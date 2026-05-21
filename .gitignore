@@ -1,0 +1,97 @@
+# ===== Game install — never commit copyrighted binaries or assets =====
+Game/
+Game_*/
+*.exe
+*.dll
+*.pak
+*.utoc
+*.ucas
+*.usmap
+*.7z
+*.bik       # Bink Video
+*.bnk       # Wwise
+*.ogg
+*.uasset    # cooked UE assets (if ever extracted)
+*.umap
+
+# ===== UE4SS runtime (per-machine; lives in the game install) =====
+# UE4SS is vendored as a submodule under reference/; its built/runtime
+# drop into Game/ is gitignored along with the rest of Game/.
+
+# ===== IDA Pro working files (per-user, large, regenerable) =====
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.t01
+*.t02
+
+# ===== Inspection scratchpad (per-user) =====
+_inspect/
+
+# ===== Heavy local working data (per-machine, not collab-relevant) =====
+ida/dumps/
+tools/x64dbg_snapshot*/
+__pycache__/
+
+# Autonomous test run artifacts (regenerable, can be gigabytes)
+tools/test-runs/
+
+# Build outputs of vendored deps (regenerable from submodule + build script)
+third_party/*-build/
+reference/*-build/
+
+# ===== Build output =====
+build/
+out/
+bin/
+obj/
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.ipdb
+*.iobj
+*.asi
+
+# ===== CMake =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# ===== IDE =====
+.vs/
+*.user
+*.sln.docstates
+*.suo
+*.userprefs
+.idea/
+.vscode/
+!.vscode/launch.example.json
+!.vscode/tasks.example.json
+
+# ===== OS junk =====
+Thumbs.db
+ehthumbs.db
+.DS_Store
+desktop.ini
+
+# ===== Temporary / log =====
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# ===== Claude Code per-machine config (MCP paths etc.) =====
+.claude/
+
+# ===== Allow-list (override broad bans for our own outputs) =====
+!src/**/*.dll
+!tools/**/*.exe
+!Game/coop-*.bat
