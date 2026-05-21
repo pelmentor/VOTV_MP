@@ -181,6 +181,27 @@ local function ReportOrphan(label)
     end)
 end
 
+-- Pose-drive the orphan: push it to new locations via K2_SetActorLocation
+-- (sweeping, so collision is exercised) -- the same pose-application path
+-- the network-driven coop::RemotePlayer will use (Phase 3.4/3.5). Confirms
+-- the orphan physically relocates + survives movement, without a local
+-- controller. step advances it along the player's forward-ish axis.
+local DriveStep = 0
+local function DriveOrphan()
+    ExecuteInGameThread(function()
+        local ok, err = pcall(function()
+            if not (OrphanPawn and OrphanPawn:IsValid()) then log("drive: no valid orphan"); return end
+            DriveStep = DriveStep + 1
+            local nl = OrphanPawn:K2_GetActorLocation()
+            nl.X = nl.X + 150.0    -- move 150 units along X each step
+            OrphanPawn:K2_SetActorLocation(nl, true, {}, false)  -- bSweep=true
+            local got = OrphanPawn:K2_GetActorLocation()
+            log(string.format("drive step %d -> set X=%.0f, read pos=(%.0f,%.0f,%.0f)", DriveStep, nl.X, got.X, got.Y, got.Z))
+        end)
+        if not ok then log("drive error: " .. tostring(err)) end
+    end)
+end
+
 -- Keybinds
 RegisterKeyBind(Key.NUM_EIGHT, {ModifierKey.CONTROL}, function() EnterGameplay(nil) end) -- new game
 RegisterKeyBind(Key.P, {ModifierKey.CONTROL}, SpawnOrphan)
@@ -219,6 +240,16 @@ local function RunTimeline(scenario)
         ExecuteWithDelay(120000, function() ReportOrphan("T+120s") end)
         ExecuteWithDelay(180000, function() ReportOrphan("T+180s"); CheckSingletons("T+180s"); StateScreenshot("T+180s soak") end)
         ExecuteWithDelay(240000, function() ReportOrphan("T+240s"); StateScreenshot("T+240s soak") end)
+        return
+    end
+    if scenario == "drive" then
+        ExecuteWithDelay(55000, function() log("=== spawn orphan to drive ==="); SpawnOrphan() end)
+        ExecuteWithDelay(62000, function() ReportOrphan("pre-drive"); Screenshot() end)
+        -- pose-drive it several times, then verify it relocated + survived
+        for i = 1, 6 do
+            ExecuteWithDelay(64000 + i * 4000, function() DriveOrphan() end)
+        end
+        ExecuteWithDelay(92000, function() ReportOrphan("post-drive"); StateScreenshot("post-drive") end)
         return
     end
     ExecuteWithDelay(80000, function() StateScreenshot("T+80s settled state") end)
