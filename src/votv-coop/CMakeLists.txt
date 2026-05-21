@@ -1,26 +1,30 @@
-# votv-coop — UE4SS C++ mod (placeholder)
+# votv-coop -- the standalone coop mod (RULE No.3: no UE4SS at runtime).
 #
-# Builds as a DLL loaded by UE4SS into Voices of the Void (UE4.27).
-# This is a skeleton: the UE4SS C++ mod SDK (from reference/RE-UE4SS/)
-# is wired in during Phase 2, when the first hook lands. No sources are
-# listed yet by design (methodology 0.1.8: first commit is project shape,
-# not the first hook).
+# Builds a standalone x64 DLL injected into VotV-Win64-Shipping.exe (UE4.27).
+# Principle 7 keeps two subtrees:
+#   src/ue_wrap/   -- engine-wrapper layer (reflection, offsets, hooks)
+#   src/coop/      -- gameplay/network layer (RemotePlayer, sessions, UDP)
+# Bootstrap/loader lives in src/bootstrap/.
+#
+# Current stage: proof-of-life bootstrap only. Reflection + hooking added
+# behind ue_wrap/ next.
 
 cmake_minimum_required(VERSION 3.20)
-project(votv-coop CXX)
+project(votv_coop CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Principle 7 subtrees. Sources added in Phase 2.
-#   src/ue_wrap/*.cpp  — engine-wrapper layer (no network/gameplay state)
-#   src/coop/*.cpp     — gameplay/network layer
-#
-# add_library(votv-coop SHARED
-#     src/ue_wrap/...
-#     src/coop/...
-# )
-# target_include_directories(votv-coop PRIVATE include)
-# target_link_libraries(votv-coop PRIVATE UE4SS)   # from reference/RE-UE4SS
+add_library(votv-coop SHARED
+    src/bootstrap/dllmain.cpp
+)
 
-message(STATUS "votv-coop: skeleton CMakeLists — no targets yet (Phase 0).")
+target_include_directories(votv-coop PRIVATE include)
+set_target_properties(votv-coop PROPERTIES OUTPUT_NAME "votv-coop")
+
+# Static CRT so the injected DLL doesn't depend on a runtime the host
+# process may not have loaded.
+if (MSVC)
+    set_property(TARGET votv-coop PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(votv-coop PRIVATE /W4 /permissive-)
+endif()

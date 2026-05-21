@@ -1,0 +1,68 @@
+// votv-coop standalone bootstrap.
+//
+// Entry point for the STANDALONE mod DLL (RULE No.3 -- no UE4SS at runtime).
+// At this stage it only proves the loader + build pipeline: on load it
+// writes a marker file next to itself so we can confirm the DLL was mapped
+// into VotV-Win64-Shipping.exe without any UE4SS involvement. Reflection
+// (resolve GUObjectArray/GNames/ProcessEvent via AOB sigs) and hooking land
+// in later steps, behind ue_wrap/.
+
+#include <windows.h>
+
+#include <cstdio>
+#include <ctime>
+
+namespace {
+
+void WriteMarker() {
+    // Locate this DLL on disk so the marker lands next to it.
+    HMODULE self = nullptr;
+    ::GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&WriteMarker), &self);
+
+    wchar_t dllPath[MAX_PATH] = {};
+    ::GetModuleFileNameW(self, dllPath, MAX_PATH);
+
+    // Replace the filename component with our marker name.
+    wchar_t* lastSep = nullptr;
+    for (wchar_t* p = dllPath; *p; ++p) {
+        if (*p == L'\\' || *p == L'/') lastSep = p;
+    }
+    wchar_t markerPath[MAX_PATH] = {};
+    if (lastSep) {
+        const size_t dirLen = static_cast<size_t>(lastSep - dllPath) + 1;
+        wcsncpy_s(markerPath, dllPath, dirLen);
+    }
+    wcscat_s(markerPath, L"votv-coop-loaded.txt");
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, markerPath, L"a") == 0 && f) {
+        const std::time_t now = std::time(nullptr);
+        std::tm tm{};
+        localtime_s(&tm, &now);
+        char ts[32] = {};
+        std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+        std::fprintf(f, "[%s] votv-coop standalone bootstrap loaded into PID %lu (no UE4SS)\n",
+                     ts, ::GetCurrentProcessId());
+        std::fclose(f);
+    }
+}
+
+DWORD WINAPI BootThread(LPVOID) {
+    WriteMarker();
+    return 0;
+}
+
+}  // namespace
+
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        ::DisableThreadLibraryCalls(module);
+        // Do real work off the loader lock.
+        if (HANDLE t = ::CreateThread(nullptr, 0, BootThread, nullptr, 0, nullptr)) {
+            ::CloseHandle(t);
+        }
+    }
+    return TRUE;
+}
