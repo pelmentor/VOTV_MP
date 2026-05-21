@@ -80,11 +80,24 @@ save, progression). The day/night cycle and power are single global values
 
 ## Save system (1.7)
 
-Classes present: `save_main.hpp` (`Usave_main_C`), `saveSlot.hpp`
-(`UsaveSlot_C`), `mainGameInstance.hpp` (`UmainGameInstance_C`), plus UI
-(`ui_saveSlots`, `uicomp_saveSlot*`). UE `USaveGame`-derived. Host-
-authoritative save reuse is viable; detailed layout + load entry UFunction
-to be mapped when Phase 4.5 needs it.
+Classes present: `save_main.hpp` (`Usave_main_C : USaveGame`),
+`saveSlot.hpp` (`UsaveSlot_C : USaveGame`), `mainGameInstance.hpp`
+(`UmainGameInstance_C`), plus UI (`ui_saveSlots`, `uicomp_saveSlot*`).
+
+- `UsaveSlot_C` = the per-slot game save (the world/player state). Funcs:
+  `save(bool quicksave, bool overwriteSubsave, bool isForcedSave)`,
+  `savePlayerOnly()`.
+- `Usave_main_C` = global/settings save. Funcs: `save()`, `saveKeybinds()`.
+- World-apply path lives on `AmainGamemode_C`: `Load Primitives(canLoad,
+  isSubData, loadingSubLevel)`, `loadObjects()`, `loadTriggers(...)` --
+  i.e. the GameMode reconstructs saved actors/triggers into the level on
+  load. This is the host-authoritative "apply save to world" hook for
+  Phase 4.5.
+
+The actual *load entry* call-graph (who calls `LoadGameFromSlot` /
+`OpenLevel`) isn't visible in the header dump (Blueprint bytecode not
+decompiled there); map it via Live View or IDA when Phase 4.5 needs it.
+Host-authoritative save reuse is viable.
 
 ## Entity factory + spawn mechanism (1.1 + Phase 2.1 derisk)
 

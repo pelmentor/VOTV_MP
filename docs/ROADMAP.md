@@ -40,14 +40,19 @@ be pulled forward once UE4SS is installed against the game.
 - ☑ 1.2 Player class layout — pawn `AmainPlayer_C : ACharacter` (camera,
        grab/hold, stats, inventory mapped); controller = stock
        `APlayerController`; GameMode `AmainGamemode_C` (world/save hub).
-- ◐ 1.3 Input dispatch path — stock `APlayerController`; VOTV input via
-       pawn `InpActEvt_*` BP events. Enumerate for 4.1 (input replication).
+- ☑ 1.3 Input dispatch path — stock `APlayerController`; VOTV input = pawn
+       `InpActEvt_*` BP events. Full vocabulary mapped (movement, jump,
+       crouch, run, fire, drop, inventory, hotbar 1-10, flashlight,
+       equipment, ...) → 4.1 keysync. See finding
+       `coop-phase-1-input-map-and-spawn-probe-2026-05-21.md`.
 - ☐ 1.4 Sim tick — UE `UWorld::Tick` / actor tick groups VOTV relies on.
 - ☐ 1.5 Render tick — confirm decoupling (UE renders on its own thread).
 - ☐ 1.6 Level-load entry + completion — `UGameplayStatics::OpenLevel` /
        `LoadStreamLevel` + post-load callback used by VOTV.
-- ◐ 1.7 Save / load entry — classes found (`Usave_main_C`, `UsaveSlot_C`,
-       `UmainGameInstance_C`); layout + load UFunction pending (Phase 4.5).
+- ◐ 1.7 Save / load entry — `UsaveSlot_C::save(...)` / `savePlayerOnly()`,
+       `Usave_main_C::save()`; world-apply on GameMode (`Load Primitives`,
+       `loadObjects`, `loadTriggers`). Load *entry* call-graph pending
+       (Live View / IDA, Phase 4.5).
 - ☐ 1.8 Screen / UI system — VOTV's UMG/HUD stack; how menus push/pop.
 - ☐ 1.9 Script VM — Blueprint VM; map key gameplay `UFunction`s (AI,
        interaction, day cycle, signals). Blueprint-vs-C++ split.
