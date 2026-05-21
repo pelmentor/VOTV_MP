@@ -39,6 +39,59 @@ The **`ue_wrap` ↔ `coop` split is principle 7.** A file that BOTH touches
 engine memory/reflection AND owns network state is a violation — split it
 (WP17).
 
+## Not an ASI
+
+This mod is **not** an ASI (the GTA/MTA-era native-DLL-via-ASI-loader
+pattern from the methodology's origin). It is a runtime DLL loaded into the
+UE4 process. Today the loader is UE4SS's `dwmapi.dll` proxy; that proxy is
+UE4SS's, not ours. See "Substrate" below for our own loading path later.
+
+## How far we can reach into the engine
+
+A DLL in the game process can reach **everything** — there is no sandbox:
+
+- **Reflected surface (the easy 95%)**: UE exposes every `UClass`,
+  property, and `UFunction` (Blueprint *and* native) via `GUObjectArray` /
+  `GNames`. We can read/write any property, call any `UFunction`, and hook
+  any `UFunction` at the `ProcessEvent` level (intercept every Blueprint
+  event/native call). VOTV is heavily Blueprint, so most "deep core game
+  functions" ARE reflected and directly reachable.
+- **Raw native surface (the other 5%)**: anything not reflected — inlined
+  engine internals, native helpers, raw memory — is reachable the same way
+  any native mod reaches it: AOB/signature scanning + MinHook/Detours/vtable
+  hooks + direct memory patching. The IDA Pro IDB is the tool for finding
+  those sites.
+
+So "can a UE4SS mod reach deep core functions?" — yes, both layers. UE4SS
+just makes the reflected layer convenient; the raw layer is always
+available because we are native code in-process.
+
+## Substrate: UE4SS is a swappable dependency, not a permanent one
+
+**Constraint (user, 2026-05-22): the shipping mod must not depend on UE4SS
+long-term.** Using it now (fast iteration, reflection, ImGui, Lua probes)
+is fine; the architecture must let us remove it cleanly later (RULE No.2 —
+when we drop it, it goes fully; no UE4SS-and-not-UE4SS dual paths).
+
+UE4SS provides three separable things, each replaceable by us:
+
+| UE4SS gives | Our replacement when we drop it |
+|---|---|
+| Injection (`dwmapi.dll` proxy) | Our own proxy/loader DLL (same technique) |
+| Reflection access (`GUObjectArray`/`GNames` resolved) | Resolve the globals ourselves via AOB sigs (patternsleuth-style) |
+| `UFunction` hook engine (`ProcessEvent` hook) | Hook `ProcessEvent` ourselves (this is how UE4SS does it) |
+| Lua + ImGui + bundled mods | Only used by **test tooling/probes**, not the shipping mod |
+
+**The discipline that makes this cheap**: all engine/substrate access lives
+behind `ue_wrap/`. The `coop/` gameplay-network layer never calls UE4SS
+directly. Dropping UE4SS then means reimplementing the substrate *behind
+`ue_wrap`* — `coop/` does not change. The CXX header dump is already, in
+effect, our standalone SDK (the class/offset/signature knowledge we'd need
+without UE4SS).
+
+Test tooling (`tools/probes/*`, the Lua harness) MAY depend on UE4SS freely
+— it is not shipped. Only `src/votv-coop` carries the no-UE4SS constraint.
+
 ## Networking model (planned — see methodology Phase 3)
 
 - **Transport**: custom UDP, pure I/O at the bottom. Host-authoritative,

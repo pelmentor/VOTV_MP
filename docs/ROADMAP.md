@@ -80,6 +80,12 @@ have it tick without crashing for ≥60 s (target several minutes).
 - ☐ 3.4 Position-only pose sync (~13–30 Hz) + interpolation.
 - ☐ 3.5 Auto-spawn the remote on first packet.
 
+### Multiplayer menu (in VOTV's main menu) — in scope
+- ☐ Native UMG menu built at runtime by our C++ mod: Host (choose save /
+      New Game, load, listen), Connect (enter IP, join), server browser
+      (future). No VOTV asset edited. Design: `docs/MULTIPLAYER_UI.md`.
+      Build gated on the Phase 3 session API (the shell drives that API).
+
 ## Phase 4 — Replication layers (the bulk)
 - ☐ 4.1 Input replication (MTA keysync pattern → engine drives the pawn).
 - ☐ 4.2 Equipment / held-item / tool state.
@@ -89,7 +95,11 @@ have it tick without crashing for ≥60 s (target several minutes).
 - ☐ 4.6 Inventory / progression (shared, host-side; client UI overlays).
 
 ## Phase 5 — Validation
-- ☐ 5.1 Autonomous test harness (boot, drive via synthetic input, JSON).
+- ◐ 5.1 Autonomous test harness — launch + skip-menu-to-gameplay +
+       screenshot + report built early for dev ease (`tools/run-test.ps1`
+       + `coopTestHarness`). Synthetic-input scripting + JSON report still
+       to add. See `docs/AUTONOMOUS_TESTING.md`. (Skip-chain validates on
+       first run.)
 - ☐ 5.2 LAN soak (dual-process).
 - ☐ 5.3 Live testing (side-by-side windows; observation log).
 - ☐ 5.4 Multi-agent audit (WP2; MTA-fidelity audit mandatory for network

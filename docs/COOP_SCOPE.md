@@ -22,7 +22,11 @@ items.
 
 ## In scope
 
-_(empty — populate as decided, with date + reason)_
+- **Multiplayer menu (in VOTV's main menu)** — Host (choose save / New
+  Game, load, listen) + Connect (enter IP, join) + server browser (future).
+  Native UMG widget built at runtime by our C++ mod; no VOTV asset edited.
+  Decided 2026-05-22 (user). Design: `docs/MULTIPLAYER_UI.md`. Build gated
+  on the Phase 3 session API.
 
 <!--
 Template for an entry:
@@ -60,3 +64,5 @@ Candidate VOTV systems to classify during Phase 1 (this is a checklist of
 ## Amendment log
 
 - 2026-05-21 — Created skeleton at project bootstrap.
+- 2026-05-22 — Added multiplayer menu (host/connect/server-browser) to In
+  scope per user; design in `docs/MULTIPLAYER_UI.md`.
