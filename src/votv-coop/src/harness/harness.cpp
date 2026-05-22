@@ -12,6 +12,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cwctype>
@@ -51,6 +52,31 @@ std::string ReadScenario() {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
         s.pop_back();
     return s.empty() ? "newgame" : s;
+}
+
+// The STORY save slot the `play` scenario auto-loads. Configurable via votv-coop.ini
+// (a line "save=<slotname>", section-agnostic); defaults to s_may2026. Coop targets
+// story mode, so we never boot the sandbox map fresh.
+std::wstring ReadStorySaveSlot() {
+    const std::wstring path = ModuleDir() + L"\\votv-coop.ini";
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"r") == 0 && f) {
+        char line[160];
+        while (std::fgets(line, sizeof(line), f)) {
+            std::string s(line);
+            // strip whitespace
+            s.erase(std::remove_if(s.begin(), s.end(),
+                                   [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
+                    s.end());
+            if (s.rfind("save=", 0) == 0 && s.size() > 5) {
+                std::string v = s.substr(5);
+                std::fclose(f);
+                return std::wstring(v.begin(), v.end());  // ASCII slot name
+            }
+        }
+        std::fclose(f);
+    }
+    return L"s_may2026";  // default story save
 }
 
 // Runs on the game thread (posted): dump a UFunction's parameter frame so we can
@@ -179,8 +205,7 @@ void DumpLiveWidgets() {
 // flag is a shared_ptr so it outlives the worker loop even if a posted check is
 // still queued (no use-after-free).
 void SpawnSecondPlayerWhenReady() {
-    UE_LOGI("play: waiting for gameplay (direct boot), spawn 2nd player the instant it's ready");
-    bool fallbackOpened = false;
+    UE_LOGI("play: waiting for STORY gameplay, spawn 2nd player the instant it's ready");
     for (int i = 0; i < 1200; ++i) {  // ~120 s safety cap
         auto state = std::make_shared<std::atomic<int>>(0);  // 0 pending,1 not-ready,2 ok,3 failed
         Post([state] {
@@ -205,17 +230,8 @@ void SpawnSecondPlayerWhenReady() {
             return;
         }
         if (s == 3) UE_LOGW("play: spawn attempt failed; retrying");
-        // Fallback: if we're still not in gameplay after ~8 s, the direct-boot URL
-        // may not have loaded the map -> issue `open` ourselves, once.
-        if (!fallbackOpened && i == 80) {
-            fallbackOpened = true;
-            UE_LOGW("play: not in gameplay after ~8s; issuing 'open %ls' fallback", P::name::GameplayLevel);
-            Post([] {
-                std::wstring cmd = L"open ";
-                cmd += P::name::GameplayLevel;
-                ue_wrap::engine::ExecuteConsoleCommand(cmd.c_str());
-            });
-        }
+        // No sandbox `open` fallback: coop targets STORY mode, loaded via the save
+        // system (LoadStorySave), never the sandbox map. We just wait for gameplay.
         ::Sleep(100);  // local player not in world yet -> poll again
     }
     UE_LOGW("play: gave up waiting for local mainPlayer_C");
@@ -229,7 +245,20 @@ DWORD WINAPI TimelineThread(LPVOID param) {
 
     UE_LOGI("harness: timeline start, scenario='%s'", scenario.c_str());
 
-    ::Sleep(scenario == "play" ? 3000 : 8000);  // let the engine init (play wants gameplay ASAP)
+    // The OMEGA WARNING is on screen during the FIRST few seconds (the intro/menu
+    // world), BEFORE we `open` gameplay. Sample widgets across that window so the
+    // dump catches the omega gate (a later single dump only sees gameplay widgets,
+    // since VOTV preloads its UMG and the omega widget is gone by then). Each Post
+    // runs on the game thread as soon as the pump is live (which is while the omega
+    // screen ticks UMG), so these land during the intro.
+    if (scenario == "play") {
+        for (int k = 0; k < 7; ++k) {  // ~2.8 s of coverage
+            Post([k] { UE_LOGI("widgets: == intro dump pass %d ==", k); DumpLiveWidgets(); });
+            ::Sleep(400);
+        }
+    } else {
+        ::Sleep(8000);  // other scenarios: let the engine fully init
+    }
     Post([] { Report("menu"); });
     // Param-offset reflection validator (scenario "paramdump"): logs a UFunction's
     // FProperty layout (names/offsets/sizes/flags) to check against the known
@@ -300,25 +329,25 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         Post([] { Report("post-drive soak"); });
         UE_LOGI("harness: ==== AUTONOMOUS ORPHAN TIMELINE DONE ====");
     } else if (scenario == "play") {
-        // Hands-on test. VOTV's boot is omega-warning -> main menu -> gameplay (a
-        // startup map URL is ignored). We issue `open` as soon as a world context
-        // is up -- it may blast past the omega/menu, else the world loads right
-        // after you click Proceed (no long timer). The puppet (a bare actor wearing
-        // your skin + body AnimBP) spawns the instant gameplay is live.
-        // DIAGNOSTIC: VOTV preloads its UMG widgets, so a single dump after `open`
-        // shows gameplay widgets, not the OMEGA WARNING gate. Sample a few times
-        // across the boot/omega window (before AND around the open) and flag any
-        // intro/warning widget + its UFunctions, so we can call its Proceed next build.
-        for (int k = 0; k < 3; ++k) {
-            Post([k] { UE_LOGI("widgets: == dump pass %d ==", k); DumpLiveWidgets(); });
-            ::Sleep(900);
+        // Hands-on test. Coop targets STORY mode: auto-load the story save via
+        // VOTV's own load path (LoadStorySave -> open untitled_1), which also
+        // skips the omega/menu (the travel happens as soon as the GameInstance is
+        // up). NOT the sandbox `open`. The puppet spawns the instant gameplay live.
+        // (Intro widget dumps already ran during the first ~3 s above.)
+        const std::wstring slot = ReadStorySaveSlot();
+        UE_LOGI("play: target STORY save '%ls'", slot.c_str());
+        bool loaded = false;
+        for (int i = 0; i < 40 && !loaded; ++i) {  // ~20 s for the GameInstance to come up
+            auto st = std::make_shared<std::atomic<int>>(0);  // 0 pending,1 retry,2 ok
+            Post([slot, st] {
+                st->store(ue_wrap::engine::LoadStorySave(slot.c_str()) ? 2 : 1);
+            });
+            while (st->load() == 0) ::Sleep(5);
+            if (st->load() == 2) { loaded = true; break; }
+            ::Sleep(500);
         }
-        Post([] {
-            UE_LOGI("play: early open %ls (reach gameplay ASAP)", P::name::GameplayLevel);
-            std::wstring cmd = L"open ";
-            cmd += P::name::GameplayLevel;
-            ue_wrap::engine::ExecuteConsoleCommand(cmd.c_str());
-        });
+        if (!loaded)
+            UE_LOGW("play: could not auto-load '%ls'; load it from the menu manually", slot.c_str());
         SpawnSecondPlayerWhenReady();
         UE_LOGI("harness: ==== PLAY READY (you have control) ====");
         // Keep the 3D nameplate(s) glued above the head + facing the local player.

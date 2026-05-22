@@ -90,6 +90,69 @@ bool ExecuteConsoleCommand(const wchar_t* command) {
     return ok;
 }
 
+bool LoadStorySave(const wchar_t* slot) {
+    if (!slot || !*slot) return false;
+
+    // A non-owning FString view over a wstring (ProcessEvent only reads it).
+    auto makeFStr = [](std::wstring& b) {
+        R::FString fs{};
+        fs.Data = b.data();
+        fs.Num = static_cast<int32_t>(b.size()) + 1;  // FString::Num counts the null
+        fs.Max = fs.Num;
+        return fs;
+    };
+
+    void* gsCdo = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
+    void* gsCls = gsCdo ? R::ClassOf(gsCdo) : nullptr;
+    void* loadFn = gsCls ? R::FindFunction(gsCls, P::name::LoadGameFromSlotFn) : nullptr;
+    if (!gsCdo || !loadFn) {
+        UE_LOGE("engine: LoadStorySave -- LoadGameFromSlot unresolved (cdo=%p fn=%p)", gsCdo, loadFn);
+        return false;
+    }
+
+    // 1) USaveGame* save = GameplayStatics::LoadGameFromSlot(slot, 0)
+    void* save = nullptr;
+    {
+        std::wstring b(slot);
+        R::FString fs = makeFStr(b);
+        ParamFrame f(loadFn);
+        f.SetRaw(L"SlotName", &fs, sizeof(fs));
+        f.Set<int32_t>(L"UserIndex", 0);
+        if (!Call(gsCdo, f)) { UE_LOGE("engine: LoadStorySave -- LoadGameFromSlot call failed"); return false; }
+        save = f.Get<void*>(L"ReturnValue");
+    }
+    if (!save) { UE_LOGW("engine: LoadStorySave -- slot '%ls' missing/empty (save=null)", slot); return false; }
+
+    // 2) the persistent mainGameInstance_C (survives the level travel)
+    void* gi = R::FindObjectByClass(P::name::GameInstanceClass);
+    if (!gi) { UE_LOGE("engine: LoadStorySave -- no mainGameInstance_C"); return false; }
+
+    // 3) gi->setSaveSlotObject(save, slot)
+    if (void* setFn = R::FindFunction(R::ClassOf(gi), P::name::SetSaveSlotObjectFn)) {
+        std::wstring b(slot);
+        R::FString fs = makeFStr(b);
+        ParamFrame f(setFn);
+        f.Set<void*>(L"save_gameInst", save);
+        f.SetRaw(L"SlotName", &fs, sizeof(fs));
+        Call(gi, f);
+    } else {
+        UE_LOGW("engine: LoadStorySave -- setSaveSlotObject unresolved");
+    }
+
+    // 4) gi->loadObjects = true -> the GameMode APPLIES the save on BeginPlay
+    // (without this it would open the map fresh, i.e. effectively sandbox/new).
+    *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(gi) + P::off::mainGameInstance_loadObjects) = 1;
+
+    UE_LOGI("engine: LoadStorySave -- registered save '%ls' (save=%p gi=%p); opening %ls",
+            slot, save, gi, P::name::GameplayLevel);
+
+    // 5) travel to the gameplay map; the save+loadObjects on the (persistent)
+    // GameInstance drive what loads. The gameplay map is untitled_1 for all modes.
+    std::wstring openCmd = L"open ";
+    openCmd += P::name::GameplayLevel;
+    return ExecuteConsoleCommand(openCmd.c_str());
+}
+
 // ---- actor spawning + transform -----------------------------------------
 namespace {
 
@@ -307,8 +370,15 @@ bool ResolveTextActorFns() {
         if (!g_setHAlignFn) g_setHAlignFn = R::FindFunction(g_trcClass, P::name::SetHorizontalAlignmentFn);
         if (!g_setTextMaterialFn) g_setTextMaterialFn = R::FindFunction(g_trcClass, P::name::SetTextMaterialFn);
     }
-    if (!g_translucentTextMat)
-        g_translucentTextMat = R::FindObject(P::name::TextMaterialTranslucentName, P::name::MaterialClassName);
+    if (!g_translucentTextMat) {
+        g_translucentTextMat = R::FindObject(P::name::UnlitTextMaterialName, P::name::MaterialClassName);
+        if (g_translucentTextMat) {
+            const uint8_t blend = *reinterpret_cast<uint8_t*>(
+                reinterpret_cast<uint8_t*>(g_translucentTextMat) + P::off::UMaterial_BlendMode);
+            UE_LOGI("engine: text material '%ls' = %p, BlendMode=%u (0=Opaque,1=Masked,2=Translucent)",
+                    P::name::UnlitTextMaterialName, g_translucentTextMat, blend);
+        }
+    }
     return g_traClass && g_setTextFn;
 }
 }  // namespace
@@ -341,9 +411,8 @@ void* SpawnTextActor(const FVector& location, const wchar_t* text, float worldSi
         ParamFrame f(g_setTextMaterialFn); f.Set<void*>(L"Material", g_translucentTextMat); Call(trc, f);
         UE_LOGI("engine: SpawnTextActor bound translucent text material %p", g_translucentTextMat);
     } else {
-        UE_LOGW("engine: SpawnTextActor -- %ls not resident / SetTextMaterial unresolved (mat=%p fn=%p); "
-                "text will be OPAQUE (need force-load by path)",
-                P::name::TextMaterialTranslucentName, g_translucentTextMat, g_setTextMaterialFn);
+        UE_LOGW("engine: SpawnTextActor -- %ls not resident / SetTextMaterial unresolved (mat=%p fn=%p)",
+                P::name::UnlitTextMaterialName, g_translucentTextMat, g_setTextMaterialFn);
     }
     if (g_setWorldSizeFn) { ParamFrame f(g_setWorldSizeFn); f.Set<float>(L"Value", worldSize); Call(trc, f); }
     if (g_setTextColorFn) { ParamFrame f(g_setTextColorFn); f.SetRaw(L"Value", &color, sizeof(color)); Call(trc, f); }

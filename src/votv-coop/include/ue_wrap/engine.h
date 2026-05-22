@@ -20,6 +20,14 @@ namespace ue_wrap::engine {
 // (cached). Returns false if anything could not be resolved. Game thread only.
 bool ExecuteConsoleCommand(const wchar_t* command);
 
+// Load a VOTV save slot (e.g. a STORY save like "s_may2026") and enter gameplay
+// via the game's own load entry: GameplayStatics::LoadGameFromSlot ->
+// mainGameInstance_C::setSaveSlotObject + loadObjects=true -> open the gameplay
+// map. The gameplay map is untitled_1 for every mode; the SAVE selects story vs
+// sandbox. Returns false if the slot is missing/empty or load can't dispatch.
+// Game thread only.
+bool LoadStorySave(const wchar_t* slot);
+
 // Spawn an actor of `actorClass` (a UClass*) at `location` via the deferred
 // GameplayStatics pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor)
 // -- the same path the K2 SpawnActorFromClass node uses. Always spawns

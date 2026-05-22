@@ -71,6 +71,8 @@ inline constexpr size_t Chunk_NumChunks = 0x1C;
 inline constexpr int32_t ElemsPerChunk = 64 * 1024;
 inline constexpr size_t FUObjectItem_Stride = 0x18;       // {Object*, flags, cluster, serial}
 inline constexpr size_t FUObjectItem_Flags = 0x08;        // int32 EInternalObjectFlags (PendingKill/Unreachable -> dying)
+inline constexpr size_t UMaterial_BlendMode = 0x151;     // TEnumAsByte<EBlendMode> (0=Opaque,1=Masked,2=Translucent)
+inline constexpr size_t mainGameInstance_loadObjects = 0x0229;  // bool: apply the save on BeginPlay (vs fresh)
 
 // UStruct / UFunction / FField / FProperty layout (UE4.27, 4.25+ FField system).
 // Derived from the shipping UObject::ProcessEvent decompile (rva 0x1465930):
@@ -198,6 +200,12 @@ inline constexpr const wchar_t* GameInstanceClass = L"mainGameInstance_C";
 inline constexpr const wchar_t* GameplayStaticsClass = L"GameplayStatics";
 inline constexpr const wchar_t* BeginDeferredSpawnFn = L"BeginDeferredActorSpawnFromClass";
 inline constexpr const wchar_t* FinishSpawningActorFn = L"FinishSpawningActor";
+
+// Story-save load: VOTV's own entry path (GameplayStatics::LoadGameFromSlot ->
+// mainGameInstance_C::setSaveSlotObject + loadObjects=true -> open untitled_1).
+// The gameplay map is untitled_1 for ALL modes; the SAVE selects story vs sandbox.
+inline constexpr const wchar_t* LoadGameFromSlotFn = L"LoadGameFromSlot";
+inline constexpr const wchar_t* SetSaveSlotObjectFn = L"setSaveSlotObject";
 inline constexpr const wchar_t* ActorClassName = L"Actor";  // owns K2_Get/SetActorLocation
 inline constexpr const wchar_t* GetActorLocationFn = L"K2_GetActorLocation";
 inline constexpr const wchar_t* GetActorForwardVectorFn = L"GetActorForwardVector";
@@ -265,14 +273,13 @@ inline constexpr const wchar_t* SetWorldSizeFn = L"SetWorldSize";        // floa
 inline constexpr const wchar_t* SetTextRenderColorFn = L"SetTextRenderColor";  // FColor
 inline constexpr const wchar_t* SetHorizontalAlignmentFn = L"SetHorizontalAlignment";  // EHorizTextAligment (1=Center)
 // A TextRenderComponent's default material (DefaultTextMaterialOpaque) is OPAQUE
-// and discards the FColor alpha. The stock translucent sibling is unlit with
-// Opacity = FontTextureAlpha * VertexColorAlpha (TextRenderColor's alpha flows
-// into VertexColor.A), so binding it makes the FColor alpha give real, smooth
-// transparency. (The earlier "UnlitText" lookup resolved to a VOTV opaque/masked
-// material -> alpha was dropped.) SetTextMaterial param is named "Material".
+// and discards the FColor alpha. VOTV cooked in only two text materials -- that
+// opaque default and the stock /Engine/EngineMaterials/UnlitText; the translucent
+// DefaultTextMaterialTranslucent is NOT cooked in (verified via the object dump),
+// so it can't be loaded. We bind UnlitText and read its blend mode at runtime to
+// learn whether partial alpha is achievable here. SetTextMaterial param: "Material".
 inline constexpr const wchar_t* SetTextMaterialFn = L"SetTextMaterial";
-inline constexpr const wchar_t* TextMaterialTranslucentName =
-    L"DefaultTextMaterialTranslucent";  // /Engine/EngineMaterials/ -- Unlit + Translucent
+inline constexpr const wchar_t* UnlitTextMaterialName = L"UnlitText";  // /Engine/EngineMaterials/UnlitText
 inline constexpr const wchar_t* MaterialClassName = L"Material";
 }  // namespace name
 
