@@ -54,7 +54,10 @@ void Register(RemotePlayer* player) {
 void Unregister(RemotePlayer* player) {
     for (auto it = g_entries.begin(); it != g_entries.end(); ++it) {
         if (it->player == player) {
-            if (it->textActor) E::DestroyActor(it->textActor);
+            // Only destroy if still live: now that DestroyActor actually fires
+            // K2_DestroyActor, calling it on a label the engine already killed on a
+            // level change would be a use-after-free.
+            if (it->textActor && R::IsLive(it->textActor)) E::DestroyActor(it->textActor);
             g_entries.erase(it);
             return;
         }

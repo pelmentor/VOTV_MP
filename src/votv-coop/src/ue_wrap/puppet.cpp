@@ -167,6 +167,10 @@ void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass) 
 
 void DriveAnimBP(void* puppetActor, float speed) {
     void* comp = GetSkeletalMeshComponent(puppetActor);
+    // The actor slot can still pass IsLive for a tick while its child component is
+    // already being torn down (UE finalizes sub-objects first). Re-check the
+    // component before reading AnimScriptInstance @ +0x6B0.
+    if (!comp || !R::IsLive(comp)) return;
     void* anim = LiveAnimInstance(comp);
     if (!anim) return;
     WriteAt<float>(anim, P::off::AnimBP_kerfur_walkSpeed, speed);

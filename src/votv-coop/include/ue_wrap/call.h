@@ -22,7 +22,9 @@ public:
     // zeroed (so unset params/out-params start clean).
     explicit ParamFrame(void* function);
 
-    bool valid() const { return fn_ != nullptr && !buf_.empty(); }
+    // A resolved UFunction. buf_ may be empty for a no-param function (valid: the
+    // call passes a null params buffer). Param read/write paths guard buf_ size.
+    bool valid() const { return fn_ != nullptr; }
     void* function() const { return fn_; }
     void* data() { return buf_.empty() ? nullptr : buf_.data(); }
 

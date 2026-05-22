@@ -296,7 +296,7 @@ void* g_setWorldSizeFn = nullptr;
 void* g_setTextColorFn = nullptr;
 void* g_setHAlignFn = nullptr;
 void* g_setTextMaterialFn = nullptr;
-void* g_unlitTextMat = nullptr;
+void* g_translucentTextMat = nullptr;
 bool ResolveTextActorFns() {
     if (!g_traClass) g_traClass = R::FindClass(P::name::TextRenderActorClass);
     if (!g_trcClass) g_trcClass = R::FindClass(P::name::TextRenderComponentClass);
@@ -307,7 +307,8 @@ bool ResolveTextActorFns() {
         if (!g_setHAlignFn) g_setHAlignFn = R::FindFunction(g_trcClass, P::name::SetHorizontalAlignmentFn);
         if (!g_setTextMaterialFn) g_setTextMaterialFn = R::FindFunction(g_trcClass, P::name::SetTextMaterialFn);
     }
-    if (!g_unlitTextMat) g_unlitTextMat = R::FindObject(P::name::UnlitTextMaterialName, P::name::MaterialClassName);
+    if (!g_translucentTextMat)
+        g_translucentTextMat = R::FindObject(P::name::TextMaterialTranslucentName, P::name::MaterialClassName);
     return g_traClass && g_setTextFn;
 }
 }  // namespace
@@ -333,13 +334,16 @@ void* SpawnTextActor(const FVector& location, const wchar_t* text, float worldSi
                   static_cast<int32_t>(sbuf.size()) + 1};
     { ParamFrame f(g_setTextFn); f.SetRaw(L"Value", &fs, sizeof(fs)); Call(trc, f); }
 
-    // Translucent text material so the color alpha actually shows (the default is
-    // opaque). Without this the nameplate is fully solid regardless of alpha.
-    if (g_setTextMaterialFn && g_unlitTextMat) {
-        ParamFrame f(g_setTextMaterialFn); f.Set<void*>(L"Material", g_unlitTextMat); Call(trc, f);
+    // Bind the stock translucent text material so the FColor alpha actually shows
+    // (the default is opaque and discards alpha). Without this the nameplate is
+    // fully solid regardless of alpha.
+    if (g_setTextMaterialFn && g_translucentTextMat) {
+        ParamFrame f(g_setTextMaterialFn); f.Set<void*>(L"Material", g_translucentTextMat); Call(trc, f);
+        UE_LOGI("engine: SpawnTextActor bound translucent text material %p", g_translucentTextMat);
     } else {
-        UE_LOGW("engine: SpawnTextActor -- UnlitText material/SetTextMaterial unresolved (mat=%p fn=%p); text will be opaque",
-                g_unlitTextMat, g_setTextMaterialFn);
+        UE_LOGW("engine: SpawnTextActor -- %ls not resident / SetTextMaterial unresolved (mat=%p fn=%p); "
+                "text will be OPAQUE (need force-load by path)",
+                P::name::TextMaterialTranslucentName, g_translucentTextMat, g_setTextMaterialFn);
     }
     if (g_setWorldSizeFn) { ParamFrame f(g_setWorldSizeFn); f.Set<float>(L"Value", worldSize); Call(trc, f); }
     if (g_setTextColorFn) { ParamFrame f(g_setTextColorFn); f.SetRaw(L"Value", &color, sizeof(color)); Call(trc, f); }

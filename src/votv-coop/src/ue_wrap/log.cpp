@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <share.h>
 
 namespace ue_wrap::log {
 namespace {
@@ -44,7 +45,10 @@ void EnsureOpen() {
     if (!g_opened) {
         wchar_t path[MAX_PATH] = {};
         LogPath(path);
-        _wfopen_s(&g_file, path, L"w");
+        // Open with read-sharing (_SH_DENYWR: others may READ, not write) so the
+        // log can be tailed live while the game runs -- without this the file is
+        // locked exclusively and diagnostics can't be read until the game exits.
+        g_file = _wfsopen(path, L"w", _SH_DENYWR);
         g_opened = true;
     }
     ::LeaveCriticalSection(&g_lock);

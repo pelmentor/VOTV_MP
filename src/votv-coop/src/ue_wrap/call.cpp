@@ -10,15 +10,22 @@ namespace ue_wrap {
 ParamFrame::ParamFrame(void* function) : fn_(function) {
     if (!fn_) return;
     const int32_t frameSize = reflection::FunctionFrameSize(fn_);
-    if (frameSize <= 0) {
-        UE_LOGE("ParamFrame: function %p has frame size %d", fn_, frameSize);
+    if (frameSize < 0) {  // genuinely malformed UFunction; refuse
+        UE_LOGE("ParamFrame: function %p has negative frame size %d", fn_, frameSize);
         fn_ = nullptr;
         return;
     }
-    buf_.assign(static_cast<size_t>(frameSize), 0);
-    // Cache param name->offset once (the FProperty chain doesn't change).
-    for (const auto& p : reflection::FunctionParams(fn_)) {
-        offsets_.emplace_back(p.name, p.offset);
+    // frameSize == 0 is VALID: a no-param/no-return UFunction (e.g. K2_DestroyActor).
+    // ProcessEvent is then invoked with a null params buffer (buf_ stays empty).
+    // Previously this was treated as an error and the call became a silent no-op --
+    // so DestroyActor never destroyed anything (freecam cams / nameplates / puppets
+    // leaked). Keep fn_ so the call goes through.
+    if (frameSize > 0) {
+        buf_.assign(static_cast<size_t>(frameSize), 0);
+        // Cache param name->offset once (the FProperty chain doesn't change).
+        for (const auto& p : reflection::FunctionParams(fn_)) {
+            offsets_.emplace_back(p.name, p.offset);
+        }
     }
 }
 
@@ -30,7 +37,7 @@ int32_t ParamFrame::OffsetOf(const wchar_t* name) const {
 }
 
 bool ParamFrame::SetRaw(const wchar_t* name, const void* src, int32_t size) {
-    if (!valid()) return false;
+    if (fn_ == nullptr || buf_.empty()) return false;  // empty => zero-param frame; nothing to set
     const int32_t off = OffsetOf(name);
     if (off < 0) {
         UE_LOGE("ParamFrame::Set: unknown param '%ls'", name);

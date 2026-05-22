@@ -77,17 +77,17 @@ void RemotePlayer::Drive(const ue_wrap::FVector& location, float yaw, float spee
 }
 
 bool RemotePlayer::SetLocation(const ue_wrap::FVector& location) {
-    if (!actor_) return false;
+    if (!valid()) { actor_ = nullptr; return false; }  // valid() = IsLive (not just non-null)
     return E::SetActorLocation(actor_, location);
 }
 
 bool RemotePlayer::SetFacing(float yaw) {
-    if (!actor_) return false;
+    if (!valid()) { actor_ = nullptr; return false; }
     return E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, yaw, 0.f});
 }
 
 ue_wrap::FVector RemotePlayer::GetLocation() const {
-    if (!actor_) return {};
+    if (!valid()) return {};  // never read a dying actor (PendingKill on level change)
     return E::GetActorLocation(actor_);
 }
 

@@ -59,7 +59,10 @@ int32_t NumObjects() {
     return *reinterpret_cast<int32_t*>(g_objArray + O::FUObjectArray_ObjObjects + O::Chunk_NumElements);
 }
 
-void* ObjectAt(int32_t index) {
+namespace {
+// Address of the FUObjectItem (Object*, Flags, Cluster, Serial) for a slot, or
+// null if the index is out of range / the chunk is unallocated.
+uint8_t* ItemAt(int32_t index) {
     if (!g_objArray || index < 0) return nullptr;
     const uintptr_t objObjects = g_objArray + O::FUObjectArray_ObjObjects;
     if (index >= *reinterpret_cast<int32_t*>(objObjects + O::Chunk_NumElements)) return nullptr;
@@ -67,15 +70,31 @@ void* ObjectAt(int32_t index) {
     if (!chunks) return nullptr;
     uint8_t* chunk = chunks[index / O::ElemsPerChunk];
     if (!chunk) return nullptr;
-    uint8_t* item = chunk + static_cast<size_t>(index % O::ElemsPerChunk) * O::FUObjectItem_Stride;
-    return *reinterpret_cast<void**>(item);  // FUObjectItem.Object @ +0x00
+    return chunk + static_cast<size_t>(index % O::ElemsPerChunk) * O::FUObjectItem_Stride;
+}
+}  // namespace
+
+void* ObjectAt(int32_t index) {
+    uint8_t* item = ItemAt(index);
+    return item ? *reinterpret_cast<void**>(item) : nullptr;  // FUObjectItem.Object @ +0x00
 }
 
 bool IsLive(void* obj) {
     if (!obj) return false;
     const int32_t idx = *reinterpret_cast<int32_t*>(
         reinterpret_cast<uint8_t*>(obj) + O::UObject_InternalIndex);
-    return idx >= 0 && ObjectAt(idx) == obj;
+    uint8_t* item = ItemAt(idx);
+    if (!item || *reinterpret_cast<void**>(item) != obj) return false;  // slot empty/recycled
+    // The slot check alone is NOT enough across a level transition: an actor the
+    // engine is tearing down is flagged PendingKill (then Unreachable by GC) yet
+    // still occupies its array slot until the purge completes. Calling UFunctions
+    // on it -- GetActorLocation/SetViewTargetWithBlend/etc. -- is a use-after-free
+    // (the tutorial-map load crashed here: read 0xffff...). Reject those flags so a
+    // dying object reports not-live. (FUObjectItem.Flags @ +0x08; bit values per
+    // UE4.27 EInternalObjectFlags -- matches UE4SS's own PendingKill guard.)
+    const int32_t flags = *reinterpret_cast<int32_t*>(item + O::FUObjectItem_Flags);
+    constexpr int32_t kKillFlags = 0x10000000 /*Unreachable*/ | 0x20000000 /*PendingKill*/;
+    return (flags & kKillFlags) == 0;
 }
 
 const FName& NameOf(void* uobject) {

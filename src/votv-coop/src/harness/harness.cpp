@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cwctype>
 #include <memory>
 #include <string>
 
@@ -102,15 +103,48 @@ void DumpComponents(const char* label, void* actor) {
 
 void Post(GT::Task t) { GT::Post(std::move(t)); }
 
+// Case-insensitive substring test (ASCII keywords against a wide string).
+static bool ContainsCI(const std::wstring& hay, const wchar_t* needle) {
+    std::wstring h = hay, n = needle;
+    auto lower = [](std::wstring& s) { for (auto& c : s) c = static_cast<wchar_t>(::towlower(c)); };
+    lower(h); lower(n);
+    return h.find(n) != std::wstring::npos;
+}
+
+// List the callable UFunctions a class (and its parents) expose, so we can see
+// exactly which one to call (e.g. a Proceed/Skip on the OMEGA widget). Functions
+// are UObjects of class "Function" whose Outer is one of the classes in the chain.
+static void DumpClassFunctions(void* cls, const wchar_t* tag) {
+    const int32_t n = R::NumObjects();
+    for (int32_t i = 0; i < n; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj || R::ClassNameOf(obj) != L"Function") continue;
+        void* outer = R::OuterOf(obj);
+        void* c = cls;
+        for (int d = 0; d < 16 && c; ++d) {
+            if (outer == c) {
+                UE_LOGI("  %ls fn: %ls", tag, R::ToString(R::NameOf(obj)).c_str());
+                break;
+            }
+            c = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(c) + P::off::UStruct_SuperStruct);
+        }
+    }
+}
+
 // Diagnostic: log every live UUserWidget instance (name + class). Used to find
 // the OMEGA WARNING startup widget's class so we can auto-Proceed past it. Fast:
 // resolves the UserWidget UClass once and walks each object's super chain by
-// POINTER compare (no per-object string work).
+// POINTER compare (no per-object string work). Any widget whose name/class looks
+// like an intro/warning gate is flagged and its UFunctions dumped (to find the
+// Proceed/Skip to call next).
 void DumpLiveWidgets() {
     void* userWidgetCls = R::FindClass(L"UserWidget");
     if (!userWidgetCls) { UE_LOGW("widgets: UserWidget class not found"); return; }
+    static const wchar_t* kGateWords[] = {L"omega", L"warning", L"intro", L"disclaimer",
+                                          L"epilepsy", L"splash", L"boot", L"startup",
+                                          L"proceed", L"continue", L"title", L"legal"};
     const int32_t n = R::NumObjects();
-    int found = 0;
+    int found = 0, flagged = 0;
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
@@ -121,12 +155,22 @@ void DumpLiveWidgets() {
             c = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(c) + P::off::UStruct_SuperStruct);
         }
         if (!isWidget) continue;
-        std::wstring nm = R::ToString(R::NameOf(obj));
+        const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) continue;  // skip CDOs
-        UE_LOGI("widget: %ls : %ls", R::ClassNameOf(obj).c_str(), nm.c_str());
-        if (++found >= 80) break;
+        const std::wstring cn = R::ClassNameOf(obj);
+        ++found;
+        bool gate = false;
+        for (const wchar_t* w : kGateWords)
+            if (ContainsCI(nm, w) || ContainsCI(cn, w)) { gate = true; break; }
+        if (gate) {
+            UE_LOGI("widget[GATE?]: %ls : %ls -- dumping its UFunctions:", cn.c_str(), nm.c_str());
+            DumpClassFunctions(R::ClassOf(obj), cn.c_str());
+            ++flagged;
+        } else {
+            UE_LOGI("widget: %ls : %ls", cn.c_str(), nm.c_str());
+        }
     }
-    UE_LOGI("widgets: %d live UserWidget instances logged", found);
+    UE_LOGI("widgets: %d live UserWidget instances (%d flagged as intro/gate candidates)", found, flagged);
 }
 
 // Spawn the 2nd player the INSTANT the local mainPlayer_C exists -- no fixed
@@ -261,9 +305,14 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         // is up -- it may blast past the omega/menu, else the world loads right
         // after you click Proceed (no long timer). The puppet (a bare actor wearing
         // your skin + body AnimBP) spawns the instant gameplay is live.
-        // DIAGNOSTIC: dump live widgets now (the OMEGA WARNING is on screen) to
-        // find its class, so we can auto-Proceed past it next build.
-        Post([] { DumpLiveWidgets(); });
+        // DIAGNOSTIC: VOTV preloads its UMG widgets, so a single dump after `open`
+        // shows gameplay widgets, not the OMEGA WARNING gate. Sample a few times
+        // across the boot/omega window (before AND around the open) and flag any
+        // intro/warning widget + its UFunctions, so we can call its Proceed next build.
+        for (int k = 0; k < 3; ++k) {
+            Post([k] { UE_LOGI("widgets: == dump pass %d ==", k); DumpLiveWidgets(); });
+            ::Sleep(900);
+        }
         Post([] {
             UE_LOGI("play: early open %ls (reach gameplay ASAP)", P::name::GameplayLevel);
             std::wstring cmd = L"open ";
