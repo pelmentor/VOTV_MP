@@ -99,10 +99,13 @@ have it tick without crashing for ≥60 s (target several minutes).
             `K2_SetActorLocation`/`K2_DestroyActor` UFunctions. (`mainPlayer_C`
             not found at the menu is expected — BP gameplay classes load with
             the map.)
-      - ☐ `ProcessEvent` (UFunction call path) — next; unblocks both our own
-            skip-to-gameplay and pawn driving. UFunction.Func @ +0xD8 (Bind =
-            sub_1412FACF0). Addresses for ProcessInternal/StaticConstructObject/
-            GMalloc/FName::FName already computed (in the finding).
+      - ☑ `ProcessEvent` (UFunction call path) AOB-resolved at rva 0x1465930
+            (vtable index 68; found via runtime vtable dump + decompile
+            confirm). Wired as `reflection::CallFunction(obj, func, params)`.
+            Resolved live to the exact RVA. RULE No.3 "GUObjectArray/GNames/
+            ProcessEvent via AOB" milestone COMPLETE: read the object graph +
+            call any UFunction, no UE4SS. (Live call validated with the spawn
+            port — needs a game-thread context.)
 - ☐ Port the validated orphan spawn into C++ behind `coop::RemotePlayer`.
 
 ## Phase 3 — Networking transport

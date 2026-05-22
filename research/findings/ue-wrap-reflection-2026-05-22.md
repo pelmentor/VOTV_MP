@@ -95,14 +95,33 @@ map (`untitled_1`). The lookup path itself is proven by Actor/World/Function.
 This means we already have the exact pieces the orphan-spawn port needs once in
 gameplay: the `Actor` class, a live `World`, and `K2_SetActorLocation`.
 
+## Update: ProcessEvent resolved (DONE)
+
+`UObject::ProcessEvent` pinned at **rva 0x1465930** (vtable index 68; sits just
+before ProcessInternal in the same TU). Found via a runtime vtable dump: it is
+the un-overridden UObject virtual at slot 68 (identical RVA across the
+CoreUObject package object and a live World). Confirmed by decompile: 3 args
+`(this, UFunction, Parms)`, `FunctionFlags & 0x400` (FUNC_Native) check at +0xB0,
+`alloca(PropertiesSize@+0x88)`, `memcpy(ParmsSize@+0xB6)`, inline FFrame setup,
+then the call into execution (`sub_141302DC0`).
+
+AOB (unique, 1 match; only the __security_cookie disp is wildcarded):
+`40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC F0 00 00 00 48 8D 6C 24 30 48 89 9D 18 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 B0 00 00 00`
+
+Resolved live to rva 0x1465930 exactly (matches the vtable slot). Wired as
+`ue_wrap::reflection::CallFunction(object, function, params)` ->
+`ProcessEvent(object, function, params)`. NOTE: ProcessEvent must run on the
+game thread; the boot-thread self-test only validates resolution, not a live
+call. A real call is validated with the orphan-spawn port (game-thread context).
+
+So the RULE No.3 "GUObjectArray / GNames / ProcessEvent via AOB" milestone is
+COMPLETE: the standalone SDK can both read the object graph and call any
+UFunction, no UE4SS.
+
 ## Next
 
-1. Resolve **ProcessEvent** (UObject::ProcessEvent) by AOB — the universal
-   UFunction call entry. Unblocks BOTH skip-to-gameplay (call
-   `OpenLevel`/load UFunctions ourselves) AND driving the pawn
-   (`K2_SetActorLocation`). Note: UFunction dispatches via `UFunction.Func`
-   @ +0xD8 (UFunction::Bind = sub_1412FACF0 sets it to ProcessInternal
-   sub_141465CE0 for script fns); ProcessEvent is a UObject virtual, not yet
-   pinned statically -- find its vtable slot or a clean AOB next.
-2. Then enter gameplay, find `mainPlayer_C`, and port the Phase 2.1 orphan
-   spawn into C++ behind `coop::RemotePlayer`.
+1. Get a game-thread execution context (hook a per-frame tick, e.g. via a
+   UFunction hook or `GameEngine::Tick`) so `CallFunction` runs safely.
+2. Drive skip-to-gameplay ourselves (`OpenLevel` + load UFunctions) so
+   `mainPlayer_C` loads; then port the Phase 2.1 orphan spawn into C++ behind
+   `coop::RemotePlayer` (spawn + `K2_SetActorLocation`), all via `CallFunction`.

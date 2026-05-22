@@ -35,6 +35,15 @@ bool IsResolved();
 // Resolved addresses (0 until Resolve() succeeds), for diagnostics.
 uintptr_t GUObjectArrayAddr();
 uintptr_t FNameToStringAddr();
+uintptr_t ProcessEventAddr();
+
+// Call a UFunction on `object` via UObject::ProcessEvent -- the universal
+// engine call path (drives BlueprintCallable/native UFunctions: SpawnActor
+// helpers, K2_SetActorLocation, OpenLevel, ...). `params` points to the
+// function's parameter struct (inputs in, outputs/return written back); pass
+// nullptr for a no-parameter function. Returns false if ProcessEvent is
+// unresolved. Must run on the game thread.
+bool CallFunction(void* object, void* function, void* params);
 
 // GUObjectArray.ObjObjects.NumElements (count of allocated UObject slots).
 int32_t NumObjects();

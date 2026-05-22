@@ -28,6 +28,13 @@ constexpr const char* kSigGUObjectArray =
 constexpr size_t kGUObjLeaDispOff = 24;  // offset of the disp32 within the match
 constexpr size_t kGUObjLeaEndOff = 28;   // rip base (end of the lea instruction)
 
+// UObject::ProcessEvent: unique prologue (vtable index 68; sits just before
+// ProcessInternal). Match == function address. The only wildcarded bytes are
+// the __security_cookie rip displacement.
+constexpr const char* kSigProcessEvent =
+    "40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC F0 00 00 00 48 8D 6C 24 30 "
+    "48 89 9D 18 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 B0 00 00 00";
+
 // ---- UObject / FUObjectArray layout (standard UE4.27) -------------------
 constexpr size_t kUObj_ClassPrivate = 0x10;
 constexpr size_t kUObj_NamePrivate = 0x18;
@@ -42,19 +49,20 @@ constexpr int32_t kElemsPerChunk = 64 * 1024;  // FChunkedFixedUObjectArray
 constexpr size_t kItemStride = 0x18;           // sizeof(FUObjectItem)
 
 using FNameToStringFn = void(__fastcall*)(const FName*, FString*);
+using ProcessEventFn = void(__fastcall*)(void* self, void* function, void* params);
 
 uintptr_t g_objArray = 0;
 FNameToStringFn g_fnameToString = nullptr;
+ProcessEventFn g_processEvent = nullptr;
 
 }  // namespace
 
 uintptr_t GUObjectArrayAddr() { return g_objArray; }
 uintptr_t FNameToStringAddr() { return reinterpret_cast<uintptr_t>(g_fnameToString); }
+uintptr_t ProcessEventAddr() { return reinterpret_cast<uintptr_t>(g_processEvent); }
 bool IsResolved() { return g_objArray && g_fnameToString; }
 
 bool Resolve() {
-    if (IsResolved()) return true;
-
     if (!g_fnameToString) {
         const uintptr_t hit = FindPattern(kSigFNameToString);
         if (hit) g_fnameToString = reinterpret_cast<FNameToStringFn>(hit);
@@ -66,7 +74,17 @@ bool Resolve() {
             g_objArray = hit + kGUObjLeaEndOff + disp;
         }
     }
+    if (!g_processEvent) {
+        const uintptr_t hit = FindPattern(kSigProcessEvent);
+        if (hit) g_processEvent = reinterpret_cast<ProcessEventFn>(hit);
+    }
     return IsResolved();
+}
+
+bool CallFunction(void* object, void* function, void* params) {
+    if (!g_processEvent || !object || !function) return false;
+    g_processEvent(object, function, params);
+    return true;
 }
 
 int32_t NumObjects() {
@@ -176,9 +194,12 @@ void RunSelfTest(const wchar_t* outPath) {
     MainModuleRange(base, imgSize);
     std::fprintf(f, "main module base=%p size=0x%zx\n", reinterpret_cast<void*>(base), imgSize);
     std::fprintf(f, "GUObjectArray   = %p (rva 0x%zx)\n", reinterpret_cast<void*>(g_objArray), g_objArray - base);
-    std::fprintf(f, "FName::ToString = %p (rva 0x%zx)\n\n",
+    std::fprintf(f, "FName::ToString = %p (rva 0x%zx)\n",
                  reinterpret_cast<void*>(g_fnameToString),
                  reinterpret_cast<uintptr_t>(g_fnameToString) - base);
+    std::fprintf(f, "ProcessEvent    = %p (rva 0x%zx)  [expect rva 0x1465930]\n\n",
+                 reinterpret_cast<void*>(g_processEvent),
+                 g_processEvent ? reinterpret_cast<uintptr_t>(g_processEvent) - base : 0);
 
     // Wait for the engine to populate the object array (proxy loads pre-engine).
     int32_t n = 0;
@@ -257,6 +278,30 @@ void RunSelfTest(const wchar_t* outPath) {
         if (obj && ClassNameOf(obj) == L"World") worldInst = obj;
     }
     report(L"first World instance", worldInst);
+
+    // --- vtable dump (to locate ProcessEvent: a UObject virtual) ---
+    // Dump the same slots for two unrelated objects; ProcessEvent is an
+    // un-overridden UObject virtual, so its slot RVA is identical across both.
+    auto dumpVtable = [&](const wchar_t* label, void* obj) {
+        std::fprintf(f, "\n--- vtable: %ls (obj=%p) ---\n", label, obj);
+        if (!obj) {
+            std::fprintf(f, "  (null)\n");
+            return;
+        }
+        auto** vt = *reinterpret_cast<void***>(obj);
+        for (int i = 0; i < 100; ++i) {
+            void* fn = vt[i];
+            const uintptr_t a = reinterpret_cast<uintptr_t>(fn);
+            // Only print plausible code addresses inside the main image.
+            if (a >= base && a < base + imgSize) {
+                std::fprintf(f, "  [%3d] rva 0x%zx\n", i, a - base);
+            } else {
+                std::fprintf(f, "  [%3d] %p (out of image)\n", i, fn);
+            }
+        }
+    };
+    dumpVtable(L"object[0] (CoreUObject package)", ObjectAt(0));
+    dumpVtable(L"World instance", worldInst);
 
     std::fclose(f);
 }
