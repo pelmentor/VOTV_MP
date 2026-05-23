@@ -576,6 +576,21 @@ void RunAutonomousGrabTest() {
         }
         UE_LOGI("grab_test: prop scan scanned=%d candidates=%d nearest=%p (%ls) dist=%.1f mesh=%p",
                 scanned, candidates, pr->prop, pr->cls.c_str(), pr->dist, pr->mesh);
+        // Stage 2 preview: log the prop's identity + heavy/static/frozen
+        // bools. Validates the propData / Key / Static / frozen offsets that
+        // Stage 4-7 will need for the wire. Aprop_propData_heavy = 0x02CC,
+        // Aprop_Static = 0x02D8, Aprop_frozen = 0x02DA, Aprop_Key = 0x02E0.
+        if (pr->prop) {
+            auto* p = reinterpret_cast<uint8_t*>(pr->prop);
+            const bool heavy  = *reinterpret_cast<bool*>(p + P::off::Aprop_propData_heavy);
+            const bool staticP = *reinterpret_cast<bool*>(p + P::off::Aprop_Static);
+            const bool frozen = *reinterpret_cast<bool*>(p + P::off::Aprop_frozen);
+            const R::FName key = *reinterpret_cast<R::FName*>(p + P::off::Aprop_Key);
+            const std::wstring keyStr = R::ToString(key);
+            UE_LOGI("grab_test: prop fields -- heavy=%d Static=%d frozen=%d Key='%ls' (idx=%d num=%d)",
+                    heavy ? 1 : 0, staticP ? 1 : 0, frozen ? 1 : 0,
+                    keyStr.c_str(), key.ComparisonIndex, key.Number);
+        }
         done->store(pr->prop && pr->mesh ? 1 : 2);
     });
     while (done->load() == 0) ::Sleep(5);
