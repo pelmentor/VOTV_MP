@@ -836,6 +836,40 @@ void RunAutonomousGrabTest() {
         UE_LOGI("grab_test: no nearby heavy prop -- skipping heavy-grab arm");
     }
 
+    // ---- 8. (HOST) Timeline-force arm: drive `grab` Timeline via
+    // PlayFromStart so we trigger the 3 BP-Timeline observers without a
+    // real E-press. The `grab` UTimelineComponent is at mainPlayer+0x0728;
+    // its UpdateFunc/FinishedFunc bindings are auto-emitted by the BP
+    // compiler and dispatched via OwningActor.ProcessEvent on each tick /
+    // at end. RISK: VOTV's grab__UpdateFunc body may read state (e.g.
+    // mainPlayer.grabbing_actor) that's null right now -- if not defensive,
+    // could crash. Best to call once after a clean state (post-release).
+    UE_LOGI("grab_test: trying to force `grab` Timeline play (closes the last 3 BP-Timeline observer gaps)");
+    done->store(0);
+    GT::Post([rsv, done] {
+        void* timeline = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(rsv->player) + P::off::mainPlayer_grabTimeline);
+        if (!timeline) {
+            UE_LOGW("grab_test: mainPlayer.grab Timeline is null -- skipping force-play");
+            done->store(2); return;
+        }
+        void* tlCls = R::FindClass(P::name::TimelineComponentClass);
+        void* playFromStartFn = R::FindFunction(tlCls, P::name::TimelinePlayFromStartFn);
+        if (!playFromStartFn) {
+            UE_LOGW("grab_test: TimelineComponent.PlayFromStart UFunction not found");
+            done->store(2); return;
+        }
+        UE_LOGI("grab_test: forcing grab Timeline=%p .PlayFromStart()", timeline);
+        const bool ok = R::CallFunction(timeline, playFromStartFn, nullptr);
+        UE_LOGI("grab_test: CallFunction(grab.PlayFromStart) -> %d "
+                "(expect grab_hook[grab.Update] x3 + grab_hook[grab.Finished PRE])", ok);
+        done->store(1);
+    });
+    while (done->load() == 0) ::Sleep(5);
+
+    // Give the Timeline a few seconds to tick and finish.
+    ::Sleep(3000);
+
     UE_LOGI("grab_test: DONE -- autonomous grab routine complete");
 }
 

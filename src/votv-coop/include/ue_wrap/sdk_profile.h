@@ -220,6 +220,7 @@ inline constexpr size_t USceneComponent_RelativeLocation = 0x011C;     // FVecto
 // fire on heavy drag; needs the constraint observers below.
 inline constexpr size_t mainPlayer_heavyGrab            = 0x04F0;  // UPhysicsConstraintComponent*
 inline constexpr size_t mainPlayer_grabHandle           = 0x0688;  // UPhysicsHandleComponent*  (`self` in PHC observer xref)
+inline constexpr size_t mainPlayer_grabTimeline         = 0x0728;  // UTimelineComponent* (the `grab` Timeline; UpdateFunc fires per-tick, FinishedFunc at end)
 inline constexpr size_t mainPlayer_grabbing_actor       = 0x07D0;  // AActor*
 inline constexpr size_t mainPlayer_grabbing_component   = 0x07D8;  // UPrimitiveComponent*
 inline constexpr size_t mainPlayer_grabsHeavy           = 0x0874;  // bool
@@ -541,6 +542,13 @@ inline constexpr const wchar_t* AddImpulseFn                           = L"AddIm
 inline constexpr const wchar_t* MainPlayerGrabUpdateFn       = L"grab__UpdateFunc";
 inline constexpr const wchar_t* MainPlayerGrabFinishedFn     = L"grab__FinishedFunc";
 inline constexpr const wchar_t* MainPlayerUseInputEventFn    = L"InpActEvt_use_K2Node_InputActionEvent_41";
+
+// UTimelineComponent BP-callable methods (used to force the `grab` Timeline
+// from the autonomous test, so the 3 BP-Timeline observers fire without a
+// real E-press). These ARE ProcessEvent-dispatched (BP CallFunction nodes).
+inline constexpr const wchar_t* TimelineComponentClass       = L"TimelineComponent";
+inline constexpr const wchar_t* TimelinePlayFromStartFn      = L"PlayFromStart";
+inline constexpr const wchar_t* TimelineStopFn               = L"Stop";
 
 // Aprop_C BP class name (for PropKeyRegistry GUObjectArray scan, Stage 4).
 inline constexpr const wchar_t* PropClass             = L"prop_C";

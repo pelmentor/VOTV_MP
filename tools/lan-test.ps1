@@ -167,9 +167,9 @@ while ((Get-Date) -lt $deadline) {
 if ($pass) {
     if ($GrabTest) {
         # Grab test: 10 s stabilization + 5 s SetTargetLocation drive +
-        # 4 s heavy-grab arm + log tail.
-        Step "PASS detected; GRAB TEST armed -- waiting 30 s for grab routine to complete..."
-        Start-Sleep -Seconds 30
+        # 4 s heavy-grab arm + 3 s Timeline-force tail.
+        Step "PASS detected; GRAB TEST armed -- waiting 35 s for grab routine to complete..."
+        Start-Sleep -Seconds 35
     } else {
         Step "PASS detected; waiting 6 s for pose stream to settle before screenshot..."
         Start-Sleep -Seconds 6
