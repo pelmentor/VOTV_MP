@@ -640,19 +640,24 @@ void RunAutonomousGrabTest() {
         return;
     }
 
-    // ---- 3. (HOST) Compute hand position (player + forward * 80 cm + Z+50 cm).
+    // ---- 3. (HOST) Compute hand position (player + forward * 60 cm + Z+80 cm
+    // so the prop sits at the camera's face level, IN FRAME for the screenshot).
+    // The host's camera is at the head bone (~+80 cm above actor centre), so
+    // putting the prop at actor.Z+80 + forward 60 cm puts it about an arm's
+    // length in front of the camera centre.
     auto handPos = std::make_shared<ue_wrap::FVector>();
     done->store(0);
     GT::Post([rsv, pr, handPos, done] {
         ue_wrap::FVector pLoc = ue_wrap::engine::GetActorLocation(rsv->player);
         ue_wrap::FVector fwd  = ue_wrap::engine::GetActorForwardVector(rsv->player);
-        handPos->X = pLoc.X + fwd.X * 80.f;
-        handPos->Y = pLoc.Y + fwd.Y * 80.f;
-        handPos->Z = pLoc.Z + 50.f;
+        handPos->X = pLoc.X + fwd.X * 60.f;
+        handPos->Y = pLoc.Y + fwd.Y * 60.f;
+        handPos->Z = pLoc.Z + 80.f;
         // Teleport the prop to the hand position (physics may fight back but
         // the kinematic-target will overwrite each tick).
         ue_wrap::engine::SetActorLocation(pr->prop, *handPos);
-        UE_LOGI("grab_test: teleported prop -> (%.1f, %.1f, %.1f)", handPos->X, handPos->Y, handPos->Z);
+        UE_LOGI("grab_test: teleported prop -> (%.1f, %.1f, %.1f) (camera-level, in frame)",
+                handPos->X, handPos->Y, handPos->Z);
         done->store(1);
     });
     while (done->load() == 0) ::Sleep(5);
@@ -671,22 +676,41 @@ void RunAutonomousGrabTest() {
     });
     while (done->load() == 0) ::Sleep(5);
 
-    // ---- 5. Per-tick SetTargetLocation for 5 seconds.
-    UE_LOGI("grab_test: now driving SetTargetLocation 5x (1 sec apart)");
-    for (int i = 0; i < 5; ++i) {
-        ::Sleep(1000);
+    // ---- 5. Hold the prop visible for ~8 seconds so the LAN-test screenshot
+    // captures it being held. Drive SetTargetLocation every 500 ms; between
+    // ticks, take 2 in-process screenshots (host-side) showing the prop
+    // floating in front of the player.
+    UE_LOGI("grab_test: holding prop for 8 sec (taking 2 in-process screenshots mid-hold)");
+
+    // Helper to push one SetTargetLocation call.
+    auto drive = [&](float zOffset) {
         done->store(0);
-        const float zJitter = 50.f + static_cast<float>(i) * 5.f;
-        GT::Post([rsv, handPos, zJitter, done, i] {
+        GT::Post([rsv, handPos, zOffset, done] {
             std::vector<uint8_t> frame(static_cast<size_t>(rsv->stFrameSize), 0);
-            ue_wrap::FVector newLoc{handPos->X, handPos->Y, handPos->Z + zJitter - 50.f};
+            ue_wrap::FVector newLoc{handPos->X, handPos->Y, handPos->Z + zOffset};
             *reinterpret_cast<ue_wrap::FVector*>(frame.data() + rsv->stPLoc) = newLoc;
-            const bool ok = R::CallFunction(rsv->grabHandle, rsv->setTargetFn, frame.data());
-            UE_LOGI("grab_test: tick %d SetTargetLocation((%.1f,%.1f,%.1f)) -> %d",
-                    i, newLoc.X, newLoc.Y, newLoc.Z, ok);
+            R::CallFunction(rsv->grabHandle, rsv->setTargetFn, frame.data());
             done->store(1);
         });
         while (done->load() == 0) ::Sleep(5);
+    };
+
+    // Drive ticks: 16 calls over 8 seconds at 500 ms each. Between calls, take
+    // 2 screenshots -- one early (prop just lifted into frame), one later
+    // (prop at a slightly different height so it's clearly being driven).
+    for (int i = 0; i < 16; ++i) {
+        ::Sleep(500);
+        // Sinusoidal Z bob so the prop visibly moves between screenshots.
+        const float z = static_cast<float>(std::sin(i * 0.4f) * 8.f);
+        drive(z);
+        if (i == 4) {
+            const bool ok = harness::screenshot::Capture(L"grab-held-1");
+            UE_LOGI("grab_test: SCREENSHOT 1 (mid-hold) saved=%d -> coop-screenshots/coop-*-grab-held-1.png", ok);
+        }
+        if (i == 12) {
+            const bool ok = harness::screenshot::Capture(L"grab-held-2");
+            UE_LOGI("grab_test: SCREENSHOT 2 (later-hold) saved=%d -> coop-screenshots/coop-*-grab-held-2.png", ok);
+        }
     }
 
     // ---- 6. ReleaseComponent.
