@@ -34,8 +34,15 @@ void Repaint() {
 bool Init(void* outer) {
     if (g_root) return true;  // already up
     if (!outer) { UE_LOGW("hud_feed: Init with null outer"); return false; }
-    if (!engine::SpawnHudFeedWidget(outer, kZOrder, &g_root, &g_text) || !g_root || !g_text) {
-        UE_LOGE("hud_feed: SpawnHudFeedWidget failed");
+    // Top-right by the right lamp -- pivot at the widget's top-right corner, placed at
+    // (1900, 40) for the 1920x1080 test resolution. Opaque white, right-justified, font 16.
+    if (!engine::SpawnScreenTextWidget(outer, kZOrder,
+                                       FVector2D{1.f, 0.f}, FVector2D{1900.f, 40.f},
+                                       /*justify Right*/ 2, /*fontSize*/ 16,
+                                       FLinearColor{1.f, 1.f, 1.f, 1.f},
+                                       &g_root, &g_text)
+        || !g_root || !g_text) {
+        UE_LOGE("hud_feed: SpawnScreenTextWidget failed");
         g_root = g_text = nullptr;
         return false;
     }

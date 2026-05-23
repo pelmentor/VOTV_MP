@@ -593,34 +593,36 @@ bool RemoveWidgetFromViewport(void* userWidget) {
     return Call(userWidget, f);
 }
 
-bool SpawnHudFeedWidget(void* outer, int zOrder, void** outRoot, void** outText) {
+bool SpawnScreenTextWidget(void* outer, int zOrder, FVector2D alignment, FVector2D position,
+                           int justify, int fontSize, const FLinearColor& color,
+                           void** outRoot, void** outText) {
     if (outRoot) *outRoot = nullptr;
     if (outText) *outText = nullptr;
     if (!outer || !ResolveScreenWidgetFns()) {
-        UE_LOGE("engine: SpawnHudFeedWidget unresolved (uw=%p addVp=%p setVis=%p)",
+        UE_LOGE("engine: SpawnScreenTextWidget unresolved (uw=%p addVp=%p setVis=%p)",
                 g_npUserWidgetClass, g_addToVpFn, g_widgetSetVisFn);
         return false;
     }
-    // Opaque-white, RIGHT-justified, multi-line text (the feed rebuilds the whole
-    // string on each push); font 16. Outer = a persistent object (GameInstance) so
-    // it survives level loads.
-    BuiltText bt = BuildTextWidget(outer, L"", FLinearColor{1.f, 1.f, 1.f, 1.f}, 16, /*Right*/ 2);
+    // Multi-line text (caller drives via SetWidgetText). Outer should be a
+    // persistent object (GameInstance) so the widget survives level loads.
+    BuiltText bt = BuildTextWidget(outer, L"", color, fontSize, static_cast<uint8_t>(justify));
     if (!bt.root || !bt.txt) return false;
     // Visible but input-transparent (ESlateVisibility::HitTestInvisible = 3) so the
     // overlay never steals mouse/keyboard focus from the game.
     if (g_widgetSetVisFn) { ParamFrame f(g_widgetSetVisFn); f.Set<uint8_t>(L"InVisibility", 3); Call(bt.root, f); }
     if (!AddWidgetToViewport(bt.root, zOrder)) {
-        UE_LOGE("engine: SpawnHudFeedWidget -- AddToViewport failed");
+        UE_LOGE("engine: SpawnScreenTextWidget -- AddToViewport failed");
         return false;
     }
-    // Anchor to the TOP-RIGHT: alignment (1,0) makes the widget's top-right corner
-    // the pivot, positioned near the top-right of the viewport (by the right lamp).
-    // Pixel coords assume the 1920x1080 test window; tune if the resolution differs.
-    if (g_setAlignVpFn) { ParamFrame f(g_setAlignVpFn); FVector2D a{1.f, 0.f}; f.SetRaw(L"Alignment", &a, sizeof(a)); Call(bt.root, f); }
-    if (g_setPosVpFn)   { ParamFrame f(g_setPosVpFn); FVector2D p{1900.f, 40.f}; f.SetRaw(L"Position", &p, sizeof(p)); f.Set<bool>(L"bRemoveDPIScale", true); Call(bt.root, f); }
+    // Alignment is the pivot inside the widget that gets placed at `position`:
+    // {0,0} top-left, {1,0} top-right, {0,.5} left-middle, {0.5,0.5} centre, etc.
+    // Position pixels assume 1920x1080; tune (or use viewport-relative math) for other res.
+    if (g_setAlignVpFn) { ParamFrame f(g_setAlignVpFn); FVector2D a = alignment; f.SetRaw(L"Alignment", &a, sizeof(a)); Call(bt.root, f); }
+    if (g_setPosVpFn)   { ParamFrame f(g_setPosVpFn);   FVector2D p = position;  f.SetRaw(L"Position",  &p, sizeof(p)); f.Set<bool>(L"bRemoveDPIScale", true); Call(bt.root, f); }
     if (outRoot) *outRoot = bt.root;
     if (outText) *outText = bt.txt;
-    UE_LOGI("engine: SpawnHudFeedWidget root=%p txt=%p z=%d", bt.root, bt.txt, zOrder);
+    UE_LOGI("engine: SpawnScreenTextWidget root=%p txt=%p z=%d align=(%.1f,%.1f) pos=(%.0f,%.0f)",
+            bt.root, bt.txt, zOrder, alignment.X, alignment.Y, position.X, position.Y);
     return true;
 }
 

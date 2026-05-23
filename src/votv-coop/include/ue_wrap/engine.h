@@ -123,9 +123,16 @@ void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float o
 // the player's screen via UUserWidget::AddToViewport -- it does NOT need the stock HUD
 // canvas (which VOTV doesn't run). Set to HitTestInvisible so it never steals input.
 // `outer` should be a persistent object (the GameInstance) so it survives level loads.
+//   alignment   -- pivot within the widget {0,0} = top-left, {1,0} = top-right, {0,.5} = left-middle, etc.
+//   position    -- viewport pixel coords for the pivot (with bRemoveDPIScale=true).
+//   justify     -- ETextJustify: 0=Left, 1=Center, 2=Right.
+//   fontSize    -- pt.
+//   color       -- text colour (use 1,1,1,1 for opaque white).
 // Returns the root UUserWidget* (outRoot, for re-attach on level change) and the
 // UTextBlock* (outText, to drive text via SetWidgetText). Game thread only.
-bool SpawnHudFeedWidget(void* outer, int zOrder, void** outRoot, void** outText);
+bool SpawnScreenTextWidget(void* outer, int zOrder, FVector2D alignment, FVector2D position,
+                           int justify, int fontSize, const FLinearColor& color,
+                           void** outRoot, void** outText);
 
 // Set a UTextBlock's text (Conv_StringToText -> UTextBlock::SetText). The HUD feed
 // updates its line by rebuilding the whole multi-line string. Game thread only.

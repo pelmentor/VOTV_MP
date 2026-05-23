@@ -2,6 +2,7 @@
 
 #include "harness/screenshot.h"
 #include "dev/freecam.h"
+#include "dev/pos_hud.h"
 #include "coop/event_feed.h"
 #include "coop/nameplate.h"
 #include "coop/net/session.h"
@@ -637,6 +638,9 @@ void Start() {
 
     // Dev free-flying camera (HOME toggle). No-op unless votv-coop.ini enables it.
     dev::freecam::Init();
+
+    // Dev pos + camera-rotation overlay (F2 toggle). No-op unless ini enables it.
+    dev::pos_hud::Init();
 
     auto* scenario = new std::string(ReadScenario());
     if (HANDLE t = ::CreateThread(nullptr, 0, TimelineThread, scenario, 0, nullptr)) {

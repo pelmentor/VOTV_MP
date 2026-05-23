@@ -47,6 +47,7 @@ add_library(votv-coop SHARED
     src/coop/net/session.cpp
     src/coop/net/reliable_channel.cpp
     src/dev/freecam.cpp
+    src/dev/pos_hud.cpp
     src/harness/harness.cpp
     src/harness/screenshot.cpp
 )
