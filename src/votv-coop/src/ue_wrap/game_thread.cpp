@@ -90,6 +90,42 @@ inline void FireObservers(const ObserverSlot table[], void* self, void* function
     }
 }
 
+// Name-prefix diagnostic table. Each slot is (prefix wchar buffer, cb).
+// `anySet` is the fast-path bypass: when no slots are populated, the detour
+// skips the whole name-resolve+compare path entirely (zero cost in the
+// common case). Single producer / multiple readers, atomic publish.
+struct NameDiagSlot {
+    wchar_t prefix[kMaxNameDiagnosticPrefixLen]{};
+    std::atomic<ProcessEventNameDiagnosticFn> cb{nullptr};
+    std::atomic<int> prefixLen{0};  // 0 = empty slot
+};
+NameDiagSlot g_nameDiagSlots[kMaxNameDiagnostics];
+std::atomic<int> g_nameDiagAnySet{0};
+
+inline void FireNameDiagnostics(void* self, void* function, void* params) {
+    if (g_nameDiagAnySet.load(std::memory_order_acquire) == 0) return;
+    if (!function) return;
+    // Resolve the function name. This calls into reflection -- cheap-ish but
+    // not free; gated by the anySet fast path above.
+    auto fname = reflection::NameOf(function);
+    std::wstring nameStr = reflection::ToString(fname);
+    const wchar_t* funcName = nameStr.c_str();
+    const size_t funcLen = nameStr.size();
+    for (int i = 0; i < kMaxNameDiagnostics; ++i) {
+        const int prefLen = g_nameDiagSlots[i].prefixLen.load(std::memory_order_acquire);
+        if (prefLen <= 0) continue;
+        if (static_cast<int>(funcLen) < prefLen) continue;
+        // Case-sensitive prefix compare. We could lowercase both sides for
+        // case-insensitive matching; UE4 FNames are case-preserving but
+        // case-insensitive-equal -- for prefix debugging we just match the
+        // case the BP author wrote.
+        if (std::wmemcmp(funcName, g_nameDiagSlots[i].prefix, prefLen) == 0) {
+            ProcessEventNameDiagnosticFn cb = g_nameDiagSlots[i].cb.load(std::memory_order_relaxed);
+            if (cb) cb(self, funcName, params);
+        }
+    }
+}
+
 // The posted-task queue. Pulled out under the lock, then run unlocked so a task
 // may Post() without deadlocking.
 std::mutex g_queueMutex;
@@ -172,6 +208,9 @@ void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
     // single interceptor compare above. NO observers registered = NO cost
     // beyond the 8 null loads.
     FireObservers(g_preObservers, self, function, params);
+
+    // Diagnostic name-prefix sniffer (zero cost when no slot is set).
+    FireNameDiagnostics(self, function, params);
 
     g_originalPE(self, function, params);
 
@@ -262,6 +301,42 @@ void ClearAllObservers() {
         g_preObservers[i].targetFn.store(nullptr, std::memory_order_release);
         g_preObservers[i].cb.store(nullptr, std::memory_order_relaxed);
     }
+    ClearAllNameDiagnostics();
+}
+
+bool SetNameDiagnostic(int slot, const wchar_t* prefix, ProcessEventNameDiagnosticFn cb) {
+    if (slot < 0 || slot >= kMaxNameDiagnostics) return false;
+    if (!prefix || !cb || !*prefix) {
+        // Clear this slot.
+        g_nameDiagSlots[slot].prefixLen.store(0, std::memory_order_release);
+        g_nameDiagSlots[slot].cb.store(nullptr, std::memory_order_relaxed);
+        // Recompute anySet.
+        int anySet = 0;
+        for (int i = 0; i < kMaxNameDiagnostics; ++i) {
+            if (g_nameDiagSlots[i].prefixLen.load(std::memory_order_relaxed) > 0) { anySet = 1; break; }
+        }
+        g_nameDiagAnySet.store(anySet, std::memory_order_release);
+        return true;
+    }
+    // Copy prefix (bounded). Compute length up to kMaxNameDiagnosticPrefixLen-1.
+    int len = 0;
+    while (len < kMaxNameDiagnosticPrefixLen - 1 && prefix[len] != L'\0') {
+        g_nameDiagSlots[slot].prefix[len] = prefix[len];
+        ++len;
+    }
+    g_nameDiagSlots[slot].prefix[len] = L'\0';
+    g_nameDiagSlots[slot].cb.store(cb, std::memory_order_relaxed);
+    g_nameDiagSlots[slot].prefixLen.store(len, std::memory_order_release);
+    g_nameDiagAnySet.store(1, std::memory_order_release);
+    return true;
+}
+
+void ClearAllNameDiagnostics() {
+    for (int i = 0; i < kMaxNameDiagnostics; ++i) {
+        g_nameDiagSlots[i].prefixLen.store(0, std::memory_order_release);
+        g_nameDiagSlots[i].cb.store(nullptr, std::memory_order_relaxed);
+    }
+    g_nameDiagAnySet.store(0, std::memory_order_release);
 }
 
 }  // namespace ue_wrap::game_thread

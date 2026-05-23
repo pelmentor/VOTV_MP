@@ -329,6 +329,47 @@ void GrabObserver_switchToHeavyDrag(void* self, void* /*function*/, void* /*para
     UE_LOGI("grab_hook[switchToHeavyDrag]: grabsHeavy=%d Heavy=%d", grabsHeavy, heavy);
 }
 
+// Upstream entry points -- catch the dispatch BEFORE pickupObject. If
+// pickupObject doesn't fire on E-press, one of these should: playerTryToGrab
+// is the BPI entry; canPickup is the gate check; beginHoldingObject /
+// playerGrabbed are the BPI mid-flow / result events.
+void GrabObserver_playerTryToGrab(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[playerTryToGrab]: self=%p", self);
+}
+void GrabObserver_canPickup(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[canPickup]: self=%p", self);
+}
+void GrabObserver_beginHoldingObject(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[beginHoldingObject]: self=%p", self);
+}
+void GrabObserver_playerGrabbed(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[playerGrabbed]: self=%p", self);
+}
+
+// Diagnostic name-prefix callback: log ANY UFunction whose name starts with
+// the configured prefix. Used to discover the actual dispatch names when our
+// named observers don't fire (the SDK header names may not match the live
+// FName for inlined-BP UFunctions). Throttled per-name so a high-rate
+// dispatch doesn't drown the log; lifetime is a debug session.
+void GrabDiag_logName(void* self, const wchar_t* funcName, void* /*params*/) {
+    // Throttle: only log each unique name once per ~30 calls. Tiny 8-entry
+    // recently-seen cache keyed by first 4 chars of name (cheap hash).
+    static struct { uint64_t key; int count; } sCache[8] = {};
+    if (!funcName) return;
+    const uint64_t key = (static_cast<uint64_t>(funcName[0]) << 48) |
+                         (static_cast<uint64_t>(funcName[1]) << 32) |
+                         (static_cast<uint64_t>(funcName[2]) << 16) |
+                          static_cast<uint64_t>(funcName[3]);
+    int slot = static_cast<int>(key) & 7;
+    if (sCache[slot].key == key) {
+        if (++sCache[slot].count % 30 != 1) return;
+    } else {
+        sCache[slot].key = key;
+        sCache[slot].count = 1;
+    }
+    UE_LOGI("grab_diag: dispatched UFunc '%ls' self=%p", funcName, self);
+}
+
 // One-shot UFunction-pointer resolution + observer install. Idempotent (gated
 // by g_grabObserversInstalled). Called from NetPumpTick the first time
 // g_netLocal resolves, so the observers are live before any user E-press.
@@ -368,6 +409,19 @@ void InstallGrabObservers() {
     reg(P::name::dropGrabObjectFn,     GrabObserver_dropGrabObject_PRE, /*pre=*/true);
     reg(P::name::throwHoldingPropFn,   GrabObserver_throwHoldingProp_PRE, /*pre=*/true);
     reg(P::name::switchToHeavyDragFn,  GrabObserver_switchToHeavyDrag,  /*pre=*/false);
+    // Upstream entry points -- catch the dispatch one level above pickupObject.
+    reg(L"playerTryToGrab",   GrabObserver_playerTryToGrab,   /*pre=*/false);
+    reg(L"canPickup",         GrabObserver_canPickup,         /*pre=*/false);
+    // Diagnostic name-prefix sniffer: log ANY UFunction whose name starts
+    // with one of these. Catches the actual dispatch when our SDK-header
+    // names don't match the live FName. Throttled per-name in
+    // GrabDiag_logName so log doesn't drown. Retire this once the actual
+    // entry-point names are confirmed (RULE 2 debug crutch).
+    ue_wrap::game_thread::SetNameDiagnostic(0, L"pickup",     GrabDiag_logName);
+    ue_wrap::game_thread::SetNameDiagnostic(1, L"grab",       GrabDiag_logName);
+    ue_wrap::game_thread::SetNameDiagnostic(2, L"InpActEvt_use", GrabDiag_logName);
+    ue_wrap::game_thread::SetNameDiagnostic(3, L"holdObject", GrabDiag_logName);
+    UE_LOGI("grab_hook: name-prefix diagnostics enabled (pickup/grab/InpActEvt_use/holdObject)");
     g_grabObserversInstalled = true;
     UE_LOGI("grab_hook: Stage 1 observers installed -- press E on a prop to see hook lines");
 }

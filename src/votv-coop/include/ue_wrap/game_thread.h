@@ -108,4 +108,26 @@ void UnregisterObservers(void* targetUFunction);
 // Drop the entire observer table (post + pre). Called from Uninstall().
 void ClearAllObservers();
 
+// ---- Diagnostic name-prefix dispatcher ----------------------------------
+// Temporary tool for "I don't know which UFunction VOTV dispatches; log the
+// names of all that match my filter". Single global filter (max 4 prefixes,
+// each up to 31 wchars). On each ProcessEvent dispatch, the detour walks the
+// 4-entry prefix table; for any function whose name starts with one of the
+// configured prefixes, the configured callback fires with the function's
+// FName-resolved wide string. Used when our named observers don't fire and
+// we suspect the actual UFunction name differs from the SDK header.
+//
+// Performance: 4 string compares per ProcessEvent dispatch ONLY if at least
+// one prefix is set. Set/cleared in the same atomic-publish pattern as the
+// observers. Strip the diagnostic after the actual UFunction names are
+// pinned down (RULE 2: this is a debug crutch with a documented retirement).
+using ProcessEventNameDiagnosticFn = void(*)(void* self, const wchar_t* funcName, void* params);
+inline constexpr int kMaxNameDiagnostics = 4;
+inline constexpr int kMaxNameDiagnosticPrefixLen = 32;  // including null terminator
+
+// Add a name-prefix filter. funcName starting with `prefix` triggers `cb`.
+// Pass empty `prefix` or null `cb` to clear all entries.
+bool SetNameDiagnostic(int slot, const wchar_t* prefix, ProcessEventNameDiagnosticFn cb);
+void ClearAllNameDiagnostics();
+
 }  // namespace ue_wrap::game_thread
