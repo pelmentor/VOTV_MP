@@ -122,6 +122,21 @@ private:
                                   // successful spawn.
     void* satelliteCmc_ = nullptr; // cached satellite->CharacterMovementComponent
                                    // for per-tick Velocity writes.
+
+    // BP-authored visual offset between mainPlayer_C's actor centre and the
+    // visible body. On the source this lives on the `mesh_playerVisible`
+    // sub-component as RelativeLocation.Z and RelativeRotation.Yaw (typically
+    // -halfH-ish for Z and -90 for Yaw -- the "+Y forward mesh / +X forward
+    // actor" UE4 character convention shim). The puppet's SkeletalMeshComponent
+    // is the actor's ROOT component, so it has no sub-component to host the
+    // same offset (root-component RelLoc/RelRot just compose into the world
+    // transform that SetActorLocation overwrites). We apply the same shim at
+    // the ACTOR transform level instead: puppet.actor.Z = source.actor.Z +
+    // meshOffsetZ_; puppet.actor.Yaw = source.actor.Yaw + meshOffsetYaw_. Read
+    // once at Spawn from the local mainPlayer_C's mesh_playerVisible (same
+    // class as the source -> same BP-authored values).
+    float meshOffsetZ_ = 0.f;
+    float meshOffsetYaw_ = 0.f;
     // Placeholder until the peer's Join reliable message lands (typically within
     // a few RTT of connect). nameplate::Update repaints when SetNickname changes
     // this. The old "Player 2" default was misleading -- both ends saw "Player 2"
@@ -133,20 +148,24 @@ private:
     // single-threaded; no mutex). curPos_/curYaw_/curSpeed_ is what was last
     // applied to the engine; targetPos_/targetYaw_ is what we're walking toward.
     ue_wrap::FVector curPos_{};
-    float            curYaw_ = 0.f;       // source's ACTOR yaw (body facing); naturally
-                                          // lags the camera if VOTV's Character has slow
-                                          // body turn -- gives "head leads body" for free.
+    float            curYaw_ = 0.f;       // source's ACTOR yaw (body facing).
     float            curPitch_ = 0.f;     // source controller pitch (drives head bone)
+    float            curHeadYawDelta_ = 0.f;  // source controller.yaw - actor.yaw; drives the
+                                              // head bone yaw lead over the body so the
+                                              // puppet's head visually follows where the
+                                              // SOURCE is looking (free-look / camera lead).
     float            curSpeed_ = 0.f;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;
+    float            targetHeadYawDelta_ = 0.f;
     // Cached at SetTargetPose time = target - cur. The interp incrementally
     // applies dAlpha * errorPos_ each frame (MTA's linear form -- recomputing
     // (target - cur) each frame would decay geometrically, not linearly).
     ue_wrap::FVector errorPos_{};
     float            errorYaw_ = 0.f;
     float            errorPitch_ = 0.f;
+    float            errorHeadYawDelta_ = 0.f;
     uint64_t         interpStartMs_ = 0;
     uint64_t         interpFinishMs_ = 0;  // 0 == no active interp window (frozen)
     float            lastAlpha_ = 0.f;

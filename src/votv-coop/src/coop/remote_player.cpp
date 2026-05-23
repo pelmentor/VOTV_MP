@@ -53,14 +53,17 @@ bool RemotePlayer::Spawn() {
         return false;
     }
 
-    // The puppet's actor sits at the SAME world coordinate as the source actor
-    // (capsule centre). The mesh-vs-actor visual offset (RelativeLocation Z) is
-    // copied off the local mainPlayer_C's mesh_playerVisible onto the puppet's
-    // SkeletalMeshComponent inside SpawnPuppet -- which is the BP-authored shim
-    // that puts the visible feet on the ground. No -halfH wire math, no
-    // capsule-centre/feet arithmetic anywhere in coop (RULE 1: replicate the
-    // engine's native frame; let the visual offset belong to the component
-    // where the engine already stores it).
+    // Wire convention: source actor centre Z (engine native frame, MTA-style).
+    // The visible-body-vs-actor visual shim lives on mainPlayer_C's
+    // mesh_playerVisible (a SUB-component, not the root) as RelLoc.Z / RelRot.Yaw.
+    // We can't put the same shim on the puppet's SkeletalMeshComponent because
+    // it IS the puppet's root component (root RelLoc/RelRot just compose into
+    // the world transform that SetActorLocation overwrites). Instead: read the
+    // local mainPlayer_C's mesh_playerVisible.RelLoc.Z + RelRot.Yaw ONCE and
+    // cache as a per-RemotePlayer additive offset. ApplyToEngine then writes
+    // puppet.actor.Z = curPos_.Z + meshOffsetZ_ and puppet.actor.Yaw = curYaw_
+    // + meshOffsetYaw_ -- the same world transform the source's visible body
+    // ends up at, achieved at a different component layer.
     ue_wrap::FVector loc = E::GetActorLocation(local);
 
     // Place the puppet a couple metres in FRONT of the local player so it's
@@ -76,9 +79,67 @@ bool RemotePlayer::Spawn() {
         return false;
     }
     void* animClass = Pup::GetMeshPlayerVisibleAnimClass(local);
-    void* srcMeshComp = Pup::GetMeshPlayerVisibleComponent(local);
 
-    actor_ = Pup::SpawnPuppet(loc, skin, animClass, srcMeshComp);
+    // Cache the actor-Z + actor-Yaw offsets that put the puppet's visible body
+    // on the ground and facing the right way. Both are derived from the live
+    // LOCAL mainPlayer_C (same class as the source, so same BP-authored geometry).
+    //
+    // Z derivation: we want the puppet's LOWEST visible bone (= visible feet) to
+    // land at source ground = source.actor.Z - halfH. The puppet's mesh comp is
+    // the actor's root, so puppet.lowestBone.world.Z = puppet.actor.Z + K, where
+    // K = (lowestBone Z in mesh-local space) = local.lowestBone.world.Z -
+    // local.mesh.world.Z. Solving for puppet.actor.Z:
+    //   puppet.actor.Z = source.actor.Z - halfH - K
+    //                  = source.actor.Z + (local.mesh.world.Z - local.lowestBone.world.Z - halfH)
+    // so meshOffsetZ_ = (local.mesh.world.Z) - (local.lowestBone.world.Z) - halfH.
+    // For the standard ACharacter + kerfur skin this is approximately -halfH plus
+    // the small "mesh-asset origin below visible feet" shim that's been making
+    // the puppet float ~10-20 cm above ground since the start of the project.
+    //
+    // Yaw derivation: read the mesh comp's WORLD forward vector and subtract the
+    // actor's world yaw -- captures whatever chain-of-RelRot composes to the
+    // visible mesh orientation (typically -90 for "mesh +Y forward" vs UE4
+    // actor "+X forward"), data-driven and robust against any attach-parent
+    // reshuffle.
+    if (void* srcMeshComp = Pup::GetMeshPlayerVisibleComponent(local)) {
+        const ue_wrap::FVector localActorLoc = E::GetActorLocation(local);  // RAW (pre-fwd-offset)
+        const ue_wrap::FRotator localActorRot = E::GetActorRotation(local);
+        const ue_wrap::FVector meshWorld = E::GetComponentLocation(srcMeshComp);
+        const ue_wrap::FVector meshFwd = E::GetComponentForwardVector(srcMeshComp);
+        const float meshWorldYaw = std::atan2(meshFwd.Y, meshFwd.X) * 57.29577951f;
+        meshOffsetYaw_ = ue_wrap::NormalizeAxis(meshWorldYaw - localActorRot.Yaw);
+        const float halfH = E::GetActorCharacterHalfHeight(local);
+        float lowestBoneZ = 0.f;
+        // The local's mesh_playerVisible IS the third-person body's skeletal mesh
+        // (and runs the kerfur skeleton the puppet inherits) -- query its lowest
+        // bone directly. (mainPlayer_C also has the inherited ACharacter::Mesh at
+        // +0x0280 for first-person arms; we deliberately don't query that one.)
+        if (E::GetLowestBoneWorldZ(srcMeshComp, lowestBoneZ)) {
+            meshOffsetZ_ = meshWorld.Z - lowestBoneZ - halfH;
+            UE_LOGI("RemotePlayer::Spawn: mesh visual offsets cached: "
+                    "localActor.Z=%.1f mesh.world.Z=%.1f lowestBone.world.Z=%.1f halfH=%.1f "
+                    "-> meshOffsetZ_=%.2f meshOffsetYaw_=%.2f",
+                    localActorLoc.Z, meshWorld.Z, lowestBoneZ, halfH,
+                    meshOffsetZ_, meshOffsetYaw_);
+        } else {
+            // Couldn't enumerate bones; fall back to the pre-bone math (puts the
+            // mesh root at source feet; visible feet may still float by the asset
+            // shim, but this is the best we can do without the lowest-bone read).
+            meshOffsetZ_ = meshWorld.Z - localActorLoc.Z;  // == -halfH for standard ACharacter chain
+            UE_LOGW("RemotePlayer::Spawn: GetLowestBoneWorldZ failed -- falling back to chain-offset only "
+                    "(meshOffsetZ_=%.2f); visible feet may float by mesh-asset's foot-vs-origin shim",
+                    meshOffsetZ_);
+        }
+    } else {
+        UE_LOGW("RemotePlayer::Spawn: no local mesh_playerVisible -- puppet will float/face sideways");
+    }
+
+    // Pre-apply the Z offset to the spawn placement so the puppet appears at
+    // the right world Z from SpawnActor onward (avoids a one-tick visual pop
+    // before the first ApplyToEngine runs).
+    ue_wrap::FVector spawnLoc = loc;
+    spawnLoc.Z += meshOffsetZ_;
+    actor_ = Pup::SpawnPuppet(spawnLoc, skin, animClass);
     if (!actor_) {
         UE_LOGE("RemotePlayer::Spawn: SpawnPuppet failed");
         return false;
@@ -150,9 +211,8 @@ bool RemotePlayer::Spawn() {
     // Face the puppet toward the local player (yaw = direction from puppet to
     // player = -forward). atan2 in degrees. This yaw is in the SOURCE actor
     // convention (matches what ReadLocalPose / mainPlayer_C produces); the
-    // mesh-asset orientation shim now lives on the puppet's SkeletalMeshComponent
-    // RelativeRotation (copied from the local mesh_playerVisible in SpawnPuppet),
-    // so the actor's yaw goes directly on the wire and out the other side.
+    // mesh-asset orientation shim (+meshOffsetYaw_, BP-authored -90 for VOTV's
+    // mesh_playerVisible) is added inside ApplyToEngine at the actor write.
     const float yaw = std::atan2(-fwd.Y, -fwd.X) * 57.29578f;
 
     // Seed the interpolation state to the spawn placement so the first network
@@ -161,19 +221,21 @@ bool RemotePlayer::Spawn() {
     curPos_ = loc;
     curYaw_ = yaw;
     curPitch_ = 0.f;
+    curHeadYawDelta_ = 0.f;
     curSpeed_ = 0.f;
     targetPos_ = loc;
     targetYaw_ = yaw;
     targetPitch_ = 0.f;
+    targetHeadYawDelta_ = 0.f;
     interpStartMs_ = 0;
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
     hasPose_ = false;  // the first network pose SNAPS away from this fake placement
-    // Push the spawn placement (curPos_, curYaw_) to the engine NOW so the
-    // puppet is correctly positioned + oriented before the first network packet
-    // arrives. The mesh-vs-actor visual offset (RelLoc/RelRot) lives on the
-    // puppet's SkeletalMeshComponent (mirrored from the local in SpawnPuppet);
-    // nothing to compensate for in the actor-frame write.
+    // Push the spawn placement (curPos_, curYaw_) to the engine NOW. ApplyToEngine
+    // adds meshOffsetZ_/Yaw_ to produce the puppet's actor transform, matching
+    // what the source's visible body would land at -- the SpawnActor placement
+    // already pre-applied meshOffsetZ_ to spawnLoc, so this is consistent (no
+    // visual pop between SpawnActor and the first ApplyToEngine).
     ApplyToEngine();
     dirty_ = false;     // just pushed it
 
@@ -198,10 +260,12 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
         curPos_ = tgtPos;
         curYaw_ = snap.yaw;
         curPitch_ = snap.pitch;
+        curHeadYawDelta_ = snap.headYawDelta;
         curSpeed_ = snap.speed;
         targetPos_ = tgtPos;
         targetYaw_ = snap.yaw;
         targetPitch_ = snap.pitch;
+        targetHeadYawDelta_ = snap.headYawDelta;
         interpFinishMs_ = 0;  // freeze (no interp budget)
         lastAlpha_ = 0.f;
         hasPose_ = true;
@@ -220,10 +284,12 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
         curPos_ = tgtPos;
         curYaw_ = snap.yaw;
         curPitch_ = snap.pitch;
+        curHeadYawDelta_ = snap.headYawDelta;
         curSpeed_ = snap.speed;
         targetPos_ = tgtPos;
         targetYaw_ = snap.yaw;
         targetPitch_ = snap.pitch;
+        targetHeadYawDelta_ = snap.headYawDelta;
         interpFinishMs_ = 0;  // no active window
         lastAlpha_ = 0.f;
         ApplyToEngine();
@@ -239,6 +305,7 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
     targetPos_ = tgtPos;
     targetYaw_ = snap.yaw;
     targetPitch_ = snap.pitch;
+    targetHeadYawDelta_ = snap.headYawDelta;
     curSpeed_ = snap.speed;  // speed is not interpolated; AnimBP blends locomotion
     errorPos_.X = tgtPos.X - curPos_.X;
     errorPos_.Y = tgtPos.Y - curPos_.Y;
@@ -249,6 +316,9 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
     // source, so cross-180 is impossible in practice regardless of the wire
     // validator's wider (-180, 180] FRotator-axis range.
     errorPitch_ = snap.pitch - curPitch_;
+    // headYawDelta is the camera lead in (-180, 180]; a fast spin can cross
+    // 180 -> shortest-arc to avoid the "head whips the long way around" pop.
+    errorHeadYawDelta_ = OffsetDegrees(curHeadYawDelta_, snap.headYawDelta);
     const uint64_t now = NowMs();
     interpStartMs_ = now;
     interpFinishMs_ = now + kInterpWindowMs;
@@ -276,17 +346,19 @@ void RemotePlayer::Tick() {
         const float dAlpha = alpha - lastAlpha_;
         lastAlpha_ = alpha;
 
-        curPos_.X += errorPos_.X * dAlpha;
-        curPos_.Y += errorPos_.Y * dAlpha;
-        curPos_.Z += errorPos_.Z * dAlpha;
-        curYaw_   += errorYaw_   * dAlpha;
-        curPitch_ += errorPitch_ * dAlpha;
+        curPos_.X         += errorPos_.X         * dAlpha;
+        curPos_.Y         += errorPos_.Y         * dAlpha;
+        curPos_.Z         += errorPos_.Z         * dAlpha;
+        curYaw_           += errorYaw_           * dAlpha;
+        curPitch_         += errorPitch_         * dAlpha;
+        curHeadYawDelta_  += errorHeadYawDelta_  * dAlpha;
         dirty_ = true;  // pose moved this frame -> needs an engine push
 
         if (alpha >= 1.f) {
             curPos_ = targetPos_;  // exact arrival (kills any float drift over the window)
             curYaw_ = targetYaw_;
             curPitch_ = targetPitch_;
+            curHeadYawDelta_ = targetHeadYawDelta_;
             interpFinishMs_ = 0;
         }
     }
@@ -327,14 +399,19 @@ void RemotePlayer::Destroy() {
 }
 
 void RemotePlayer::ApplyToEngine() {
-    E::SetActorLocation(actor_, curPos_);
-    // The puppet actor yaw equals the source actor yaw directly. The mesh-vs-actor
-    // orientation reconciliation (the BP-authored RelativeRotation, typically
-    // yaw -90 for "mesh +Y forward" vs "actor +X forward" UE4 character setup)
-    // lives on the puppet's SkeletalMeshComponent RelativeRotation -- mirrored
-    // off the local mainPlayer's mesh_playerVisible in SpawnPuppet. No magic
-    // constant here; the actor frame is the wire's frame is the source's frame.
-    E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, curYaw_, 0.f});
+    // Apply the BP-authored visual shim at the actor transform level. The wire
+    // carries the source's NATIVE actor frame (capsule centre Z, actor body
+    // yaw); the source's visible body sits at (actor + mesh_playerVisible's
+    // RelLoc/RelRot) on its end. The puppet's mesh comp is the actor's root
+    // (no sub-component to host the same RelLoc/RelRot), so we apply the same
+    // shim here -- adding meshOffsetZ_/Yaw_ that were read from the local's
+    // mesh_playerVisible at Spawn. Result: puppet.mesh.world.Z = source.mesh.
+    // world.Z and puppet visible-look-direction = source visible-look-direction,
+    // by construction, regardless of capsule sizing or mesh-asset authoring.
+    ue_wrap::FVector puppetLoc = curPos_;
+    puppetLoc.Z += meshOffsetZ_;
+    E::SetActorLocation(actor_, puppetLoc);
+    E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, curYaw_ + meshOffsetYaw_, 0.f});
 
     // Bug 2 Plan B2: drive the satellite Character (the AnimBP Pawn pull source)
     // so its CharacterMovementComponent.Velocity carries the streamed velocity.
@@ -362,11 +439,15 @@ void RemotePlayer::ApplyToEngine() {
         }
     }
 
-    // Head bone gets the source's view pitch (head tilt up/down). No yaw delta:
-    // VOTV's body already naturally lags the camera on the source side (where
-    // applicable); we stream actor yaw so the puppet body shows the SAME lag
-    // visually. The head's L/R "lead" emerges from the body's natural lag.
-    Pup::DriveAnimBP(actor_, curSpeed_, curPitch_, 0.f);
+    // Head bone gets the source's full view direction: pitch (look up/down) AND
+    // the camera-vs-body yaw lead (looking left/right with the camera leading
+    // the body, including free-look). DriveAnimBP also overrides the AnimBP's
+    // `lookingAtPlayer` to false every tick -- the kerfur AnimBP's default
+    // graph re-writes that flag to TRUE each frame (track the LOCAL player),
+    // which is glaringly wrong on a puppet (puppet's head twists to face the
+    // observer's body, not where the SOURCE is looking). We turn off that
+    // auto-track and drive headLookAt directly from the streamed view.
+    Pup::DriveAnimBP(actor_, curSpeed_, curPitch_, curHeadYawDelta_);
 }
 
 bool RemotePlayer::SetLocation(const ue_wrap::FVector& location) {

@@ -193,8 +193,7 @@ void DumpAnimState(const wchar_t* label, void* skeletalMeshComponent) {
             pawn, ctrl, movement, kerfur, useLegIK, isFace, lookingAtPlayer);
 }
 
-void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass,
-                  void* srcMeshComp) {
+void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass) {
     if (!skeletalMeshAsset) {
         UE_LOGE("puppet: SpawnPuppet no skin asset");
         return nullptr;
@@ -214,35 +213,6 @@ void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass,
     if (!comp) {
         UE_LOGE("puppet: spawned actor %p has no SkeletalMeshComponent", actor);
         return actor;
-    }
-
-    // Mirror the LOCAL mainPlayer_C::mesh_playerVisible's parent-relative
-    // transform onto the puppet's SkeletalMeshComponent. The player BP authors
-    // mesh_playerVisible with a non-trivial RelativeLocation (the Z shim between
-    // the actor centre and the mesh asset's root bone -- the source of the
-    // float-above-ground that's existed since the start of the project) AND a
-    // non-trivial RelativeRotation (yaw -90 reconciling the mesh's "mesh +Y
-    // forward" authoring with UE4's actor "+X forward" convention -- what made
-    // puppets visually 90 deg sideways without manual compensation).
-    //
-    // Both peers run mainPlayer_C, so the LOCAL on the receiving machine carries
-    // the same BP-authored RelLoc/RelRot the source's mesh_playerVisible has.
-    // Reading it at runtime makes the puppet visually identical to the source's
-    // body, no hard-coded magic numbers, robust to mesh-asset re-authoring
-    // across game versions. Written here BEFORE the next SetActorLocation in
-    // RemotePlayer::Spawn -> the world transform refresh propagates through
-    // AttachChildren and picks up the new RelLoc/RelRot naturally.
-    if (srcMeshComp) {
-        const FVector srcRelLoc = ReadAt<FVector>(srcMeshComp, P::off::USceneComponent_RelativeLocation);
-        const FRotator srcRelRot = ReadAt<FRotator>(srcMeshComp, P::off::USceneComponent_RelativeRotation);
-        WriteAt<FVector>(comp, P::off::USceneComponent_RelativeLocation, srcRelLoc);
-        WriteAt<FRotator>(comp, P::off::USceneComponent_RelativeRotation, srcRelRot);
-        UE_LOGI("puppet: mirrored src mesh RelLoc=(%.1f,%.1f,%.1f) RelRot=(P=%.1f,Y=%.1f,R=%.1f) onto puppet comp=%p",
-                srcRelLoc.X, srcRelLoc.Y, srcRelLoc.Z,
-                srcRelRot.Pitch, srcRelRot.Yaw, srcRelRot.Roll, comp);
-    } else {
-        UE_LOGW("puppet: no source mesh component -> puppet renders at default mesh RelLoc/RelRot "
-                "(may float above ground / face sideways)");
     }
 
     // Wear the local player's skin + run the body AnimBP. SetAnimClass also flips
@@ -286,22 +256,21 @@ void DriveAnimBP(void* puppetActor, float /*speed*/, float headPitch, float head
     void* anim = LiveAnimInstance(comp);
     if (!anim) return;
 
-    // spd is now driven by BUA reading the satellite Character's
-    // CharacterMovementComponent.Velocity (Plan B2). headLookAt remains driven
-    // here because BUA does not write it (the local-vs-puppet diff confirmed
-    // it stays at whatever we set), and it's directly the head-bone target.
-
-    // Drive the puppet head bone from the streamed view. headLookAt is NOT
-    // written by BUA (BUA only touches velocity-derived vars), so end-of-frame
-    // writes here survive into the next AnimGraph evaluation.
-    //   Pitch: streamed view pitch -- head tilts up/down with the source.
-    //   Yaw:   head yaw delta vs body. Currently 0 -- the source's body lag
-    //          already encodes the head-leads-body lean; replicate it by
-    //          streaming actor yaw (not camera yaw) into bodyRotation. The
-    //          parameter is kept for a future "free-look" mode.
-    // With lookingAtPlayer=false (set in SpawnPuppet), the AnimBP graph uses
-    // headLookAt as the explicit head-look rotation rather than chasing a
-    // phantom camera target.
+    // spd is driven by BUA reading the satellite Character's
+    // CharacterMovementComponent.Velocity (Plan B2). headLookAt + lookingAtPlayer
+    // are driven here per tick.
+    //
+    // The kerfur AnimBP's default behaviour ("NPC kerfur looks at the player")
+    // is to re-write lookingAtPlayer=true each frame and then compute a head-
+    // track rotation aimed at whatever the AnimBP considers "the player" --
+    // which is the LOCAL player from the puppet's perspective. That makes the
+    // puppet's head twist to face the OBSERVER's body regardless of where the
+    // SOURCE is looking, which is the wrong behaviour for a remote player's
+    // puppet. We REVERSE that auto-track each tick: write lookingAtPlayer=false
+    // (overrides BUA's reset) and drive headLookAt explicitly from the streamed
+    // view (pitch = source's view tilt up/down, yaw = source's controller-vs-
+    // actor yaw lead, so head-leads-body / free-look replicates exactly).
+    WriteAt<bool>(anim, P::off::AnimBP_kerfur_lookingAtPlayer, false);
     const FRotator headLook{headPitch, headYawDelta, 0.f};
     WriteAt<FRotator>(anim, P::off::AnimBP_kerfur_headLookAt, headLook);
 }

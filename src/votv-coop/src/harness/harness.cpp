@@ -129,11 +129,14 @@ std::wstring ReadNickname() {
 // Game thread: read the local player's pose into a network snapshot. x/y/z carry
 // the source actor's NATIVE world location (capsule centre on a Character) -- the
 // engine's own frame, no derived feet-Z or centre-Z arithmetic. The receiver
-// reproduces the visible-body offset by mirroring the source mesh component's
-// RelativeLocation onto the puppet's mesh component (see SpawnPuppet); that is
-// where the BP-authored Z shim between actor centre and visible feet lives, and
-// it stays on the receiver side -- the wire carries one thing (where the actor
-// is), one frame, MTA-style.
+// reconstructs the visible-body offset at the PUPPET'S ACTOR TRANSFORM (its
+// SkeletalMeshActor's mesh comp is the root, so a sub-component RelLoc/RelRot
+// shim is impossible). At puppet spawn the receiver measures the local
+// mainPlayer's lowest visible bone Z and mesh world transform, derives the
+// actor-Z + actor-Yaw additive offsets that ground the visible feet AND
+// reconcile the BP-authored mesh-yaw convention, and applies them every
+// ApplyToEngine. The wire carries one thing (where the source's actor is),
+// one frame -- MTA-style.
 bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) {
     if (!local) return false;
     const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(local);
@@ -163,9 +166,17 @@ bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) 
     // symmetric around zero for cleaner linear LERP arcs. Mirrors MTA's
     // SCameraRotationSync bWrapInsteadOfClamp wire policy.
     out.yaw = ue_wrap::NormalizeAxis(actorRot.Yaw);
-    out.pitch = ue_wrap::NormalizeAxis(
-        controller ? ue_wrap::engine::GetControlRotation(controller).Pitch
-                   : actorRot.Pitch);
+    const ue_wrap::FRotator ctlRot = controller
+        ? ue_wrap::engine::GetControlRotation(controller)
+        : actorRot;
+    out.pitch = ue_wrap::NormalizeAxis(ctlRot.Pitch);
+    // headYawDelta: the source's controller-yaw LEAD over its body yaw, in
+    // (-180, 180]. The puppet's AnimBP headLookAt yaw component reads this so
+    // the puppet's head turns to match where the source's CAMERA is looking
+    // (free-look / camera-lead-body) -- decoupled from the body facing, which
+    // is what makes the head-track-local-player default look glaringly wrong
+    // on a puppet. Normalized for the same wire-boundary reason as yaw/pitch.
+    out.headYawDelta = ue_wrap::NormalizeAxis(ctlRot.Yaw - actorRot.Yaw);
     out.speed = std::sqrt(vel.X * vel.X + vel.Y * vel.Y);
     return true;
 }

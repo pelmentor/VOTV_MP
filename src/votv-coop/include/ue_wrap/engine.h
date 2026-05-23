@@ -198,6 +198,21 @@ bool RemoveWidgetFromViewport(void* userWidget);
 // visible head instead of the actor origin. Returns false if unresolved. Game thread only.
 bool GetHeadWorldLocation(void* skelMeshComp, FVector& out);
 
+// World Z of the LOWEST bone on this skeletal mesh's currently-evaluated pose.
+// Enumerates all bones (50+) on first call by walking GetBoneName + GetSocketLocation
+// and tracks the minimum Z; cheap one-shot used at puppet spawn to compute the
+// mesh-asset's "lowest visible point" offset (where the visible feet are vs the
+// mesh-local origin). Robust against bone-name conventions across skeletons
+// ("foot_l" vs "L_foot" vs custom names). Returns false if unresolved or no
+// bones. Game thread only.
+bool GetLowestBoneWorldZ(void* skelMeshComp, float& outZ);
+
+// ACharacter capsule half-height read (UCapsuleComponent::CapsuleHalfHeight at the
+// fixed offset). 0.f if `mainPlayerPawn` is null or has no capsule. Used by
+// RemotePlayer's foot-on-ground placement (puppet visible feet at world Z =
+// source.actor.Z - halfH). Game thread only (memory read of an engine struct).
+float GetActorCharacterHalfHeight(void* mainPlayerPawn);
+
 // Set a USceneComponent's visibility: SetVisibility(visible, propagate) +
 // SetHiddenInGame(!visible, propagate). visible=true shows a remote pawn's
 // third-person body meshes (an unpossessed pawn never runs the gameplay code

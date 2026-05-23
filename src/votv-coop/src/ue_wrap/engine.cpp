@@ -673,6 +673,44 @@ bool GetHeadWorldLocation(void* skelMeshComp, FVector& out) {
     return true;
 }
 
+bool GetLowestBoneWorldZ(void* skelMeshComp, float& outZ) {
+    if (!skelMeshComp || !ResolveBoneFns()) return false;
+    int32_t n = 0;
+    { ParamFrame f(g_numBonesFn); if (Call(skelMeshComp, f)) n = f.Get<int32_t>(L"ReturnValue"); }
+    if (n <= 0) return false;
+    float minZ = 1.0e9f;
+    bool any = false;
+    std::wstring lowestName;
+    for (int32_t i = 0; i < n; ++i) {
+        uint8_t name[8] = {};
+        { ParamFrame nf(g_boneNameFn); nf.Set<int32_t>(L"BoneIndex", i);
+          if (!Call(skelMeshComp, nf)) continue;
+          nf.GetRaw(L"ReturnValue", name, sizeof(name)); }
+        ParamFrame lf(g_socketLocFn);
+        lf.SetRaw(L"InSocketName", name, sizeof(name));
+        if (!Call(skelMeshComp, lf)) continue;
+        const FVector loc = lf.Get<FVector>(L"ReturnValue");
+        if (!any || loc.Z < minZ) {
+            minZ = loc.Z;
+            lowestName = R::ToString(*reinterpret_cast<const R::FName*>(name));
+            any = true;
+        }
+    }
+    if (!any) return false;
+    UE_LOGI("engine: lowest bone on mesh comp %p = '%ls' world Z=%.2f", skelMeshComp, lowestName.c_str(), minZ);
+    outZ = minZ;
+    return true;
+}
+
+float GetActorCharacterHalfHeight(void* mainPlayerPawn) {
+    if (!mainPlayerPawn) return 0.f;
+    void* capsule = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(mainPlayerPawn) + P::off::ACharacter_CapsuleComponent);
+    if (!capsule) return 0.f;
+    return *reinterpret_cast<float*>(
+        reinterpret_cast<uint8_t*>(capsule) + P::off::UCapsuleComponent_CapsuleHalfHeight);
+}
+
 namespace {
 void* g_skinnedMeshClass = nullptr;   // owns SetSkeletalMesh
 void* g_skeletalMeshClass = nullptr;  // owns SetAnimClass

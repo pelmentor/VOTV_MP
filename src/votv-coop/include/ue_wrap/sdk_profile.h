@@ -134,20 +134,6 @@ inline constexpr size_t APawn_AIControllerClass = 0x238;    // UClass* (TSubclas
 inline constexpr size_t USkinnedMesh_VisibilityBasedAnimTickOption = 0x604;  // uint8 (set 0)  Engine.hpp:18308
 inline constexpr size_t USkeletalMesh_AnimScriptInstance = 0x6B0;            // AnimInstance*  Engine.hpp:18095
 
-// USceneComponent transform-locals (parent-relative). Engine.hpp:17904-17905.
-// The puppet's SkeletalMeshComponent must MIRROR the source mainPlayer_C's
-// `mesh_playerVisible` RelLoc + RelRot, otherwise the visible body floats above
-// the ground (RelLoc.Z carries the BP-authored mesh-to-actor offset, e.g. the
-// kerfur skin's root-bone-vs-feet shim) and faces 90 deg sideways (RelRot.Yaw
-// = -90 is the standard "mesh authored along Y+, actor +X" reconciliation).
-// The wire stays in the source actor's NATIVE frame (actor.Z, actor.Yaw); the
-// per-class visual offset is reconciled once at puppet spawn by copying these
-// two fields off the local mainPlayer's mesh component (both peers run the
-// same mainPlayer_C class, so its mesh component carries the same RelLoc/RelRot
-// the source uses -- pull the truth from the local copy at runtime, no
-// hard-coded compensation).
-inline constexpr size_t USceneComponent_RelativeLocation = 0x011C;  // FVector
-inline constexpr size_t USceneComponent_RelativeRotation = 0x0128;  // FRotator
 
 // ---- skin-puppet (the remote body) ---------------------------------------
 // Root-cause finding (two converging agents, CXX dump): the body AnimBP poses
@@ -186,6 +172,16 @@ inline constexpr size_t AnimBP_kerfur_spd = 0x2E1C;                // float  (li
 inline constexpr size_t AnimBP_kerfur_useLegIK = 0x2E39;           // bool (false = skip floor-trace IK)
 inline constexpr size_t AnimBP_kerfur_headLookAt = 0x2E3C;         // FRotator
 inline constexpr size_t AnimBP_kerfur_isFace = 0x2E48;             // bool
+
+// ACharacter capsule -- needed for the foot-on-ground correction in RemotePlayer.
+// The puppet's SkeletalMeshComponent is the actor's root (no sub-component slot
+// for the standard ACharacter::Mesh.RelLoc.Z = -halfH shim), so RemotePlayer
+// reconstructs the same world-Z offset at the actor transform level. capsule
+// half-height = the distance from the source's actor centre down to source
+// ground (where the source's feet ARE meant to be). See [[project-remote-
+// player-open-issues]] for the full derivation.
+inline constexpr size_t ACharacter_CapsuleComponent = 0x0290;          // UCapsuleComponent*  Engine.hpp:6972
+inline constexpr size_t UCapsuleComponent_CapsuleHalfHeight = 0x0468;  // float  Engine.hpp:9883
 
 // ---- HUD / Canvas (screen-space nameplate, MTA-style) --------------------
 // We hook AHUD::ReceiveDrawHUD (ProcessEvent-dispatched), read the live UCanvas
