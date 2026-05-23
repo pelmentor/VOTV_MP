@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace ue_wrap {
@@ -56,6 +57,24 @@ inline FTransform MakeTransform(const FVector& location) {
     t.TY = location.Y;
     t.TZ = location.Z;
     return t;
+}
+
+// Normalize a degree angle into the canonical FRotator axis range (-180, 180].
+// UE4's AController::GetControlRotation returns the RAW ControlRotation field,
+// which the input system accumulates as unnormalized [0, 360): looking 10 deg
+// DOWN reads back as Pitch=350, not -10. Two independent agents (2026-05-23)
+// converged on this as the root cause of "puppet freezes when source looks
+// below horizontal" -- the unnormalized 350 failed coop::net::ValidatePose's
+// (-90, 90) bound and dropped the entire pose packet. The proper fix is at
+// the wire boundary: produce values in the canonical axis range BEFORE they
+// enter PoseSnapshot. Mirrors MTA's SCameraRotationSync bWrapInsteadOfClamp
+// pattern (see research/findings/mta-rotation-normalize-2026-05-23.md).
+// Equivalent of UE4's FRotator::NormalizeAxis(float Angle).
+inline float NormalizeAxis(float deg) {
+    deg = std::fmod(deg, 360.f);
+    if (deg > 180.f)  deg -= 360.f;
+    if (deg < -180.f) deg += 360.f;
+    return deg;
 }
 
 }  // namespace ue_wrap

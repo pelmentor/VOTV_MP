@@ -160,10 +160,18 @@ inline bool ValidatePose(const PoseSnapshot& p) {
     if (std::fabs(p.x) > kMaxCoord || std::fabs(p.y) > kMaxCoord || std::fabs(p.z) > kMaxCoord)
         return false;
     if (p.speed < 0.f || p.speed > kMaxSpeed) return false;
-    // UE4 control rotation pitch is clamped to (-90, 90); reject anything wild
-    // (NaN already caught above; this catches a hostile mid-range "look at the sky"
-    // value used to anim-glitch the puppet).
-    if (p.pitch < -90.f || p.pitch > 90.f) return false;
+    // Yaw/pitch invariant: canonical FRotator axis range (-180, 180]. Senders MUST
+    // normalize via ue_wrap::NormalizeAxis at the wire boundary (harness.cpp::
+    // ReadLocalPose) -- this is the wire contract, not a sanitizer. An earlier
+    // version of this check used (-90, 90) on the assumption that UE4's
+    // GetControlRotation returns a normalized small-magnitude pitch; that was
+    // WRONG (UE4's control rotation is unnormalized -- looking 10 deg down reads
+    // back as Pitch=350) and silently dropped EVERY packet while a peer looked
+    // below horizontal. Two converging agents 2026-05-23. The pitch invariant is
+    // widened to (-180, 180] to match what a normalized FRotator axis legitimately
+    // carries; out-of-range still rejects (still no crutch).
+    if (p.yaw   < -180.f || p.yaw   > 180.f) return false;
+    if (p.pitch < -180.f || p.pitch > 180.f) return false;
     return true;
 }
 

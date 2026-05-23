@@ -176,8 +176,10 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
     errorPos_.Y = tgtPos.Y - curPos_.Y;
     errorPos_.Z = tgtPos.Z - curPos_.Z;
     errorYaw_ = OffsetDegrees(curYaw_, snap.yaw);
-    // Pitch is a STRAIGHT delta (no shortest-arc wrap): the controller clamps
-    // pitch to (-90, 90), so cross-180 never happens.
+    // Pitch is a STRAIGHT delta (no shortest-arc wrap needed): VOTV's
+    // PlayerCameraManager physically clamps view pitch to ~(-89, 89) at the
+    // source, so cross-180 is impossible in practice regardless of the wire
+    // validator's wider (-180, 180] FRotator-axis range.
     errorPitch_ = snap.pitch - curPitch_;
     const uint64_t now = NowMs();
     interpStartMs_ = now;

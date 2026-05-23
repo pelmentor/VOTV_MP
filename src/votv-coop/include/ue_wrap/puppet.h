@@ -55,7 +55,9 @@ void* GetSkeletalMeshComponent(void* puppetActor);
 // Drive the puppet's pose from a network snapshot value:
 //   * walkSpeed/spd (locomotion BlendSpace inputs; speed in cm/s, 0 = idle).
 //   * headLookAt (FRotator): the AnimBP-exposed head-bone look direction.
-//     - headPitch: streamed view pitch, degrees (-90..90).
+//     - headPitch: streamed view pitch, degrees. Wire contract is the
+//       canonical FRotator axis range (-180, 180]; live values from VOTV's
+//       camera-clamped source sit well inside (-89, 89).
 //     - headYawDelta: head yaw RELATIVE to body (degrees). Currently always
 //       streamed as 0 -- the source actor's body yaw already lags the camera
 //       inside VOTV's Character, so the natural "head leads body" effect

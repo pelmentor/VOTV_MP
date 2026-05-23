@@ -146,9 +146,22 @@ bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) 
     out.x = loc.X;
     out.y = loc.Y;
     out.z = loc.Z - halfH;
-    out.yaw = actorRot.Yaw;
-    out.pitch = controller ? ue_wrap::engine::GetControlRotation(controller).Pitch
-                           : actorRot.Pitch;
+    // Normalize yaw and pitch into the canonical FRotator axis range (-180, 180]
+    // BEFORE they go on the wire. UE4's AController::GetControlRotation returns
+    // the RAW ControlRotation, which the input system accumulates as unnormalized
+    // [0, 360): looking 10 deg DOWN reads back as Pitch=350 (not -10). Without
+    // this normalize, pitch=350 fails coop::net::ValidatePose's (-90, 90) bound
+    // and the ENTIRE packet is dropped on the receiver, freezing position+yaw+
+    // everything while the source looks below horizontal -- root cause of the
+    // hands-on "puppet freezes when host looks down then teleports on look-up"
+    // bug, two converging agents 2026-05-23. Yaw is normalized too: same
+    // unnormalized risk, and a normalized yaw keeps RemotePlayer::errorYaw_
+    // symmetric around zero for cleaner linear LERP arcs. Mirrors MTA's
+    // SCameraRotationSync bWrapInsteadOfClamp wire policy.
+    out.yaw = ue_wrap::NormalizeAxis(actorRot.Yaw);
+    out.pitch = ue_wrap::NormalizeAxis(
+        controller ? ue_wrap::engine::GetControlRotation(controller).Pitch
+                   : actorRot.Pitch);
     out.speed = std::sqrt(vel.X * vel.X + vel.Y * vel.Y);
     return true;
 }
