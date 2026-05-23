@@ -108,6 +108,11 @@ private:
     static constexpr float kSnapPerSpeedSec = 0.5f;
 
     void* actor_ = nullptr;  // the engine ASkeletalMeshActor puppet (owned by the engine)
+    void* puppetAnim_ = nullptr;  // the puppet's live UAnimBlueprint_kerfurOmega_regular_C
+                                  // AnimInstance; cached at Spawn so Destroy can
+                                  // call puppet::UnregisterPuppetAnimInstance even
+                                  // after the SkeletalMeshComponent has gone away.
+                                  // BUA-interceptor key (Bug 2 Plan B1).
     // Placeholder until the peer's Join reliable message lands (typically within
     // a few RTT of connect). nameplate::Update repaints when SetNickname changes
     // this. The old "Player 2" default was misleading -- both ends saw "Player 2"

@@ -1,6 +1,7 @@
 #include "ue_wrap/puppet.h"
 
 #include "ue_wrap/engine.h"
+#include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
@@ -13,6 +14,7 @@ namespace ue_wrap::puppet {
 namespace P = profile;
 namespace R = reflection;
 namespace E = engine;
+namespace GT = game_thread;
 
 namespace {
 
@@ -34,6 +36,45 @@ inline void WriteAt(void* base, size_t off, T value) {
 // puppet actor -> its cached SkeletalMeshComponent (avoid a GUObjectArray walk
 // per Drive() frame).
 std::unordered_map<void*, void*> g_meshComp;
+
+// Bug 2 / Plan B1 state. Game-thread-only access, no lock: BUA interceptor
+// fires on the game thread (ProcessEvent), Register/Unregister/SetPuppetSpeed
+// are all called from game-thread code (RemotePlayer::Spawn / Destroy / Tick).
+// AnimInstance pointer -> last-streamed speed (cm/s). Presence implies "this
+// AnimInstance is a puppet -> intercept BUA, skip original".
+std::unordered_map<void*, float> g_puppetSpeed;
+
+// Cached pointer to UAnimBlueprint_kerfurOmega_regular_C::BlueprintUpdateAnimation.
+// Resolved lazily on first RegisterPuppetAnimInstance (the kerfur class isn't
+// guaranteed loaded before gameplay enters). Stays cached for the session.
+void* g_buaUFunc = nullptr;
+
+bool BUAInterceptor(void* self, void* /*params*/) {
+    auto it = g_puppetSpeed.find(self);
+    if (it == g_puppetSpeed.end()) return false;  // not a puppet -> let original BUA run
+
+    // We are running BEFORE the original BUA body. Write spd directly: the
+    // original would write spd=0 (Pawn null on a puppet -> velocity branch dead),
+    // we write spd=streamed_speed instead. EvaluateGraphExposedInputs fires
+    // immediately after this in the same tick, reads OUR spd, feeds it to the
+    // BlendSpace as the X coordinate. The AnimGraph then poses the actual walk.
+    //
+    // animWalkRate=1.0 kept (a default of 0 would freeze the BlendSpace's
+    // sample interpolation; safer to explicitly set). animWalkAlpha
+    // intentionally NOT written -- the spawn-time local dump showed
+    // animWalkAlpha=0 even on a WALKING local player, so it's NOT the
+    // locomotion gate (an earlier hypothesis was wrong; the diagnostic
+    // disproved it). spd is the only locomotion-driving variable.
+    //
+    // Skipping the original is safe for the puppet: its side-effects on
+    // other AnimBP variables (lookAt, footZ_R/L, floorFoot_*, pelvisLoc,
+    // etc.) drive IK paths we've already disabled (useLegIK=false,
+    // lookingAtPlayer=false set in SpawnPuppet). The puppet poses correctly
+    // without BUA running -- only the locomotion variable was missing.
+    *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(self) + P::off::AnimBP_kerfur_spd) = it->second;
+    *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(self) + P::off::AnimBP_kerfur_animWalkRate) = 1.f;
+    return true;  // skip original BUA -> no clobber
+}
 
 // The live AnimInstance running on a SkeletalMeshComponent (comp + AnimScriptInstance).
 void* LiveAnimInstance(void* skeletalMeshComponent) {
@@ -116,10 +157,11 @@ void DumpAnimState(const wchar_t* label, void* skeletalMeshComponent) {
     }
     const float spd = ReadAt<float>(anim, P::off::AnimBP_kerfur_spd);
     const float walkSpeed = ReadAt<float>(anim, P::off::AnimBP_kerfur_walkSpeed);
-    // New: the suspected locomotion gate (animWalkAlpha) + rate. Logged on both
-    // local and puppet at spawn so the local-vs-puppet diff is one log line apart
-    // -- if local has animWalkAlpha=1 while walking and the puppet has 0, that's
-    // the variable we need to drive (Bug 2 hypothesis confirmed empirically).
+    // animWalkAlpha + animWalkRate: kept in the dump as observable AnimBP state.
+    // The Plan A hypothesis that animWalkAlpha gates idle-vs-walk was DISPROVED
+    // by the 2026-05-23 spawn diagnostic -- the LOCAL has animWalkAlpha=0.00
+    // while WALKING. spd is the actual locomotion driver (BlendSpace X input),
+    // which Plan B1's BUA interceptor pushes from the network speed.
     const float animWalkAlpha = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha);
     const float animWalkRate = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate);
     void* pawn = ReadPtr(anim, P::off::AnimBP_kerfur_Pawn);
@@ -201,64 +243,17 @@ void DriveAnimBP(void* puppetActor, float speed, float headPitch, float headYawD
     void* anim = LiveAnimInstance(comp);
     if (!anim) return;
 
-    // BUG 2 ROOT-CAUSE FIX (Pull-model AnimBP, null Pawn case). VOTV's
-    // BlueprintUpdateAnimation reads Pawn->GetVelocity() (or Movement->Velocity)
-    // and writes spd/animWalkAlpha/animWalkRate from it. The puppet has
-    // Pawn=Movement=null -> the velocity-read branch is dead. We need to write
-    // the OUTPUT variables of that branch directly:
-    //   * spd:           the live speed -- the BlendSpace X-axis input
-    //                    (cm/s; ~0 idle, ~200 walk, ~600 sprint per the local).
-    //   * animWalkAlpha: the TwoWayBlend gate between cached-idle and cached-walk
-    //                    poses. While Pawn=null on the puppet, the BP graph
-    //                    leaves this at 0 forever -> 100% idle weight -> the
-    //                    BlendSpace's walk pose contributes ZERO to the final
-    //                    output -> puppet "slides" with no leg motion. Writing
-    //                    1 when moving makes the walk pose contribute its full
-    //                    weight.
-    //   * animWalkRate:  PlayRate scalar; nominal 1.0 (the BlendSpace selects
-    //                    walk-vs-run by sample interpolation on spd, not by
-    //                    playrate). Set explicitly so a zero-default doesn't
-    //                    freeze playback.
-    //
-    // walkSpeed is INTENTIONALLY not written: the local-vs-puppet diff showed it
-    // is 0.0 on a WALKING local player, so it's not a velocity-driven variable
-    // (a max-walk-speed config cache, unused by the BlendSpace).
-    //
-    // SURVIVAL: this fix assumes BlueprintUpdateAnimation has a standard
-    // null-guard early-out on Pawn (typical BP wizard pattern: Cast-to-Pawn-
-    // failed -> rest of graph doesn't execute -> our writes persist). The
-    // diagnostic READ-BACK below logs the value SEEN at frame start (BEFORE we
-    // write again); if our last write was clobbered by BlueprintUpdateAnimation,
-    // the read-back will show 0 and Plan B (synthetic Movement / Pawn) becomes
-    // necessary.
-    // Unsigned -- signed overflow is UB and at 60 Hz the counter wraps in ~414
-    // days, well within an "always-on" session. Unsigned overflow is defined
-    // (mod 2^32). Single-puppet today -- if N+1 peers are ever added this
-    // counter must move onto the per-puppet identity (the per-RemotePlayer
-    // counter would be the obvious home) so the diagnostic doesn't ping-pong
-    // its samples between puppets and mislead a Plan-B clobber diagnosis.
-    static unsigned int sDiagCounter = 0;
-    const bool diagThisCall = (++sDiagCounter % 60 == 0);  // ~1 Hz at 60 Hz tick
-    if (diagThisCall) {
-        const float seenSpd = ReadAt<float>(anim, P::off::AnimBP_kerfur_spd);
-        const float seenAlpha = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha);
-        const float seenRate = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate);
-        UE_LOGI("puppet: locomotion read-back (frame start, before our writes): "
-                "spd=%.1f animWalkAlpha=%.2f animWalkRate=%.2f "
-                "(if Alpha=0 here while speed>0 streamed, BlueprintUpdateAnimation "
-                "clobbers writes -> need Plan B)",
-                seenSpd, seenAlpha, seenRate);
-    }
+    // Push the streamed speed via the BUA-interceptor path (Bug 2 fix). The
+    // interceptor writes `spd` at the right tick-order position (BEFORE
+    // EvaluateGraphExposedInputs reads it); writing from here at end-of-frame
+    // does NOT survive the next frame's BUA tick (confirmed via shipped
+    // read-back diagnostic 2026-05-23). SetPuppetSpeed is the supported entry
+    // point and is registered for this AnimInstance by RemotePlayer::Spawn.
+    SetPuppetSpeed(anim, speed);
 
-    WriteAt<float>(anim, P::off::AnimBP_kerfur_spd, speed);
-    // Threshold tuned to "moving enough that the user's gait reads as walking",
-    // matching the natural BP wizard pattern of `speed > 0` (kept above 1 to
-    // ignore floating-point twitch and the pose interpolator's tail).
-    WriteAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha, (speed > 1.f) ? 1.f : 0.f);
-    WriteAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate, 1.f);
-
-    // Drive the puppet head bone from the streamed view.
-    // AnimBP_kerfur_headLookAt is the AnimBP-exposed FRotator for head IK.
+    // Drive the puppet head bone from the streamed view. headLookAt is NOT
+    // written by BUA (BUA only touches velocity-derived vars), so end-of-frame
+    // writes here survive into the next AnimGraph evaluation.
     //   Pitch: streamed view pitch -- head tilts up/down with the source.
     //   Yaw:   head yaw delta vs body. Currently 0 -- the source's body lag
     //          already encodes the head-leads-body lean; replicate it by
@@ -269,6 +264,58 @@ void DriveAnimBP(void* puppetActor, float speed, float headPitch, float headYawD
     // phantom camera target.
     const FRotator headLook{headPitch, headYawDelta, 0.f};
     WriteAt<FRotator>(anim, P::off::AnimBP_kerfur_headLookAt, headLook);
+}
+
+void RegisterPuppetAnimInstance(void* animInstance) {
+    if (!animInstance) return;
+    // Lazy: resolve BUA UFunction + install the interceptor on the first puppet
+    // ever registered. The kerfur AnimBP class isn't guaranteed loaded before
+    // gameplay (we spawn the puppet AFTER mainPlayer_C exists, so the AnimBP
+    // class is definitely live by then). One-shot; reuses for every subsequent
+    // puppet.
+    if (!g_buaUFunc) {
+        void* cls = R::FindClass(P::name::AnimBPKerfurRegularClass);
+        if (!cls) {
+            UE_LOGE("puppet: AnimBP class '%ls' not found -- BUA interceptor NOT installed; "
+                    "puppet locomotion will not animate",
+                    P::name::AnimBPKerfurRegularClass);
+            return;
+        }
+        g_buaUFunc = R::FindFunction(cls, P::name::BlueprintUpdateAnimationFn);
+        if (!g_buaUFunc) {
+            UE_LOGE("puppet: BlueprintUpdateAnimation UFunction not found on '%ls' -- "
+                    "BUA interceptor NOT installed",
+                    P::name::AnimBPKerfurRegularClass);
+            return;
+        }
+        GT::SetInterceptor(g_buaUFunc, &BUAInterceptor);
+        UE_LOGI("puppet: BUA interceptor installed (UFunc=%p) -- puppet AnimInstances "
+                "now bypass BlueprintUpdateAnimation's null-Pawn clobber",
+                g_buaUFunc);
+    }
+    g_puppetSpeed[animInstance] = 0.f;
+    UE_LOGI("puppet: registered AnimInstance %p (now %zu puppet(s) intercepted)",
+            animInstance, g_puppetSpeed.size());
+}
+
+void UnregisterPuppetAnimInstance(void* animInstance) {
+    if (!animInstance) return;
+    if (g_puppetSpeed.erase(animInstance) == 0) return;
+    UE_LOGI("puppet: unregistered AnimInstance %p (%zu puppet(s) remaining)",
+            animInstance, g_puppetSpeed.size());
+    // Clear the interceptor when the last puppet exits -- keeps the hot
+    // ProcessEvent path's pointer-compare against a null target (still cheap;
+    // also avoids a stale interceptor running if the BUA UFunction itself is
+    // GC'd, though FindFunction returns a UObject* that the engine pins).
+    if (g_puppetSpeed.empty()) {
+        GT::ClearInterceptor();
+        UE_LOGI("puppet: BUA interceptor cleared (no puppets registered)");
+    }
+}
+
+void SetPuppetSpeed(void* animInstance, float speed) {
+    auto it = g_puppetSpeed.find(animInstance);
+    if (it != g_puppetSpeed.end()) it->second = speed;
 }
 
 }  // namespace ue_wrap::puppet

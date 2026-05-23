@@ -82,6 +82,27 @@ bool RemotePlayer::Spawn() {
         return false;
     }
 
+    // Bug 2 / Plan B1: register the puppet's AnimInstance with the BUA
+    // interceptor so BlueprintUpdateAnimation's "spd = 0 on null Pawn" clobber
+    // is bypassed for this puppet (and ONLY this puppet -- the local mainPlayer
+    // and any NPC kerfurs continue to run BUA normally). On first registration
+    // ever, the interceptor itself gets installed; subsequent puppets just
+    // add to the registered set.
+    if (void* comp = Pup::GetSkeletalMeshComponent(actor_)) {
+        // The AnimInstance is at SkeletalMeshComponent +0x6B0 (AnimScriptInstance);
+        // use the same path SpawnPuppet's DumpAnimState/DriveAnimBP use, so it
+        // pairs with the IsLive guards there.
+        void* anim = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(comp) + P::off::USkeletalMesh_AnimScriptInstance);
+        if (anim) {
+            puppetAnim_ = anim;  // remembered for Destroy's unregister
+            Pup::RegisterPuppetAnimInstance(anim);
+        } else {
+            UE_LOGW("RemotePlayer::Spawn: puppet has no live AnimInstance yet; "
+                    "BUA-interceptor registration deferred (locomotion will not animate)");
+        }
+    }
+
     // Face the puppet toward the local player (yaw = direction from puppet to
     // player = -forward). atan2 in degrees. NOTE: this yaw is in the SOURCE
     // ACTOR convention (matches what ReadLocalPose / mainPlayer_C produces),
@@ -236,6 +257,16 @@ void RemotePlayer::Tick() {
 
 void RemotePlayer::Destroy() {
     if (!actor_) return;
+    // Unregister from the BUA interceptor BEFORE destroying the engine actor:
+    // once the AnimInstance is freed, any further BUA interception on a stale
+    // pointer is undefined (we keyed on the AnimInstance address; the engine
+    // does not guarantee the next allocation reuses the same slot, but a
+    // straggling BUA dispatch landing after DestroyActor could read freed
+    // memory via the interceptor's map lookup).
+    if (puppetAnim_) {
+        Pup::UnregisterPuppetAnimInstance(puppetAnim_);
+        puppetAnim_ = nullptr;
+    }
     nameplate::Unregister(this);  // drops + destroys the floating label
     if (R::IsLive(actor_)) E::DestroyActor(actor_);
     actor_ = nullptr;

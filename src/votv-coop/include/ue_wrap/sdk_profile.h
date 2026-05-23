@@ -161,8 +161,8 @@ inline constexpr size_t AnimBP_kerfur_walkSpeed = 0x2D68;          // float  (CO
 inline constexpr size_t AnimBP_kerfur_Pawn = 0x2D70;               // APawn*   (cached owner; null on puppet)
 inline constexpr size_t AnimBP_kerfur_Controller = 0x2D78;         // AController* (cached; null on puppet)
 inline constexpr size_t AnimBP_kerfur_Movement = 0x2D80;           // UPawnMovementComponent* (cached; null on puppet -> BP's Movement->Velocity branch dead)
-inline constexpr size_t AnimBP_kerfur_animWalkAlpha = 0x2D88;      // float  HYPOTHESIS: TwoWayBlend alpha gating idle vs walk (0 = pure idle => puppet "slides" with no leg motion)
-inline constexpr size_t AnimBP_kerfur_animWalkRate = 0x2D8C;       // float  HYPOTHESIS: BlendSpace play-rate scalar (1.0 = nominal)
+inline constexpr size_t AnimBP_kerfur_animWalkAlpha = 0x2D88;      // float  CONFIRMED NOT the walk gate: spawn-time diagnostic 2026-05-23 showed the LOCAL has animWalkAlpha=0.00 while WALKING. BUA computes it but it does not gate the BlendSpace. Plan B1 leaves it untouched.
+inline constexpr size_t AnimBP_kerfur_animWalkRate = 0x2D8C;       // float  BlendSpace play-rate scalar. BUAInterceptor sets to 1.0 so a default of 0 cannot freeze BlendSpace sample interp.
 inline constexpr size_t AnimBP_kerfur_lookAt = 0x2D90;             // FVector
 inline constexpr size_t AnimBP_kerfur_lookingAtPlayer = 0x2E01;    // bool
 inline constexpr size_t AnimBP_kerfur_kerfur = 0x2E08;             // AkerfurOmega_C* (null for a player body too)
@@ -265,6 +265,14 @@ inline constexpr const wchar_t* SkeletalMeshComponentClass = L"SkeletalMeshCompo
 inline constexpr const wchar_t* SkinnedMeshComponentClass = L"SkinnedMeshComponent";
 inline constexpr const wchar_t* SetSkeletalMeshFn = L"SetSkeletalMesh";   // USkinnedMeshComponent
 inline constexpr const wchar_t* SetAnimClassFn = L"SetAnimClass";         // USkeletalMeshComponent
+
+// Bug 2 Plan B1: BUA-interceptor target. The kerfur AnimBP class (its
+// AnimBlueprintGeneratedClass leaf name; the AnimBP source asset is
+// 'AnimBlueprint_kerfurOmega_regular' but the generated UClass adds the '_C'
+// suffix UE4 uses for BP-generated classes). BlueprintUpdateAnimation is the
+// per-frame BP event whose body writes spd=0 on null-Pawn puppets.
+inline constexpr const wchar_t* AnimBPKerfurRegularClass = L"AnimBlueprint_kerfurOmega_regular_C";
+inline constexpr const wchar_t* BlueprintUpdateAnimationFn = L"BlueprintUpdateAnimation";
 
 // Dev freecam: a spawned ACameraActor we point the view at (SetViewTargetWithBlend),
 // look driven by the game's own control rotation (smooth), moved by WASD per frame.
