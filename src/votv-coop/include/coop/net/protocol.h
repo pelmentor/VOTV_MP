@@ -31,6 +31,8 @@ enum class MsgType : uint8_t {
     Bye = 3,           // graceful disconnect; no payload
     Reliable = 4,      // a reliable, ordered, ack'd message (chat / system events)
     ReliableAck = 5,   // acknowledges a Reliable message by its relSeq
+    Ping = 6,          // RTT probe: payload = sender's local steady_clock millis (uint32)
+    Pong = 7,          // RTT echo:  payload = the SAME millis we received in Ping
 };
 
 // Payload kinds carried inside a Reliable message. The chat/event-feed groundwork:
@@ -74,6 +76,17 @@ struct PosePacket {
     PoseSnapshot pose;
 };
 static_assert(sizeof(PosePacket) == 40, "PosePacket must be 40 bytes");
+
+// Ping/Pong: header + a single uint32_t payload (the sender's local steady-clock
+// milliseconds, truncated to 32 bits -- ~49 days of monotonic range, far more
+// than any session). Pong echoes the EXACT bytes from the Ping it answered;
+// the original sender then computes RTT = (now32 - echoedMs).
+struct PingPacket {
+    PacketHeader header;
+    uint32_t senderMs;
+    uint32_t _pad;  // keep 8-byte alignment; reserved for future use
+};
+static_assert(sizeof(PingPacket) == 28, "PingPacket must be 28 bytes");
 
 // A reliable message: standard header (type=Reliable, seq=the reliable seq) +
 // ReliableHeader + variable UTF-8 payload. relSeq is a SEPARATE counter from the

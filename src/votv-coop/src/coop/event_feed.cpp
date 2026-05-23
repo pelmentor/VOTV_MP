@@ -14,7 +14,10 @@ namespace coop::event_feed {
 namespace {
 
 std::wstring g_localNick = L"Player";
-std::wstring g_remoteNick = L"Player 2";  // until a Join tells us otherwise
+// Placeholder shown ONLY in the unusual case the peer drops before its Join
+// reliable message lands (Bye before Join completes). Once Join is delivered
+// this becomes the real peer nickname.
+std::wstring g_remoteNick = L"Remote player";
 bool g_lastConnected = false;
 bool g_joinSent = false;
 
@@ -45,6 +48,10 @@ void SetLocalNickname(const std::wstring& nick) {
 
 void Update(net::Session& session, RemotePlayer* remote) {
     const bool connected = session.connected();
+
+    // Forward the latest RTT into the remote player so the nameplate can show
+    // "<nick> (<ping>ms)". Cheap (atomic load + an int store; no allocation).
+    if (remote) remote->SetPing(session.lastRttMs());
 
     // On (re)connect: announce ourselves once via the reliable channel. Join payload
     // is [uint8 len][len bytes UTF-8 nickname]; the nickname is clamped to fit.

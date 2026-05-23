@@ -1,5 +1,6 @@
 #include "dev/freecam.h"
 
+#include "dev/common.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
@@ -9,11 +10,8 @@
 
 #include <windows.h>
 
-#include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -50,38 +48,6 @@ bool KeyDown(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
 
 inline void* ReadPtr(void* base, size_t off) {
     return base ? *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(base) + off) : nullptr;
-}
-
-std::wstring ModuleDir() {
-    HMODULE self = nullptr;
-    ::GetModuleHandleExW(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&ModuleDir), &self);
-    wchar_t path[MAX_PATH] = {};
-    ::GetModuleFileNameW(self, path, MAX_PATH);
-    std::wstring p(path);
-    const size_t sep = p.find_last_of(L"\\/");
-    return sep == std::wstring::npos ? L"." : p.substr(0, sep);
-}
-
-// Minimal ini read: look for a line "freecam=1" / "freecam = true" (case/space
-// tolerant) in votv-coop.ini next to the DLL.
-bool ReadIniEnabled() {
-    const std::wstring path = ModuleDir() + L"\\votv-coop.ini";
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"r") != 0 || !f) return false;
-    char line[128];
-    bool on = false;
-    while (std::fgets(line, sizeof(line), f)) {
-        std::string s(line);
-        // strip spaces
-        s.erase(std::remove_if(s.begin(), s.end(), [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }), s.end());
-        for (auto& c : s) c = static_cast<char>(::tolower(c));
-        if (s == "freecam=1" || s == "freecam=true") { on = true; break; }
-        if (s == "freecam=0" || s == "freecam=false") { on = false; break; }
-    }
-    std::fclose(f);
-    return on;
 }
 
 void Enable() {
@@ -251,7 +217,13 @@ DWORD WINAPI HotkeyThread(LPVOID) {
 }  // namespace
 
 void Init() {
-    g_enabled = ReadIniEnabled();
+    // Master kill-switch first: [dev] enabled=0 forces every dev feature off
+    // regardless of the granular `freecam=...` line.
+    if (!::dev::MasterEnabled()) {
+        UE_LOGI("freecam: disabled by master switch ([dev] enabled=0)");
+        return;
+    }
+    g_enabled = ::dev::IsIniKeyTrue("freecam");
     if (!g_enabled) {
         UE_LOGI("freecam: disabled (set [dev] freecam=1 in votv-coop.ini to enable)");
         return;

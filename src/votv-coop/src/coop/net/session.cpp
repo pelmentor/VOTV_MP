@@ -17,6 +17,20 @@ namespace {
 // compare before being dropped.
 constexpr int kMaxRecvPerTick = 64;
 
+// Ping cadence + peer-liveness budget. A peer that hasn't sent ANY packet (pose,
+// ping, anything) for kPeerTimeoutMs is treated as gone (host crash / internet
+// drop -- they couldn't send a graceful Bye). At 30 Hz pose stream + 1 Hz ping
+// the budget should never be approached in healthy steady state; 10 s gives
+// generous slack for transient hiccups before declaring "lost peer".
+constexpr int kPingIntervalMs = 1000;
+constexpr int kPeerTimeoutMs  = 10000;
+
+uint64_t NowMs() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
 // A non-zero random session nonce. Not crypto-grade (adequate for LAN anti-spoof;
 // a WAN phase would want a CSPRNG); seeded from random_device + the clock so two
 // sessions on one machine don't collide.
@@ -66,6 +80,8 @@ bool Session::Start(const Config& cfg) {
     }
 
     state_.store(ConnState::Handshaking);
+    lastRttMs_.store(0);    // fresh session -- no measurement yet
+    lastRecvMs_.store(0);   // no packets yet (timeout check gates on this != 0)
     running_.store(true);
     thread_ = std::thread(&Session::NetThread, this);
     UE_LOGI("net: session started role=%s peer=%s:%u port=%u sendHz=%d",
@@ -203,15 +219,46 @@ void Session::HandleDatagram(const void* data, int len, const Endpoint& from) {
         { std::lock_guard<std::mutex> lk(remoteMutex_);
           hasRemote_ = false; lastRemoteSeq_ = 0; remoteStamp_ = 0; lastReadStamp_ = 0; }
         reliable_.Reset();
+        lastRttMs_.store(0);
         if (cfg_.role == Role::Host) {
             std::lock_guard<std::mutex> lk(peerMutex_);
             peerLocked_ = false;  // host re-learns the peer on the next Hello
         }
         break;
     }
+    case MsgType::Ping: {
+        // Echo the EXACT payload back so the sender can compute RTT from its own
+        // local clock. The sender pegs the timestamp at send time; we don't add
+        // ours (one-way clock skew would corrupt the measurement).
+        if (len < static_cast<int>(sizeof(PingPacket))) return;
+        PingPacket in;
+        std::memcpy(&in, data, sizeof(in));
+        PingPacket out{};
+        WriteHeader(out.header, MsgType::Pong, sendSeq_.fetch_add(1), token);
+        out.senderMs = in.senderMs;
+        // Gate the stats counter on the actual send (matches every other send
+        // site -- audit caught the unconditional fetch_add drifting the stat).
+        if (transport_.SendTo(from, &out, sizeof(out))) sent_.fetch_add(1);
+        break;
+    }
+    case MsgType::Pong: {
+        // Sender's timestamp echoed back -- RTT = our_now - that_timestamp.
+        if (len < static_cast<int>(sizeof(PingPacket))) return;
+        PingPacket p;
+        std::memcpy(&p, data, sizeof(p));
+        const uint32_t now32 = static_cast<uint32_t>(NowMs());
+        const uint32_t rtt = now32 - p.senderMs;  // unsigned subtract wraps cleanly
+        if (rtt < 60000) lastRttMs_.store(static_cast<int>(rtt));  // ignore implausible RTTs
+        break;
+    }
     default:
         break;  // Hello handled above
     }
+
+    // Touch the peer-liveness clock LAST (after the message was accepted from
+    // the locked peer with a valid token -- i.e. confirmed peer traffic, not a
+    // foreign spoof). The net thread reads this for the timeout-disconnect.
+    lastRecvMs_.store(NowMs());
 }
 
 void Session::NetThread() {
@@ -219,6 +266,7 @@ void Session::NetThread() {
         cfg_.sendHz > 0 ? 1000 / cfg_.sendHz : 33);
     auto nextSend = std::chrono::steady_clock::now();
     auto nextHello = std::chrono::steady_clock::now();
+    auto nextPing = std::chrono::steady_clock::now();
     char buf[kMaxPacketBytes];
 
     while (running_.load()) {
@@ -271,6 +319,44 @@ void Session::NetThread() {
                 if (transport_.SendTo(peer, &pkt, sizeof(pkt))) sent_.fetch_add(1);
             }
             nextSend = now + sendInterval;
+        }
+
+        // 4) Connected: fire a Ping every kPingIntervalMs (1 s). Payload = our
+        // local steady-clock millis; the peer echoes the same bytes back as a
+        // Pong, we compute RTT from now - echo. Cheap (28 bytes, 1 Hz) and
+        // doubles as the peer-liveness heartbeat -- a peer that stops responding
+        // also stops bumping our lastRecvMs_ -> times out below.
+        if (state_.load() == ConnState::Connected && now >= nextPing && peer.valid()) {
+            PingPacket pkt{};
+            WriteHeader(pkt.header, MsgType::Ping, sendSeq_.fetch_add(1), token);
+            pkt.senderMs = static_cast<uint32_t>(NowMs());
+            if (transport_.SendTo(peer, &pkt, sizeof(pkt))) sent_.fetch_add(1);
+            nextPing = now + std::chrono::milliseconds(kPingIntervalMs);
+        }
+
+        // 5) Peer-timeout: if no packet from the peer in kPeerTimeoutMs while we
+        // think we're Connected, declare them gone. Same effect as a Bye: state
+        // drops to Handshaking + remote tracking + reliable channel reset. The
+        // game thread's harness watcher then sees the !Connected edge and runs
+        // Destroy() on the puppet. Without this, a host crash / internet drop
+        // would leave the client stuck in Connected, sending poses to a black
+        // hole forever.
+        if (state_.load() == ConnState::Connected) {
+            const uint64_t nowMs = NowMs();
+            const uint64_t lastMs = lastRecvMs_.load();
+            if (lastMs != 0 && nowMs - lastMs > kPeerTimeoutMs) {
+                UE_LOGW("net: peer timeout (%llu ms since last recv) -- dropping to Handshaking",
+                        static_cast<unsigned long long>(nowMs - lastMs));
+                state_.store(ConnState::Handshaking);
+                { std::lock_guard<std::mutex> lk(remoteMutex_);
+                  hasRemote_ = false; lastRemoteSeq_ = 0; remoteStamp_ = 0; lastReadStamp_ = 0; }
+                reliable_.Reset();
+                lastRttMs_.store(0);
+                if (cfg_.role == Role::Host) {
+                    std::lock_guard<std::mutex> lk(peerMutex_);
+                    peerLocked_ = false;  // host re-learns from the next Hello if peer recovers
+                }
+            }
         }
 
         // Idle a touch so we don't spin a core. ~5 ms keeps recv latency low while

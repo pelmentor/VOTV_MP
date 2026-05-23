@@ -85,6 +85,12 @@ public:
     uint64_t packetsSent() const { return sent_.load(); }
     uint64_t packetsRecv() const { return recv_.load(); }
 
+    // Last measured round-trip time to the peer, in milliseconds. 0 until the
+    // first Pong arrives (or the peer never replies). Updated on every received
+    // Pong; the net thread sends a Ping every kPingIntervalMs while Connected.
+    // Reading is wait-free (atomic load) -- safe from the game thread for HUD use.
+    int lastRttMs() const { return lastRttMs_.load(); }
+
 private:
     void NetThread();
     void HandleDatagram(const void* data, int len, const Endpoint& from);
@@ -123,6 +129,14 @@ private:
     std::atomic<uint32_t> sendSeq_{0};
     std::atomic<uint64_t> sent_{0};
     std::atomic<uint64_t> recv_{0};
+
+    // RTT + peer-liveness tracking. lastRttMs_ is updated on Pong (atomic, so a
+    // game-thread HUD read is wait-free). lastRecvMs_ is the steady_clock millis
+    // of the last received packet from the locked peer -- the net thread uses it
+    // to fire the peer-timeout (host crash / internet drop = no Bye, so we'd
+    // otherwise stay Connected forever).
+    std::atomic<int> lastRttMs_{0};
+    std::atomic<uint64_t> lastRecvMs_{0};
 
     ReliableChannel reliable_;  // reliable sub-channel (chat / system events)
 };

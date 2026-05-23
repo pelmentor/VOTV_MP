@@ -116,7 +116,11 @@ FVector GetComponentForwardVector(void* component);
 // whole plate's alpha (TintColorAndOpacity.A) -- real partial transparency, which
 // a TextRender cannot do (its materials are Opaque/Masked). Returns the actor (a
 // host you position/billboard each frame), or nullptr. Game thread only.
-void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float opacity);
+// `outTextBlock` (optional): receives the inner UTextBlock pointer so the caller
+// can re-drive the visible label later (e.g. when the remote nickname arrives
+// via the Join reliable message AFTER the nameplate was already spawned).
+void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float opacity,
+                           void** outTextBlock = nullptr);
 
 // Build a SCREEN-SPACE HUD widget (a UUserWidget with a single multi-line UTextBlock
 // root) and add it to the viewport. Unlike the world-space nameplate, this renders on

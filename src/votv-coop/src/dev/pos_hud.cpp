@@ -1,5 +1,6 @@
 #include "dev/pos_hud.h"
 
+#include "dev/common.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
@@ -8,9 +9,7 @@
 
 #include <windows.h>
 
-#include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cstdio>
 #include <string>
 
@@ -46,40 +45,6 @@ void* g_local = nullptr;
 constexpr int kZOrder = 95;  // just below the coop hud_feed (which is at 100)
 
 bool KeyDown(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
-
-// Mirror of dev::freecam::ModuleDir -- the DLL's directory, where votv-coop.ini lives.
-std::wstring ModuleDir() {
-    HMODULE self = nullptr;
-    ::GetModuleHandleExW(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&ModuleDir), &self);
-    wchar_t path[MAX_PATH] = {};
-    ::GetModuleFileNameW(self, path, MAX_PATH);
-    std::wstring p(path);
-    const size_t sep = p.find_last_of(L"\\/");
-    return sep == std::wstring::npos ? L"." : p.substr(0, sep);
-}
-
-// Minimal ini read: look for "posinfo=1" / "posinfo = true" (case/space tolerant)
-// anywhere in votv-coop.ini. Same shape as freecam::ReadIniEnabled.
-bool ReadIniEnabled() {
-    const std::wstring path = ModuleDir() + L"\\votv-coop.ini";
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"r") != 0 || !f) return false;
-    char line[128];
-    bool on = false;
-    while (std::fgets(line, sizeof(line), f)) {
-        std::string s(line);
-        s.erase(std::remove_if(s.begin(), s.end(),
-                               [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
-                s.end());
-        for (auto& c : s) c = static_cast<char>(::tolower(c));
-        if (s == "posinfo=1" || s == "posinfo=true") { on = true; break; }
-        if (s == "posinfo=0" || s == "posinfo=false") { on = false; break; }
-    }
-    std::fclose(f);
-    return on;
-}
 
 // Build the LEFT-MIDDLE overlay widget. Outer must be a persistent UObject (the
 // GameInstance) so it survives level loads; pivot at the widget's left-middle
@@ -201,7 +166,13 @@ DWORD WINAPI HotkeyThread(LPVOID) {
 }  // namespace
 
 void Init() {
-    g_iniEnabled = ReadIniEnabled();
+    // Master kill-switch first: [dev] enabled=0 forces every dev feature off
+    // regardless of the granular `posinfo=...` line.
+    if (!::dev::MasterEnabled()) {
+        UE_LOGI("pos_hud: disabled by master switch ([dev] enabled=0)");
+        return;
+    }
+    g_iniEnabled = ::dev::IsIniKeyTrue("posinfo");
     if (!g_iniEnabled) {
         UE_LOGI("pos_hud: disabled (set [dev] posinfo=1 in votv-coop.ini to enable; F2 toggles)");
         return;

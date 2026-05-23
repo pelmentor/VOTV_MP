@@ -4,18 +4,27 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
+#include <chrono>
 #include <deque>
 
 namespace ue_wrap::hud_feed {
 
 namespace {
 
-constexpr int kMaxLines = 8;     // last N lines kept on screen
-constexpr int kZOrder = 100;     // above VOTV's own UMG HUD
+constexpr int kMaxLines = 8;        // last N lines kept on screen
+constexpr int kZOrder = 100;        // above VOTV's own UMG HUD
+constexpr int kLineTtlMs = 10000;   // 10 s -- matches typical game-chat fade
+
+using Clock = std::chrono::steady_clock;
+
+struct Line {
+    std::wstring text;
+    Clock::time_point expireAt;
+};
 
 void* g_root = nullptr;          // the UUserWidget (for re-attach on level change)
 void* g_text = nullptr;          // the UTextBlock we drive
-std::deque<std::wstring> g_lines;
+std::deque<Line> g_lines;
 
 // Rebuild the multi-line string (oldest at top, newest at bottom) and push it to the
 // single UTextBlock. The block wraps newlines, so one SetText paints the whole feed.
@@ -24,7 +33,7 @@ void Repaint() {
     std::wstring all;
     for (size_t i = 0; i < g_lines.size(); ++i) {
         if (i) all += L'\n';
-        all += g_lines[i];
+        all += g_lines[i].text;
     }
     engine::SetWidgetText(g_text, all.c_str());
 }
@@ -63,10 +72,23 @@ bool IsInitialized() {
 }
 
 void Push(const std::wstring& line) {
-    g_lines.push_back(line);
+    g_lines.push_back({line, Clock::now() + std::chrono::milliseconds(kLineTtlMs)});
     while (g_lines.size() > static_cast<size_t>(kMaxLines)) g_lines.pop_front();
     UE_LOGI("hud_feed: '%ls'", line.c_str());
     Repaint();
+}
+
+void Tick() {
+    if (g_lines.empty()) return;
+    const auto now = Clock::now();
+    bool changed = false;
+    // Lines are pushed in time order so expiry is always at the front -- pop
+    // from the front until we hit one that's still alive.
+    while (!g_lines.empty() && g_lines.front().expireAt <= now) {
+        g_lines.pop_front();
+        changed = true;
+    }
+    if (changed) Repaint();
 }
 
 void Shutdown() {

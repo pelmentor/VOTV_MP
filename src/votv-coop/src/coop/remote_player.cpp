@@ -83,9 +83,11 @@ bool RemotePlayer::Spawn() {
     }
 
     // Face the puppet toward the local player (yaw = direction from puppet to
-    // player = -forward). atan2 in degrees.
+    // player = -forward). atan2 in degrees. NOTE: this yaw is in the SOURCE
+    // ACTOR convention (matches what ReadLocalPose / mainPlayer_C produces),
+    // so the -90 mesh compensation in ApplyToEngine applies cleanly -- no
+    // 90 deg visual pop between Spawn and the first ApplyToEngine (audit fix).
     const float yaw = std::atan2(-fwd.Y, -fwd.X) * 57.29578f;
-    SetFacing(yaw);
 
     // Seed the interpolation state to the spawn placement so the first network
     // pose snaps from a SANE current (not zero), and per-frame Tick() in the
@@ -99,7 +101,11 @@ bool RemotePlayer::Spawn() {
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
     hasPose_ = false;  // the first network pose SNAPS away from this fake placement
-    dirty_ = false;    // Spawn just placed the actor at curPos_; nothing pending
+    // Route the initial placement through ApplyToEngine so the -90 yaw mesh
+    // compensation is applied consistently with the streaming path -- no 90 deg
+    // visual pop between Spawn and the first ApplyToEngine on the first pose.
+    ApplyToEngine();
+    dirty_ = false;     // just pushed it
 
     // Show the floating nameplate above this body (lazily hooks the HUD draw).
     nameplate::Register(this);
@@ -214,30 +220,36 @@ void RemotePlayer::Tick() {
     }
 }
 
-void RemotePlayer::ResetPoseState() {
-    // Wipe interp state; the puppet stays at cur (no engine move). The next
-    // SetTargetPose will see hasPose_=false and snap to the new target.
+void RemotePlayer::Destroy() {
+    if (!actor_) return;
+    nameplate::Unregister(this);  // drops + destroys the floating label
+    if (R::IsLive(actor_)) E::DestroyActor(actor_);
+    actor_ = nullptr;
     hasPose_ = false;
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
-    errorPos_ = ue_wrap::FVector{};
-    errorYaw_ = 0.f;
+    dirty_ = false;
+    UE_LOGI("RemotePlayer::Destroy: puppet + nameplate gone");
 }
 
 void RemotePlayer::ApplyToEngine() {
     E::SetActorLocation(actor_, curPos_);
-    E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, curYaw_, 0.f});
+    // Yaw compensation for the SkeletalMesh's local orientation: VOTV's mainPlayer_C
+    // (a Character) has its SkeletalMeshComponent rotated -90 yaw inside the actor
+    // (standard UE4 character setup -- imported meshes face Y+, the -90 RelativeRotation
+    // re-aligns them to actor +X). Our puppet is a bare SkeletalMeshActor with NO
+    // mesh-component offset, so applying the source actor's yaw directly leaves the
+    // puppet visually 90 deg sideways (user-confirmed). Subtracting 90 here makes
+    // (puppet visual) == (source visual) without poking the engine's mesh RelativeRotation.
+    constexpr float kPuppetMeshYawCompensationDeg = -90.f;
+    E::SetActorRotation(actor_,
+                        ue_wrap::FRotator{0.f, curYaw_ + kPuppetMeshYawCompensationDeg, 0.f});
     Pup::DriveAnimBP(actor_, curSpeed_);
 }
 
 bool RemotePlayer::SetLocation(const ue_wrap::FVector& location) {
     if (!valid()) { actor_ = nullptr; return false; }  // valid() = IsLive (not just non-null)
     return E::SetActorLocation(actor_, location);
-}
-
-bool RemotePlayer::SetFacing(float yaw) {
-    if (!valid()) { actor_ = nullptr; return false; }
-    return E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, yaw, 0.f});
 }
 
 ue_wrap::FVector RemotePlayer::GetLocation() const {

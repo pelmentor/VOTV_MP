@@ -21,8 +21,15 @@ bool Init(void* outer);
 
 bool IsInitialized();
 
-// Append a line to the feed (oldest scrolls off after N lines). No-op if not Init'd.
+// Append a line to the feed. Lines auto-expire after kLineTtlMs (default 10 s)
+// just like real chat -- a "X joined the game" line is interesting for a moment
+// and then clutters the screen forever otherwise. Tick() does the expiry.
 void Push(const std::wstring& line);
+
+// Drop any expired lines and repaint if anything changed. Call from a periodic
+// game-thread context (e.g. NetPumpTick at ~60 Hz). Cheap when nothing expired:
+// a single steady_clock read + a deque-front timestamp compare.
+void Tick();
 
 // Drop the overlay (session end / shutdown).
 void Shutdown();

@@ -506,7 +506,9 @@ bool ResolveScreenWidgetFns() {
 }
 }  // namespace
 
-void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float opacity) {
+void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float opacity,
+                           void** outTextBlock) {
+    if (outTextBlock) *outTextBlock = nullptr;
     if (!ResolveNameplateFns()) {
         UE_LOGE("engine: SpawnNameplateWidget unresolved (actor=%p comp=%p add=%p fin=%p spawnObj=%p uw=%p tb=%p)",
                 g_npActorClass, g_npCompClass, g_npAddFn, g_npFinishFn, g_npSpawnObjFn, g_npUserWidgetClass, g_npTbClass);
@@ -571,6 +573,7 @@ void* SpawnNameplateWidget(const FVector& location, const wchar_t* text, float o
 
     UE_LOGI("engine: SpawnNameplateWidget(own) '%ls' actor=%p comp=%p root=%p txt=%p font=%p at (%.0f,%.0f,%.0f)",
             text, actor, comp, root, txt, g_npFont, location.X, location.Y, location.Z);
+    if (outTextBlock) *outTextBlock = txt;
     return actor;
 }
 

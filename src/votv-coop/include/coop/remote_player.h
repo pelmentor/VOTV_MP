@@ -56,18 +56,16 @@ public:
     void SetTargetPose(const coop::net::PoseSnapshot& snap);
     void Tick();
 
-    // Clear the "we have a target" state so the NEXT SetTargetPose snaps (no
-    // LERPing across the disconnect interval). Call when the peer goes from
-    // Connected -> not-Connected (Bye / timeout) -- the puppet stays where
-    // it is, but the first pose after reconnect teleports rather than sliding.
-    void ResetPoseState();
+    // Tear down the puppet: DestroyActor on the engine SkeletalMeshActor and
+    // unregister the floating nameplate. Called on peer disconnect (Bye /
+    // exit) -- otherwise the puppet lingers in the world frozen at its last
+    // pose forever. The next remote pose (if the peer reconnects) re-spawns
+    // a fresh puppet via the NetPumpTick auto-spawn path.
+    void Destroy();
 
     // Apply an absolute position only (teleport, no sweep). Kept for the harness /
     // verification; the network path is SetTargetPose() + Tick().
     bool SetLocation(const ue_wrap::FVector& location);
-
-    // Set horizontal facing independently of where the local player looks.
-    bool SetFacing(float yaw);
 
     // Current engine-reported location (for verification / interpolation base).
     ue_wrap::FVector GetLocation() const;
@@ -77,9 +75,15 @@ public:
     ue_wrap::FVector GetHeadPosition() const;
 
     // The display nickname rendered above the body (set from the network
-    // handshake; defaults to "Player 2" so the harness shows something).
+    // handshake; defaults to "..." until the peer's Join reliable msg arrives).
     void SetNickname(std::wstring name);
     const std::wstring& GetNickname() const { return nickname_; }
+
+    // Current RTT to this player's source, in milliseconds. 0 = unmeasured.
+    // The nameplate appends "(<ping>ms)" when this is non-zero; event_feed
+    // pulls Session::lastRttMs() each tick and forwards it here.
+    void SetPing(int ms) { pingMs_ = ms; }
+    int GetPing() const { return pingMs_; }
 
     void* actor() const { return actor_; }
 
@@ -100,7 +104,12 @@ private:
     static constexpr float kSnapPerSpeedSec = 0.5f;
 
     void* actor_ = nullptr;  // the engine ASkeletalMeshActor puppet (owned by the engine)
-    std::wstring nickname_ = L"Player 2";
+    // Placeholder until the peer's Join reliable message lands (typically within
+    // a few RTT of connect). nameplate::Update repaints when SetNickname changes
+    // this. The old "Player 2" default was misleading -- both ends saw "Player 2"
+    // forever in early tests because no refresh path existed.
+    std::wstring nickname_ = L"...";
+    int pingMs_ = 0;  // last RTT measurement (set by event_feed from Session::lastRttMs)
 
     // Receiver-side interpolation state (game thread only -- the engine path is
     // single-threaded; no mutex). curPos_/curYaw_/curSpeed_ is what was last

@@ -185,6 +185,12 @@ coop::RemotePlayer g_orphan;
 // re-find if it died (level change) -- never a full scan per tick (post-ship audit).
 void* g_netLocal = nullptr;
 
+// Connected-state edge detection for the disconnect cleanup (Destroy the puppet).
+// File-scope (NOT a static-local in NetPumpTick) so a future session restart can
+// reset it explicitly via ResetNetState below -- otherwise the local-static would
+// hold the prior session's value across the new Start (audit fix).
+bool g_wasConnected = false;
+
 // Game thread, ~send-rate: push the local player's pose to the session and apply
 // the latest remote pose to the puppet (auto-spawning it on the first packet,
 // methodology 3.5). `displayOffsetX` shifts the rendered puppet sideways so a
@@ -197,13 +203,14 @@ void NetPumpTick(float displayOffsetX) {
         if (void* gi = R::FindObjectByClass(P::name::GameInstanceClass)) ue_wrap::hud_feed::Init(gi);
     }
 
-    // Detect peer disconnect (Connected -> Handshaking/Disconnected). Wipe the
-    // remote player's interp state so the NEXT first pose after a reconnect SNAPS
-    // -- otherwise the puppet would LERP across the disconnect-gap distance.
-    static bool sWasConnected = false;
+    // Detect peer disconnect (Connected -> Handshaking/Disconnected). DESTROY the
+    // puppet -- a frozen-in-place puppet of a peer who already quit is confusing
+    // and clutters the world. event_feed will also have posted "X left the game"
+    // (a chat-feed line that now expires via hud_feed::Tick). If the peer ever
+    // reconnects, NetPumpTick auto-spawns a fresh puppet on the first new pose.
     const bool isConnected = (g_session.state() == coop::net::ConnState::Connected);
-    if (sWasConnected && !isConnected && g_orphan.valid()) g_orphan.ResetPoseState();
-    sWasConnected = isConnected;
+    if (g_wasConnected && !isConnected && g_orphan.valid()) g_orphan.Destroy();
+    g_wasConnected = isConnected;
 
     if (g_netLocal && !R::IsLive(g_netLocal)) g_netLocal = nullptr;
     if (!g_netLocal) g_netLocal = R::FindObjectByClass(P::name::MainPlayerClass);
@@ -247,6 +254,10 @@ void NetPumpTick(float displayOffsetX) {
 
     // Surface session events (joins/disconnects) to the feed + send our Join.
     coop::event_feed::Update(g_session, &g_orphan);
+
+    // Expire old chat-feed lines (10 s TTL) so a "X joined the game" line
+    // doesn't linger forever like the early version did.
+    ue_wrap::hud_feed::Tick();
 }
 
 // Runs on the game thread: log an actor's default subobjects (its components),
@@ -509,6 +520,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         const coop::net::Config netCfg = ReadNetConfig(netEnabled);
         if (netEnabled) {
             coop::event_feed::SetLocalNickname(ReadNickname());
+            g_wasConnected = false;  // fresh edge-detector for the disconnect cleanup
             g_session.Start(netCfg);
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
                     netCfg.role == coop::net::Role::Host ? "host" : "client");
@@ -556,6 +568,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         cfg.peerIp = "127.0.0.1";
         cfg.initiate = true;  // host targets itself for the loopback handshake
         coop::event_feed::SetLocalNickname(ReadNickname());
+        g_wasConnected = false;  // fresh edge-detector for the disconnect cleanup
         g_session.Start(cfg);
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
         int tick = 0;
