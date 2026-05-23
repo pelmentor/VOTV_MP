@@ -215,6 +215,11 @@ inline constexpr size_t USceneComponent_RelativeLocation = 0x011C;     // FVecto
 // renamed in IDB) is a clean cross-cut we can also intercept if needed.
 
 // mainPlayer_C grab-state fields (mainPlayer.hpp, all writers BP-only).
+// LIGHT grab path is UPhysicsHandleComponent; HEAVY grab path is a DIFFERENT
+// component class (UPhysicsConstraintComponent) -- our PHC observers will NOT
+// fire on heavy drag; needs the constraint observers below.
+inline constexpr size_t mainPlayer_heavyGrab            = 0x04F0;  // UPhysicsConstraintComponent*
+inline constexpr size_t mainPlayer_grabHandle           = 0x0688;  // UPhysicsHandleComponent*  (`self` in PHC observer xref)
 inline constexpr size_t mainPlayer_grabbing_actor       = 0x07D0;  // AActor*
 inline constexpr size_t mainPlayer_grabbing_component   = 0x07D8;  // UPrimitiveComponent*
 inline constexpr size_t mainPlayer_grabsHeavy           = 0x0874;  // bool
@@ -224,6 +229,17 @@ inline constexpr size_t mainPlayer_grabRelativeLocation = 0x0DE4;  // FVector (l
 inline constexpr size_t mainPlayer_heavyGrabLocation    = 0x0E8C;  // FVector
 inline constexpr size_t mainPlayer_heavyGrabArm         = 0x0E98;  // FVector
 inline constexpr size_t mainPlayer_Heavy                = 0x0EC8;  // bool
+
+// UPhysicsHandleComponent internal layout (IDA-confirmed via ReleaseComponent
+// + UpdateHandleTransform decompile at 0x142D7C670 / 0x142D7EE30; matches
+// stock UE4.27 source line 336/413 of PhysicsHandleComponent.cpp).
+inline constexpr size_t UPhysicsHandleComponent_GrabbedComponent   = 0x00B0;  // UPrimitiveComponent* (cleared on Release)
+inline constexpr size_t UPhysicsHandleComponent_GrabbedBoneName    = 0x00B8;  // FName (8 bytes)
+inline constexpr size_t UPhysicsHandleComponent_Flags              = 0x00C0;  // DWORD (&=~1 clears bConstrained)
+inline constexpr size_t UPhysicsHandleComponent_TargetRotation     = 0x00E0;  // FQuat (16 bytes)
+inline constexpr size_t UPhysicsHandleComponent_TargetLocation     = 0x00F0;  // FVector (per-tick PhysX kinematic target)
+inline constexpr size_t UPhysicsHandleComponent_KinActorData       = 0x0148;  // FPhysicsActorHandle*
+inline constexpr size_t UPhysicsHandleComponent_ConstraintHandle   = 0x0150;  // FPhysicsConstraintHandle*
 
 // Aprop_C field offsets (prop.hpp).
 //
@@ -487,10 +503,10 @@ inline constexpr const wchar_t* GetBoneNameFn = L"GetBoneName";              // 
 // IDA decompile + log analysis written up in
 // research/findings/votv-physics-interaction-deep-re-2026-05-23.md.
 
-// Engine UPhysicsHandleComponent UFunctions (ProcessEvent-dispatched -- the
-// exec thunks at rva 0x1430C64B0 / 0x1430C65D0 / 0x1430C6AD0 / 0x1430C6B60 /
-// 0x142FEA9B0 are UFunction.Func pointers; ProcessEvent's `function` arg IS
-// the UFunction* we match on, looked up by FName via
+// Engine UPhysicsHandleComponent UFunctions (light-grab path; ProcessEvent-
+// dispatched -- the exec thunks at rva 0x1430C64B0 / 0x1430C65D0 / 0x1430C6AD0 /
+// 0x1430C6B60 / 0x142FEA9B0 are UFunction.Func pointers; ProcessEvent's
+// `function` arg IS the UFunction* we match on, looked up by FName via
 // reflection::FindFunction(UPhysicsHandleComponent::StaticClass(), name)).
 inline constexpr const wchar_t* PhysicsHandleComponentClass            = L"PhysicsHandleComponent";
 inline constexpr const wchar_t* GrabComponentAtLocationFn              = L"GrabComponentAtLocation";
@@ -498,6 +514,16 @@ inline constexpr const wchar_t* GrabComponentAtLocationWithRotationFn  = L"GrabC
 inline constexpr const wchar_t* SetTargetLocationFn                    = L"SetTargetLocation";
 inline constexpr const wchar_t* SetTargetLocationAndRotationFn         = L"SetTargetLocationAndRotation";
 inline constexpr const wchar_t* ReleaseComponentFn                     = L"ReleaseComponent";
+
+// Engine UPhysicsConstraintComponent UFunctions (HEAVY drag path -- VOTV uses
+// a physics CONSTRAINT for heavy drag, not a handle; SDK dump shows
+// mainPlayer_C.heavyGrab is UPhysicsConstraintComponent*, distinct from
+// mainPlayer_C.grabHandle which is UPhysicsHandleComponent*). These ARE
+// ProcessEvent-dispatched too -- BP calls them via CallFunction nodes.
+inline constexpr const wchar_t* PhysicsConstraintComponentClass        = L"PhysicsConstraintComponent";
+inline constexpr const wchar_t* SetConstrainedComponentsFn             = L"SetConstrainedComponents";
+inline constexpr const wchar_t* BreakConstraintFn                      = L"BreakConstraint";
+inline constexpr const wchar_t* SetDisableCollisionFn                  = L"SetDisableCollision";
 
 // Secondary -- BP-Timeline / input level. Useful for triangulation and to
 // learn the grabbed prop's identity (read mainPlayer_C.grabbing_actor from

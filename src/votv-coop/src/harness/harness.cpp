@@ -309,9 +309,28 @@ void GrabObserver_PHC_SetTargetWithRotation(void* self, void* /*function*/, void
 }
 
 void GrabObserver_PHC_Release_PRE(void* self, void* /*function*/, void* /*params*/) {
-    // Pre-dispatch: read GrabbedComponent BEFORE PhysX clears it. Offset TBD;
-    // for now just signal the release. Field-mining is Stage 1.1.
-    UE_LOGI("grab_hook[PHC.Release PRE]: handle=%p (drop)", self);
+    // Pre-dispatch: read GrabbedComponent BEFORE PhysX clears it (offset +176
+    // confirmed by IDA decompile of ReleaseComponent_Impl @0x142D7C670).
+    if (!self) {
+        UE_LOGI("grab_hook[PHC.Release PRE]: handle=null");
+        return;
+    }
+    void* comp = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(self) + P::off::UPhysicsHandleComponent_GrabbedComponent);
+    UE_LOGI("grab_hook[PHC.Release PRE]: handle=%p released_component=%p", self, comp);
+}
+
+// --- Primary: UPhysicsConstraintComponent (HEAVY drag path). `self` IS the
+// constraint component, owned by mainPlayer_C as `heavyGrab` (+0x4F0).
+// Confirmed via SDK dump (mainPlayer.hpp:12). VOTV uses a physics CONSTRAINT
+// joint between the player and a heavy prop instead of a kinematic handle.
+
+void GrabObserver_PCC_SetConstrainedComponents(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[PCC.SetConstrainedComponents]: constraint=%p (heavy grab START)", self);
+}
+
+void GrabObserver_PCC_BreakConstraint_PRE(void* self, void* /*function*/, void* /*params*/) {
+    UE_LOGI("grab_hook[PCC.BreakConstraint PRE]: constraint=%p (heavy grab END)", self);
 }
 
 // --- Secondary: BP-Timeline + input (`self` IS mainPlayer_C). These prove
@@ -364,10 +383,11 @@ void InstallGrabObservers() {
     if (g_grabObserversInstalled) return;
 
     void* phcCls = R::FindClass(P::name::PhysicsHandleComponentClass);
+    void* pccCls = R::FindClass(P::name::PhysicsConstraintComponentClass);
     void* playerCls = R::FindClass(P::name::MainPlayerClass);
-    if (!phcCls || !playerCls) {
-        UE_LOGW("grab_hook: class not found yet (PHC=%p, mainPlayer=%p) -- will retry next tick",
-                phcCls, playerCls);
+    if (!phcCls || !pccCls || !playerCls) {
+        UE_LOGW("grab_hook: class not found yet (PHC=%p, PCC=%p, mainPlayer=%p) -- will retry next tick",
+                phcCls, pccCls, playerCls);
         return;
     }
 
@@ -389,7 +409,7 @@ void InstallGrabObservers() {
         }
     };
 
-    // Primary: engine PhysicsHandle (universal -- catches every grab path).
+    // Primary: engine PhysicsHandle (LIGHT grab path).
     reg(phcCls, P::name::PhysicsHandleComponentClass,
         P::name::GrabComponentAtLocationFn,             GrabObserver_PHC_Grab,                  /*pre=*/false);
     reg(phcCls, P::name::PhysicsHandleComponentClass,
@@ -401,6 +421,12 @@ void InstallGrabObservers() {
     reg(phcCls, P::name::PhysicsHandleComponentClass,
         P::name::ReleaseComponentFn,                    GrabObserver_PHC_Release_PRE,           /*pre=*/true);
 
+    // Primary: engine PhysicsConstraint (HEAVY grab path -- different class).
+    reg(pccCls, P::name::PhysicsConstraintComponentClass,
+        P::name::SetConstrainedComponentsFn, GrabObserver_PCC_SetConstrainedComponents, /*pre=*/false);
+    reg(pccCls, P::name::PhysicsConstraintComponentClass,
+        P::name::BreakConstraintFn,          GrabObserver_PCC_BreakConstraint_PRE,      /*pre=*/true);
+
     // Secondary: BP-Timeline + input on mainPlayer_C.
     reg(playerCls, P::name::MainPlayerClass,
         P::name::MainPlayerUseInputEventFn,  GrabObserver_InpActEvt_use,      /*pre=*/false);
@@ -410,7 +436,7 @@ void InstallGrabObservers() {
         P::name::MainPlayerGrabFinishedFn,   GrabObserver_grab_Finished_PRE,  /*pre=*/true);
 
     g_grabObserversInstalled = true;
-    UE_LOGI("grab_hook: Stage 1 observers installed (5 PHC + 3 BP-Timeline) -- press E on a prop to see hook lines");
+    UE_LOGI("grab_hook: Stage 1 observers installed (5 PHC + 2 PCC + 3 BP-Timeline) -- press E on a prop to see hook lines");
 }
 
 // Game thread, ~send-rate: push the local player's pose to the session and apply
