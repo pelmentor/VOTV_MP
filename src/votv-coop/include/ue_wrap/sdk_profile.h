@@ -147,19 +147,30 @@ inline constexpr size_t USkinnedMesh_SkeletalMesh = 0x0480;       // USkeletalMe
 inline constexpr size_t USkeletalMesh_AnimClass = 0x06A8;         // TSubclassOf<UAnimInstance>  Engine.hpp:18094
 
 // UAnimBlueprint_kerfurOmega_regular_C public variables (offsets within the live
-// AnimInstance). walkSpeed/spd drive the locomotion BlendSpace; the rest are
-// dumped for the local-vs-puppet state diff and to suppress world-dependent IK.
-inline constexpr size_t AnimBP_kerfur_walkSpeed = 0x2D68;           // float
+// AnimInstance). The locomotion-drive variables are PULL: BlueprintUpdateAnimation
+// (the AnimBP's sole custom writer per the CXX dump) is expected to read the
+// owning Pawn's velocity (Pawn->GetVelocity() or Movement->Velocity) and write
+// spd / animWalkAlpha / animWalkRate from it.
+//
+// On our puppet (a SkeletalMeshActor, NOT a Pawn -> Pawn cache is null), that
+// read fails. Whether our direct writes to these variables SURVIVE depends on
+// whether BlueprintUpdateAnimation early-outs on null Pawn (standard BP pattern
+// = our writes survive) or writes 0 unconditionally (= our writes get clobbered).
+// The DriveAnimBP path read-backs animWalkAlpha each frame to log the truth.
+inline constexpr size_t AnimBP_kerfur_walkSpeed = 0x2D68;          // float  (CONFIG cache: max walk speed; local has 0.0 even while WALKING -> NOT the BlendSpace input)
 inline constexpr size_t AnimBP_kerfur_Pawn = 0x2D70;               // APawn*   (cached owner; null on puppet)
 inline constexpr size_t AnimBP_kerfur_Controller = 0x2D78;         // AController* (cached; null on puppet)
-inline constexpr size_t AnimBP_kerfur_lookAt = 0x2D90;            // FVector
-inline constexpr size_t AnimBP_kerfur_lookingAtPlayer = 0x2E01;   // bool
-inline constexpr size_t AnimBP_kerfur_kerfur = 0x2E08;            // AkerfurOmega_C* (null for a player body too)
-inline constexpr size_t AnimBP_kerfur_walkSpeedMultiplier = 0x2E18; // float
-inline constexpr size_t AnimBP_kerfur_spd = 0x2E1C;                // float
-inline constexpr size_t AnimBP_kerfur_useLegIK = 0x2E39;          // bool (false = skip floor-trace IK)
-inline constexpr size_t AnimBP_kerfur_headLookAt = 0x2E3C;        // FRotator
-inline constexpr size_t AnimBP_kerfur_isFace = 0x2E48;            // bool
+inline constexpr size_t AnimBP_kerfur_Movement = 0x2D80;           // UPawnMovementComponent* (cached; null on puppet -> BP's Movement->Velocity branch dead)
+inline constexpr size_t AnimBP_kerfur_animWalkAlpha = 0x2D88;      // float  HYPOTHESIS: TwoWayBlend alpha gating idle vs walk (0 = pure idle => puppet "slides" with no leg motion)
+inline constexpr size_t AnimBP_kerfur_animWalkRate = 0x2D8C;       // float  HYPOTHESIS: BlendSpace play-rate scalar (1.0 = nominal)
+inline constexpr size_t AnimBP_kerfur_lookAt = 0x2D90;             // FVector
+inline constexpr size_t AnimBP_kerfur_lookingAtPlayer = 0x2E01;    // bool
+inline constexpr size_t AnimBP_kerfur_kerfur = 0x2E08;             // AkerfurOmega_C* (null for a player body too)
+inline constexpr size_t AnimBP_kerfur_walkSpeedMultiplier = 0x2E18;// float
+inline constexpr size_t AnimBP_kerfur_spd = 0x2E1C;                // float  (live speed; local has 600 while walking -> the BlendSpace X input)
+inline constexpr size_t AnimBP_kerfur_useLegIK = 0x2E39;           // bool (false = skip floor-trace IK)
+inline constexpr size_t AnimBP_kerfur_headLookAt = 0x2E3C;         // FRotator
+inline constexpr size_t AnimBP_kerfur_isFace = 0x2E48;             // bool
 
 // ---- HUD / Canvas (screen-space nameplate, MTA-style) --------------------
 // We hook AHUD::ReceiveDrawHUD (ProcessEvent-dispatched), read the live UCanvas

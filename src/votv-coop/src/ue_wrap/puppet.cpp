@@ -87,7 +87,18 @@ void* GetSkeletalMeshComponent(void* puppetActor) {
     // DriveAnimBP would then read at +0x6B0 (AV).
     if (!R::IsLive(puppetActor)) { g_meshComp.erase(puppetActor); return nullptr; }
     auto it = g_meshComp.find(puppetActor);
-    if (it != g_meshComp.end()) return it->second;
+    if (it != g_meshComp.end()) {
+        // The actor can outlive its child component for a tick mid-tear-down
+        // (UE finalizes sub-objects first). A live actor with a dying cached
+        // component must NOT return the dying pointer -- the caller would then
+        // read AnimScriptInstance @+0x6B0 on freed memory (AV). Treat as a
+        // cache miss; drop the entry and fall through to re-resolve. Post-ship
+        // audit catch: callers shouldn't have to repeat this guard themselves
+        // (current single caller DriveAnimBP does, but a future caller would
+        // not know to).
+        if (R::IsLive(it->second)) return it->second;
+        g_meshComp.erase(it);
+    }
     void* comp = nullptr;
     for (const auto& c : R::ChildObjectsOf(puppetActor)) {
         if (c.className == P::name::SkeletalMeshComponentClass) { comp = c.object; break; }
@@ -105,16 +116,26 @@ void DumpAnimState(const wchar_t* label, void* skeletalMeshComponent) {
     }
     const float spd = ReadAt<float>(anim, P::off::AnimBP_kerfur_spd);
     const float walkSpeed = ReadAt<float>(anim, P::off::AnimBP_kerfur_walkSpeed);
+    // New: the suspected locomotion gate (animWalkAlpha) + rate. Logged on both
+    // local and puppet at spawn so the local-vs-puppet diff is one log line apart
+    // -- if local has animWalkAlpha=1 while walking and the puppet has 0, that's
+    // the variable we need to drive (Bug 2 hypothesis confirmed empirically).
+    const float animWalkAlpha = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha);
+    const float animWalkRate = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate);
     void* pawn = ReadPtr(anim, P::off::AnimBP_kerfur_Pawn);
     void* ctrl = ReadPtr(anim, P::off::AnimBP_kerfur_Controller);
+    void* movement = ReadPtr(anim, P::off::AnimBP_kerfur_Movement);
     void* kerfur = ReadPtr(anim, P::off::AnimBP_kerfur_kerfur);
     const bool useLegIK = ReadAt<bool>(anim, P::off::AnimBP_kerfur_useLegIK);
     const bool isFace = ReadAt<bool>(anim, P::off::AnimBP_kerfur_isFace);
     const bool lookingAtPlayer = ReadAt<bool>(anim, P::off::AnimBP_kerfur_lookingAtPlayer);
     UE_LOGI("puppet: [%ls] AnimInstance=%ls(%p) spd=%.1f walkSpeed=%.1f "
-            "Pawn=%p Controller=%p kerfur=%p useLegIK=%d isFace=%d lookingAtPlayer=%d",
+            "animWalkAlpha=%.2f animWalkRate=%.2f "
+            "Pawn=%p Controller=%p Movement=%p kerfur=%p "
+            "useLegIK=%d isFace=%d lookingAtPlayer=%d",
             label, R::ClassNameOf(anim).c_str(), anim, spd, walkSpeed,
-            pawn, ctrl, kerfur, useLegIK, isFace, lookingAtPlayer);
+            animWalkAlpha, animWalkRate,
+            pawn, ctrl, movement, kerfur, useLegIK, isFace, lookingAtPlayer);
 }
 
 void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass) {
@@ -179,8 +200,63 @@ void DriveAnimBP(void* puppetActor, float speed, float headPitch, float headYawD
     if (!comp || !R::IsLive(comp)) return;
     void* anim = LiveAnimInstance(comp);
     if (!anim) return;
-    WriteAt<float>(anim, P::off::AnimBP_kerfur_walkSpeed, speed);
+
+    // BUG 2 ROOT-CAUSE FIX (Pull-model AnimBP, null Pawn case). VOTV's
+    // BlueprintUpdateAnimation reads Pawn->GetVelocity() (or Movement->Velocity)
+    // and writes spd/animWalkAlpha/animWalkRate from it. The puppet has
+    // Pawn=Movement=null -> the velocity-read branch is dead. We need to write
+    // the OUTPUT variables of that branch directly:
+    //   * spd:           the live speed -- the BlendSpace X-axis input
+    //                    (cm/s; ~0 idle, ~200 walk, ~600 sprint per the local).
+    //   * animWalkAlpha: the TwoWayBlend gate between cached-idle and cached-walk
+    //                    poses. While Pawn=null on the puppet, the BP graph
+    //                    leaves this at 0 forever -> 100% idle weight -> the
+    //                    BlendSpace's walk pose contributes ZERO to the final
+    //                    output -> puppet "slides" with no leg motion. Writing
+    //                    1 when moving makes the walk pose contribute its full
+    //                    weight.
+    //   * animWalkRate:  PlayRate scalar; nominal 1.0 (the BlendSpace selects
+    //                    walk-vs-run by sample interpolation on spd, not by
+    //                    playrate). Set explicitly so a zero-default doesn't
+    //                    freeze playback.
+    //
+    // walkSpeed is INTENTIONALLY not written: the local-vs-puppet diff showed it
+    // is 0.0 on a WALKING local player, so it's not a velocity-driven variable
+    // (a max-walk-speed config cache, unused by the BlendSpace).
+    //
+    // SURVIVAL: this fix assumes BlueprintUpdateAnimation has a standard
+    // null-guard early-out on Pawn (typical BP wizard pattern: Cast-to-Pawn-
+    // failed -> rest of graph doesn't execute -> our writes persist). The
+    // diagnostic READ-BACK below logs the value SEEN at frame start (BEFORE we
+    // write again); if our last write was clobbered by BlueprintUpdateAnimation,
+    // the read-back will show 0 and Plan B (synthetic Movement / Pawn) becomes
+    // necessary.
+    // Unsigned -- signed overflow is UB and at 60 Hz the counter wraps in ~414
+    // days, well within an "always-on" session. Unsigned overflow is defined
+    // (mod 2^32). Single-puppet today -- if N+1 peers are ever added this
+    // counter must move onto the per-puppet identity (the per-RemotePlayer
+    // counter would be the obvious home) so the diagnostic doesn't ping-pong
+    // its samples between puppets and mislead a Plan-B clobber diagnosis.
+    static unsigned int sDiagCounter = 0;
+    const bool diagThisCall = (++sDiagCounter % 60 == 0);  // ~1 Hz at 60 Hz tick
+    if (diagThisCall) {
+        const float seenSpd = ReadAt<float>(anim, P::off::AnimBP_kerfur_spd);
+        const float seenAlpha = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha);
+        const float seenRate = ReadAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate);
+        UE_LOGI("puppet: locomotion read-back (frame start, before our writes): "
+                "spd=%.1f animWalkAlpha=%.2f animWalkRate=%.2f "
+                "(if Alpha=0 here while speed>0 streamed, BlueprintUpdateAnimation "
+                "clobbers writes -> need Plan B)",
+                seenSpd, seenAlpha, seenRate);
+    }
+
     WriteAt<float>(anim, P::off::AnimBP_kerfur_spd, speed);
+    // Threshold tuned to "moving enough that the user's gait reads as walking",
+    // matching the natural BP wizard pattern of `speed > 0` (kept above 1 to
+    // ignore floating-point twitch and the pose interpolator's tail).
+    WriteAt<float>(anim, P::off::AnimBP_kerfur_animWalkAlpha, (speed > 1.f) ? 1.f : 0.f);
+    WriteAt<float>(anim, P::off::AnimBP_kerfur_animWalkRate, 1.f);
+
     // Drive the puppet head bone from the streamed view.
     // AnimBP_kerfur_headLookAt is the AnimBP-exposed FRotator for head IK.
     //   Pitch: streamed view pitch -- head tilts up/down with the source.
