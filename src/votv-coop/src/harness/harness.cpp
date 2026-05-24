@@ -312,6 +312,33 @@ bool g_grabObserversInstalled = false;
 // re-attempting the 13 already-installed observers.
 bool g_inventoryObserverInstalled = false;
 
+// Storage-container spawn fix (2026-05-25 RE): when a player extracts
+// from a container, the BP path is
+//   Aprop_container_C::extract(idx)
+//     -> UpropInventory_C::takeObj(idx, ...)
+//        -> BeginDeferredActorSpawnFromClass (a fresh AProp_food_*_C, etc.)
+//        -> FinishSpawningActor
+//             -> UCS -> Aprop_C::Init   *** INIT POST fires here ***
+//             At this point Key = NewGuid (fresh) -- the actor has NOT
+//             yet been loadData'd with the saved Fstruct_save.
+//        -> [BP body resumes] loadData(out_save)
+//             -> Aprop_C::loadData: Key = saved cross-peer-stable UUID
+//        -> takeObj returns to its caller   *** TAKEOBJ POST fires ***
+//             Key is now the correct saved UUID.
+//
+// If Init POST broadcasts with NewGuid, the peer receives the actor under
+// the wrong key, and every later PropPose/PropGrab/PropDestroy (carrying
+// the saved UUID) fails to resolve -> tracking lost.
+//
+// Fix: a takeObj PRE observer sets this flag; Init POST checks it and
+// defers (the takeObj POST observer is the canonical broadcaster for
+// extracts on both host AND client; the host-skip gate that was muzzling
+// takeObj POST on host is removed). Single bool, game-thread-only,
+// re-entrancy-safe (BP dispatch is linear single-thread, so even if
+// takeObj nested-called itself we'd see PRE->PRE->POST->POST and the
+// flag would still correctly bracket each level).
+bool g_takeObjInFlight = false;
+
 // Bug C audit C-3 (2026-05-24): bounded retry queue for PropSpawn payloads
 // that couldn't ship immediately because the reliable channel was busy
 // (stop-and-wait: chat or PropRelease in-flight). Drained by NetPumpTick on
@@ -843,6 +870,22 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
     }
     MarkProcessedInit(self);
 
+    // Storage-container spawn fix (2026-05-25): defer broadcast for actors
+    // spawned from inside a takeObj call. At Init POST time the actor's
+    // Key is a freshly-generated NewGuid (the deferred-spawn UCS just ran);
+    // loadData hasn't yet restored the saved Key from the Fstruct_save. The
+    // takeObj POST observer fires AFTER loadData and broadcasts with the
+    // correct saved Key. Broadcasting here would (a) ship the wrong key
+    // (peer tracks under NewGuid; subsequent PropPose with the saved UUID
+    // fails to resolve), and (b) cause a double-broadcast (Init POST with
+    // NewGuid, takeObj POST with saved UUID = two PropSpawns for the same
+    // actor on the receiver).
+    if (g_takeObjInFlight) {
+        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p spawned inside takeObj -- defer to takeObj POST (Key not yet restored by loadData)",
+                self);
+        return;
+    }
+
     // v5 Phase 5N Stream B (2026-05-24): host-authoritative client-side
     // suppression for intermediate-variant props (mushroom7_C, etc.). On
     // CLIENT, if this is a locally-spawned intermediate variant (NOT in
@@ -996,7 +1039,29 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
 //
 // Param offset for `Object` is resolved lazily (one FindParamOffset per
 // observer install, cached in a function-local static atomic).
+// PRE observer for propInventory_C::takeObj. Sets g_takeObjInFlight so the
+// Aprop_C::Init POST observer (which fires INSIDE FinishSpawningActor, which
+// runs INSIDE takeObj's body, BEFORE loadData restores the saved Key) knows
+// to defer the broadcast. The takeObj POST observer (below) clears the flag
+// after loadData has run and broadcasts with the correct saved Key.
+//
+// Storage-container spawn fix (2026-05-25). See g_takeObjInFlight doc.
+void GrabObserver_PropInventory_TakeObj_PRE(void* self, void* /*function*/, void* /*params*/) {
+    if (!self) return;
+    if (!g_session.connected()) return;
+    g_takeObjInFlight = true;
+}
+
 void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* params) {
+    // Storage-container spawn fix (2026-05-25): clear the in-flight flag
+    // first, BEFORE any other return path. The PRE observer set it; this
+    // observer is the bracket-close. Even if any check below short-circuits
+    // (no params, no session, non-prop result, etc.), the flag must be
+    // cleared so the NEXT Init POST that fires (next prop spawned by any
+    // path -- a normal world spawn, a save-load drop, a respawn) is not
+    // accidentally deferred.
+    g_takeObjInFlight = false;
+
     if (!self || !params || !function) return;
     // Cache Object out-param offset. Atomic because the observer can dispatch
     // on either the game thread (typical) or a task-graph worker (per
@@ -1020,14 +1085,16 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
                 spawnedActor);
         return;
     }
-    // v5 Inc2: gate takeObj observer to CLIENT-only. On host, the same drop
-    // is already captured by the Aprop_C::Init POST observer (which runs
-    // inside FinishSpawningActor, fired BEFORE takeObj's POST body returns).
-    // Without this gate, host would double-broadcast every inventory drop.
-    if (g_session.role() != coop::net::Role::Client) {
-        UE_LOGI("grab_hook[takeObj POST]: host-side drop -- skip (Aprop_C::Init observer handles host broadcasts)");
-        return;
-    }
+    // Storage-container spawn fix (2026-05-25): the prior host-skip gate
+    // was REMOVED. The old comment claimed "Aprop_C::Init handles host
+    // broadcasts" -- but Init POST fires BEFORE loadData restores the saved
+    // Key, so its broadcast carried a fresh NewGuid that the receiver
+    // couldn't subsequently resolve when PropPose/PropGrab/PropDestroy
+    // arrived with the correct saved UUID. Now takeObj POST broadcasts on
+    // BOTH host and client (the Init POST observer defers via
+    // g_takeObjInFlight when we're inside a takeObj call -- echo
+    // suppression on the receiver side still applies because OnSpawn marks
+    // incoming actors in g_incomingSpawns before FinishSpawning).
     // Defensive: only broadcast for Aprop_C derivatives. If a non-prop class
     // somehow flows through takeObj (BP refactor regression), the receiver's
     // OnSpawn would still try to spawn it -- which is fine but wastes bytes.
@@ -1220,6 +1287,18 @@ void InstallInventoryObserverIfReady() {
     if (!ue_wrap::game_thread::RegisterPostObserver(fn, GrabObserver_PropInventory_TakeObj_POST)) {
         UE_LOGW("grab_hook: failed to register takeObj POST observer (table full?)");
         return;
+    }
+    // Storage-container spawn fix (2026-05-25): PRE observer brackets the
+    // takeObj call so Aprop_C::Init POST (which fires nested inside takeObj's
+    // FinishSpawningActor) knows to defer broadcast. Non-fatal if registration
+    // fails -- the only consequence is degraded correctness: Init POST will
+    // broadcast with NewGuid and takeObj POST with the saved UUID = two
+    // PropSpawns per extract, mismatched keys. We log the failure and proceed.
+    if (!ue_wrap::game_thread::RegisterPreObserver(fn, GrabObserver_PropInventory_TakeObj_PRE)) {
+        UE_LOGW("grab_hook: failed to register takeObj PRE observer (table full?) -- container extracts may double-broadcast with mismatched keys");
+    } else {
+        UE_LOGI("grab_hook: registered PRE observer for %ls.%ls (takeObj-in-flight bracket)",
+                P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn);
     }
     UE_LOGI("grab_hook: registered POST observer for %ls.%ls @ %p (Bug C inventory drop ready)",
             P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn, fn);
@@ -1860,7 +1939,13 @@ void NetPumpTick(float displayOffsetX) {
         // state needs reset.)
         const size_t initProcessedDropped = g_processedInitActors.size();
         g_processedInitActors.clear();
-        UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries",
+        // Storage-container spawn fix (2026-05-25): defensive reset of the
+        // takeObj-in-flight flag. If a peer disconnects mid-extract (e.g.,
+        // socket dies after takeObj PRE fires but before its POST), the
+        // flag would persist and incorrectly defer the next session's
+        // Init POST broadcasts. The single bool reset is cheap.
+        g_takeObjInFlight = false;
+        UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 droppedSpawns, droppedDestroys, snapPending, initProcessedDropped);
     }
     // Phase 5S0 (snapshot bootstrap): on every false->true transition of
