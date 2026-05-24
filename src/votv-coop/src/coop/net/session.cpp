@@ -139,6 +139,12 @@ bool Session::SendPropSpawn(const PropSpawnPayload& payload) {
     return reliable_.Send(ReliableKind::PropSpawn, &payload, sizeof(payload));
 }
 
+bool Session::SendPropDestroy(const WireKey& key) {
+    PropDestroyPayload p{};
+    p.key = key;
+    return reliable_.Send(ReliableKind::PropDestroy, &p, sizeof(p));
+}
+
 bool Session::TryGetRemotePose(PoseSnapshot& out, bool* outIsNew) {
     if (state_.load() != ConnState::Connected) return false;
     std::lock_guard<std::mutex> lk(remoteMutex_);

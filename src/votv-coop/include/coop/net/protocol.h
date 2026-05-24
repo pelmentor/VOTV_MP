@@ -85,7 +85,16 @@ enum class ReliableKind : uint8_t {
                       //     SetSimulatePhysics + optional initial velocity.
                       //     NO echo loop: receiver spawns directly, not through
                       //     UpropInventory_C.takeObj, so the takeObj POST observer
-                      //     never fires for receiver-applied spawns.
+                      //     never fires for receiver-applied spawns. Phase 5S0 Inc2:
+                      //     HOST broadcasts via the Aprop_C::Init POST observer for
+                      //     ALL spawns (mushroom growth, world-gen, inventory drops);
+                      //     CLIENT broadcasts only via takeObj observer (its own
+                      //     inventory drops). Echo-suppressed via incoming-spawn-set.
+    PropDestroy = 4,  // v5: peer destroyed a prop (food eaten, container broken,
+                      //     mushroom harvested, etc.). Payload: PropDestroyPayload
+                      //     (WireKey only). Receiver: FindByKeyString + K2_DestroyActor.
+                      //     Echo-suppressed by incoming-destroy-set so the receiver's
+                      //     K2_DestroyActor doesn't bounce back to the sender.
 };
 
 #pragma pack(push, 1)
@@ -274,6 +283,20 @@ inline constexpr uint8_t kSimulatePhysics = 0x01;
 inline constexpr uint8_t kIsHeavy         = 0x02;
 inline constexpr uint8_t kFrozen          = 0x04;
 }  // namespace propspawn_flags
+
+// v5 Phase 5S0 Inc2: prop-destroy reliable payload. WireKey identifies the
+// prop on the receiver via prop_wrap::FindByKeyString -> K2_DestroyActor.
+// Tiny (32 bytes) -- no transform/state needed; destruction is just "this
+// Key's prop is gone". Sender's K2_DestroyActor PRE observer captures the
+// Key just before the engine destroys the actor; the receiver's
+// K2_DestroyActor call on its local actor is echo-suppressed via the
+// incoming-destroy-set so it doesn't bounce back.
+struct PropDestroyPayload {
+    WireKey key;
+};
+static_assert(sizeof(PropDestroyPayload) == 32, "PropDestroyPayload must be 32 bytes");
+static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,
+              "PropDestroyPayload must fit in one reliable datagram");
 
 #pragma pack(pop)
 

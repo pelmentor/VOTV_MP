@@ -642,6 +642,111 @@ void GrabObserver_grab_Finished_PRE(void* self, void* /*function*/, void* /*para
     UE_LOGI("grab_hook[grab.Finished PRE]: was holding=%p", grabbing);
 }
 
+// --- v5 Inc2: Aprop_C::Init POST observer -- the universal spawn detector.
+//
+// Catches EVERY Aprop derivative spawn (mushroom growth, world-gen, inventory
+// drops on the spawning peer, etc.) via the BP UserConstructionScript that
+// runs inside FinishSpawningActor. HOST broadcasts PropSpawn for each;
+// CLIENT skips (host-authoritative for world state; client's own inventory
+// drops still broadcast separately via the takeObj observer).
+//
+// Echo suppression: when this peer's OnSpawn applies a wire-received
+// PropSpawn, it calls MarkIncomingSpawn(actor) BEFORE FinishSpawningActor.
+// This observer then sees ConsumeIncomingSpawn(actor) == true and skips
+// the broadcast back to the sender (no ping-pong).
+//
+// Save-load is naturally gated by g_session.connected() == false at that
+// time (save loads pre-handshake; connected becomes true only after the
+// peer joins). No broadcast bandwidth wasted on save-load.
+void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params*/) {
+    if (!self) return;
+    if (coop::remote_prop::ConsumeIncomingSpawn(self)) {
+        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p was wire-received -- skip broadcast (echo suppression)",
+                self);
+        return;
+    }
+    if (!g_session.connected()) return;                       // pre-handshake save-load -> skip
+    if (g_session.role() != coop::net::Role::Host) return;    // client doesn't broadcast world spawns (host-authoritative)
+    if (!R::IsLive(self)) return;
+    // Defensive: confirm it's actually an Aprop derivative (the hook was
+    // installed on PropClass but a fast misregistration would surface here).
+    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;
+
+    coop::net::PropSpawnPayload p{};
+    const std::wstring cls = R::ClassNameOf(self);
+    p.className.len = 0;
+    for (size_t i = 0; i < cls.size() && i < 63; ++i) {
+        p.className.data[p.className.len++] = static_cast<char>(cls[i]);
+    }
+    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
+    if (keyStr.empty()) {
+        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p (class '%ls') has empty key -- skip (unkeyed = non-syncable)",
+                self, cls.c_str());
+        return;
+    }
+    p.key.len = 0;
+    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
+        p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
+    }
+    const auto loc = ue_wrap::engine::GetActorLocation(self);
+    const auto rot = ue_wrap::engine::GetActorRotation(self);
+    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
+    p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
+    p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+    p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
+    p.scaleX = 1.f; p.scaleY = 1.f; p.scaleZ = 1.f;
+    p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
+    if (ue_wrap::prop::IsHeavy(self))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
+    if (ue_wrap::prop::IsFrozen(self)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
+    p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
+    p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
+    UE_LOGI("grab_hook[Aprop.Init POST]: HOST broadcasting SPAWN cls='%ls' key='%ls' loc=(%.1f,%.1f,%.1f) heavy=%d frozen=%d",
+            cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
+            (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
+            (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
+    if (!g_session.SendPropSpawn(p)) {
+        EnqueuePropSpawnForRetry(p);
+    }
+}
+
+// --- v5 Inc2: K2_DestroyActor PRE observer -- the universal destroy detector.
+//
+// Catches every BP-initiated AActor::K2_DestroyActor for Aprop derivatives
+// (food eaten, container broken, mushroom harvested, hostile gibbed, etc.).
+// HOST broadcasts PropDestroy; CLIENT skips. Echo-suppressed: receiver's
+// OnDestroy marks the actor in g_incomingDestroys before calling
+// K2_DestroyActor; this observer consumes the mark and skips broadcast.
+//
+// PRE timing: we read self->Key BEFORE the engine starts destruction. The
+// actor is still fully addressable at this point (mark-PendingKill happens
+// inside the K2_DestroyActor body).
+void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void* /*params*/) {
+    if (!self) return;
+    if (coop::remote_prop::ConsumeIncomingDestroy(self)) {
+        UE_LOGI("grab_hook[K2_DestroyActor PRE]: actor %p was wire-received destroy -- skip broadcast",
+                self);
+        return;
+    }
+    if (!g_session.connected()) return;
+    if (g_session.role() != coop::net::Role::Host) return;
+    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;     // skip non-prop destroys (NPCs etc -- their own phase)
+    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
+    if (keyStr.empty()) return;                               // unkeyed = non-syncable
+    coop::net::WireKey wk{};
+    wk.len = 0;
+    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
+        wk.data[wk.len++] = static_cast<char>(keyStr[i]);
+    }
+    UE_LOGI("grab_hook[K2_DestroyActor PRE]: HOST broadcasting DESTROY actor=%p key='%ls'",
+            self, keyStr.c_str());
+    g_session.SendPropDestroy(wk);
+    // Best-effort: if SendPropDestroy fails (channel busy) it's a small,
+    // unbatched payload -- accept the miss for now. The peer would still
+    // have a phantom actor until the next snapshot bootstrap reconciles.
+    // A retry queue (like PropSpawn's) is a future enhancement if drops
+    // become common in practice.
+}
+
 // --- v5 Bug C: UpropInventory_C::takeObj POST observer. THE bottom call all
 // inventory drop paths funnel through (per
 // research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md). The signature
@@ -676,6 +781,14 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     if (!g_session.connected()) {
         UE_LOGI("grab_hook[takeObj POST]: spawned %p but session not connected -- skipping broadcast",
                 spawnedActor);
+        return;
+    }
+    // v5 Inc2: gate takeObj observer to CLIENT-only. On host, the same drop
+    // is already captured by the Aprop_C::Init POST observer (which runs
+    // inside FinishSpawningActor, fired BEFORE takeObj's POST body returns).
+    // Without this gate, host would double-broadcast every inventory drop.
+    if (g_session.role() != coop::net::Role::Client) {
+        UE_LOGI("grab_hook[takeObj POST]: host-side drop -- skip (Aprop_C::Init observer handles host broadcasts)");
         return;
     }
     // Defensive: only broadcast for Aprop_C derivatives. If a non-prop class
@@ -741,6 +854,49 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     }
 }
 
+// v5 Inc2: track Aprop_C::Init + AActor::K2_DestroyActor observer install
+// separately from the core grab observers (same reason as the takeObj
+// observer): they depend on BP/engine classes that may not be loaded at
+// first InstallGrabObservers call. NetPumpTick retries each tick until
+// the classes appear.
+bool g_propInitObserverInstalled    = false;
+bool g_propDestroyObserverInstalled = false;
+
+void InstallPropLifecycleObserversIfReady() {
+    if (!g_propInitObserverInstalled) {
+        if (void* propCls = R::FindClass(P::name::PropClass)) {
+            if (void* fn = R::FindFunction(propCls, P::name::PropInitFn)) {
+                if (ue_wrap::game_thread::RegisterPostObserver(fn, GrabObserver_Aprop_Init_POST)) {
+                    UE_LOGI("grab_hook: registered POST observer for %ls.%ls @ %p (continuous spawn broadcast)",
+                            P::name::PropClass, P::name::PropInitFn, fn);
+                    g_propInitObserverInstalled = true;
+                }
+            } else {
+                UE_LOGW("grab_hook: %ls.%ls UFunction not found -- Aprop_C spawn broadcast disabled",
+                        P::name::PropClass, P::name::PropInitFn);
+                g_propInitObserverInstalled = true;  // stop retry loop
+            }
+        }
+    }
+    if (!g_propDestroyObserverInstalled) {
+        // K2_DestroyActor is on AActor base class -- always loaded by the
+        // time we're past the initial class lookup.
+        if (void* actorCls = R::FindClass(P::name::ActorClassName)) {
+            if (void* fn = R::FindFunction(actorCls, P::name::DestroyActorFn)) {
+                if (ue_wrap::game_thread::RegisterPreObserver(fn, GrabObserver_Actor_K2DestroyActor_PRE)) {
+                    UE_LOGI("grab_hook: registered PRE observer for %ls.%ls @ %p (continuous destroy broadcast)",
+                            P::name::ActorClassName, P::name::DestroyActorFn, fn);
+                    g_propDestroyObserverInstalled = true;
+                }
+            } else {
+                UE_LOGW("grab_hook: %ls.%ls UFunction not found -- destroy broadcast disabled",
+                        P::name::ActorClassName, P::name::DestroyActorFn);
+                g_propDestroyObserverInstalled = true;  // stop retry
+            }
+        }
+    }
+}
+
 // Helper: install ONLY the propInventory_C::takeObj POST observer. Separate
 // from InstallGrabObservers (audit C-2) so NetPumpTick can re-attempt this
 // observer each tick if propInventory_C is loaded later than the core
@@ -775,10 +931,11 @@ void InstallInventoryObserverIfReady() {
 // UFunctions log a warning (BP recooks can renumber the K2Node ordinal in
 // the InpActEvt name -- localized failure, others still install).
 void InstallGrabObservers() {
-    // Always attempt the inventory observer (audit C-2): independent of the
-    // core observers so a late-loading propInventory_C still gets hooked.
+    // Always attempt the lifecycle observers (audit C-2 pattern): independent
+    // of the core observers so late-loading BP classes still get hooked.
     if (g_grabObserversInstalled) {
         InstallInventoryObserverIfReady();
+        InstallPropLifecycleObserversIfReady();
         return;
     }
 
@@ -853,6 +1010,10 @@ void InstallGrabObservers() {
     // v5 Bug C: try takeObj observer NOW; if propInventory_C isn't loaded
     // yet, NetPumpTick will retry each tick via this same helper.
     InstallInventoryObserverIfReady();
+    // v5 Inc2: same for the universal Aprop_C::Init POST observer (continuous
+    // spawn broadcast) and AActor::K2_DestroyActor PRE observer (destroy
+    // broadcast).
+    InstallPropLifecycleObserversIfReady();
 }
 
 // ---- Autonomous grab test (no user E-press required) --------------------

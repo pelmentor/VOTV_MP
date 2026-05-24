@@ -197,6 +197,25 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             remote_prop::OnSpawn(p);
             break;
         }
+        case net::ReliableKind::PropDestroy: {
+            // v5 Inc2: peer destroyed a prop -- delete the matching local
+            // actor (resolved via FindByKeyString). Receiver-side
+            // K2_DestroyActor is echo-suppressed via the incoming-destroy
+            // set so it doesn't bounce back to the sender.
+            if (msg.payload.size() < sizeof(net::PropDestroyPayload)) {
+                UE_LOGW("event_feed: PropDestroy payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::PropDestroyPayload));
+                break;
+            }
+            net::PropDestroyPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            if (p.key.len > 31) {
+                UE_LOGW("event_feed: PropDestroy key.len=%u > 31 -- dropping", p.key.len);
+                break;
+            }
+            remote_prop::OnDestroy(p);
+            break;
+        }
         }
     }
 }

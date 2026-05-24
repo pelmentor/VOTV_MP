@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 
 namespace coop::remote_prop {
 
@@ -608,6 +609,12 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
     } else {
         UE_LOGW("remote_prop::OnSpawn: prop_C.setKey UFunction not resolved -- spawn will use NewGuid'd Key");
     }
+    // v5 Inc2 echo suppression: mark this actor as wire-induced BEFORE
+    // FinishSpawningActor (which runs Aprop_C::Init via UserConstructionScript,
+    // tripping our Init POST observer in harness.cpp). The observer's call
+    // to ConsumeIncomingSpawn will then return true and skip the broadcast
+    // back to the sender -> no echo loop.
+    MarkIncomingSpawn(spawned);
     // Phase 3: FinishSpawningActor -> runs UserConstructionScript + BeginPlay.
     {
         ParamFrame finish(g_finishSpawnFn);
@@ -637,6 +644,89 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
 }
 
 void* GetDriveActor() { return g_drive.actor; }
+
+namespace {
+// v5 Inc2: echo-suppression sets. Populated by OnSpawn / OnDestroy before
+// the engine call (BeginDeferred+Finish / K2_DestroyActor), consumed
+// one-shot by the Aprop_C::Init POST observer + K2_DestroyActor PRE
+// observer. Without this, our own receiver-applied spawn/destroy would
+// re-broadcast to the original sender = packet ping-pong.
+//
+// Game-thread-only access (OnSpawn/OnDestroy and the observers all dispatch
+// on the game thread). Capped at 256 to bound memory across a long session;
+// on overflow we just clear -- a one-shot stale lookup on an entry that
+// was supposed to be consumed but wasn't is harmless (it'd let a wire-induced
+// spawn re-broadcast once, which the OTHER side de-dupes via FindByKeyString).
+std::unordered_set<void*> g_incomingSpawns;
+std::unordered_set<void*> g_incomingDestroys;
+constexpr size_t kIncomingCap = 256;
+
+template <class Set>
+void InsertCapped(Set& s, void* actor) {
+    if (s.size() >= kIncomingCap) s.clear();
+    s.insert(actor);
+}
+
+template <class Set>
+bool TakeOne(Set& s, void* actor) {
+    auto it = s.find(actor);
+    if (it == s.end()) return false;
+    s.erase(it);
+    return true;
+}
+}  // namespace
+
+void MarkIncomingSpawn(void* actor)    { if (actor) InsertCapped(g_incomingSpawns, actor); }
+bool ConsumeIncomingSpawn(void* actor) { return actor ? TakeOne(g_incomingSpawns, actor) : false; }
+void MarkIncomingDestroy(void* actor)  { if (actor) InsertCapped(g_incomingDestroys, actor); }
+bool ConsumeIncomingDestroy(void* actor){ return actor ? TakeOne(g_incomingDestroys, actor) : false; }
+
+namespace {
+// Cached K2_DestroyActor UFunction for receiver-side destroys.
+void* g_destroyActorFn = nullptr;
+void* g_actorCls       = nullptr;
+
+bool ResolveDestroyFn() {
+    if (g_destroyActorFn && R::IsLive(g_actorCls)) return true;
+    g_actorCls = R::FindClass(P::name::ActorClassName);
+    if (!g_actorCls) return false;
+    g_destroyActorFn = R::FindFunction(g_actorCls, P::name::DestroyActorFn);
+    return g_destroyActorFn != nullptr;
+}
+}  // namespace
+
+void OnDestroy(const coop::net::PropDestroyPayload& payload) {
+    const std::wstring keyW = KeyToWString(payload.key);
+    if (keyW.empty()) {
+        UE_LOGW("remote_prop::OnDestroy: empty key -- dropping");
+        return;
+    }
+    void* actor = ue_wrap::prop::FindByKeyString(keyW);
+    if (!actor) {
+        UE_LOGI("remote_prop::OnDestroy: key '%ls' has no local actor (already destroyed or never spawned here)",
+                keyW.c_str());
+        return;
+    }
+    if (!ResolveDestroyFn()) {
+        UE_LOGW("remote_prop::OnDestroy: K2_DestroyActor UFunction unresolved -- dropping");
+        return;
+    }
+    UE_LOGI("remote_prop::OnDestroy: key '%ls' -> destroying local actor %p",
+            keyW.c_str(), actor);
+    // If we were kinematically driving this prop (host was holding it when
+    // they destroyed it -- unusual but possible), clear the cache so we
+    // don't try to drive a destroyed actor next tick.
+    if (g_drive.actor == actor) {
+        UE_LOGI("remote_prop::OnDestroy: actor was under active kinematic drive -- clearing drive cache");
+        g_drive.actor = nullptr;
+        g_drive.mesh = nullptr;
+        g_drive.lastKey.clear();
+    }
+    // Mark BEFORE the engine call so our K2_DestroyActor PRE observer sees
+    // it and skips the broadcast (echo suppression).
+    MarkIncomingDestroy(actor);
+    R::CallFunction(actor, g_destroyActorFn, nullptr);
+}
 
 void ForceRelease() {
     if (!g_drive.actor) return;

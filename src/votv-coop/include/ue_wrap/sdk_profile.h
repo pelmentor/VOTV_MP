@@ -560,6 +560,14 @@ inline constexpr const wchar_t* PropClass             = L"prop_C";
 // natural dispatch, NOT a separate sound-trigger crutch. Per prop.hpp:166.
 inline constexpr const wchar_t* PropThrownFn          = L"thrown";
 
+// Phase 5S0 Inc2: Aprop_C.Init is the BP UserConstructionScript that runs
+// on every Aprop spawn (FinishSpawningActor path). POST-hooking it on the
+// PropClass base gives us a single observer that catches EVERY Aprop
+// derivative spawn -- mushroom growth, save-load (filtered by
+// !g_session.connected()), inventory drops on the spawning peer, etc.
+// HOST broadcasts; CLIENT skips (host-authoritative).
+inline constexpr const wchar_t* PropInitFn            = L"Init";
+
 // v5 Bug C (inventory drop): the BP function that all 4 drop paths funnel
 // through (per research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md).
 // We POST-hook this on UpropInventory_C and read the out-params to broadcast

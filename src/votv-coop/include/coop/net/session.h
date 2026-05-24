@@ -121,6 +121,12 @@ public:
     // Returns false if the reliable channel is busy; caller should retry.
     bool SendPropSpawn(const PropSpawnPayload& payload);
 
+    // v5 Inc2: signal the peer that a prop with the given Key has been
+    // destroyed (host eats food, container breaks, mushroom harvested,
+    // etc.). The receiver does prop_wrap::FindByKeyString + K2_DestroyActor.
+    // Returns false if the reliable channel is busy.
+    bool SendPropDestroy(const WireKey& key);
+
     // Diagnostics / validation (methodology 5.2: packets sent/received counts).
     uint64_t packetsSent() const { return sent_.load(); }
     uint64_t packetsRecv() const { return recv_.load(); }
