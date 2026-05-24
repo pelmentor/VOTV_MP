@@ -3,6 +3,7 @@
 #include "coop/remote_prop.h"
 
 #include "coop/net/session.h"
+#include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -353,6 +354,257 @@ void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) 
     g_drive.actor = nullptr;
     g_drive.mesh = nullptr;
     g_drive.lastKey.clear();
+}
+
+namespace {
+
+// PropSpawn UFunction resolution (cached one-shot). Spawn path uses the
+// deferred-spawn pair on UGameplayStatics CDO; setKey is on Aprop_C base;
+// Conv_StringToName is on UKismetStringLibrary CDO (used to convert wire
+// Key string -> live FName for setKey).
+void* g_gsCdo            = nullptr;
+void* g_beginSpawnFn     = nullptr;
+void* g_finishSpawnFn    = nullptr;
+void* g_propSetKeyFn     = nullptr;
+void* g_kslCdo           = nullptr;
+void* g_convStrToNameFn  = nullptr;
+bool  g_spawnResolved    = false;
+
+bool ResolveSpawnFns() {
+    if (g_spawnResolved && R::IsLive(g_gsCdo)) return true;
+    g_gsCdo = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
+    if (!g_gsCdo) return false;
+    void* cls = R::ClassOf(g_gsCdo);
+    if (!cls) return false;
+    g_beginSpawnFn  = R::FindFunction(cls, P::name::BeginDeferredSpawnFn);
+    g_finishSpawnFn = R::FindFunction(cls, P::name::FinishSpawningActorFn);
+    if (!g_beginSpawnFn || !g_finishSpawnFn) {
+        UE_LOGW("remote_prop::OnSpawn: GameplayStatics spawn fns missing (begin=%p finish=%p)",
+                g_beginSpawnFn, g_finishSpawnFn);
+        return false;
+    }
+    // setKey on Aprop_C base. The PropClass UClass may not be loaded at the
+    // first call (the engine loads BP classes on-demand); on first miss we
+    // retry next call.
+    if (void* propCls = R::FindClass(P::name::PropClass)) {
+        g_propSetKeyFn = R::FindFunction(propCls, P::name::PropSetKeyFn);
+    }
+    // Conv_StringToName on KismetStringLibrary CDO (UE4 stock, always loaded).
+    if (!g_kslCdo) g_kslCdo = R::FindClassDefaultObject(P::name::KismetStringLibraryClass);
+    if (g_kslCdo && !g_convStrToNameFn) {
+        if (void* kc = R::ClassOf(g_kslCdo)) {
+            g_convStrToNameFn = R::FindFunction(kc, P::name::ConvStringToNameFn);
+        }
+    }
+    g_spawnResolved = true;
+    return true;
+}
+
+// Build a live FName from a wide string by dispatching
+// UKismetStringLibrary::Conv_StringToName(FString) -> FName via ProcessEvent.
+// Returns {0,0} on failure (the empty FName / NAME_None). The string is
+// registered in the engine's FName pool with a fresh local index; subsequent
+// FName equality compares with the same string will hit this index.
+R::FName StringToFName(const std::wstring& s) {
+    if (s.empty() || !g_kslCdo || !g_convStrToNameFn) return R::FName{0, 0};
+    using ue_wrap::ParamFrame;
+    using ue_wrap::Call;
+    // FString param: {Data ptr, Num including null, Max}. Copy to a local
+    // buffer so the FString points at stable memory across the call.
+    std::wstring buf(s);
+    R::FString fs{};
+    fs.Data = buf.data();
+    fs.Num  = static_cast<int32_t>(buf.size()) + 1;
+    fs.Max  = fs.Num;
+    ParamFrame f(g_convStrToNameFn);
+    // The param name is "InString" (UE4 stock); lowercase 'i' on some builds
+    // (matches Conv_StringToText's "inString" pattern noted in
+    // [[project-nameplate-widgetcomponent-plan]]). Try both for safety:
+    // SetRaw with the lowercase name first, then fall back to UE4 stock case.
+    if (!f.SetRaw(L"InString", &fs, sizeof(fs))) {
+        if (!f.SetRaw(L"inString", &fs, sizeof(fs))) {
+            UE_LOGW("StringToFName: Conv_StringToName param 'InString'/'inString' not found");
+            return R::FName{0, 0};
+        }
+    }
+    if (!Call(g_kslCdo, f)) {
+        UE_LOGW("StringToFName: ProcessEvent call failed");
+        return R::FName{0, 0};
+    }
+    return f.Get<R::FName>(L"ReturnValue");
+}
+
+// Build a wide string from WireClassName. Lossless for ASCII (VOTV class names).
+std::wstring ClassNameToWString(const coop::net::WireClassName& cn) {
+    std::wstring s;
+    s.reserve(cn.len);
+    for (uint8_t i = 0; i < cn.len && i < 63; ++i) {
+        s.push_back(static_cast<wchar_t>(static_cast<unsigned char>(cn.data[i])));
+    }
+    return s;
+}
+
+// World context for the spawn -- the GameInstance is the long-lived UObject.
+void* GetWorldContext() {
+    if (void* gi = R::FindObjectByClass(P::name::GameInstanceClass)) return gi;
+    return R::FindObjectByClass(P::name::WorldClass);
+}
+
+// FTransform layout (UE4.27, 16-byte aligned): FQuat rot (16) + FVector loc
+// (12 + 4 pad) + FVector scale (12 + 4 pad) = 48 bytes. Used inline for the
+// BeginDeferredActorSpawnFromClass / FinishSpawningActor pair.
+#pragma pack(push, 1)
+struct FTransform48 {
+    float rotX, rotY, rotZ, rotW;     // 16  FQuat
+    float locX, locY, locZ;           // 12  FVector
+    float _padLoc;                    //  4
+    float scaleX, scaleY, scaleZ;     // 12  FVector
+    float _padScale;                  //  4
+};
+#pragma pack(pop)
+static_assert(sizeof(FTransform48) == 48, "FTransform48 must be 48 bytes");
+
+// FRotator -> FQuat (UE4 stock formula, ZYX order). Used to convert the
+// wire's FRotator into the FTransform's FQuat slot.
+void RotatorToQuat(float pitchDeg, float yawDeg, float rollDeg,
+                   float& qx, float& qy, float& qz, float& qw) {
+    constexpr float kHalfDegToRad = 0.0087266462599716478846184538424431f;  // (pi/180)/2
+    const float sp = std::sin(pitchDeg * kHalfDegToRad);
+    const float cp = std::cos(pitchDeg * kHalfDegToRad);
+    const float sy = std::sin(yawDeg   * kHalfDegToRad);
+    const float cy = std::cos(yawDeg   * kHalfDegToRad);
+    const float sr = std::sin(rollDeg  * kHalfDegToRad);
+    const float cr = std::cos(rollDeg  * kHalfDegToRad);
+    qx =  cr * sp * sy - sr * cp * cy;
+    qy = -cr * sp * cy - sr * cp * sy;
+    qz =  cr * cp * sy - sr * sp * cy;
+    qw =  cr * cp * cy + sr * sp * sy;
+}
+
+}  // namespace
+
+void OnSpawn(const coop::net::PropSpawnPayload& payload) {
+    using ue_wrap::ParamFrame;
+    using ue_wrap::Call;
+    const std::wstring classW = ClassNameToWString(payload.className);
+    const std::wstring keyW   = KeyToWString(payload.key);
+    UE_LOGI("remote_prop::OnSpawn: cls='%ls' key='%ls' loc=(%.1f, %.1f, %.1f) rot=(%.1f, %.1f, %.1f) physFlags=0x%02x",
+            classW.c_str(), keyW.c_str(),
+            payload.locX, payload.locY, payload.locZ,
+            payload.rotPitch, payload.rotYaw, payload.rotRoll,
+            static_cast<int>(payload.physFlags));
+    if (classW.empty() || keyW.empty()) {
+        UE_LOGW("remote_prop::OnSpawn: empty class or key -- dropping");
+        return;
+    }
+    if (!ResolveSpawnFns()) {
+        UE_LOGW("remote_prop::OnSpawn: spawn UFunctions unresolved -- dropping");
+        return;
+    }
+    void* actorClass = R::FindClass(classW.c_str());
+    if (!actorClass) {
+        UE_LOGW("remote_prop::OnSpawn: class '%ls' not found in GUObjectArray -- dropping (likely cooked-content class not loaded)",
+                classW.c_str());
+        return;
+    }
+    void* worldCtx = GetWorldContext();
+    if (!worldCtx) {
+        UE_LOGW("remote_prop::OnSpawn: no world context -- dropping");
+        return;
+    }
+    // Build FTransform from wire rotation/scale/location.
+    FTransform48 xform{};
+    RotatorToQuat(payload.rotPitch, payload.rotYaw, payload.rotRoll,
+                  xform.rotX, xform.rotY, xform.rotZ, xform.rotW);
+    xform.locX   = payload.locX;
+    xform.locY   = payload.locY;
+    xform.locZ   = payload.locZ;
+    xform.scaleX = payload.scaleX;
+    xform.scaleY = payload.scaleY;
+    xform.scaleZ = payload.scaleZ;
+    // Phase 1: BeginDeferredActorSpawnFromClass -> uninitialized AActor*.
+    constexpr uint8_t kAlwaysSpawn = 1;
+    void* spawned = nullptr;
+    {
+        ParamFrame begin(g_beginSpawnFn);
+        begin.Set<void*>(L"WorldContextObject", worldCtx);
+        begin.Set<void*>(L"ActorClass", actorClass);
+        begin.SetRaw(L"SpawnTransform", &xform, sizeof(xform));
+        begin.Set<uint8_t>(L"CollisionHandlingOverride", kAlwaysSpawn);
+        begin.Set<void*>(L"Owner", nullptr);
+        if (!Call(g_gsCdo, begin)) {
+            UE_LOGE("remote_prop::OnSpawn: BeginDeferredActorSpawnFromClass call failed");
+            return;
+        }
+        spawned = begin.Get<void*>(L"ReturnValue");
+    }
+    if (!spawned) {
+        UE_LOGE("remote_prop::OnSpawn: BeginDeferred returned null");
+        return;
+    }
+    // Phase 2 (CRITICAL): set the Key on the spawned actor BEFORE
+    // FinishSpawningActor. Aprop_C.Init() runs inside FinishSpawningActor's
+    // UserConstructionScript and, when ResetKey=true or no Key is set, calls
+    // KismetGuidLibrary::NewGuid -> FName -> self->Key. Writing Key FIRST
+    // (via the BP-callable setKey UFunction) skips that overwrite branch and
+    // the prop ends up with our wire Key + registered in
+    // mainGamemode.keyObj_key/obj cross-peer.
+    if (!g_propSetKeyFn) {
+        // Late-resolve in case prop_C wasn't loaded earlier.
+        if (void* propCls = R::FindClass(P::name::PropClass)) {
+            g_propSetKeyFn = R::FindFunction(propCls, P::name::PropSetKeyFn);
+        }
+    }
+    if (g_propSetKeyFn) {
+        // Convert wire Key string -> live FName via Conv_StringToName, then
+        // call Aprop_C.setKey(FName) so the receiver's prop carries the
+        // SAME Key string as the sender's. Subsequent PropPose updates with
+        // this key resolve via prop_wrap::FindByKeyString (which compares by
+        // ToString, NOT by ComparisonIndex -- the cross-peer-stable path).
+        const R::FName keyFName = StringToFName(keyW);
+        if (keyFName.ComparisonIndex == 0) {
+            UE_LOGW("remote_prop::OnSpawn: StringToFName('%ls') -> NAME_None; setKey skipped",
+                    keyW.c_str());
+        } else {
+            ParamFrame sk(g_propSetKeyFn);
+            if (!sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
+                UE_LOGW("remote_prop::OnSpawn: setKey 'Key' param not found");
+            } else if (!Call(spawned, sk)) {
+                UE_LOGW("remote_prop::OnSpawn: setKey ProcessEvent call failed");
+            } else {
+                UE_LOGI("remote_prop::OnSpawn: setKey('%ls') ok (FName idx=%u)",
+                        keyW.c_str(), keyFName.ComparisonIndex);
+            }
+        }
+    } else {
+        UE_LOGW("remote_prop::OnSpawn: prop_C.setKey UFunction not resolved -- spawn will use NewGuid'd Key");
+    }
+    // Phase 3: FinishSpawningActor -> runs UserConstructionScript + BeginPlay.
+    {
+        ParamFrame finish(g_finishSpawnFn);
+        finish.Set<void*>(L"Actor", spawned);
+        finish.SetRaw(L"SpawnTransform", &xform, sizeof(xform));
+        if (!Call(g_gsCdo, finish)) {
+            UE_LOGE("remote_prop::OnSpawn: FinishSpawningActor call failed");
+            return;
+        }
+    }
+    UE_LOGI("remote_prop::OnSpawn: spawned %p of '%ls' at (%.1f, %.1f, %.1f)",
+            spawned, classW.c_str(), payload.locX, payload.locY, payload.locZ);
+    // Phase 4: physics state. The mesh is Aprop_C.StaticMesh.
+    void* mesh = ue_wrap::prop::GetStaticMesh(spawned);
+    if (mesh) {
+        const bool sim = (payload.physFlags & coop::net::propspawn_flags::kSimulatePhysics) != 0;
+        DriveSimulate(mesh, sim);
+        const bool hasLinVel =
+            payload.initLinVelX != 0.f || payload.initLinVelY != 0.f || payload.initLinVelZ != 0.f;
+        const bool hasAngVel =
+            payload.initAngVelX != 0.f || payload.initAngVelY != 0.f || payload.initAngVelZ != 0.f;
+        if (hasLinVel) DriveSetLinearVelocity(mesh, payload.initLinVelX, payload.initLinVelY, payload.initLinVelZ);
+        if (hasAngVel) DriveSetAngularVelocity(mesh, payload.initAngVelX, payload.initAngVelY, payload.initAngVelZ);
+        UE_LOGI("remote_prop::OnSpawn: physics applied (sim=%d hasLinVel=%d hasAngVel=%d)",
+                sim ? 1 : 0, hasLinVel ? 1 : 0, hasAngVel ? 1 : 0);
+    }
 }
 
 void ForceRelease() {

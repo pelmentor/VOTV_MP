@@ -458,6 +458,102 @@ void GrabObserver_grab_Finished_PRE(void* self, void* /*function*/, void* /*para
     UE_LOGI("grab_hook[grab.Finished PRE]: was holding=%p", grabbing);
 }
 
+// --- v5 Bug C: UpropInventory_C::takeObj POST observer. THE bottom call all
+// inventory drop paths funnel through (per
+// research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md). The signature
+// is `(int32 Index, bool removeVol, bool& return, Fstruct_save& Output,
+// AActor*& Object)` -- POST observer reads the Object out-param to get the
+// just-spawned actor, then builds a PropSpawnPayload from its class + Key +
+// transform + Aprop_C bools. NO echo loop: the receiver's OnSpawn spawns via
+// GameplayStatics direct (BeginDeferredActorSpawnFromClass), NOT through this
+// takeObj path, so the observer never fires for receiver-applied spawns.
+//
+// Param offset for `Object` is resolved lazily (one FindParamOffset per
+// observer install, cached in a function-local static atomic).
+void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* params) {
+    if (!self || !params || !function) return;
+    // Cache Object out-param offset. Atomic because the observer can dispatch
+    // on either the game thread (typical) or a task-graph worker (per
+    // game_thread.h note); -2 sentinel means "unresolved", -1 = "tried and
+    // failed, don't retry every call".
+    static std::atomic<int32_t> sObjectOff{-2};
+    int32_t off = sObjectOff.load(std::memory_order_acquire);
+    if (off == -2) {
+        const int32_t resolved = R::FindParamOffset(function, L"Object");
+        sObjectOff.store(resolved >= 0 ? resolved : -1, std::memory_order_release);
+        off = resolved >= 0 ? resolved : -1;
+        UE_LOGI("grab_hook[takeObj POST]: resolved Object out-param offset = %d", resolved);
+    }
+    if (off < 0) return;
+    void* spawnedActor = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(params) + off);
+    if (!spawnedActor || !R::IsLive(spawnedActor)) return;
+    // Only broadcast when connected -- otherwise we'd queue PropSpawn forever.
+    if (!g_session.connected()) {
+        UE_LOGI("grab_hook[takeObj POST]: spawned %p but session not connected -- skipping broadcast",
+                spawnedActor);
+        return;
+    }
+    // Defensive: only broadcast for Aprop_C derivatives. If a non-prop class
+    // somehow flows through takeObj (BP refactor regression), the receiver's
+    // OnSpawn would still try to spawn it -- which is fine but wastes bytes.
+    if (!ue_wrap::prop::IsDescendantOfProp(spawnedActor)) {
+        UE_LOGW("grab_hook[takeObj POST]: spawned actor %p is NOT a prop_C derivative -- skipping",
+                spawnedActor);
+        return;
+    }
+
+    coop::net::PropSpawnPayload p{};
+    // ClassName: actor's UClass leaf name (e.g. "Aprop_equipment_flashlight_C").
+    const std::wstring cls = R::ClassNameOf(spawnedActor);
+    p.className.len = 0;
+    for (size_t i = 0; i < cls.size() && i < 63; ++i) {
+        p.className.data[p.className.len++] = static_cast<char>(cls[i]);
+    }
+    // Key: Aprop_C.Key.ToString() via prop_wrap. After takeObj completes,
+    // loadData has restored Key from Fstruct_save -- this is the stable
+    // cross-peer identifier.
+    const std::wstring keyStr = ue_wrap::prop::GetKeyString(spawnedActor);
+    p.key.len = 0;
+    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
+        p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
+    }
+    // Transform: spawned actor's world location + rotation, normalized to
+    // FRotator axis canonical range so the receiver's FRotator->FQuat
+    // conversion lands on the right hemisphere (matches PropPose pattern).
+    const auto loc = ue_wrap::engine::GetActorLocation(spawnedActor);
+    const auto rot = ue_wrap::engine::GetActorRotation(spawnedActor);
+    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
+    p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
+    p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+    p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
+    // Scale: BP-spawned props typically have (1,1,1) -- send literal 1's.
+    // (Reading GetActorScale3D via reflection would be a 4th UFunction call
+    // for a value that's almost always 1; defer until a real non-1 case
+    // surfaces.)
+    p.scaleX = 1.f; p.scaleY = 1.f; p.scaleZ = 1.f;
+    // Physics flags: inventory drops always spawn with SimulatePhysics on
+    // (Aprop_C.Init enables it). The heavy + frozen bits are data-driven on
+    // propData -- read both so the receiver can grab-path prime correctly.
+    p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
+    if (ue_wrap::prop::IsHeavy(spawnedActor))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
+    if (ue_wrap::prop::IsFrozen(spawnedActor)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
+    // Initial velocity: a just-spawned prop is at rest (Aprop_C.Init wakes
+    // the body but doesn't apply velocity). Tap-drop / place-drop both
+    // produce a stationary spawn that gravity then takes over.
+    p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
+    p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
+
+    UE_LOGI("grab_hook[takeObj POST]: SPAWN broadcast cls='%ls' key='%ls' loc=(%.1f, %.1f, %.1f) heavy=%d frozen=%d",
+            cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
+            (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
+            (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
+    const bool ok = g_session.SendPropSpawn(p);
+    if (!ok) {
+        UE_LOGW("grab_hook[takeObj POST]: SendPropSpawn returned false (reliable channel busy) -- spawn won't replicate to peer this time. Stage-4 PropPose updates will eventually try to resolve the missing key.");
+    }
+}
+
 // One-shot UFunction-pointer resolution + observer install. Idempotent. Two
 // classes involved: UPhysicsHandleComponent (engine, 5 observers) and
 // mainPlayer_C (VOTV BP content, 3 observers). FindFunction does NOT climb
@@ -532,8 +628,20 @@ void InstallGrabObservers() {
     reg(playerCls, P::name::MainPlayerClass,
         P::name::MainPlayerGrabFinishedFn,   GrabObserver_grab_Finished_PRE,  /*pre=*/true);
 
+    // v5 Bug C: UpropInventory_C::takeObj POST -- captures every inventory
+    // drop path through the one bottom call (per RE doc). UpropInventory_C
+    // is a BP class; class lookup may fail before VOTV's content has loaded
+    // -- log a warning but continue (the other observers still install).
+    if (void* invCls = R::FindClass(P::name::PropInventoryClass)) {
+        reg(invCls, P::name::PropInventoryClass,
+            P::name::PropInventoryTakeObjFn, GrabObserver_PropInventory_TakeObj_POST, /*pre=*/false);
+    } else {
+        UE_LOGW("grab_hook: %ls class not found -- Bug C inventory-drop replication disabled this session",
+                P::name::PropInventoryClass);
+    }
+
     g_grabObserversInstalled = true;
-    UE_LOGI("grab_hook: Stage 1+ observers installed (5 PHC + 2 PCC + 1 PrimComp.AddImpulse + 2 PrimComp.SetVel + 3 BP-Timeline) -- press E on a prop to see hook lines");
+    UE_LOGI("grab_hook: Stage 1+ observers installed (5 PHC + 2 PCC + 1 PrimComp.AddImpulse + 2 PrimComp.SetVel + 3 BP-Timeline + 1 takeObj) -- press E on a prop or drop from inventory to see hook lines");
 }
 
 // ---- Autonomous grab test (no user E-press required) --------------------

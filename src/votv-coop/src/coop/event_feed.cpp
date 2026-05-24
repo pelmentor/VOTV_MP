@@ -140,6 +140,63 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             remote_prop::OnRelease(p, localPlayer);
             break;
         }
+        case net::ReliableKind::PropSpawn: {
+            // v5 Bug C: peer dropped an inventory item -- spawn a matching
+            // Aprop_X_C locally so subsequent PropPose updates resolve.
+            if (msg.payload.size() < sizeof(net::PropSpawnPayload)) {
+                UE_LOGW("event_feed: PropSpawn payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::PropSpawnPayload));
+                break;
+            }
+            net::PropSpawnPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            // Trust-boundary validation: any of the 18 floats (loc/rot/scale +
+            // 2 vel vectors) NaN/Inf or out-of-bound -> SpawnActor +
+            // SetPhysics* could crash PhysX. Reject before dispatch.
+            const float vals[18] = {
+                p.locX, p.locY, p.locZ,
+                p.rotPitch, p.rotYaw, p.rotRoll,
+                p.scaleX, p.scaleY, p.scaleZ,
+                p.initLinVelX, p.initLinVelY, p.initLinVelZ,
+                p.initAngVelX, p.initAngVelY, p.initAngVelZ,
+                0.f, 0.f, 0.f  // pad
+            };
+            bool finite = true;
+            for (int i = 0; i < 15; ++i) {  // skip the 3 pad slots
+                if (!std::isfinite(vals[i])) { finite = false; break; }
+            }
+            if (!finite) {
+                UE_LOGW("event_feed: PropSpawn floats non-finite -- dropping");
+                break;
+            }
+            constexpr float kMaxCoord = 1.0e6f;
+            constexpr float kMaxVel   = 1.0e6f;
+            if (std::fabs(p.locX) > kMaxCoord || std::fabs(p.locY) > kMaxCoord ||
+                std::fabs(p.locZ) > kMaxCoord) {
+                UE_LOGW("event_feed: PropSpawn location out of bounds (%.1f, %.1f, %.1f)",
+                        p.locX, p.locY, p.locZ);
+                break;
+            }
+            if (std::fabs(p.initLinVelX) > kMaxVel || std::fabs(p.initLinVelY) > kMaxVel ||
+                std::fabs(p.initLinVelZ) > kMaxVel ||
+                std::fabs(p.initAngVelX) > kMaxVel || std::fabs(p.initAngVelY) > kMaxVel ||
+                std::fabs(p.initAngVelZ) > kMaxVel) {
+                UE_LOGW("event_feed: PropSpawn velocity out of bounds");
+                break;
+            }
+            // Clamp class/key lengths defensively (they're uint8 but the
+            // sender could lie). 63/31 are the struct caps.
+            if (p.className.len > 63) {
+                UE_LOGW("event_feed: PropSpawn className.len=%u > 63 -- dropping", p.className.len);
+                break;
+            }
+            if (p.key.len > 31) {
+                UE_LOGW("event_feed: PropSpawn key.len=%u > 31 -- dropping", p.key.len);
+                break;
+            }
+            remote_prop::OnSpawn(p);
+            break;
+        }
         }
     }
 }

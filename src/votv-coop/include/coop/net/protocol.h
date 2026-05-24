@@ -74,6 +74,18 @@ enum class ReliableKind : uint8_t {
                       //     SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees;
                       //     fires Aprop_C.thrown if |linVel| > kThrownThreshold so
                       //     the BP's natural whoosh + particle FX dispatch.
+    PropSpawn = 3,    // v5: peer dropped an inventory item into the world (a new
+                      //     Aprop_X_C instance with a fresh Key). Payload:
+                      //     PropSpawnPayload (WireClassName + WireKey +
+                      //     loc/rot/scale + physFlags + initLinVel + initAngVel).
+                      //     Receiver: FindClass(className) +
+                      //     BeginDeferredActorSpawnFromClass + setKey(receivedKey)
+                      //     BEFORE FinishSpawningActor (so Aprop_C.Init doesn't
+                      //     overwrite Key with NewGuid) + FinishSpawningActor +
+                      //     SetSimulatePhysics + optional initial velocity.
+                      //     NO echo loop: receiver spawns directly, not through
+                      //     UpropInventory_C.takeObj, so the takeObj POST observer
+                      //     never fires for receiver-applied spawns.
 };
 
 #pragma pack(push, 1)
@@ -161,6 +173,17 @@ struct WireKey {
 };
 static_assert(sizeof(WireKey) == 32, "WireKey must be 32 bytes");
 
+// v5: BP class leaf name carrier (e.g. "Aprop_equipment_flashlight_C"). Longest
+// VOTV class names hit ~45 chars; 63 + length gives ample headroom. Same fixed-
+// size approach as WireKey to keep the payload at a fixed offset (no variable-
+// length parsing). Bytes beyond `len` MUST be zero on the wire so receiver
+// FindClass sees a clean wide string.
+struct WireClassName {
+    uint8_t len;       // 0..63 chars in `data`
+    char    data[63];  // ASCII (VOTV class names are ASCII)
+};
+static_assert(sizeof(WireClassName) == 64, "WireClassName must be 64 bytes");
+
 // v4: held-prop world transform. Sent unreliable, ~sendHz, while the sender's
 // mainPlayer.grabbing_actor is non-null. Receiver's first packet for a new key:
 // FindByKeyString -> local Aprop_C*, SetSimulatePhysics(false) on its StaticMesh,
@@ -212,6 +235,45 @@ static_assert(sizeof(PropReleasePayload) <= 256 - 20 - 8,
 // rarely transferring even half that to a held prop) and well below any
 // deliberate flick-throw. Calibrate vs hands-on if hover threshold matters.
 inline constexpr float kThrownLinVelThreshold = 200.f;
+
+// v5: PropSpawn reliable payload. Sent ONCE when the sender drops an inventory
+// item into the world (POST-hook on UpropInventory_C::takeObj catches all 4
+// drop paths -- simulateDrop A-D -- via the one bottom call they all funnel
+// through). Per [[project-coop-inventory-private]] we do NOT serialize the
+// full Fstruct_save (inventory contents are private); only the world-spawn
+// identity + transform + initial physics state crosses. The Key string is
+// the persistent cross-peer identifier (saved with the prop at pickup time;
+// restored on the dropped instance via Aprop_C.loadData on the sender side
+// and Aprop_C.setKey on the receiver side) so subsequent PropPose updates
+// resolve normally via prop_wrap::FindByKeyString.
+//
+// Physics flags bits (physFlags):
+//   bit 0: bSimulatePhysics  (always 1 for inventory drops -- the dropped
+//                              prop is a simulating rigid body)
+//   bit 1: bIsHeavy           (data-driven from Aprop_C.propData.heavy; the
+//                              receiver may use this for grab-path priming)
+//   bit 2: bFrozen            (Aprop_C.frozen -- quest-locked containers)
+//   bits 3-7: reserved
+struct PropSpawnPayload {
+    WireClassName className;       // 64 -- "Aprop_equipment_flashlight_C" etc.
+    WireKey       key;             // 32 -- the persistent cross-peer Key
+    float         locX, locY, locZ;            // 12 -- world cm
+    float         rotPitch, rotYaw, rotRoll;   // 12 -- FRotator (matches PropPose shape)
+    float         scaleX, scaleY, scaleZ;      // 12 -- usually (1,1,1)
+    uint8_t       physFlags;        // 1
+    uint8_t       _pad[3];          // 4
+    float         initLinVelX, initLinVelY, initLinVelZ;  // 12 -- usually (0,0,0)
+    float         initAngVelX, initAngVelY, initAngVelZ;  // 12
+};
+static_assert(sizeof(PropSpawnPayload) == 160, "PropSpawnPayload must be 160 bytes");
+static_assert(sizeof(PropSpawnPayload) <= 256 - 20 - 8,
+              "PropSpawnPayload must fit in one reliable datagram");
+
+namespace propspawn_flags {
+inline constexpr uint8_t kSimulatePhysics = 0x01;
+inline constexpr uint8_t kIsHeavy         = 0x02;
+inline constexpr uint8_t kFrozen          = 0x04;
+}  // namespace propspawn_flags
 
 #pragma pack(pop)
 

@@ -560,6 +560,24 @@ inline constexpr const wchar_t* PropClass             = L"prop_C";
 // natural dispatch, NOT a separate sound-trigger crutch. Per prop.hpp:166.
 inline constexpr const wchar_t* PropThrownFn          = L"thrown";
 
+// v5 Bug C (inventory drop): the BP function that all 4 drop paths funnel
+// through (per research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md).
+// We POST-hook this on UpropInventory_C and read the out-params to broadcast
+// PropSpawn. ON the receiver, Aprop_C.setKey is dispatched between Begin and
+// Finish spawning so the prop's Init() doesn't overwrite Key with NewGuid.
+inline constexpr const wchar_t* PropInventoryClass      = L"propInventory_C";
+inline constexpr const wchar_t* PropInventoryTakeObjFn  = L"takeObj";
+inline constexpr const wchar_t* PropSetKeyFn            = L"setKey";
+
+// UKismetStringLibrary::Conv_StringToName(const FString&) -> FName.
+// BlueprintPure, ProcessEvent-dispatched on the KismetStringLibrary CDO.
+// Used by remote_prop::OnSpawn to convert the wire Key string into a live
+// FName (registers in the engine's FName pool with a fresh local index),
+// then passed to Aprop_C.setKey on the just-spawned actor BEFORE
+// FinishSpawningActor runs Init() so the Init's NewGuid branch is skipped.
+inline constexpr const wchar_t* KismetStringLibraryClass = L"KismetStringLibrary";
+inline constexpr const wchar_t* ConvStringToNameFn       = L"Conv_StringToName";
+
 // Native UPrimitiveComponent UFunctions used by the receiver-side puppet
 // path to put a held prop into kinematic mode + apply inherited physics
 // velocity. These ARE ProcessEvent-dispatchable (native exec thunks already

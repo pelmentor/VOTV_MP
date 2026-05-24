@@ -111,6 +111,15 @@ public:
                          float linVelX, float linVelY, float linVelZ,
                          float angVelX, float angVelY, float angVelZ);
 
+    // v5: signal the peer that we just spawned a NEW prop in the world from
+    // an inventory drop (POST-hook on UpropInventory_C::takeObj). The
+    // receiver applies the payload by FindClass + BeginDeferredActorSpawn +
+    // setKey(receivedKey) + FinishSpawningActor + SetSimulatePhysics +
+    // optional initial velocity, producing a matching local Aprop_X_C
+    // instance with the same Key so subsequent PropPose updates resolve.
+    // Returns false if the reliable channel is busy; caller should retry.
+    bool SendPropSpawn(const PropSpawnPayload& payload);
+
     // Diagnostics / validation (methodology 5.2: packets sent/received counts).
     uint64_t packetsSent() const { return sent_.load(); }
     uint64_t packetsRecv() const { return recv_.load(); }

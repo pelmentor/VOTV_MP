@@ -46,6 +46,20 @@ void Tick(coop::net::Session& session);
 // minor inaccuracy in exchange for natural sound/effects).
 void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer);
 
+// v5: handle an incoming PropSpawn (peer dropped an inventory item into
+// the world). Resolves the class by leaf name, does a deferred SpawnActor
+// at the wire transform, dispatches Aprop_C.setKey(receivedKey) BEFORE
+// FinishSpawningActor (so Aprop_C.Init() doesn't overwrite Key with
+// NewGuid), then FinishSpawningActor, then SetSimulatePhysics + optional
+// initial velocity. Result: a matching local Aprop_X_C instance with
+// the same Key. Subsequent PropPose updates resolve via the existing
+// prop_wrap::FindByKeyString path.
+//
+// NO echo loop: receiver spawns directly through engine::SpawnActor (the
+// deferred-spawn pair), NOT through UpropInventory_C.takeObj, so the
+// takeObj POST observer (which is the sender hook) never fires.
+void OnSpawn(const coop::net::PropSpawnPayload& payload);
+
 // Force-release: called on disconnect / level unload to put any cached
 // prop back into normal physics state. Safe to call when not holding.
 void ForceRelease();
