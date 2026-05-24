@@ -254,20 +254,68 @@ inventory tick, input handling) is a SEPARATE task -- much was done for the
 earlier orphan design; revisit the catalog in
 [[project-remote-player-hijack-and-pose]].
 
-This requires rolling back parts of [[project-bug2-locomotion-anim]] (the
-satellite ACharacter pattern for animation): a full mainPlayer_C has the
-animation rig native; the satellite was a workaround for the skeletal-mesh-only
-puppet. Animation drive becomes simpler (direct mainPlayer_C.AnimInstance
-variables; no satellite).
+**RETAIN the satellite from [[project-bug2-locomotion-anim]]** (audit-confirmed
+correction 2026-05-24). The satellite ACharacter is ORTHOGONAL to the puppet's
+UClass -- its purpose is to populate the AnimBP's `Pawn` and `Movement`
+pointers at AnimInstance construction (BUA caches both at BeginPlay, not
+per-tick). A bare `mainPlayer_C` orphan spawned with `AutoPossessPlayer=0 +
+AutoPossessAI=0 + AIControllerClass=null` has NO possessing controller -- the
+exact state that Phase 1 produced "stick figure" animation. Removing the
+satellite was prematurely optimistic. CHANGE ONLY THE PUPPET UCLASS
+(`ASkeletalMeshActor` -> `mainPlayer_C`); KEEP the satellite-Character anim
+infrastructure intact. AI perception sees the `mainPlayer_C` orphan (rule
+satisfied); the satellite continues to drive the animation rig (Bug 2 fix
+preserved).
 
 **Pre-Phase-5N1 RE TODO:** for each active enemy class, identify the
 target-selection BP logic:
 - AIPerception-based -- works with mainPlayer_C puppet automatically.
 - `Cast to mainPlayer_C` -- works with mainPlayer_C puppet automatically.
 - `GetPlayerPawn(0)` / `Find Player` BP nodes -- if VOTV BPs use only
-  index 0, those NPCs see only the FIRST mainPlayer (the host's). Need to
-  check whether VOTV iterates all players or hardcodes index 0. If hardcoded,
-  per-NPC hook is needed.
+  index 0, those NPCs see only the FIRST mainPlayer (the host's).
+
+**Contingency plan for GetPlayerPawn(0) hardcoded case** (audit Issue 3
+fix): if RE finds an enemy whose target selection uses `GetPlayerPawn(0)`
+or `Find Player Pawn`, apply per-NPC PRE-observer on its target-selection
+function. The observer either:
+  (a) Promotes the orphan into the "player list" by walking GUObjectArray
+      for all live `mainPlayer_C` instances and choosing the nearest, OR
+  (b) Rewrites the BP's `target` field directly via reflection AFTER the
+      BP's GetPlayerPawn(0) sets it, but BEFORE it's consumed downstream.
+Option (a) is preferred -- one shared helper across NPC classes; less
+brittle to BP refactor. Both options require per-NPC RE to identify the
+exact function name to hook, hence the "RE TODO" gating before Phase 5N1
+code starts.
+
+**Per-tick suppression delta** (audit Issue 4 fix): switching the puppet
+to `mainPlayer_C` REINTRODUCES per-tick local-player subsystems that
+`ASkeletalMeshActor` didn't have. Catalog of REQUIRED suppression for
+the orphan path (drawn from [[project-remote-player-hijack-and-pose]]):
+1. **PostProcessComponent destroy** -- a `mainPlayer_C` carries a
+   `UPostProcessComponent` whose unbound settings stomp the LOCAL screen's
+   gamma/exposure on every tick. KNOWN-required. Destroy via
+   `K2_DestroyComponent` at deferred-spawn.
+2. **Inventory tick suppression** -- `mainPlayer_C` carries
+   `Aprop_inventoryContainer_player_C` (per the inventory-private rule).
+   On the orphan, this should NOT save/load anything. **NEEDS RE** to
+   confirm whether `inertPawn=true` already suppresses its tick or if
+   we need explicit `SetComponentTickEnabled(false)`.
+3. **PlayerController-bound `EventTick`** in mainPlayer_C BP graph --
+   any code path that reads `Controller` and re-applies view/exposure/
+   audio every tick must be suppressed. The simplest path: `SetActorTickEnabled(false)`
+   on the orphan, then drive its anim/skin via the satellite. **NEEDS RE**
+   to confirm tick-disable doesn't break the anim drive.
+4. **InputComponent** -- a `mainPlayer_C` registers input bindings on
+   BeginPlay. With AutoPossessPlayer=0 + bBlockInput=1, the input
+   should be inert, but **NEEDS VERIFICATION** that no `Tick` reads
+   input state directly.
+5. **Audio components** -- `mainPlayer_C` has 12+ UAudioComponents
+   (Audio, sndwtmktsts, tinnitus1, startSprint, beep, ...). On the
+   orphan, these must NOT play on the local player's audio device.
+   **NEEDS RE** to enumerate which auto-play and which gate on
+   Controller validity. Worst case: destroy them at deferred-spawn.
+The pre-Phase-5N1 task is to execute this catalog completely, not as
+a "SEPARATE task" pointer.
 
 Class list to RE: `Anpc_zombie_C`, `AkerfurOmega_C`, `Akrampus_C`,
 `Afunguy_C`, `AgoreSlither_C`, `Ainsomniac_C`, `Afossilhound_C`,
@@ -309,13 +357,44 @@ struct NpcState {
 };
 ```
 
-Receiver resolves the target tag to the right local object:
-- `none` → moveTo = nullptr
-- `remote-player` (host pointing at host-mainPlayer) → moveTo = client's host-puppet (`g_orphan.actor()`)
-- `local-player` (host pointing at host's representation of client) → moveTo = client's local mainPlayer (`g_netLocal`)
-- `entity-by-key` → `prop_wrap::FindByKeyString(targetKey)` → moveTo = resolved actor
+**Tag perspective is SENDER-LOCAL.** Tags encode "this is the host's view of who"
+and the receiver maps them to its local equivalents:
+
+| Tag | Sender (host) meaning | Receiver (client) resolves to |
+|---|---|---|
+| `none` | NPC has no current target | `moveTo = nullptr` |
+| `local-player` | host's OWN local `mainPlayer_C` (the host player) | `g_orphan.actor()` -- the puppet of the host on client's world |
+| `remote-player` | host's representation of the CLIENT (i.e. the orphan on host's world, AFTER the puppet-redesign-locked path = a `mainPlayer_C` orphan) | `g_netLocal` -- the client's own local mainPlayer |
+| `entity-by-key` | host's view of a world entity (door, prop, etc.) | `prop_wrap::FindByKeyString(targetKey)` |
+
+(Labels corrected per audit Issue 5: previous text had `local-player` and
+`remote-player` reversed from sender-perspective semantics.)
 
 This closes the "kerfur chases wrong player on client" bug Flaw 4 identified.
+
+### Stage 4 `Aprop_C.thrown` re-verification (audit Flaw 2 elevation)
+
+The throw-impulse path (commit `8832e56`, already shipped) dispatches
+`Aprop_C.thrown(localPlayer)` on the receiver for sound + particle effects.
+The shipping path passes the receiver's `g_netLocal` (the local
+`mainPlayer_C`). With the puppet now also being `mainPlayer_C`, a `Cast to
+mainPlayer_C` inside the BP `thrown` body succeeds on both the LOCAL player
+AND the orphan. If the BP graph uses the `Player` parameter for stats /
+sound credits / inventory side effects, the attribution now MAY differ
+from the SkeletalMeshActor era (where Cast would fail and the BP would
+early-out).
+
+**Pre-Phase-5N1 RE prerequisite (escalated from a Phase-5N5 TODO):** UE4SS
+Lua dump of `Aprop_C.thrown` BP body to confirm:
+1. No state mutation beyond cosmetic (sound spawn + particle activation).
+2. No `Cast to mainPlayer_C` -> add to player stats / inventory.
+3. No `Player.OwnedProps.Add()` or similar side effect.
+
+If the BP body proves cosmetic-only: ship Phase 5N1 unchanged.
+If non-cosmetic side effects exist: refactor the receiver to call
+`PlaySoundAtLocation` + `SpawnEmitterAtLocation` directly (the engine
+native UFunctions) instead of `Aprop_C.thrown`, matching the Phase 5N5
+explosion pattern.
 
 ### Audit refinements applied (final audit follow-up)
 
