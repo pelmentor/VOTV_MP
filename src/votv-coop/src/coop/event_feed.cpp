@@ -331,6 +331,58 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             remote_prop::OnDestroy(p, localPlayer);
             break;
         }
+        case net::ReliableKind::EntitySpawn: {
+            // Phase 5N1 Inc2 (2026-05-25): NPC spawn dispatch from host.
+            // Inc2 scope is DETECTION-ONLY: log the receive, validate the
+            // payload shape, but do NOT yet materialize a local NPC mirror.
+            // Inc3 will add the spawn path:
+            //   void* cls = R::FindClass(payload.className.data);
+            //   harness::MarkIncomingNpcSpawn(cls);
+            //   engine::BeginDeferredActorSpawnFromClass(cls, transform);
+            //   engine::FinishSpawningActor(actor, transform);
+            //   harness::TrackNpcMirror(payload.sessionId, actor);
+            //
+            // The reason for the staged rollout: the existing Inc1 client-
+            // side interceptor would block our own spawn unless the
+            // MarkIncomingNpcSpawn bypass slot is set. That bypass is
+            // wired (Inc1) but never EXERCISED until Inc3 ships. We log
+            // here so the user can verify the host actually broadcasts
+            // EntitySpawn when they flip VOTVCOOP_NPC_SYNC=1 on their
+            // host instance.
+            if (msg.payload.size() < sizeof(net::EntitySpawnPayload)) {
+                UE_LOGW("event_feed: EntitySpawn payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::EntitySpawnPayload));
+                break;
+            }
+            net::EntitySpawnPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            if (p.className.len > 63) {
+                UE_LOGW("event_feed: EntitySpawn className.len=%u > 63 -- dropping",
+                        p.className.len);
+                break;
+            }
+            std::wstring cls(p.className.len, L'\0');
+            for (size_t i = 0; i < p.className.len; ++i)
+                cls[i] = static_cast<wchar_t>(p.className.data[i]);
+            UE_LOGI("event_feed[Inc2 detection-only]: received EntitySpawn class='%ls' sessionId=%u loc=(%.0f, %.0f, %.0f) rot=(p=%.1f y=%.1f r=%.1f) -- Inc3 will materialize this",
+                    cls.c_str(), p.sessionId, p.locX, p.locY, p.locZ,
+                    p.rotPitch, p.rotYaw, p.rotRoll);
+            break;
+        }
+        case net::ReliableKind::EntityDestroy: {
+            // Phase 5N1 Inc2 (2026-05-25): NPC destroy dispatch from host.
+            // Inc2 scope is detection-only. Inc3 wires the mirror teardown.
+            if (msg.payload.size() < sizeof(net::EntityDestroyPayload)) {
+                UE_LOGW("event_feed: EntityDestroy payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::EntityDestroyPayload));
+                break;
+            }
+            net::EntityDestroyPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            UE_LOGI("event_feed[Inc2 detection-only]: received EntityDestroy sessionId=%u -- Inc3 will destroy the local mirror",
+                    p.sessionId);
+            break;
+        }
         }
     }
 }

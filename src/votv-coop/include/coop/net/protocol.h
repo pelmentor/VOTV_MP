@@ -95,6 +95,23 @@ enum class ReliableKind : uint8_t {
                       //     (WireKey only). Receiver: FindByKeyString + K2_DestroyActor.
                       //     Echo-suppressed by incoming-destroy-set so the receiver's
                       //     K2_DestroyActor doesn't bounce back to the sender.
+    EntitySpawn = 5,  // Phase 5N1 Inc2 (NPC sync, 2026-05-25): host detected a
+                      //     new NPC instance (one of the 12 allowlisted enemy
+                      //     classes; tracked via the host-side PRE observer on
+                      //     BeginDeferredActorSpawnFromClass that fires alongside
+                      //     the client-side interceptor). Payload:
+                      //     EntitySpawnPayload (WireClassName + uint32_t
+                      //     sessionId + loc + rot). Receiver (Inc3, not wired
+                      //     yet): MarkIncomingNpcSpawn(cls) + BeginDeferred +
+                      //     FinishSpawningActor + cache under sessionId. The
+                      //     sessionId is host-assigned monotonic, NOT a save-
+                      //     UUID like Aprop_C.Key -- NPCs are runtime-spawned
+                      //     without persistent identity, so the host owns the
+                      //     ID-space.
+    EntityDestroy = 6, // Phase 5N1 Inc2: host detected an NPC destruction via
+                      //     the existing AActor::K2_DestroyActor PRE observer
+                      //     (filtered by host-side tracked-NPC set). Payload:
+                      //     EntityDestroyPayload (sessionId only -- 8 bytes).
 };
 
 #pragma pack(push, 1)
@@ -297,6 +314,50 @@ struct PropDestroyPayload {
 static_assert(sizeof(PropDestroyPayload) == 32, "PropDestroyPayload must be 32 bytes");
 static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,
               "PropDestroyPayload must fit in one reliable datagram");
+
+// Phase 5N1 Inc2 (2026-05-25): NPC spawn reliable payload. Host detects an
+// NPC instantiation via the host-side PRE observer on
+// BeginDeferredActorSpawnFromClass (sibling of the existing client-side
+// interceptor from Inc1; same UFunction, different role gate). Payload
+// carries the class name + a host-assigned monotonic sessionId + the
+// spawn world transform. Receiver (Inc3 -- pipeline scaffolded but not
+// yet wired):
+//   MarkIncomingNpcSpawn(cls)  // bypass the suppressor for this one call
+//   actor = BeginDeferredActorSpawnFromClass(cls, transform)
+//   FinishSpawningActor(actor, transform)  // BeginPlay runs naturally
+//   g_npcMirrorBySessionId[sessionId] = actor
+//
+// sessionId is NOT a save-UUID (NPCs are runtime-spawned with no
+// persistent identity). It's host-assigned monotonic counter, reset on
+// session start. Receiver references the same ID for subsequent
+// EntityPose (Inc3) and EntityDestroy.
+struct EntitySpawnPayload {
+    WireClassName className;       // 64 -- "npc_zombie_C", "kerfurOmega_mannequin_C", etc.
+    uint32_t      sessionId;       // 4 -- host-assigned monotonic; 0 reserved for "invalid"
+    uint32_t      _pad;            // 4 -- 8-byte alignment for the floats
+    float         locX, locY, locZ;            // 12 -- world cm at spawn time
+    float         rotPitch, rotYaw, rotRoll;   // 12 -- FRotator
+};
+static_assert(sizeof(EntitySpawnPayload) == 96, "EntitySpawnPayload must be 96 bytes");
+static_assert(sizeof(EntitySpawnPayload) <= 256 - 20 - 8,
+              "EntitySpawnPayload must fit in one reliable datagram");
+
+// Phase 5N1 Inc2: NPC destroy reliable payload. Host detects an NPC
+// destruction via the existing AActor::K2_DestroyActor PRE observer
+// (filter by host-side tracked-NPC set lookup). Tiny -- just the
+// sessionId to identify which mirror to tear down. Receiver: look up
+// g_npcMirrorBySessionId[sessionId] -> K2_DestroyActor on the mirror.
+// Same incoming-destroy-set echo suppression pattern as PropDestroy.
+struct EntityDestroyPayload {
+    uint32_t sessionId;
+    uint32_t _pad;     // 8-byte alignment
+};
+static_assert(sizeof(EntityDestroyPayload) == 8, "EntityDestroyPayload must be 8 bytes");
+// Audit-fix Issue 1 (2026-05-25): tripwire for future growth. At 8 bytes
+// this trivially fits, but every reliable payload in this file has the
+// guard; absence breaks the established consistency.
+static_assert(sizeof(EntityDestroyPayload) <= 256 - 20 - 8,
+              "EntityDestroyPayload must fit in one reliable datagram (kMaxReliablePayload)");
 
 #pragma pack(pop)
 

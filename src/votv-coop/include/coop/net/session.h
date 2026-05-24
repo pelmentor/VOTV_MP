@@ -127,6 +127,17 @@ public:
     // Returns false if the reliable channel is busy.
     bool SendPropDestroy(const WireKey& key);
 
+    // Phase 5N1 Inc2 (NPC sync, 2026-05-25): broadcast an NPC spawn the
+    // host's BeginDeferredActorSpawnFromClass PRE observer just witnessed.
+    // sessionId is host-assigned monotonic; transform is the SpawnTransform
+    // the original BeginDeferred was called with. Returns false if the
+    // reliable channel is busy.
+    bool SendEntitySpawn(const EntitySpawnPayload& payload);
+
+    // Phase 5N1 Inc2: broadcast an NPC destruction. Receiver looks up
+    // its mirror by sessionId and K2_DestroyActor's it.
+    bool SendEntityDestroy(uint32_t sessionId);
+
     // Diagnostics / validation (methodology 5.2: packets sent/received counts).
     uint64_t packetsSent() const { return sent_.load(); }
     uint64_t packetsRecv() const { return recv_.load(); }

@@ -145,6 +145,16 @@ bool Session::SendPropDestroy(const WireKey& key) {
     return reliable_.Send(ReliableKind::PropDestroy, &p, sizeof(p));
 }
 
+bool Session::SendEntitySpawn(const EntitySpawnPayload& payload) {
+    return reliable_.Send(ReliableKind::EntitySpawn, &payload, sizeof(payload));
+}
+
+bool Session::SendEntityDestroy(uint32_t sessionId) {
+    EntityDestroyPayload p{};
+    p.sessionId = sessionId;
+    return reliable_.Send(ReliableKind::EntityDestroy, &p, sizeof(p));
+}
+
 bool Session::TryGetRemotePose(PoseSnapshot& out, bool* outIsNew) {
     if (state_.load() != ConnState::Connected) return false;
     std::lock_guard<std::mutex> lk(remoteMutex_);

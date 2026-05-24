@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace harness {
@@ -1431,13 +1432,135 @@ bool IsClassOrDerivedFromAnyAllowlisted(void* cls) {
     return false;
 }
 
+// Phase 5N1 Inc2 (2026-05-25): host-side env var gate. Set
+// VOTVCOOP_NPC_SYNC=1 to enable the host-side EntitySpawn broadcast
+// when this interceptor fires on the host for an allowlisted NPC class.
+// Default OFF -- Inc2 ships the wire layer but doesn't activate it
+// until the user verifies hands-on. Inc3 will wire the client-side
+// receiver and we'll likely flip this on by default.
+bool NpcSyncEnabled() {
+    static bool resolved = false;
+    static bool enabled = false;
+    if (!resolved) {
+        wchar_t buf[8] = {};
+        const DWORD n = ::GetEnvironmentVariableW(L"VOTVCOOP_NPC_SYNC", buf, 8);
+        enabled = (n > 0 && buf[0] == L'1');
+        resolved = true;
+        UE_LOGI("npc-sync: VOTVCOOP_NPC_SYNC=%ls -> EntitySpawn broadcast %s",
+                n > 0 ? buf : L"<unset>", enabled ? "ENABLED" : "disabled");
+    }
+    return enabled;
+}
+
+// Phase 5N1 Inc2: host-side monotonic sessionId counter. Reset per
+// session (cleared when net::Session disconnects -- see net-disconnect
+// handler near the bottom of this file). 0 reserved for "invalid";
+// counter starts at 1.
+uint32_t g_nextNpcSessionId = 1;
+
+// Phase 5N1 Inc2: host-side tracked-NPC set. Maps the just-deferred-
+// spawned NPC actor (returned by the original BeginDeferredActorSpawn
+// FromClass after the interceptor lets it through) -> sessionId. Used
+// by the K2_DestroyActor PRE observer to send EntityDestroy with the
+// right sessionId. Empty until the host's first NPC spawn.
+//
+// (For Inc2-detection-only mode the map is populated but EntityDestroy
+// isn't wired yet -- that's Inc3.)
+std::unordered_map<void*, uint32_t> g_npcSessionByActor;
+
 bool NpcSuppress_Interceptor(void* self, void* params) {
     (void)self;  // self = the UGameplayStatics CDO; we don't use it
     // Cheapest checks first.
     if (!params || g_npcSpawnActorClassParamOff < 0) return false;
+    if (!g_session.connected()) return false;  // pre-connect: don't filter
+
+    // Phase 5N1 Inc2: HOST-side broadcast path. When env var is set and
+    // ActorClass is allowlisted, the host emits an EntitySpawn reliable
+    // packet and lets the spawn proceed normally. The interceptor runs
+    // BEFORE the original UFunction; we read the SpawnTransform from
+    // params before the spawn actually happens. Returns FALSE so the
+    // original runs (host wants the NPC to actually spawn locally).
+    //
+    // Inc3 will:
+    //   - track the returned AActor* in g_npcSessionByActor (POST hook)
+    //   - hook K2_DestroyActor PRE to send EntityDestroy
+    //   - wire client-side receiver to materialize a mirror via
+    //     MarkIncomingNpcSpawn + BeginDeferred + FinishSpawning
+    //
+    // For Inc2 (this commit): host detects spawns + sends EntitySpawn.
+    // Client receives the packet but doesn't yet act on it (the
+    // event_feed receiver is wired-to-log-only). Detect-only mode.
+    if (g_session.role() == coop::net::Role::Host) {
+        if (!NpcSyncEnabled()) return false;
+        void* actorClass = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(params) + g_npcSpawnActorClassParamOff);
+        if (!actorClass || !IsClassOrDerivedFromAnyAllowlisted(actorClass)) {
+            return false;  // not an NPC; let it run, no broadcast
+        }
+        // Read the SpawnTransform param. Offset resolved at install time
+        // for both endpoints; for now we read via FindParamOffset each
+        // call (cached statically below).
+        static int32_t sXformOff = -2;
+        if (sXformOff == -2) {
+            sXformOff = R::FindParamOffset(g_npcSpawnFn, L"SpawnTransform");
+        }
+        coop::net::EntitySpawnPayload p{};
+        if (sXformOff >= 0) {
+            // FTransform layout: FQuat Rotation (16B) + FVector Translation (12B)
+            // + FVector Scale3D (12B) -- 48 bytes total, but UE4 also aligns to
+            // 16 so it's typically 48 with internal padding.
+            const uint8_t* xform = reinterpret_cast<const uint8_t*>(params) + sXformOff;
+            // FQuat (XYZW)
+            const float qx = *reinterpret_cast<const float*>(xform + 0);
+            const float qy = *reinterpret_cast<const float*>(xform + 4);
+            const float qz = *reinterpret_cast<const float*>(xform + 8);
+            const float qw = *reinterpret_cast<const float*>(xform + 12);
+            // FVector translation @ +0x10 (16; after the 16-byte FQuat).
+            p.locX = *reinterpret_cast<const float*>(xform + 0x10);
+            p.locY = *reinterpret_cast<const float*>(xform + 0x14);
+            p.locZ = *reinterpret_cast<const float*>(xform + 0x18);
+            // Convert FQuat -> FRotator (in degrees) for wire compatibility
+            // with our existing FRotator-based pose pipeline. Standard UE4
+            // conversion: pitch = asin(2(wy - zx)); yaw = atan2(2(wz + xy),
+            // 1 - 2(yy + zz)); roll = atan2(2(wx + yz), 1 - 2(xx + yy)).
+            // We use a single normalize for sin clamp.
+            const float sinp = 2.f * (qw * qy - qz * qx);
+            const float sinp_clamped = sinp >  1.f ?  1.f
+                                     : sinp < -1.f ? -1.f : sinp;
+            const float pitchRad = std::asin(sinp_clamped);
+            const float yawRad   = std::atan2(2.f * (qw * qz + qx * qy),
+                                              1.f - 2.f * (qy * qy + qz * qz));
+            const float rollRad  = std::atan2(2.f * (qw * qx + qy * qz),
+                                              1.f - 2.f * (qx * qx + qy * qy));
+            constexpr float kRadToDeg = 57.29577951308232f;
+            p.rotPitch = pitchRad * kRadToDeg;
+            p.rotYaw   = yawRad   * kRadToDeg;
+            p.rotRoll  = rollRad  * kRadToDeg;
+        }
+        // Class name -> wire string. actorClass IS a UClass*; NameOf returns
+        // its own FName (e.g., "npc_zombie_C"). (ClassNameOf would return the
+        // class-of-the-class, i.e., "Class" -- wrong.)
+        const std::wstring cls = R::ToString(R::NameOf(actorClass));
+        p.className.len = 0;
+        for (size_t i = 0; i < cls.size() && i < 63; ++i) {
+            p.className.data[p.className.len++] = static_cast<char>(cls[i]);
+        }
+        p.sessionId = g_nextNpcSessionId++;
+        if (g_session.SendEntitySpawn(p)) {
+            UE_LOGI("npc-sync[host]: broadcast EntitySpawn class='%ls' sessionId=%u loc=(%.0f, %.0f, %.0f) rot=(p=%.1f y=%.1f r=%.1f)",
+                    cls.c_str(), p.sessionId, p.locX, p.locY, p.locZ,
+                    p.rotPitch, p.rotYaw, p.rotRoll);
+        } else {
+            UE_LOGW("npc-sync[host]: SendEntitySpawn failed (reliable channel busy?) -- NPC sessionId=%u not broadcast",
+                    p.sessionId);
+        }
+        // ALWAYS let the original spawn proceed on the host. Returning
+        // false from the interceptor = pass-through to the real UFunction.
+        return false;
+    }
+
     // Host runs spawners normally; only CLIENT suppresses.
     if (g_session.role() != coop::net::Role::Client) return false;
-    if (!g_session.connected()) return false;  // pre-connect: don't filter
 
     // Read the ActorClass UClass* param from the FFrame buffer.
     void* actorClass = *reinterpret_cast<void**>(
@@ -2206,6 +2329,14 @@ void NetPumpTick(float displayOffsetX) {
         // flag would persist and incorrectly defer the next session's
         // Init POST broadcasts. The single bool reset is cheap.
         g_takeObjInFlight = false;
+        // Phase 5N1 Inc2 (2026-05-25): reset host-side NPC tracking state
+        // on disconnect. sessionId must restart at 1 next session (zero is
+        // reserved for "invalid"). The g_npcSessionByActor map holds stale
+        // actor pointers from the previous session -- not safe to keep,
+        // and the next session's allocator wouldn't recognize them anyway.
+        g_npcSessionByActor.clear();
+        g_nextNpcSessionId = 1;
+        g_incomingNpcSpawnClass = nullptr;  // any in-flight bypass slot
         UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 droppedSpawns, droppedDestroys, snapPending, initProcessedDropped);
     }

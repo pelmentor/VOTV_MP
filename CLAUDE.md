@@ -141,6 +141,31 @@ The game install folder name (`Game_0.9.0n/`) reflects the current target.
   Draw on the curated audit prompts in `reference/agency-agents/` to brief the
   audit agents (code-reviewer, security-engineer, autonomous-optimization-architect,
   testing-performance-benchmarker, testing-reality-checker).
+  **Every audit prompt MUST also include a file-size / modularity check:**
+  any touched file approaching or exceeding the soft cap (see modular rule below)
+  must be flagged with an extraction proposal. Born from a gap caught
+  2026-05-25: 14 successive Inc-* commits each individually fine, none flagging
+  that harness.cpp had silently grown to 3,126 LOC.
+
+- **Modular file-size rule (RULE 2026-05-25, post-harness.cpp-bloat).**
+  - **Soft cap: 800 LOC per .cpp/.h.** Past 800, an audit MUST flag the file
+    with a proposed extraction.
+  - **Hard cap: 1500 LOC.** A commit that pushes a file past 1500 is rejected
+    by the audit unless it's a single-feature file (e.g. `protocol.h` is a
+    constants header that may legitimately grow).
+  - **One feature per file.** When adding a new feature subsystem, it gets
+    its own `.cpp/.h` pair under the right principle-7 subtree
+    (`coop/` for gameplay/network, `ue_wrap/` for engine substrate). Glue
+    code only goes in `harness.cpp` if it's truly boot/scenario glue.
+  - **Extraction triggers:** if the file you're about to touch is past the
+    soft cap AND your new code is conceptually a distinct subsystem,
+    extract first (separate commit) then add the new code in its own file.
+    Avoids ballooning the existing file further.
+  - **Existing oversized files** (catalog as of 2026-05-25 PM): `harness.cpp`
+    (3126 LOC — refactor in progress), `engine.cpp` (1247 LOC — UMG helpers
+    should split out), `remote_prop.cpp` (885 LOC — near soft cap). These
+    are NOT exempt; they're called out so future work consciously avoids
+    growing them and opportunistically extracts on touch.
 - **Verify behaviour by diffing observable state, not just hooks.** UE4SS
   UFunction hooks only fire on ProcessEvent-dispatched calls; native engine
   paths (Possess, EnableInput, auto-possess) bypass them. To catch those,
