@@ -241,18 +241,24 @@ for the architecture: **the puppet (each peer's local representation of the
 OTHER peer) must be AI-perceivable as a player**. Currently the puppet is an
 `ASkeletalMeshActor` (bare visual, not a Pawn) -- host's NPCs don't see it.
 
-**Recommended path:** switch the puppet from `ASkeletalMeshActor` back to a
-`mainPlayer_C` orphan (the design from earlier Phase 1, already proven viable
-with multi-mainPlayer_C spawn). Block input + AI possession via the
-deferred-spawn pattern (`AutoPossessPlayer=Disabled, AutoPossessAI=Disabled,
-AIControllerClass=nullptr`) so the orphan can't act as a real player, but
-keep the player-class identity that AI perception and `Cast to mainPlayer_C`
-checks rely on.
+**LOCKED-IN PATH (USER DECISION 2026-05-24, verbatim: "Yea, puppet shouldn't be a bare visual"):**
+Switch the puppet from `ASkeletalMeshActor` back to a `mainPlayer_C` orphan
+(the design from earlier Phase 1, already proven viable with multi-mainPlayer_C
+spawn). Block input + AI possession via the deferred-spawn pattern
+(`AutoPossessPlayer=Disabled, AutoPossessAI=Disabled, AIControllerClass=nullptr`)
+so the orphan can't act as a real player, but keep the player-class identity
+that AI perception and `Cast to mainPlayer_C` checks rely on.
 
 Per-tick local-player-only subsystem suppression (PostProcess gamma stomp,
 inventory tick, input handling) is a SEPARATE task -- much was done for the
 earlier orphan design; revisit the catalog in
 [[project-remote-player-hijack-and-pose]].
+
+This requires rolling back parts of [[project-bug2-locomotion-anim]] (the
+satellite ACharacter pattern for animation): a full mainPlayer_C has the
+animation rig native; the satellite was a workaround for the skeletal-mesh-only
+puppet. Animation drive becomes simpler (direct mainPlayer_C.AnimInstance
+variables; no satellite).
 
 **Pre-Phase-5N1 RE TODO:** for each active enemy class, identify the
 target-selection BP logic:
