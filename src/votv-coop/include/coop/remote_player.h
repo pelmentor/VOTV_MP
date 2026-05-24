@@ -141,6 +141,26 @@ private:
                                   // successful spawn.
     void* satelliteCmc_ = nullptr; // cached satellite->CharacterMovementComponent
                                    // for per-tick Velocity writes.
+    void* localController_ = nullptr; // cached LOCAL player's APawn.Controller @0x0258
+                                      // at Spawn time. Animation-fix v2 (2026-05-25):
+                                      // the AnimBP state-machine idle->walk transition
+                                      // requires AnimBP.Controller @0x2D78 to be
+                                      // non-null. The puppet's mainPlayer_C orphan
+                                      // is unpossessed (no controller) by design,
+                                      // so AnimBP.Controller stays null after the
+                                      // satellite Pawn/Movement/Character writes
+                                      // -- the transition never fires -> BlendSpace
+                                      // stuck idle. We write the LOCAL PC pointer
+                                      // into AnimBP.Controller at Spawn and re-write
+                                      // each tick in ApplyToEngine (in case BUA's
+                                      // BlueprintBeginPlay re-runs and re-caches
+                                      // null from TryGetPawnOwner->GetController).
+                                      // Safe: the local PC is alive for the whole
+                                      // local game session; the AnimBP only reads
+                                      // it as a null-guard (the kerfur AnimBP is
+                                      // shared with NPC kerfurOmega which use
+                                      // AIController -- it doesn't call any PC-
+                                      // specific methods).
 
     // Both offsets are captured ONCE at Spawn from the RECEIVER's own local
     // mainPlayer_C -- same BP class as the source, so the BP-authored RelLoc

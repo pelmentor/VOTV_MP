@@ -166,19 +166,40 @@ bool RemotePlayer::Spawn() {
     //   source.mesh.world.Z = source.actor.Z + srcChain
     //   => offset = srcChain - puppetChain
     if (Pup::IsMainPlayerPuppetKind()) {
-        void* srcMesh    = Pup::GetMeshPlayerVisibleComponent(local);
+        // 2026-05-25 hands-on bug: the prior dual-chain measurement read
+        // srcChain from local.mesh_playerVisible's world transform. That
+        // transform is TRANSIENT during BP construction: on the CLIENT,
+        // the local mainPlayer_C spawns moments before this Spawn() fires,
+        // and mesh_playerVisible has not yet composed the -halfH offset
+        // through its AttachParent chain (the 2026-05-23 Z-trace showed
+        // an 84 cm swing in mesh.world.Z over the first ~2 seconds post-
+        // teleport). During that unsettled window, srcMeshZ ~= srcActorZ
+        // and srcChain ~= 0, instead of the settled -halfH. Result on the
+        // client: meshOffsetZ_ = 0 - (-2*halfH) = +2*halfH = +170 instead
+        // of +halfH = +85 -> host puppet floats 85 cm on the client's
+        // screen. The host side was correct because the host had been
+        // running its loaded save long enough for mesh.world.Z to settle.
+        //
+        // Fix: read the capsule HalfHeight directly. It's a static
+        // authored float on the CapsuleComponent (CDO-set + BP-construction
+        // overridable, but stable after BP CTOR completes -- which it
+        // has, because SpawnActor returned). srcChain on a settled
+        // mainPlayer_C is always -halfH (CMC floor-snap keeps mesh
+        // world.Z at actor.Z - halfH); we don't need to MEASURE that
+        // empirically when we can read it from a non-transient source.
+        // puppet.cpp's GetSpawnMeshOffsetZ uses the same capsule-halfH
+        // path for the SkelMesh backup; we now use it here too.
         void* puppetMesh = Pup::GetSkeletalMeshComponent(actor_);
-        if (srcMesh && puppetMesh) {
-            const float srcMeshZ    = E::GetComponentLocation(srcMesh).Z;
-            const float srcActorZ   = E::GetActorLocation(local).Z;
+        if (puppetMesh) {
+            const float halfH       = E::GetActorCharacterHalfHeight(local);
+            const float srcChain    = -halfH;  // -85 on VOTV's mainPlayer_C
             const float puppetMeshZ = E::GetComponentLocation(puppetMesh).Z;
             const float puppetActorZ= E::GetActorLocation(actor_).Z;
-            const float srcChain    = srcMeshZ    - srcActorZ;
             const float puppetChain = puppetMeshZ - puppetActorZ;
             const float prev = meshOffsetZ_;
             meshOffsetZ_ = srcChain - puppetChain;
-            UE_LOGI("RemotePlayer::Spawn: dual chain measure -- src(meshZ=%.2f actorZ=%.2f chain=%.2f) puppet(meshZ=%.2f actorZ=%.2f chain=%.2f) -> meshOffsetZ_=%.2f (was %.2f)",
-                    srcMeshZ, srcActorZ, srcChain,
+            UE_LOGI("RemotePlayer::Spawn: chain measure (halfH-anchored, symmetric) -- halfH=%.2f srcChain=%.2f puppet(meshZ=%.2f actorZ=%.2f chain=%.2f) -> meshOffsetZ_=%.2f (was %.2f)",
+                    halfH, srcChain,
                     puppetMeshZ, puppetActorZ, puppetChain,
                     meshOffsetZ_, prev);
             // Apply corrected Z immediately so the first frame doesn't
@@ -187,8 +208,8 @@ bool RemotePlayer::Spawn() {
             liftedLoc.Z += meshOffsetZ_;
             E::SetActorLocation(actor_, liftedLoc);
         } else {
-            UE_LOGW("RemotePlayer::Spawn: dual chain measure failed (srcMesh=%p puppetMesh=%p) -- meshOffsetZ_=0",
-                    srcMesh, puppetMesh);
+            UE_LOGW("RemotePlayer::Spawn: chain measure failed (puppetMesh=%p) -- meshOffsetZ_=0",
+                    puppetMesh);
         }
     }
 
@@ -258,8 +279,36 @@ bool RemotePlayer::Spawn() {
                     ue_wrap::engine::WriteObjectField(anim, P::off::AnimBP_kerfur_Movement, satelliteCmc_);
                 }
                 ue_wrap::engine::WriteObjectField(anim, P::off::AnimBP_kerfur_Character, satellite_);
-                UE_LOGI("RemotePlayer::Spawn: wired puppet AnimInstance %p .Pawn=%p .Movement=%p .Character=%p",
-                        anim, satellite_, satelliteCmc_, satellite_);
+                // Animation-fix v2 (2026-05-25): also redirect the Controller
+                // cache. c9f0d85's Character-cache fix was necessary but
+                // insufficient -- the BP state-machine idle->walk transition
+                // evaluator checks (at minimum) `spd > threshold` AND
+                // `Controller != None`. With Pawn/Movement/Character pointing
+                // at the satellite, spd reads correctly from satellite.CMC.
+                // But Controller @0x2D78 stayed null (BUA caches it at
+                // BeginPlay from Cast<AController>(Pawn.GetController()); the
+                // orphan is unpossessed by design, so GetController returns
+                // null, so the cast caches null). Result: transition never
+                // fires regardless of spd; BlendSpace stuck idle = no anims.
+                //
+                // We use the LOCAL player's APawn.Controller @0x0258 (a real
+                // PlayerController). The kerfur AnimBP is class-shared with
+                // NPC kerfurOmega which uses AIController, so the field is
+                // a null-guard, not a PC-specific method receiver. Safe to
+                // share the local PC pointer across all peer puppets.
+                //
+                // Cached on the RemotePlayer so ApplyToEngine can re-write
+                // it each tick (in case BUA's BlueprintBeginPlay re-runs
+                // and re-caches null from the orphan's null controller).
+                if (local) {
+                    localController_ = *reinterpret_cast<void**>(
+                        reinterpret_cast<uint8_t*>(local) + P::off::APawn_Controller);
+                    if (localController_) {
+                        ue_wrap::engine::WriteObjectField(anim, P::off::AnimBP_kerfur_Controller, localController_);
+                    }
+                }
+                UE_LOGI("RemotePlayer::Spawn: wired puppet AnimInstance %p .Pawn=%p .Movement=%p .Character=%p .Controller=%p (local PC)",
+                        anim, satellite_, satelliteCmc_, satellite_, localController_);
             }
         }
     } else {
@@ -468,10 +517,16 @@ void RemotePlayer::Destroy() {
     // BP graphs that pull velocity via Character.GetMovementComponent would
     // dereference a freed satellite ACharacter pointer otherwise.
     if (puppetAnim_ && R::IsLive(puppetAnim_)) {
-        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Pawn,      nullptr);
-        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Movement,  nullptr);
-        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Character, nullptr);
+        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Pawn,       nullptr);
+        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Movement,   nullptr);
+        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Character,  nullptr);
+        // Animation-fix v2: null the Controller cache too. The local PC may
+        // outlive the puppet (it doesn't get destroyed when a peer disconnects),
+        // so this isn't a strict UAF concern -- but clearing it keeps the
+        // AnimInstance's state machine in a consistent "torn-down" state.
+        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Controller, nullptr);
     }
+    localController_ = nullptr;
     if (satellite_) {
         if (R::IsLive(satellite_)) E::DestroyActor(satellite_);
         satellite_ = nullptr;
@@ -540,6 +595,17 @@ void RemotePlayer::ApplyToEngine() {
             };
             E::SetMovementVelocity(satelliteCmc_, vel);
         }
+    }
+
+    // Animation-fix v2 (2026-05-25): re-write the Controller cache each tick.
+    // If BUA's BlueprintBeginPlay re-runs at any point during the puppet's
+    // lifetime (re-cast on SetAnimClass, level reload, etc.), it will re-cache
+    // Controller from the orphan's null GetController(). Per-tick rewrite
+    // makes the state machine condition robust against that. Cost: one ptr
+    // write per puppet per tick (a few ns each). Localcontroller_ was set at
+    // Spawn from local.Controller @0x0258.
+    if (puppetAnim_ && R::IsLive(puppetAnim_) && localController_ && R::IsLive(localController_)) {
+        E::WriteObjectField(puppetAnim_, P::off::AnimBP_kerfur_Controller, localController_);
     }
 
     // Head bone gets the source's full view direction: pitch (look up/down) AND

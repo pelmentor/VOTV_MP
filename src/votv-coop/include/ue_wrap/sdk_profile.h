@@ -122,6 +122,7 @@ inline constexpr size_t UStruct_SuperStruct = 0x40;
 // EAutoReceiveInput::Disabled = 0.
 inline constexpr size_t AActor_bBlockInput = 0x5A;          // uint8 (set 1)
 inline constexpr size_t AActor_AutoReceiveInput = 0xF3;     // uint8 enum (set 0)
+inline constexpr size_t APawn_Controller = 0x0258;          // AController* (live possessing controller; null on unpossessed/orphan pawn). Engine.hpp:7646. The puppet's mainPlayer_C orphan has this null by design (auto-possess disabled); we need the LOCAL player's controller for the AnimBP Controller-cache write (animation-fix v2, 2026-05-25: BP state-machine idle->walk transition requires AnimBP.Controller != None).
 inline constexpr size_t APawn_AutoPossessPlayer = 0x230;    // uint8 enum (set 0)
 inline constexpr size_t APawn_AutoPossessAI = 0x231;        // uint8 enum (set 0)
 inline constexpr size_t APawn_AIControllerClass = 0x238;    // UClass* (TSubclassOf<AController>)
