@@ -80,11 +80,57 @@ void Unregister(RemotePlayer* player) {
 
 void Update() {
     if (g_entries.empty()) return;
-    // Billboard target = the local player. Cache the pointer (FindObjectByClass
+    // Billboard target = the LOCAL player. Cache the pointer (FindObjectByClass
     // walks the whole GUObjectArray, too costly per frame), but drop the cache if
     // the actor was destroyed (level change) so we never read freed memory.
+    //
+    // 2026-05-25 hands-on fix: with the new mainPlayer_C puppet path
+    // (vs the old ASkeletalMeshActor backup), the FindObjectByClass call
+    // could return the PUPPET instead of the local player -- both are
+    // now AmainPlayer_C. If g_viewer ends up pointing at a puppet, the
+    // nameplate's "face viewer" yaw is computed against the puppet's
+    // own position -> yaw is meaningless / oscillates wildly when the
+    // puppet walks (= the "horizontally flipped" symptom user reported).
+    //
+    // Filter: exclude any actor that's registered as a puppet entry.
     if (g_viewer && !R::IsLive(g_viewer)) g_viewer = nullptr;
-    if (!g_viewer) g_viewer = R::FindObjectByClass(P::name::MainPlayerClass);
+    // Also drop the cache if the cached actor turns out to be one of OUR
+    // puppets (could happen after a puppet spawns into a previously-
+    // valid slot, or the first cache happened before the puppet existed
+    // and the wrong actor was selected).
+    if (g_viewer) {
+        for (const auto& e : g_entries) {
+            if (e.player && e.player->valid() &&
+                e.player->GetActor() == g_viewer) {
+                g_viewer = nullptr;
+                break;
+            }
+        }
+    }
+    if (!g_viewer) {
+        // Walk GUObjectArray, find a mainPlayer_C that is NOT one of our
+        // puppet actors. The local player spawns at game-load time and is
+        // typically the first mainPlayer_C in GUObjectArray; the puppet
+        // spawns later. But after a level reload or slot reuse the order
+        // can flip, so we filter explicitly.
+        const int32_t n = R::NumObjects();
+        for (int32_t i = 0; i < n; ++i) {
+            void* obj = R::ObjectAt(i);
+            if (!obj) continue;
+            if (R::ClassNameOf(obj) != P::name::MainPlayerClass) continue;
+            const std::wstring nm = R::ToString(R::NameOf(obj));
+            if (nm.rfind(L"Default__", 0) == 0) continue;
+            if (!R::IsLive(obj)) continue;
+            bool isPuppet = false;
+            for (const auto& e : g_entries) {
+                if (e.player && e.player->valid() &&
+                    e.player->GetActor() == obj) { isPuppet = true; break; }
+            }
+            if (isPuppet) continue;
+            g_viewer = obj;
+            break;
+        }
+    }
     const ue_wrap::FVector viewer =
         g_viewer ? E::GetActorLocation(g_viewer) : ue_wrap::FVector{};
 
@@ -94,10 +140,19 @@ void Update() {
         const ue_wrap::FVector at = e.player->GetHeadPosition();  // head-bone anchored
         E::SetActorLocation(e.textActor, at);
 
-        // Face the viewer: point the WidgetComponent quad's +X toward the viewer
-        // (its normal is +X, IDA-confirmed) -- yaw of label->viewer.
-        const float dx = viewer.X - at.X;
-        const float dy = viewer.Y - at.Y;
+        // Face the viewer: point the WidgetComponent quad's +X toward the
+        // viewer (its normal is +X, IDA-confirmed). 2026-05-25 hands-on fix:
+        // use the puppet's ACTOR pivot (stable, capsule center) for the
+        // yaw calculation instead of the head BONE position. The head bone
+        // oscillates with the AnimBP walk cycle (BlendSpace + IK perturb
+        // bone world transforms each tick), which made the yaw jitter and
+        // occasionally flip 180 degrees when the puppet was walking
+        // (user-visible as "nameplate horizontally flipped on S press").
+        // The actor pivot doesn't move with the skeleton -- yaw computed
+        // from it is rock-steady regardless of animation.
+        const ue_wrap::FVector puppetPivot = e.player->GetLocation();
+        const float dx = viewer.X - puppetPivot.X;
+        const float dy = viewer.Y - puppetPivot.Y;
         const float yaw = std::atan2(dy, dx) * 57.29578f;
         E::SetActorRotation(e.textActor, ue_wrap::FRotator{0.f, yaw, 0.f});
 

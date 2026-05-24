@@ -151,37 +151,44 @@ bool RemotePlayer::Spawn() {
         return false;
     }
 
-    // 2026-05-25 v7 EMPIRICAL Z compensation for MainPlayer puppet path.
-    // After spawn (BeginPlay + construction script have run), measure the
-    // puppet's actual chain composite: puppet.mesh.world.Z -
-    // puppet.actor.Z. Source's Z-trace shows source.mesh.world.Z =
-    // source.actor.Z (delta=0). To match, puppet.mesh.world.Z must equal
-    // source.actor.Z. With wire.z = source.actor.Z and
-    // puppet.actor.Z = wire.z + meshOffsetZ_:
-    //   puppet.mesh.world.Z = wire.z + meshOffsetZ_ + chain_delta
-    //                       = source.actor.Z + meshOffsetZ_ + chain_delta
-    // Target: source.actor.Z. Solve: meshOffsetZ_ = -chain_delta.
+    // 2026-05-25 v8 (hands-on fix): measure BOTH source's and puppet's
+    // mesh chain composite to compute the offset. The prior v7 used only
+    // puppet's chain delta and assumed source delta=0 (per an early-init
+    // Z-trace) -- but the SETTLED source delta is actually -halfH (mesh
+    // hangs below capsule by halfH). v7 over-compensated by halfH ->
+    // puppet "afloat a lot" (user 2026-05-25). Dual measurement adapts
+    // to whatever both ends actually have.
     //
-    // Robust against any BP-mutation timing assumption (the chain
-    // composite is observed directly, not inferred). RULE 1 root-cause
-    // measure-don't-guess.
+    // Target: puppet.mesh.world.Z = source.mesh.world.Z (at wire-aligned
+    // puppet.actor.Z = source.actor.Z + offset).
+    //   puppet.mesh.world.Z = puppet.actor.Z + puppetChain
+    //                       = source.actor.Z + offset + puppetChain
+    //   source.mesh.world.Z = source.actor.Z + srcChain
+    //   => offset = srcChain - puppetChain
     if (Pup::IsMainPlayerPuppetKind()) {
-        if (void* puppetMesh = Pup::GetSkeletalMeshComponent(actor_)) {
-            const float meshZ  = E::GetComponentLocation(puppetMesh).Z;
-            const float actorZ = E::GetActorLocation(actor_).Z;
-            const float chainDelta = meshZ - actorZ;
+        void* srcMesh    = Pup::GetMeshPlayerVisibleComponent(local);
+        void* puppetMesh = Pup::GetSkeletalMeshComponent(actor_);
+        if (srcMesh && puppetMesh) {
+            const float srcMeshZ    = E::GetComponentLocation(srcMesh).Z;
+            const float srcActorZ   = E::GetActorLocation(local).Z;
+            const float puppetMeshZ = E::GetComponentLocation(puppetMesh).Z;
+            const float puppetActorZ= E::GetActorLocation(actor_).Z;
+            const float srcChain    = srcMeshZ    - srcActorZ;
+            const float puppetChain = puppetMeshZ - puppetActorZ;
             const float prev = meshOffsetZ_;
-            meshOffsetZ_ = -chainDelta;
-            UE_LOGI("RemotePlayer::Spawn: empirical chain measure -- puppet.mesh.world.Z=%.2f puppet.actor.Z=%.2f chainDelta=%.2f -> meshOffsetZ_=%.2f (was %.2f)",
-                    meshZ, actorZ, chainDelta, meshOffsetZ_, prev);
-            // Apply the corrected Z immediately so the first frame doesn't
-            // show the puppet at the uncompensated position (which is
-            // chainDelta below the intended ground level).
+            meshOffsetZ_ = srcChain - puppetChain;
+            UE_LOGI("RemotePlayer::Spawn: dual chain measure -- src(meshZ=%.2f actorZ=%.2f chain=%.2f) puppet(meshZ=%.2f actorZ=%.2f chain=%.2f) -> meshOffsetZ_=%.2f (was %.2f)",
+                    srcMeshZ, srcActorZ, srcChain,
+                    puppetMeshZ, puppetActorZ, puppetChain,
+                    meshOffsetZ_, prev);
+            // Apply corrected Z immediately so the first frame doesn't
+            // show the puppet at the uncompensated position.
             ue_wrap::FVector liftedLoc = loc;
             liftedLoc.Z += meshOffsetZ_;
             E::SetActorLocation(actor_, liftedLoc);
         } else {
-            UE_LOGW("RemotePlayer::Spawn: cannot read puppet mesh component for empirical Z -- meshOffsetZ_ stays at 0 (puppet may sink by chain composite)");
+            UE_LOGW("RemotePlayer::Spawn: dual chain measure failed (srcMesh=%p puppetMesh=%p) -- meshOffsetZ_=0",
+                    srcMesh, puppetMesh);
         }
     }
 

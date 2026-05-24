@@ -82,6 +82,14 @@ public:
     // offset to float just above the head.
     ue_wrap::FVector GetHeadPosition() const;
 
+    // The raw engine puppet actor pointer (mainPlayer_C or ASkeletalMeshActor
+    // depending on puppet kind). Used by nameplate::Update to exclude
+    // puppet actors from its "find the local viewer" GUObjectArray scan --
+    // with the mainPlayer_C puppet path both local and puppet share the
+    // same UClass, so the scan needs a way to distinguish them. Returns
+    // nullptr if no puppet is spawned yet. Game thread only.
+    void* GetActor() const { return actor_; }
+
     // The display nickname rendered above the body (set from the network
     // handshake; defaults to "..." until the peer's Join reliable msg arrives).
     void SetNickname(std::wstring name);
