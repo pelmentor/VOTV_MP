@@ -504,6 +504,18 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
     // mushroom at a different position; snapshot bootstrap teleports
     // client's to match host's). 2026-05-24.
     if (void* existing = ue_wrap::prop::FindByKeyString(keyW)) {
+        // Audit I-1 (2026-05-24): skip the convergence write if THIS prop
+        // is currently under active kinematic drive by the PropPose stream
+        // (host is holding it). Otherwise the SetActorLocation here would
+        // stomp the active drive for one frame, producing a visible
+        // teleport-pop until the next PropPose Tick corrects it. The
+        // PropPose stream is authoritative for held props; let it own
+        // position while held.
+        if (existing == g_drive.actor) {
+            UE_LOGI("remote_prop::OnSpawn: key '%ls' is under active kinematic drive -- skipping convergence (PropPose owns position)",
+                    keyW.c_str());
+            return;
+        }
         UE_LOGI("remote_prop::OnSpawn: key '%ls' already resolves to live actor %p -- de-duping, converging transform to host (loc=(%.1f,%.1f,%.1f))",
                 keyW.c_str(), existing, payload.locX, payload.locY, payload.locZ);
         ue_wrap::engine::SetActorLocation(existing,
@@ -623,6 +635,8 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
                 sim ? 1 : 0, hasLinVel ? 1 : 0, hasAngVel ? 1 : 0);
     }
 }
+
+void* GetDriveActor() { return g_drive.actor; }
 
 void ForceRelease() {
     if (!g_drive.actor) return;

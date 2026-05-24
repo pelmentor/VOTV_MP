@@ -64,4 +64,12 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload);
 // prop back into normal physics state. Safe to call when not holding.
 void ForceRelease();
 
+// Returns the local AActor* currently being kinematically driven by the
+// PropPose stream (the peer's grab), or nullptr if no drive is active.
+// Used by the Phase-5S0 snapshot de-dupe path to skip the transform
+// convergence when a snapshot entry collides with a prop the peer is
+// CURRENTLY holding -- otherwise the convergence stomps the active drive
+// for one frame producing a visible teleport-pop (audit I-1 2026-05-24).
+void* GetDriveActor();
+
 }  // namespace coop::remote_prop

@@ -340,6 +340,22 @@ void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
     UE_LOGI("net: PropSpawn enqueued for retry (depth now %zu)", g_pendingSpawns.size());
 }
 
+// --- Phase 5S0 snapshot enumeration state (audit I-2 chunked send) ------
+//
+// Audit I-2 (2026-05-24): SendPropSnapshotForPeer originally walked all
+// ~2000 Aprop_C derivatives + did 2 ProcessEvent dispatches each
+// (GetActorLocation + GetActorRotation) in one NetPumpTick frame -- a
+// ~200-400 ms game-thread stall. Split the work: on connected-edge,
+// populate g_snapshotCandidates with the live actor list (one fast GU
+// walk + cheap descendant/CDO filtering, NO ProcessEvent). Then each
+// subsequent NetPumpTick drains kSnapshotChunkSize candidates from the
+// list (the per-candidate transform reads), enqueueing each result.
+// kSnapshotChunkSize=100 keeps per-tick cost at ~5-15 ms (well below
+// the 16.6 ms frame budget).
+std::vector<void*> g_snapshotCandidates;  // game-thread only; no lock
+size_t g_snapshotCandidateIdx = 0;
+constexpr size_t kSnapshotChunkSize = 100;
+
 // --- Phase 5S0 (Save Snapshot Bootstrap) -- snapshot-on-connect ----------
 //
 // USER DIRECTIVE 2026-05-24 ("client just reconnects to the host's game and
@@ -364,28 +380,46 @@ void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
 // We enqueue every snapshot prop via EnqueuePropSpawnForRetry so DrainPending
 // takes over -- ~10 ms per packet, so 2000 props = ~20 s to drain. During
 // that window the world keeps streaming via PropPose; no blocking.
-void SendPropSnapshotForPeer() {
-    if (g_session.role() != coop::net::Role::Host) {
-        UE_LOGI("snapshot: not host -- skipping (client receives, doesn't broadcast)");
-        return;
-    }
-    if (!g_session.connected()) {
-        UE_LOGW("snapshot: not connected -- skipping");
-        return;
-    }
+// Phase 1 of snapshot (fast): walk GUObjectArray ONCE, collect live
+// Aprop_C derivative actor pointers into g_snapshotCandidates. No
+// ProcessEvent dispatch, no enqueue. Cheap O(NumObjects) walk + the
+// descendant/CDO filter (one wstring allocation per ~2000 candidates).
+// Returns the number of candidates collected.
+size_t EnumerateSnapshotCandidates() {
+    g_snapshotCandidates.clear();
+    g_snapshotCandidateIdx = 0;
+    int skippedCDO = 0, skippedDying = 0;
     const int32_t n = R::NumObjects();
-    int sent = 0, skippedCDO = 0, skippedDying = 0;
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
         if (!ue_wrap::prop::IsDescendantOfProp(obj)) continue;
-        // Skip CDOs (Default__Aprop_C) -- they're the class default objects,
-        // not world instances. Their NamePrivate starts with "Default__".
         const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) { ++skippedCDO; continue; }
         if (!R::IsLive(obj)) { ++skippedDying; continue; }
-        // Build PropSpawnPayload from the live actor (same path as the
-        // takeObj POST observer, minus the source distinction).
+        g_snapshotCandidates.push_back(obj);
+    }
+    UE_LOGI("snapshot: enumerated %zu Aprop_C live candidates (skipped %d CDOs, %d dying); will drain %zu per tick",
+            g_snapshotCandidates.size(), skippedCDO, skippedDying, kSnapshotChunkSize);
+    return g_snapshotCandidates.size();
+}
+
+// Phase 2 of snapshot (chunked): per-tick, read transform + state for up
+// to kSnapshotChunkSize candidates, build PropSpawnPayload, enqueue.
+// Stops when g_snapshotCandidates is exhausted. Per-tick cost ~5-15 ms
+// at chunk=100; total wall time for 2000 props ~20-30 ticks (~330 ms-
+// 500 ms but spread across frames so no single-frame stall).
+void DrainSnapshotChunk() {
+    if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) return;
+    // (std::min) parenthesized to defeat windows.h's `min` macro.
+    const size_t limit = (std::min)(g_snapshotCandidateIdx + kSnapshotChunkSize,
+                                    g_snapshotCandidates.size());
+    int sent = 0;
+    for (; g_snapshotCandidateIdx < limit; ++g_snapshotCandidateIdx) {
+        void* obj = g_snapshotCandidates[g_snapshotCandidateIdx];
+        // Re-validate liveness: an actor that was live during Phase-1
+        // enumeration might have been GC'd in the intervening ticks.
+        if (!obj || !R::IsLive(obj)) continue;
         coop::net::PropSpawnPayload p{};
         const std::wstring cls = R::ClassNameOf(obj);
         p.className.len = 0;
@@ -393,7 +427,7 @@ void SendPropSnapshotForPeer() {
             p.className.data[p.className.len++] = static_cast<char>(cls[j]);
         }
         const std::wstring keyStr = ue_wrap::prop::GetKeyString(obj);
-        if (keyStr.empty()) continue;  // unkeyed props can't be cross-peer-resolved; skip
+        if (keyStr.empty()) continue;
         p.key.len = 0;
         for (size_t j = 0; j < keyStr.size() && j < 31; ++j) {
             p.key.data[p.key.len++] = static_cast<char>(keyStr[j]);
@@ -410,17 +444,31 @@ void SendPropSnapshotForPeer() {
         if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
         p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
         p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-        // Enqueue (always via retry queue -- the snapshot is N hundreds of
-        // packets; trying direct send N times would saturate the reliable
-        // channel and the failed-direct cases would still need the queue).
         EnqueuePropSpawnForRetry(p);
         ++sent;
     }
-    UE_LOGI("snapshot: enqueued %d Aprop_C live actors (skipped %d CDOs, %d dying); pending queue depth = %zu",
-            sent, skippedCDO, skippedDying, [](){
-                std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-                return g_pendingSpawns.size();
-            }());
+    if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) {
+        UE_LOGI("snapshot: enumeration drain complete (%zu candidates processed); freeing candidate list",
+                g_snapshotCandidates.size());
+        g_snapshotCandidates.clear();
+        g_snapshotCandidates.shrink_to_fit();
+        g_snapshotCandidateIdx = 0;
+    } else {
+        UE_LOGI("snapshot: drained chunk -- this tick=%d, processed %zu/%zu",
+                sent, g_snapshotCandidateIdx, g_snapshotCandidates.size());
+    }
+}
+
+void SendPropSnapshotForPeer() {
+    if (g_session.role() != coop::net::Role::Host) {
+        UE_LOGI("snapshot: not host -- skipping (client receives, doesn't broadcast)");
+        return;
+    }
+    if (!g_session.connected()) {
+        UE_LOGW("snapshot: not connected -- skipping");
+        return;
+    }
+    EnumerateSnapshotCandidates();  // Phase 1: cheap walk + filter; Phase 2 happens per-tick via DrainSnapshotChunk
 }
 
 // Drain pending PropSpawns into the reliable channel. Called per tick from
@@ -1309,6 +1357,26 @@ void NetPumpTick(float displayOffsetX) {
         // Audit fix 2026-05-24).
         if (g_orphan.valid()) g_orphan.Destroy();
         coop::remote_prop::ForceRelease();
+        // Audit C-1 (2026-05-24): clear the pending-spawn queue + any
+        // half-drained snapshot enumeration. Their contents belong to the
+        // now-dead session; shipping them to the NEXT peer (which may be a
+        // DIFFERENT machine after IP change) would carry stale or wrong-
+        // peer state. A fresh snapshot enqueues on the next connected-edge.
+        size_t dropped;
+        {
+            std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
+            dropped = g_pendingSpawns.size();
+            g_pendingSpawns.clear();
+        }
+        size_t snapPending = 0;
+        if (!g_snapshotCandidates.empty()) {
+            snapPending = g_snapshotCandidates.size() - g_snapshotCandidateIdx;
+            g_snapshotCandidates.clear();
+            g_snapshotCandidates.shrink_to_fit();
+            g_snapshotCandidateIdx = 0;
+        }
+        UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu un-enumerated snapshot candidate(s)",
+                dropped, snapPending);
     }
     // Phase 5S0 (snapshot bootstrap): on every false->true transition of
     // Connected, the host enumerates Aprop_C derivatives and broadcasts
@@ -1322,6 +1390,12 @@ void NetPumpTick(float displayOffsetX) {
         SendPropSnapshotForPeer();
     }
     g_wasConnected = isConnected;
+
+    // Per-tick snapshot work (Phase 5S0 audit I-2): process kSnapshotChunkSize
+    // candidates per tick if a snapshot enumeration is in progress. Cheap
+    // when no enumeration is active (no-op on empty vector). Splits the
+    // GetActorLocation + Rotation cost across many frames instead of one.
+    if (isConnected) DrainSnapshotChunk();
 
     // Drain any pending PropSpawn payloads that couldn't ship at observer
     // fire time because the reliable channel was busy (audit C-3). Cheap
