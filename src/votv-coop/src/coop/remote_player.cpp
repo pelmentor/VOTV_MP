@@ -100,7 +100,12 @@ bool RemotePlayer::Spawn() {
     // runtime, and Crouch updates it in lockstep with Mesh.RelLoc.Z so the
     // -halfH formula stays valid through crouch transitions on the source.
     // (Receiver-side crouch handling is Phase 2 wire bump.)
-    // 2026-05-25 v6: branch yaw + Z offset by puppet kind.
+    // 2026-05-25 v7 (audit fix): branch yaw by puppet kind ONLY. The Z
+    // offset is now measured EMPIRICALLY post-spawn (see below), not
+    // hardcoded -- the prior +halfH inference was vulnerable to BP-
+    // mutation timing assumptions that we can't verify without inspecting
+    // every BP graph. Measurement is RULE-1 robust against any future
+    // change to VOTV's mainPlayer_C BP.
     //
     //   SkelMesh BACKUP:
     //     Yaw -- capture the mesh-frame shim (+Y-forward authoring vs
@@ -108,27 +113,15 @@ bool RemotePlayer::Spawn() {
     //       mesh_playerVisible.world.forward vs local.actor.Yaw. Typically
     //       -90 for VOTV's BP-authored mesh. Applied at the puppet's
     //       ACTOR transform because on SkelMeshActor the SMC IS the root.
-    //     Z   -- -halfH for the same reason (SMC is root, so reconstruct
-    //       the BP-authored mesh.RelLoc.Z = -halfH shim at actor level).
     //
     //   MainPlayer DEFAULT:
     //     Yaw -- 0. The mainPlayer_C BP construction script applies the
-    //       +Y-forward shim INSIDE the mesh_playerVisible.RelRot.Yaw
-    //       (= -90). So puppet.mesh.world.Yaw = puppet.actor.Yaw - 90,
-    //       same as source.mesh.world.Yaw = source.actor.Yaw - 90.
-    //       Setting puppet.actor.Yaw = source.actor.Yaw produces matching
-    //       mesh world yaws. Applying -90 here would DOUBLE the shim and
-    //       face the puppet 90 degrees off (user's "facing sideways"
-    //       hands-on report 2026-05-25).
-    //     Z   -- +halfH. Source's Z-trace shows mesh.world.Z =
-    //       source.actor.Z (delta=0), so source's BP graph lifts the
-    //       mesh chain composite to 0 at runtime via BP mutation. The
-    //       puppet has actor tick + GameMode disabled (suppression
-    //       intentional -- prevents save corruption + per-frame SP
-    //       logic) so that BP mutation does NOT run on the puppet --
-    //       chain composite stays at the class-default -halfH (mesh
-    //       hangs below capsule). To produce puppet.mesh.world.Z =
-    //       source.actor.Z, we add +halfH at the actor transform.
+    //       +Y-forward shim INSIDE mesh_playerVisible.RelRot.Yaw (= -90),
+    //       so puppet.mesh.world.Yaw = puppet.actor.Yaw + (-90 from BP)
+    //       = source.actor.Yaw + (-90 from BP) = source.mesh.world.Yaw.
+    //       No actor-level offset needed; applying -90 here doubled the
+    //       shim and faced the puppet 90 degrees off ("facing sideways"
+    //       hands-on 2026-05-25).
     if (Pup::IsMainPlayerPuppetKind()) {
         meshOffsetYaw_ = 0.f;
     } else if (void* srcMeshComp = Pup::GetMeshPlayerVisibleComponent(local)) {
@@ -137,15 +130,14 @@ bool RemotePlayer::Spawn() {
         const float meshWorldYaw = std::atan2(meshFwd.Y, meshFwd.X) * 57.29577951f;
         meshOffsetYaw_ = ue_wrap::NormalizeAxis(meshWorldYaw - localActorRot.Yaw);
     }
-    if (Pup::IsMainPlayerPuppetKind()) {
-        const float halfH = E::GetActorCharacterHalfHeight(local);
-        meshOffsetZ_ = +halfH;
-    } else {
-        meshOffsetZ_ = Pup::GetSpawnMeshOffsetZ(local);
-    }
-    UE_LOGI("RemotePlayer::Spawn: meshOffsetZ_=%.2f meshOffsetYaw_=%.2f puppet-kind=%ls",
-            meshOffsetZ_, meshOffsetYaw_,
-            Pup::IsMainPlayerPuppetKind() ? L"MainPlayer (+halfH, yaw=0)"
+    // Z offset: SkelMesh uses the centralized -halfH helper (mesh IS the
+    // root; reconstruct the BP shim at actor level). MainPlayer measures
+    // empirically AFTER spawn so the suppression-vs-BP-mutation question
+    // is settled by direct observation.
+    meshOffsetZ_ = Pup::IsMainPlayerPuppetKind() ? 0.f : Pup::GetSpawnMeshOffsetZ(local);
+    UE_LOGI("RemotePlayer::Spawn: meshOffsetYaw_=%.2f preliminary meshOffsetZ_=%.2f puppet-kind=%ls",
+            meshOffsetYaw_, meshOffsetZ_,
+            Pup::IsMainPlayerPuppetKind() ? L"MainPlayer (yaw=0, Z empirical post-spawn)"
                                           : L"SkelMesh (-halfH, yaw=mesh-frame-shim)");
 
     // Spawn-placement Z = actor.Z + meshOffsetZ_, same formula as ApplyToEngine.
@@ -157,6 +149,40 @@ bool RemotePlayer::Spawn() {
     if (!actor_) {
         UE_LOGE("RemotePlayer::Spawn: SpawnPuppet failed");
         return false;
+    }
+
+    // 2026-05-25 v7 EMPIRICAL Z compensation for MainPlayer puppet path.
+    // After spawn (BeginPlay + construction script have run), measure the
+    // puppet's actual chain composite: puppet.mesh.world.Z -
+    // puppet.actor.Z. Source's Z-trace shows source.mesh.world.Z =
+    // source.actor.Z (delta=0). To match, puppet.mesh.world.Z must equal
+    // source.actor.Z. With wire.z = source.actor.Z and
+    // puppet.actor.Z = wire.z + meshOffsetZ_:
+    //   puppet.mesh.world.Z = wire.z + meshOffsetZ_ + chain_delta
+    //                       = source.actor.Z + meshOffsetZ_ + chain_delta
+    // Target: source.actor.Z. Solve: meshOffsetZ_ = -chain_delta.
+    //
+    // Robust against any BP-mutation timing assumption (the chain
+    // composite is observed directly, not inferred). RULE 1 root-cause
+    // measure-don't-guess.
+    if (Pup::IsMainPlayerPuppetKind()) {
+        if (void* puppetMesh = Pup::GetSkeletalMeshComponent(actor_)) {
+            const float meshZ  = E::GetComponentLocation(puppetMesh).Z;
+            const float actorZ = E::GetActorLocation(actor_).Z;
+            const float chainDelta = meshZ - actorZ;
+            const float prev = meshOffsetZ_;
+            meshOffsetZ_ = -chainDelta;
+            UE_LOGI("RemotePlayer::Spawn: empirical chain measure -- puppet.mesh.world.Z=%.2f puppet.actor.Z=%.2f chainDelta=%.2f -> meshOffsetZ_=%.2f (was %.2f)",
+                    meshZ, actorZ, chainDelta, meshOffsetZ_, prev);
+            // Apply the corrected Z immediately so the first frame doesn't
+            // show the puppet at the uncompensated position (which is
+            // chainDelta below the intended ground level).
+            ue_wrap::FVector liftedLoc = loc;
+            liftedLoc.Z += meshOffsetZ_;
+            E::SetActorLocation(actor_, liftedLoc);
+        } else {
+            UE_LOGW("RemotePlayer::Spawn: cannot read puppet mesh component for empirical Z -- meshOffsetZ_ stays at 0 (puppet may sink by chain composite)");
+        }
     }
 
     // Bug 2 / Plan B2 (root-cause fix per RULE 1): the AnimBP's
@@ -441,22 +467,28 @@ void RemotePlayer::Destroy() {
 }
 
 void RemotePlayer::ApplyToEngine() {
-    // Option G wire convention (2026-05-23-evening, code-architect verdict +
-    // MTA fidelity):
-    //   wire.z = source.actor.Z (stable capsule centre, MTA::CEntitySA::vPos
-    //            shape -- the physics anchor, unaffected by BP init transients)
-    //   puppet.actor.Z = wire.z + meshOffsetZ_  (where meshOffsetZ_ is the
-    //                    LOCAL's raw BP-authored mesh.RelLoc.Z, captured once
-    //                    at Spawn -- identical on every instance of the same
-    //                    mainPlayer_C BP)
-    // Net effect: puppet's mesh comp (= the actor's root, so puppet.mesh.world.Z
-    // = puppet.actor.Z) lands at SETTLED source.mesh.world.Z by reconstruction
-    // -- the source's actor.Z is stable, the offset is stable, the result is
-    // stable. The 84cm mid-init swing in mesh.world.Z on the source does NOT
-    // reach the wire, so the puppet does not "jump afloat after init" anymore.
+    // Wire convention + per-tick Z/yaw recipe (post-2026-05-25 puppet rework):
     //
-    // Yaw: data-driven mesh-+Y-forward vs UE-actor-+X-forward shim, also
-    // captured once at Spawn.
+    //   wire.z = source.actor.Z (stable capsule centre, MTA::CEntitySA::vPos
+    //            shape -- the physics anchor, unaffected by BP init transients).
+    //   puppet.actor.Z = wire.z + meshOffsetZ_
+    //
+    // meshOffsetZ_ carries DIFFERENT semantics per puppet kind (see Spawn):
+    //   SkelMesh path:    meshOffsetZ_ = -halfH (the BP-authored
+    //                     mesh.RelLoc.Z shim reconstructed at the actor
+    //                     transform because the SMC IS the root).
+    //   MainPlayer path:  meshOffsetZ_ = -(puppet.mesh.world.Z -
+    //                     puppet.actor.Z) MEASURED EMPIRICALLY at Spawn.
+    //                     Compensates for whatever chain composite the BP
+    //                     produces on the puppet (which may differ from
+    //                     the source if BP mutation timing differs).
+    //
+    // Net effect: puppet's mesh comp lands at the SETTLED source.mesh.world.Z
+    // (target = source.actor.Z per Z-trace delta=0 on local).
+    //
+    // Yaw: also captured once at Spawn -- 0 on the MainPlayer path (BP
+    // applies the mesh-frame shim INSIDE mesh.RelRot.Yaw); mesh-frame
+    // angle (typically -90) on the SkelMesh path.
     ue_wrap::FVector puppetLoc = curPos_;
     puppetLoc.Z += meshOffsetZ_;
     E::SetActorLocation(actor_, puppetLoc);
