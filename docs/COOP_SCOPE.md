@@ -106,6 +106,28 @@ items.
   SimulatePhysics. Drop semantics remain when no recent impulse for
   the released mesh.
 
+- **NPCs + interactable entities sync (proposed, AWAITING USER REVIEW)** —
+  next major feature after physics-prop pickup. Architecture proposal in
+  `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md`,
+  grounded in `research/findings/mta-npc-entity-sync-2026-05-24.md` (MTA
+  patterns) and `research/findings/votv-npc-entity-survey-2026-05-24.md`
+  (VOTV ~17 NPC classes + 1200+ prop subclasses + doors/triggers/keypads
+  + 2 vehicle-ish + UFO/event actors). Recommended 5-phase stagging:
+  5N1 NPC pose stream (kerfur/zombie/ariral, host-authoritative);
+  5N2 spawn/despawn (host-routed); 5N3 interactables (doors, switches,
+  triggers, keypads); 5N4 vehicles (ATV driver-authoritative, drone host);
+  5N5 transient events (explosions, projectiles, one-shot sound/particle,
+  AOI-culled). Universal cross-peer ID = `Key` FName (already verified
+  cross-peer stable for props). Wire protocol bump v4→v5 adds NpcSpawn/
+  Despawn (reliable), NpcPose (unreliable), NpcState (reliable, delta-
+  encoded), EntityEvent (reliable), EffectFire (unreliable AOI-culled),
+  VehicleEnter/Exit/Pose. MTA patterns to adopt directly: sync-time-
+  context byte for stale-drop, flag-byte delta encoding for sparse state,
+  AOI-cull for transient effects. Open decisions for user: phase ordering,
+  authority model for 5N1-3, AOI radii defaults, client-AI suppression
+  strategy, save-persistence in/out of scope. NO CODE until user
+  reviews + approves architecture.
+
 <!--
 Template for an entry:
 - **<system>** — replicated <how>. Owner: <host / per-machine>.
