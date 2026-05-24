@@ -338,11 +338,23 @@ static void* SpawnPuppetSkelMesh(const FVector& loc, void* skeletalMeshAsset, vo
 
 // New path: spawn mainPlayer_C orphan. The class's built-in mesh_playerVisible
 // carries the player body skin + IK leg bones + the AnimBP all pre-wired by
-// class defaults. We just neuter the per-screen systems (PostProcess
-// components affect the local view; FP arms are camera-space attached) and
-// flip a few AnimBP flags. 2026-05-25 per
+// class defaults. We neuter the per-screen systems (PostProcess components
+// affect the local view; FP arms are camera-space attached) and flip a few
+// AnimBP flags. 2026-05-25 per
 // research/findings/votv-puppet-mainplayer-body-RE-2026-05-25.md.
-static void* SpawnPuppetMainPlayer(const FVector& loc) {
+//
+// 2026-05-25 v2 hands-on fix: user reported "remote player has no visible
+// model applied to him". Diagnosis: VOTV's mainPlayer_C class default may
+// not carry a SkeletalMesh asset on `mesh_playerVisible` -- the skin is
+// applied at runtime by save-load / equipment BP graphs that we suppressed
+// (GameMode nulled + actor tick disabled). Fix: explicitly copy the LOCAL
+// player's CURRENT mesh + AnimClass onto the orphan's mesh_playerVisible,
+// like the SkelMesh backup path does. Caller passes `skeletalMeshAsset` +
+// `animClass` from Pup::GetMeshPlayerVisibleAsset / GetMeshPlayerVisible
+// AnimClass on the live local player.
+static void* SpawnPuppetMainPlayer(const FVector& loc,
+                                   void* skeletalMeshAsset,
+                                   void* animClass) {
     void* cls = R::FindClass(P::name::MainPlayerClass);
     if (!cls) {
         UE_LOGE("puppet[MainPlayer]: mainPlayer_C class not found");
@@ -475,6 +487,33 @@ static void* SpawnPuppetMainPlayer(const FVector& loc) {
             UE_LOGI("puppet[MainPlayer]: hid ACharacter::Mesh @ %p (the unused native slot)", nativeMesh);
         }
     }
+    // 2026-05-25 v2 hands-on fix: copy the local player's skin onto the
+    // orphan's mesh_playerVisible. VOTV's class default may not carry a
+    // SkeletalMesh asset here; the local player gets it via save-load BP
+    // (which we suppressed by nulling GameMode + disabling actor tick).
+    // SetSkeletalMesh also re-initializes the pose buffer. Without this
+    // the puppet renders blank.
+    if (skeletalMeshAsset) {
+        E::SetSkeletalMesh(meshComp, skeletalMeshAsset);
+        UE_LOGI("puppet[MainPlayer]: copied local skin asset %p onto mesh_playerVisible",
+                skeletalMeshAsset);
+    } else {
+        UE_LOGW("puppet[MainPlayer]: no skin asset provided -- puppet will render whatever the class default carried (often blank)");
+    }
+    // SetAnimClass instantiates the AnimInstance (flips AnimationMode to
+    // UseAnimBlueprint). The class default likely already has it set,
+    // but on an inert orphan with suppressed BP paths the BUA cache may
+    // be stale; re-applying triggers a fresh BlueprintBeginPlay + caches
+    // Pawn/Movement from TryGetPawnOwner (= orphan, valid Pawn -- the
+    // satellite write later overrides this).
+    if (animClass) {
+        E::SetAnimClass(meshComp, animClass);
+        UE_LOGI("puppet[MainPlayer]: applied local AnimClass %p onto mesh_playerVisible",
+                animClass);
+    } else {
+        UE_LOGW("puppet[MainPlayer]: no AnimClass provided -- mesh may render in reference pose");
+    }
+
     // mesh_playerVisible: force always-tick + visible. Class default may
     // have VisibilityBasedAnimTick=OnlyTickPoseWhenRendered which would
     // collapse the puppet to a stick when not on screen.
@@ -484,7 +523,9 @@ static void* SpawnPuppetMainPlayer(const FVector& loc) {
     // AnimBP setup: IK legs ON (real Character has floor-trace context via
     // the satellite Plan B2), removeArms ON (avoid grab-pose arm flail),
     // head-look-at-player OFF (the streamed yaw via DriveAnimBP drives the
-    // head bone directly).
+    // head bone directly). Note: SetAnimClass above instantiated a fresh
+    // AnimInstance, so LiveAnimInstance is now the NEW one (the old
+    // pointer captured before SetAnimClass is stale).
     if (void* anim = LiveAnimInstance(meshComp)) {
         WriteAt<bool>(anim, P::off::AnimBP_kerfur_useLegIK,        true);
         WriteAt<bool>(anim, P::off::AnimBP_kerfur_removeArms,      true);
@@ -501,12 +542,14 @@ void* SpawnPuppet(const FVector& loc, void* skeletalMeshAsset, void* animClass) 
     // Branch on env-var-controlled puppet kind. Default MainPlayer per user
     // directive 2026-05-25 (puppet must be full body+legs+IK, not bare
     // SkeletalMeshActor).
+    //
+    // BOTH paths now use the local-player skin + AnimClass params: the
+    // SkelMesh path needs them because the bare actor has no defaults;
+    // the MainPlayer path needs them because VOTV's class default mesh_
+    // playerVisible may not carry a SkeletalMesh asset (v2 hands-on fix
+    // 2026-05-25).
     if (IsMainPlayerPuppetKind()) {
-        // skin + animClass params unused on this path (class defaults set
-        // them); kept on the public API while SkelMesh backup remains. RULE
-        // 2 retirement drops both params + the SkelMesh branch.
-        (void)skeletalMeshAsset; (void)animClass;
-        return SpawnPuppetMainPlayer(loc);
+        return SpawnPuppetMainPlayer(loc, skeletalMeshAsset, animClass);
     }
     return SpawnPuppetSkelMesh(loc, skeletalMeshAsset, animClass);
 }
