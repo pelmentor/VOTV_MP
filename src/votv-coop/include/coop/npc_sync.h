@@ -20,6 +20,11 @@ namespace coop::net { class Session; }
 
 namespace coop::npc_sync {
 
+// Cache the session pointer. Call once at boot, BEFORE the interceptor
+// is installed (so the live interceptor reads through a stable pointer
+// from its first fire). Mirrors prop_snapshot::SetSession.
+void SetSession(coop::net::Session* session);
+
 // Try to install the NPC spawn interceptor. Resolves the GameplayStatics
 // class + the BeginDeferredActorSpawnFromClass UFunction + the 12 NPC
 // allowlist classes. Logs a warning + permanently disables if the engine

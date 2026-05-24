@@ -319,6 +319,10 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
 
 // ---- public API --------------------------------------------------------
 
+void SetSession(coop::net::Session* session) {
+    g_session_ptr = session;
+}
+
 bool IsWireSuppressedPropClass(const std::wstring& cls) {
     return cls == P::name::PropMushroomGrowingClass;
 }

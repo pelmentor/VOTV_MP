@@ -817,6 +817,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
             g_propEmitCount = 0;
+            coop::prop_lifecycle::SetSession(&g_session);
+            coop::npc_sync::SetSession(&g_session);
             coop::prop_snapshot::SetSession(&g_session);
             g_session.Start(netCfg);
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
@@ -991,6 +993,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         g_lastHeldProp = nullptr;
         g_lastHeldKey = {};
         g_propEmitCount = 0;
+        coop::prop_lifecycle::SetSession(&g_session);
+        coop::npc_sync::SetSession(&g_session);
         coop::prop_snapshot::SetSession(&g_session);
         g_session.Start(cfg);
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);

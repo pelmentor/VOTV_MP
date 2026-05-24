@@ -29,6 +29,15 @@ namespace coop::net { class Session; }
 
 namespace coop::prop_lifecycle {
 
+// Cache the session pointer. Call once at boot, BEFORE any code path
+// that could fire DrainPending* or the observers (e.g. before NetPumpTick
+// starts ticking). The Install / InstallInventory functions ALSO accept
+// a session pointer for backward compatibility, but this dedicated
+// setter exists so the session is bound from the moment Drain* may run
+// (NetPumpTick can call Drain* on a frame BEFORE g_netLocal is resolved
+// + Install* is reached, leaving the queue undrained until Install runs).
+void SetSession(coop::net::Session* session);
+
 // Install Aprop_C::Init POST + AActor::K2_DestroyActor PRE observers.
 // First call does a one-shot GUObjectArray scan to find every Init
 // UFunction in the prop_C lineage. Idempotent; retried each NetPumpTick

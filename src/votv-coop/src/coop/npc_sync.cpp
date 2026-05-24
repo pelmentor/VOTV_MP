@@ -230,6 +230,10 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
 
 }  // namespace
 
+void SetSession(coop::net::Session* session) {
+    g_session_ptr = session;
+}
+
 void MarkIncomingNpcSpawn(void* npcClass) {
     g_incomingNpcSpawnClass = npcClass;
 }
