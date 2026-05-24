@@ -354,7 +354,7 @@ FVector GetComponentRelativeLocation(void* component) {
         reinterpret_cast<uint8_t*>(component) + P::off::USceneComponent_RelativeLocation);
 }
 
-bool SetComponentVisible(void* component, bool visible) {
+bool SetComponentVisible(void* component, bool visible, bool propagate) {
     if (!component || !ResolveCompVis()) {
         UE_LOGE("engine: SetComponentVisible unresolved (cls=%p setVis=%p setHidden=%p)",
                 g_sceneCompClass, g_setVisFn, g_setHiddenFn);
@@ -363,13 +363,13 @@ bool SetComponentVisible(void* component, bool visible) {
     {
         ParamFrame f(g_setVisFn);
         f.Set<bool>(L"bNewVisibility", visible);
-        f.Set<bool>(L"bPropagateToChildren", true);
+        f.Set<bool>(L"bPropagateToChildren", propagate);
         Call(component, f);
     }
     {
         ParamFrame f(g_setHiddenFn);
         f.Set<bool>(L"NewHidden", !visible);  // UE4.27 param is "NewHidden" (no b prefix)
-        f.Set<bool>(L"bPropagateToChildren", true);
+        f.Set<bool>(L"bPropagateToChildren", propagate);
         Call(component, f);
     }
     return true;

@@ -466,25 +466,39 @@ static void* SpawnPuppetMainPlayer(const FVector& loc,
             UE_LOGI("puppet[MainPlayer]: destroyed mic UAudioCaptureComponent @ %p", mic);
         }
     }
-    // Hide FP arms viewmodel (camera-space attached -- wrong on a 3rd-
-    // person-observed puppet). SetComponentVisible(false) sets BOTH
-    // SetVisibility(false) and SetHiddenInGame(true) (propagated).
+    // 2026-05-25 v3 hands-on root-cause fix (user: "remote player has
+    // collision, remote player has no visible model"):
+    //
+    // The prior version called SetComponentVisible(comp, false) with
+    // bPropagateToChildren=true (the historical default) on `arms`,
+    // `playermodel`, AND `ACharacter::Mesh`. If mesh_playerVisible is
+    // attached as a child of ANY of those (VOTV's BP can attach the
+    // authoritative body to the native ACharacter::Mesh slot rather than
+    // to the capsule root), the propagating-hide CASCADES to the body
+    // -> puppet renders invisible.
+    //
+    // Fix: pass propagate=false. We only want to hide the SPECIFIC
+    // component, not its scene-graph children. The mesh_playerVisible
+    // SetComponentVisible(true) call later (which is fine with
+    // propagate=true -- mesh_playerVisible's children are its skeletal
+    // sockets, not other meshes) reverses any prior unintended hide.
+    //
+    // Companion diagnostic below dumps each component's AttachParent +
+    // bHiddenInGame state at end of spawn so we can confirm the
+    // hierarchy and detect regressions.
     if (void* arms = ReadPtr(actor, P::off::AmainPlayer_arms)) {
-        E::SetComponentVisible(arms, false);
-        UE_LOGI("puppet[MainPlayer]: hid FP arms @ %p", arms);
+        E::SetComponentVisible(arms, /*visible=*/false, /*propagate=*/false);
+        UE_LOGI("puppet[MainPlayer]: hid FP arms @ %p (no propagate)", arms);
     }
-    // 2026-05-25 audit (HIGH #5): hide playermodel if it carries a
-    // visible mesh asset. This is the legacy equipment-overlay slot;
-    // typically null/hidden on the player but verify per build.
     if (void* playermodel = ReadPtr(actor, P::off::AmainPlayer_playermodel)) {
-        E::SetComponentVisible(playermodel, false);
-        UE_LOGI("puppet[MainPlayer]: hid playermodel @ %p (legacy equipment overlay)", playermodel);
+        E::SetComponentVisible(playermodel, /*visible=*/false, /*propagate=*/false);
+        UE_LOGI("puppet[MainPlayer]: hid playermodel @ %p (no propagate)", playermodel);
     }
-    // Hide the ACharacter native Mesh slot if distinct from mesh_playerVisible.
     if (void* nativeMesh = ReadPtr(actor, P::off::ACharacter_Mesh)) {
         if (nativeMesh != meshComp) {
-            E::SetComponentVisible(nativeMesh, false);
-            UE_LOGI("puppet[MainPlayer]: hid ACharacter::Mesh @ %p (the unused native slot)", nativeMesh);
+            E::SetComponentVisible(nativeMesh, /*visible=*/false, /*propagate=*/false);
+            UE_LOGI("puppet[MainPlayer]: hid ACharacter::Mesh @ %p (no propagate; the native slot)",
+                    nativeMesh);
         }
     }
     // 2026-05-25 v2 hands-on fix: copy the local player's skin onto the
@@ -535,6 +549,40 @@ static void* SpawnPuppetMainPlayer(const FVector& loc,
     UE_LOGI("puppet[MainPlayer]: spawned actor=%p mesh_playerVisible=%p at (%.0f,%.0f,%.0f)",
             actor, meshComp, loc.X, loc.Y, loc.Z);
     DumpAnimState(L"puppet", meshComp);
+
+    // 2026-05-25 v3 diagnostic: dump the actual component hierarchy +
+    // visibility state of the four meshes (body, FP arms, playermodel,
+    // ACharacter::Mesh) so we can definitively root-cause any future
+    // "puppet invisible" regression. Reads:
+    //   AttachParent @0x00C0 -- the scene-graph parent (= who would
+    //     cascade hide to us if propagated).
+    //   bHiddenInGame  -- bit 2 of byte 0x14D.
+    //   bVisible       -- bit 4 of byte 0x14C.
+    //   SkeletalMesh   -- USkinnedMeshComponent.SkeletalMesh @0x480.
+    auto dumpMeshComp = [](const wchar_t* label, void* comp) {
+        if (!comp) {
+            UE_LOGI("puppet-state[%ls]: <null>", label);
+            return;
+        }
+        void* attachParent = ReadPtr(comp, P::off::USceneComponent_AttachParent);
+        const uint8_t visByte = ReadAt<uint8_t>(comp, P::off::USceneComponent_VisFlagsByte);
+        const uint8_t hiddenByte = ReadAt<uint8_t>(comp, P::off::USceneComponent_HiddenFlagsByte);
+        const bool bVisible = (visByte & (1u << 4)) != 0;
+        const bool bHiddenInGame = (hiddenByte & (1u << 2)) != 0;
+        void* skinAsset = ReadPtr(comp, P::off::USkinnedMesh_SkeletalMesh);
+        std::wstring parentClass = attachParent ? R::ClassNameOf(attachParent) : L"<null>";
+        std::wstring skinClass = skinAsset ? R::ClassNameOf(skinAsset) : L"<null>";
+        UE_LOGI("puppet-state[%ls]: comp=%p AttachParent=%p(%ls) bVisible=%d bHiddenInGame=%d SkelMesh=%p(%ls)",
+                label, comp,
+                attachParent, parentClass.c_str(),
+                (int)bVisible, (int)bHiddenInGame,
+                skinAsset, skinClass.c_str());
+    };
+    dumpMeshComp(L"mesh_playerVisible", meshComp);
+    dumpMeshComp(L"arms",               ReadPtr(actor, P::off::AmainPlayer_arms));
+    dumpMeshComp(L"playermodel",        ReadPtr(actor, P::off::AmainPlayer_playermodel));
+    dumpMeshComp(L"ACharacter::Mesh",   ReadPtr(actor, P::off::ACharacter_Mesh));
+
     return actor;
 }
 

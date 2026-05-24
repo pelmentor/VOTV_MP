@@ -284,8 +284,13 @@ float GetActorCharacterHalfHeight(void* mainPlayerPawn);
 // third-person body meshes (an unpossessed pawn never runs the gameplay code
 // that unhides them); visible=false hides the orphan's editor-debug visualizers
 // (ArrowComponent/BillboardComponent) that the unpossessed pawn leaves on.
+// `propagate` -- pass to UE's SetVisibility/SetHiddenInGame bPropagateToChildren
+// flag. DEFAULT true (the historical behavior); pass false when hiding ONE
+// component that may have children we want visible (e.g. mainPlayer_C's
+// ACharacter::Mesh native slot, which can be the AttachParent of the
+// authoritative body mesh -- propagating hide there cascades to the body).
 // Game thread only.
-bool SetComponentVisible(void* component, bool visible = true);
+bool SetComponentVisible(void* component, bool visible = true, bool propagate = true);
 
 // Force a SkeletalMeshComponent to ALWAYS tick its pose (VisibilityBasedAnimTick
 // Option = AlwaysTickPoseAndRefreshBones). Without this a remote body that isn't

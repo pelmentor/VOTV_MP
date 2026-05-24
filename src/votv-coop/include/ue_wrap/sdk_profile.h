@@ -211,6 +211,21 @@ inline constexpr size_t ACharacter_CharacterMovement = 0x0288;         // UChara
 inline constexpr size_t ACharacter_CapsuleComponent = 0x0290;          // UCapsuleComponent*  Engine.hpp:6972
 inline constexpr size_t UCapsuleComponent_CapsuleHalfHeight = 0x0468;  // float  Engine.hpp:9883
 
+// USceneComponent::AttachParent @ +0x00C0 (USceneComponent*). The scene-graph
+// parent the component is attached TO. Used by SpawnPuppetMainPlayer's
+// diagnostic dump to verify mesh_playerVisible's parent chain (BP authoring
+// can attach it to either the capsule root or the native ACharacter::Mesh
+// slot -- hiding the latter with bPropagateToChildren=true would cascade
+// down and hide the body, which is exactly the "no visible model"
+// regression the user hit 2026-05-25). Engine.hpp:17900.
+inline constexpr size_t USceneComponent_AttachParent      = 0x00C0;
+// USceneComponent flag bytes (bitfields). bHiddenInGame is bit 2 of the
+// byte at 0x14D (per Engine.hpp:17917 ordering); bVisible is bit 4 of the
+// byte at 0x14C. We log the raw bytes for diagnosis -- masking out the
+// individual bits is done inline at the read site.
+inline constexpr size_t USceneComponent_VisFlagsByte      = 0x014C;  // bVisible @ bit 4
+inline constexpr size_t USceneComponent_HiddenFlagsByte   = 0x014D;  // bHiddenInGame @ bit 2
+
 // USceneComponent::RelativeLocation @ +0x011C (FVector, 12 bytes). The
 // BP-AUTHORED relative offset to the parent component -- a STATIC field whose
 // settled value is what the BP construction script writes (mainPlayer_C's
