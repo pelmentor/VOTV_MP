@@ -1096,15 +1096,17 @@ void NetPumpTick(float displayOffsetX) {
             g_session.SendPropRelease(g_lastHeldKey, ix, iy, iz);
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
-            // Clear the impulse cache so a stale value can't be re-applied to
-            // the NEXT release. All four atomics cleared for consistency
-            // (audit: don't leave stale vec components behind even though
-            // the comp/ms guards gate them).
+            // Clear the impulse cache so a stale value can't be re-applied
+            // to the NEXT release. UNPUBLISH-FENCE ORDER: zero ms FIRST with
+            // release (invalidates the gate), then payload relaxed. Otherwise
+            // a worker-thread AddImpulse racing between the comp-clear and
+            // ms-clear would have its fresh ms publish clobbered by our zero
+            // (audit found 2026-05-24).
+            g_lastImpulseMs.store(0, std::memory_order_release);
             g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
             g_lastImpulseX.store(0.f, std::memory_order_relaxed);
             g_lastImpulseY.store(0.f, std::memory_order_relaxed);
             g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
-            g_lastImpulseMs.store(0, std::memory_order_release);
         }
     }
 
@@ -1502,11 +1504,12 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
             g_propEmitCount = 0;
+            // Unpublish-fence order: ms first (release), then payload relaxed.
+            g_lastImpulseMs.store(0, std::memory_order_release);
             g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
             g_lastImpulseX.store(0.f, std::memory_order_relaxed);
             g_lastImpulseY.store(0.f, std::memory_order_relaxed);
             g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
-            g_lastImpulseMs.store(0, std::memory_order_release);
             g_session.Start(netCfg);
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
                     netCfg.role == coop::net::Role::Host ? "host" : "client");
@@ -1680,11 +1683,12 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         g_lastHeldProp = nullptr;
         g_lastHeldKey = {};
         g_propEmitCount = 0;
+        // Unpublish-fence order: ms first (release), then payload relaxed.
+        g_lastImpulseMs.store(0, std::memory_order_release);
         g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
         g_lastImpulseX.store(0.f, std::memory_order_relaxed);
         g_lastImpulseY.store(0.f, std::memory_order_relaxed);
         g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
-        g_lastImpulseMs.store(0, std::memory_order_release);
         g_session.Start(cfg);
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
         int tick = 0;
