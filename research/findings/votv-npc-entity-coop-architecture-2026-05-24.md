@@ -3,6 +3,18 @@
 **Date:** 2026-05-24
 **Status:** research phase — **NO code yet**. Audit-fixed; awaiting user review of remaining open decisions.
 
+## Final-audit-fix changelog (2nd revision)
+
+| Change | Source | Section |
+|---|---|---|
+| EntityManifest packet for session-init + reconnect | Issue 1 | Wire taxonomy |
+| Direct-memory transform write demoted to optional optimization; baseline = SetActorLocation | Issue 2 | Scale section item 5 |
+| Tagged-union sequential-parse contract documented | Issue 3 | Audit refinements section |
+| Spawn-time NpcState bootstrap rule | Issue 4 | Audit refinements section |
+| Forward-scope note for N≥3 syncerPeerId protocol bump | Issue 5 | Audit refinements section |
+| `Aprop_C.thrown` cosmetic-only RE TODO for Phase 5N5 | Issue 6 | Audit refinements + Hook surface table |
+| Reconnect-mid-session = manifest replay; ephemeral = cross-session only | Issue 7 | Audit refinements section |
+
 ## Audit-fix changelog (this revision)
 
 | Change | Source | Section |
@@ -106,7 +118,8 @@ Building on v4 (PoseSnapshot + PropPose + PropRelease), v5 adds:
 |---|---|---|---|
 | `NpcSpawn` | reliable | host → client | spawn an NPC (Key + class FName + spawn pose + assigned 4-byte session-id) |
 | `NpcDespawn` | reliable | host → client | despawn an NPC (4-byte session-id) |
-| `EntityPoseBatch` | unreliable | host → client | **AGGREGATED** per-tick pose stream (1 packet for N entities; see 100-entity scale memo). Entry = 4-byte id + quantized transform (~26 B). 100 entries fit in single UDP packet. |
+| `EntityManifest` | reliable | host → client | **SESSION INITIALIZATION** -- on session-Connected edge AND on every client reconnect, host sends a full manifest of every active entity (id + Key + class FName + current transform). Client's EntityPoseBatch processing requires the manifest first; entries with unknown id are PROTOCOL ERROR, not graceful fallback. Closes Issue 1 of final audit. |
+| `EntityPoseBatch` | unreliable | host → client | **AGGREGATED** per-tick pose stream (1 packet for N entities; see 100-entity scale memo). Entry = 4-byte id + quantized transform (~26 B). 100 entries fit in single UDP packet. Sequential parsing -- no offset-indexed access; the per-entry quantized fields are fixed-width, but the batch itself is variable-N. |
 | `NpcState` | reliable | host → client | discrete state change (4-byte id + field bitmask + values: health / mode / target as tagged-union). Re-activation packet (Gap 2 mitigation) -- when NPC wakes from idle, push a full state snapshot before pose stream resumes. |
 | `EntityEvent` | reliable | host or client | door opened, button pressed, trigger fired, **inventory pickup, inventory drop, item-state with world effect**. Client-initiated requests routed via host arbitration. (Key + event-id + params) |
 | `EffectFire` | reliable | initiator → peer | one-shot explosion / projectile / sound / particle. **Client receivers spawn ONLY cosmetic VFX+SFX (PlaySoundAtLocation + SpawnEmitterAtLocation); the damage-radius AActor is NEVER spawned on non-initiator peers** -- the spawning peer's `Aexplosion_C.ReceiveBeginPlay` is the sole damage application. Per Flaw 5 RE. |
@@ -223,7 +236,8 @@ Full design in `memory/project_coop_scale_100_entities.md`. Key forces:
 2. **Activity-rate gating**: per-NPC rate by AI state (5 Hz idle / 15 Hz roam / 30 Hz alert / 60 Hz combat). Typical 100 active = ~12 Hz average.
 3. **WireKey → 4-byte session-id mapping**: after NpcSpawn establishes the Key, subsequent pose entries use the 4-byte id. Saves ~28 B per entry per tick.
 4. **Host-side `g_activeNpcs` set**: event-driven insertion (spawn / state-change observers) -- no per-tick GUObjectArray walk (237k entries is too costly).
-5. **Receiver-side direct-memory transform write** for kinematic NPC puppets (AI nulled, no physics): write USceneComponent.RelativeLocation @+0x011C directly, bypass SetActorLocation's ProcessEvent dispatch. Saves ~32 atomic ops × 100 entities × 30 Hz = 96k atomic ops/sec.
+5. **Receiver-side transform write -- BASELINE**: use `SetActorLocation` + `SetActorRotation` via reflection (proven path; same as RemotePlayer puppet). Estimated cost at 100 NPCs × 30 Hz = 3k ProcessEvent dispatches/sec on receiver -- tolerable. The architecture COMMITS to this path for Phase 5N1.
+   **OPTIONAL OPTIMIZATION (deferred until profile-driven evidence justifies)**: direct write to USceneComponent.RelativeLocation @+0x011C bypasses ProcessEvent dispatch, BUT requires also triggering `USceneComponent::UpdateComponentToWorld` -- otherwise the render transform stays at the previous position (per Issue 2 of final audit). RE prerequisite for this optimization: identify the `UpdateComponentToWorld` vtable index OR confirm the `bWantsUpdateTransform` flag offset. Not blocking baseline; do not pursue without measured need.
 
 Budget at peak: ~80-150 KB/s wire, ~5% host CPU, ~3% client CPU. Comfortable.
 
@@ -255,6 +269,48 @@ Receiver resolves the target tag to the right local object:
 - `entity-by-key` → `prop_wrap::FindByKeyString(targetKey)` → moveTo = resolved actor
 
 This closes the "kerfur chases wrong player on client" bug Flaw 4 identified.
+
+### Audit refinements applied (final audit follow-up)
+
+**Spawn-time NpcState bootstrap (Issue 4 of final audit):** On every `NpcSpawn`,
+the host immediately follows with a full `NpcState` snapshot (re-activation bit
+set) for that entity, regardless of whether the AI state actually changed.
+This gives the receiver an explicit initial mode/target/rate before the first
+`EntityPoseBatch` arrives. Without this, receiver has no basis to pick an
+expected stream rate.
+
+**Tagged-union sequential-parse contract (Issue 3 of final audit):** The
+`NpcState` packet's `targetTag + optional WireKey` field MUST be parsed
+sequentially -- no offset-indexed access into the bitmask-gated fields. The
+receiver's parser walks fields in declared order, consuming exactly the bytes
+each present field requires. Same shape as MTA's CPedSync `WritePedInformation`.
+
+**Future N≥3 migration path (Issue 5 of final audit, RULE 2 hygiene):**
+The current wire format encodes "host is always the syncer." When 3+ peers
+are added (future): `EntityPoseBatch` and `EntityEvent` will need a
+`syncerPeerId` byte added (protocol version bump). Host validates
+`pEntity->GetSyncer() == sender` before applying any peer's authoritative
+packet (MTA pattern). This is documented as a forward-scope note, NOT a
+crutch -- nothing about the current 2-peer wire prevents adding it cleanly.
+
+**Cosmetic-only verification for `Aprop_C.thrown` extension (Issue 6 of
+final audit):** Phase 5N5 proposes reusing `Aprop_C.thrown(player)` for
+NPC throw events. The throw-impulse shipped path (commit 8832e56) calls
+`thrown(localPlayer)` on receiver for sound + particles. **Before extending
+this pattern to NPC throws in Phase 5N5**, RE the `Aprop_C.thrown` BP body
+via UE4SS Lua dump to confirm it has NO side effects beyond cosmetics
+(no inventory mutation, no stat tracking with world effect, no AI trigger).
+If non-cosmetic side effects exist, refactor to use only the underlying
+PlaySoundAtLocation + SpawnEmitterAtLocation pattern (same as explosions
+in Phase 5N5).
+
+**Reconnect-mid-session clarification (Issue 7 of final audit):** The
+"save persistence out of scope" decision applies only to CROSS-SESSION
+state. WITHIN-SESSION reconnect (client disconnect + rejoin during the
+same coop game) is handled by the `EntityManifest` packet: host detects
+the new session-Connected edge and replays the full active-entity manifest.
+Runtime Keys for in-flight props (drops mid-session) are re-broadcast as
+part of the manifest. Reconnect is a clean re-sync, not a state divergence.
 
 ### Inventory is per-player private (USER DECISION 2026-05-24)
 
