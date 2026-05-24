@@ -320,7 +320,14 @@ bool g_inventoryObserverInstalled = false;
 // to exist).
 std::mutex g_pendingSpawnsMutex;
 std::deque<coop::net::PropSpawnPayload> g_pendingSpawns;
-constexpr size_t kMaxPendingSpawns = 8;  // bounded so a runaway sender + stuck channel can't bloat memory
+// Sized for a snapshot bootstrap: ~2000 Aprop_C derivatives in a populated
+// save × 160 B per payload = ~320 KB max queue memory. 4096 leaves headroom
+// for both the initial snapshot AND any drops/spawns that fire during the
+// snapshot drain. Stop-and-wait reliable means drain takes 5-20 s for a full
+// snapshot (~10 ms per packet); during that window other PropSpawn events
+// (inventory drops) get appended and ship in order. (Increased from 8 for
+// Phase 5S0 -- 2026-05-24.)
+constexpr size_t kMaxPendingSpawns = 4096;
 
 void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
     std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
@@ -331,6 +338,89 @@ void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
     }
     g_pendingSpawns.push_back(payload);
     UE_LOGI("net: PropSpawn enqueued for retry (depth now %zu)", g_pendingSpawns.size());
+}
+
+// --- Phase 5S0 (Save Snapshot Bootstrap) -- snapshot-on-connect ----------
+//
+// USER DIRECTIVE 2026-05-24 ("client just reconnects to the host's game and
+// all objects and states are force synced"): when the session reaches
+// Connected, host enumerates every live Aprop_C derivative in GUObjectArray
+// and broadcasts a PropSpawn for each. Client OnSpawn de-dupes on
+// FindByKeyString -- existing actors (loaded from the same save) are skipped;
+// missing actors (host-side mid-game spawn that the client never saw) are
+// created. Result: client's world converges to host's prop set after every
+// (re)connect. Mushroom desync from independent spawners gets corrected
+// because client's old-location mushroom now shares Key with host's mushroom
+// and the de-dupe path teleports it to host's transform.
+//
+// Trigger: edge detector in NetPumpTick (g_wasConnected false -> true) +
+// role == Host. Re-fires on every reconnect.
+//
+// Cost: one GUObjectArray walk (~237k slots, ~2k candidates). Each candidate
+// allocates a wstring for the CDO-skip check (same cost as the existing
+// FindNearest scan in prop_wrap). One-shot per (re)connect, not per-tick.
+//
+// Stop-and-wait reliable channel: SendPropSpawn returns false when busy.
+// We enqueue every snapshot prop via EnqueuePropSpawnForRetry so DrainPending
+// takes over -- ~10 ms per packet, so 2000 props = ~20 s to drain. During
+// that window the world keeps streaming via PropPose; no blocking.
+void SendPropSnapshotForPeer() {
+    if (g_session.role() != coop::net::Role::Host) {
+        UE_LOGI("snapshot: not host -- skipping (client receives, doesn't broadcast)");
+        return;
+    }
+    if (!g_session.connected()) {
+        UE_LOGW("snapshot: not connected -- skipping");
+        return;
+    }
+    const int32_t n = R::NumObjects();
+    int sent = 0, skippedCDO = 0, skippedDying = 0;
+    for (int32_t i = 0; i < n; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj) continue;
+        if (!ue_wrap::prop::IsDescendantOfProp(obj)) continue;
+        // Skip CDOs (Default__Aprop_C) -- they're the class default objects,
+        // not world instances. Their NamePrivate starts with "Default__".
+        const std::wstring nm = R::ToString(R::NameOf(obj));
+        if (nm.rfind(L"Default__", 0) == 0) { ++skippedCDO; continue; }
+        if (!R::IsLive(obj)) { ++skippedDying; continue; }
+        // Build PropSpawnPayload from the live actor (same path as the
+        // takeObj POST observer, minus the source distinction).
+        coop::net::PropSpawnPayload p{};
+        const std::wstring cls = R::ClassNameOf(obj);
+        p.className.len = 0;
+        for (size_t j = 0; j < cls.size() && j < 63; ++j) {
+            p.className.data[p.className.len++] = static_cast<char>(cls[j]);
+        }
+        const std::wstring keyStr = ue_wrap::prop::GetKeyString(obj);
+        if (keyStr.empty()) continue;  // unkeyed props can't be cross-peer-resolved; skip
+        p.key.len = 0;
+        for (size_t j = 0; j < keyStr.size() && j < 31; ++j) {
+            p.key.data[p.key.len++] = static_cast<char>(keyStr[j]);
+        }
+        const auto loc = ue_wrap::engine::GetActorLocation(obj);
+        const auto rot = ue_wrap::engine::GetActorRotation(obj);
+        p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
+        p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
+        p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+        p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
+        p.scaleX = 1.f; p.scaleY = 1.f; p.scaleZ = 1.f;
+        p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
+        if (ue_wrap::prop::IsHeavy(obj))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
+        if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
+        p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
+        p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
+        // Enqueue (always via retry queue -- the snapshot is N hundreds of
+        // packets; trying direct send N times would saturate the reliable
+        // channel and the failed-direct cases would still need the queue).
+        EnqueuePropSpawnForRetry(p);
+        ++sent;
+    }
+    UE_LOGI("snapshot: enqueued %d Aprop_C live actors (skipped %d CDOs, %d dying); pending queue depth = %zu",
+            sent, skippedCDO, skippedDying, [](){
+                std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
+                return g_pendingSpawns.size();
+            }());
 }
 
 // Drain pending PropSpawns into the reliable channel. Called per tick from
@@ -1219,6 +1309,17 @@ void NetPumpTick(float displayOffsetX) {
         // Audit fix 2026-05-24).
         if (g_orphan.valid()) g_orphan.Destroy();
         coop::remote_prop::ForceRelease();
+    }
+    // Phase 5S0 (snapshot bootstrap): on every false->true transition of
+    // Connected, the host enumerates Aprop_C derivatives and broadcasts
+    // each as a PropSpawn. Client receives + de-dupes (skip if local Key
+    // already resolves, update transform to converge). Naturally re-fires
+    // on every reconnect since g_wasConnected resets in the disconnect
+    // branch above. NO trigger from client side (asymmetric: host pushes,
+    // client receives).
+    if (!g_wasConnected && isConnected) {
+        UE_LOGI("net: connected edge -- triggering Phase 5S0 snapshot");
+        SendPropSnapshotForPeer();
     }
     g_wasConnected = isConnected;
 

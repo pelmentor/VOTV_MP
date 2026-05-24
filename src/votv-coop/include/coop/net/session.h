@@ -67,6 +67,7 @@ public:
     bool running() const { return running_.load(); }
     ConnState state() const { return state_.load(); }
     bool connected() const { return state_.load() == ConnState::Connected; }
+    Role role() const { return cfg_.role; }  // host vs client; immutable after Start
 
     // Game thread: publish our local player's pose for the net thread to send.
     void SetLocalPose(const PoseSnapshot& pose);

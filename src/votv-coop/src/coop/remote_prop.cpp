@@ -495,6 +495,23 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
         UE_LOGW("remote_prop::OnSpawn: empty class or key -- dropping");
         return;
     }
+    // Phase 5S0 de-dupe: if a local Aprop_C derivative with the same Key
+    // already exists (e.g. both peers loaded the same save and both already
+    // have this prop, OR a prior PropSpawn already created it), don't
+    // duplicate. Instead force-converge: update the local actor's transform
+    // to match the host's authoritative payload. This is the path that
+    // corrects mushroom-desync (each peer's spawner placed the same-Key
+    // mushroom at a different position; snapshot bootstrap teleports
+    // client's to match host's). 2026-05-24.
+    if (void* existing = ue_wrap::prop::FindByKeyString(keyW)) {
+        UE_LOGI("remote_prop::OnSpawn: key '%ls' already resolves to live actor %p -- de-duping, converging transform to host (loc=(%.1f,%.1f,%.1f))",
+                keyW.c_str(), existing, payload.locX, payload.locY, payload.locZ);
+        ue_wrap::engine::SetActorLocation(existing,
+            ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
+        ue_wrap::engine::SetActorRotation(existing,
+            ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
+        return;
+    }
     if (!ResolveSpawnFns()) {
         UE_LOGW("remote_prop::OnSpawn: spawn UFunctions unresolved -- dropping");
         return;
