@@ -8,6 +8,7 @@
 #include "coop/nameplate.h"
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"
+#include "coop/prop_lifecycle.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
 #include "ue_wrap/hud_feed.h"
@@ -309,86 +310,11 @@ uint64_t g_propEmitCount = 0;
 // what was grabbed (read mainPlayer.grabbing_actor) and start streaming.
 // (Idempotency flag now owned by coop::grab_observer; see coop/grab_observer.cpp.)
 
-// Bug C audit C-2 (2026-05-24): the propInventory_C class may not be loaded
-// at the moment InstallGrabObservers first runs (engine loads BP classes on
-// demand). Track its install separately so NetPumpTick can retry the takeObj
-// observer registration each tick until the class appears, without
-// re-attempting the 13 already-installed observers.
-bool g_inventoryObserverInstalled = false;
-
-// Storage-container spawn fix (2026-05-25 RE): when a player extracts
-// from a container, the BP path is
-//   Aprop_container_C::extract(idx)
-//     -> UpropInventory_C::takeObj(idx, ...)
-//        -> BeginDeferredActorSpawnFromClass (a fresh AProp_food_*_C, etc.)
-//        -> FinishSpawningActor
-//             -> UCS -> Aprop_C::Init   *** INIT POST fires here ***
-//             At this point Key = NewGuid (fresh) -- the actor has NOT
-//             yet been loadData'd with the saved Fstruct_save.
-//        -> [BP body resumes] loadData(out_save)
-//             -> Aprop_C::loadData: Key = saved cross-peer-stable UUID
-//        -> takeObj returns to its caller   *** TAKEOBJ POST fires ***
-//             Key is now the correct saved UUID.
-//
-// If Init POST broadcasts with NewGuid, the peer receives the actor under
-// the wrong key, and every later PropPose/PropGrab/PropDestroy (carrying
-// the saved UUID) fails to resolve -> tracking lost.
-//
-// Fix: a takeObj PRE observer sets this flag; Init POST checks it and
-// defers (the takeObj POST observer is the canonical broadcaster for
-// extracts on both host AND client; the host-skip gate that was muzzling
-// takeObj POST on host is removed). Single bool, game-thread-only,
-// re-entrancy-safe (BP dispatch is linear single-thread, so even if
-// takeObj nested-called itself we'd see PRE->PRE->POST->POST and the
-// flag would still correctly bracket each level).
-//
-// Threading rationale (audit fix 2026-05-25): plain bool, not atomic.
-// Safe because propInventory_C::takeObj is a gameplay BP UFunction (not
-// anim-graph BUA), so its ProcessEvent dispatch always fires on the game
-// thread -- never on a parallel-anim task-graph worker. See
-// game_thread.h:94 ("usually game thread; sometimes a task-graph worker
-// for parallel anim"); the parallel-anim carve-out applies to
-// BlueprintUpdateAnimation only. Other game-thread-only globals in this
-// file (g_wasConnected, g_processedInitActors)
-// follow the same pattern. The sObjectOff std::atomic in the same POST
-// observer body is for a different reason -- it's lazy-resolved on
-// FIRST call, which can in principle happen from any context that
-// dispatches a UFunction observer (per the dispatch contract); a
-// per-call read-vs-set race on a static cache is a different concern
-// from a per-call read-or-write on a session-scoped flag.
-bool g_takeObjInFlight = false;
-
-// Phase 5N1 NPC sync state is owned by coop/npc_sync.cpp; this TU calls into
-// it via coop::npc_sync::Install(&g_session) each NetPumpTick.
-
-// Bug C audit C-3 (2026-05-24): bounded retry queue for PropSpawn payloads
-// that couldn't ship immediately because the reliable channel was busy
-// (stop-and-wait: chat or PropRelease in-flight). Drained by NetPumpTick on
-// each tick. Without this queue, a PropSpawn dropped here means the peer
-// permanently has no actor with that Key -- subsequent PropPose updates
-// would log "no local match" forever (FindByKeyString requires the prop
-// to exist).
-std::mutex g_pendingSpawnsMutex;
-std::deque<coop::net::PropSpawnPayload> g_pendingSpawns;
-// Sized for a snapshot bootstrap: ~2000 Aprop_C derivatives in a populated
-// save × 160 B per payload = ~320 KB max queue memory. 4096 leaves headroom
-// for both the initial snapshot AND any drops/spawns that fire during the
-// snapshot drain. Stop-and-wait reliable means drain takes 5-20 s for a full
-// snapshot (~10 ms per packet); during that window other PropSpawn events
-// (inventory drops) get appended and ship in order. (Increased from 8 for
-// Phase 5S0 -- 2026-05-24.)
-constexpr size_t kMaxPendingSpawns = 4096;
-
-void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
-    std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-    if (g_pendingSpawns.size() >= kMaxPendingSpawns) {
-        UE_LOGW("net: PropSpawn retry queue full (depth %zu / max %zu) -- dropping OLDEST so newer spawns aren't lost",
-                g_pendingSpawns.size(), kMaxPendingSpawns);
-        g_pendingSpawns.pop_front();
-    }
-    g_pendingSpawns.push_back(payload);
-    UE_LOGI("net: PropSpawn enqueued for retry (depth now %zu)", g_pendingSpawns.size());
-}
+// Prop wire-sync state (observers, retry queues, takeObj-in-flight flag,
+// processed-Init dedupe set) is owned by coop/prop_lifecycle.cpp;
+// this TU calls into it via coop::prop_lifecycle::Install(&g_session) +
+// InstallInventory(&g_session) each NetPumpTick, and OnDisconnect() on
+// the disconnect edge.
 
 // --- Phase 5S0 snapshot enumeration state (audit I-2 chunked send) ------
 //
@@ -454,12 +380,6 @@ size_t EnumerateSnapshotCandidates() {
     return g_snapshotCandidates.size();
 }
 
-// Forward-decl for the wire-suppress allowlist predicate; defined further
-// down (with the lifecycle observers). DrainSnapshotChunk + the Init POST
-// observer + event_feed all use the same predicate to keep the
-// host-authoritative allowlist consistent across all broadcast sites.
-bool IsWireSuppressedPropClass(const std::wstring& cls);
-
 // Phase 2 of snapshot (chunked): per-tick, read transform + state for up
 // to kSnapshotChunkSize candidates, build PropSpawnPayload, enqueue.
 // Stops when g_snapshotCandidates is exhausted. Per-tick cost ~5-15 ms
@@ -484,7 +404,7 @@ void DrainSnapshotChunk() {
         // snapshot stream would queue N mushroom7_C entries per reconnect
         // that the client just drops; reliable stop-and-wait channel
         // means each wasted entry adds ~10 ms latency to snapshot drain.
-        if (IsWireSuppressedPropClass(cls)) {
+        if (coop::prop_lifecycle::IsWireSuppressedPropClass(cls)) {
             UE_LOGI("snapshot: skipping intermediate-variant '%ls' actor %p (wire-suppressed)",
                     cls.c_str(), obj);
             continue;
@@ -511,7 +431,7 @@ void DrainSnapshotChunk() {
         if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
         p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
         p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-        EnqueuePropSpawnForRetry(p);
+        coop::prop_lifecycle::EnqueuePropSpawnForRetry(p);
         ++sent;
     }
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) {
@@ -538,676 +458,24 @@ void SendPropSnapshotForPeer() {
     EnumerateSnapshotCandidates();  // Phase 1: cheap walk + filter; Phase 2 happens per-tick via DrainSnapshotChunk
 }
 
-// Audit I-2 (2026-05-24): mirror PropSpawn's retry queue for PropDestroy.
-// Without this, a destroy that races a busy reliable channel (e.g. a chat
-// message in flight) leaves a phantom actor on the peer until the next
-// snapshot bootstrap reconciles -- materially worse than a missing spawn
-// because the phantom persists, is interactable, and pollutes the scene.
-// Queue capacity 1024 -- destroys are rarer than spawns (only on
-// consumption / breakage), and each entry is just a WireKey (32 B) so
-// 1024 * 32 = 32 KB max queue memory.
-std::mutex g_pendingDestroysMutex;
-std::deque<coop::net::WireKey> g_pendingDestroys;
-constexpr size_t kMaxPendingDestroys = 1024;
+// Retry queues + drainers + IsWireSuppressedPropClass + ProcessedInit set
+// + DestroyLocalProp + Init POST / K2_DestroyActor PRE / takeObj PRE+POST
+// observers + their installers all moved to coop/prop_lifecycle.cpp
+// (2026-05-25 modular refactor; see coop/prop_lifecycle.h).
 
-void EnqueuePropDestroyForRetry(const coop::net::WireKey& key) {
-    std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-    if (g_pendingDestroys.size() >= kMaxPendingDestroys) {
-        UE_LOGW("net: PropDestroy retry queue full (depth %zu / max %zu) -- dropping OLDEST",
-                g_pendingDestroys.size(), kMaxPendingDestroys);
-        g_pendingDestroys.pop_front();
-    }
-    g_pendingDestroys.push_back(key);
-    UE_LOGI("net: PropDestroy enqueued for retry (depth now %zu)", g_pendingDestroys.size());
-}
 
-void DrainPendingPropDestroys() {
-    std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-    while (!g_pendingDestroys.empty()) {
-        const auto& key = g_pendingDestroys.front();
-        if (!g_session.SendPropDestroy(key)) break;  // channel busy; retry next tick
-        UE_LOGI("net: PropDestroy dequeued + sent (remaining=%zu)",
-                g_pendingDestroys.size() - 1);
-        g_pendingDestroys.pop_front();
-    }
-}
-
-// Drain pending PropSpawns into the reliable channel. Called per tick from
-// NetPumpTick. Stops at the first SendPropSpawn=false (reliable channel
-// still busy) so order is preserved.
-void DrainPendingPropSpawns() {
-    std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-    while (!g_pendingSpawns.empty()) {
-        const auto& payload = g_pendingSpawns.front();
-        if (!g_session.SendPropSpawn(payload)) {
-            break;  // channel busy; retry next tick. preserves order.
-        }
-        UE_LOGI("net: PropSpawn dequeued + sent (remaining=%zu)",
-                g_pendingSpawns.size() - 1);
-        g_pendingSpawns.pop_front();
-    }
-}
-
-// --- v5 Inc2: Aprop_C::Init POST observer -- the universal spawn detector.
-//
-// Catches EVERY Aprop derivative spawn (mushroom growth, world-gen, inventory
-// drops on the spawning peer, etc.) via the BP UserConstructionScript that
-// runs inside FinishSpawningActor. HOST broadcasts PropSpawn for each;
-// CLIENT skips (host-authoritative for world state; client's own inventory
-// drops still broadcast separately via the takeObj observer).
-//
-// Echo suppression: when this peer's OnSpawn applies a wire-received
-// PropSpawn, it calls MarkIncomingSpawn(actor) BEFORE FinishSpawningActor.
-// This observer then sees ConsumeIncomingSpawn(actor) == true and skips
-// the broadcast back to the sender (no ping-pong).
-//
-// Save-load is naturally gated by g_session.connected() == false at that
-// time (save loads pre-handshake; connected becomes true only after the
-// peer joins). No broadcast bandwidth wasted on save-load.
-// v5 Phase 5N Stream B (2026-05-24): is this prop class an intermediate-
-// variant that should NEVER be wire-synced? Host-authoritative growth
-// pipeline -- the intermediate state (mushroom7_C growing) stays internal
-// to host; only the mature variant (mushroom_C) is broadcast. Renamed
-// from "ClientSuppressed" to "WireSuppressed" (audit naming clarification
-// 2026-05-24): the predicate gates THREE sites symmetrically:
-//   (1) HOST broadcast in Aprop_C::Init POST -> never send
-//   (2) HOST broadcast in DrainSnapshotChunk -> never enqueue for snapshot
-//   (3) CLIENT local spawn destruction in Aprop_C::Init POST
-//   (4) CLIENT wire-drop in event_feed.cpp PropSpawn handler
-// Extend allowlist as new intermediate-variant cases surface in RE.
-bool IsWireSuppressedPropClass(const std::wstring& cls) {
-    return cls == P::name::PropMushroomGrowingClass;
-}
-
-// 2026-05-25 audit fix (post-ship audit issue #1): the subclass-aware Init
-// observer registers on multiple Init UFunctions in the prop_C lineage (base
-// + each override). If a subclass Init calls super (BP "Parent: ..." node),
-// BOTH the override AND the base observer fire for the same actor with
-// different function pointers but identical self. Without dedupe, host
-// double-broadcasts PropSpawn and client runs DestroyLocalProp twice.
-//
-// Same set also dedupes against a hypothetical "Init called multiple times"
-// path (UE4 doesn't normally do that for a single actor, but defensive).
-//
-// Cap mirrors the remote_prop incoming-set pattern: bounded 256, clear on
-// overflow (a one-shot stale-skip is harmless because by the time the cap
-// trips, all listed actors have either been destroyed or stably broadcast).
-// Game-thread-only access (observer dispatch fires on game thread for BP
-// UFunctions like Init).
-std::unordered_set<void*> g_processedInitActors;
-constexpr size_t kProcessedInitCap = 256;
-
-void MarkProcessedInit(void* actor) {
-    if (!actor) return;
-    if (g_processedInitActors.size() >= kProcessedInitCap) g_processedInitActors.clear();
-    g_processedInitActors.insert(actor);
-}
-
-bool HasProcessedInit(void* actor) {
-    return actor && g_processedInitActors.count(actor) > 0;
-}
-
-void UnmarkProcessedInit(void* actor) {
-    if (!actor) return;
-    g_processedInitActors.erase(actor);
-}
-
-// v5 Phase 5N Stream B: destroy a wire-suppressed intermediate-variant
-// prop via K2_DestroyActor reflection. Idempotent class resolution cached.
-//
-// IMPORTANT (audit I-3 2026-05-24): when called from inside
-// Aprop_C::Init POST observer, the engine is STILL EXECUTING
-// FinishSpawningActor -- the caller BP graph (e.g. mushroomMaster_C::form)
-// is about to read the FinishSpawningActor return value and call
-// spawnedNaturally() on it. Calling K2_DestroyActor here marks the actor
-// PendingKill BEFORE form() continues. PendingKill actors in UE4 are
-// addressable but flagged for GC; calling spawnedNaturally on a
-// PendingKill is technically safe (no segfault) but burns a UFunction
-// dispatch on a doomed actor.
-//
-// To make destroys clean: caller passes `deferred=true` to schedule the
-// destroy via GT::Post (next-frame on game thread) -- form()'s BP
-// continuation finishes first, THEN we destroy. Adds one frame of
-// "phantom" intermediate-variant on client but eliminates any
-// PendingKill-on-live-BP risk.
-//
-// MarkIncomingDestroy is forward-correct (future host-side suppression
-// extensions would need it); currently dead on client because the PRE
-// observer is host-only-gated.
-void DestroyLocalProp(void* actor, bool deferred) {
-    if (!actor) return;
-    auto doDestroy = [actor]() {
-        static void* sActorCls = nullptr;
-        static void* sDestroyFn = nullptr;
-        if (!sActorCls || !R::IsLive(sActorCls)) {
-            sActorCls = R::FindClass(P::name::ActorClassName);
-            sDestroyFn = nullptr;
-        }
-        if (sActorCls && !sDestroyFn) {
-            sDestroyFn = R::FindFunction(sActorCls, P::name::DestroyActorFn);
-        }
-        if (!sDestroyFn) {
-            UE_LOGW("spawner-suppress: K2_DestroyActor UFunction unresolved -- cannot destroy local %p", actor);
-            return;
-        }
-        if (!R::IsLive(actor)) {
-            UE_LOGI("spawner-suppress: deferred destroy target %p no longer live (already destroyed elsewhere) -- skip",
-                    actor);
-            return;
-        }
-        // Mark BEFORE calling destroy so OUR PRE-observer skips broadcast
-        // (forward-correct; currently dead on client since the observer is
-        // host-only).
-        coop::remote_prop::MarkIncomingDestroy(actor);
-        R::CallFunction(actor, sDestroyFn, nullptr);
-    };
-    if (deferred) {
-        GT::Post(doDestroy);
-    } else {
-        doDestroy();
-    }
-}
-
-void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params*/) {
-    if (!self) return;
-    // Gate order (audit L-1 2026-05-24): cheapest checks FIRST so the hot path
-    // short-circuits with minimal work. atomic load -> field read -> hash
-    // lookup -> SuperStruct chain. Save-load fires this observer ~2000 times
-    // pre-handshake; the connected() short-circuit avoids the hash lookup on
-    // every one of those.
-    if (!g_session.connected()) return;                       // pre-handshake save-load -> skip
-    if (coop::remote_prop::ConsumeIncomingSpawn(self)) {
-        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p was wire-received -- skip broadcast (echo suppression)",
-                self);
-        return;
-    }
-    if (!R::IsLive(self)) return;
-    // Defensive: confirm it's actually an Aprop derivative (the hook was
-    // installed on PropClass but a fast misregistration would surface here).
-    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;
-    // 2026-05-25 audit dedupe: with the subclass-aware Init scan, multiple
-    // observers are registered along the prop_C lineage. If a subclass Init
-    // calls super (BP "Parent" node), we see TWO firings for the same actor
-    // (override + base). Skip the duplicate. Cleared on K2_DestroyActor PRE
-    // so address reuse after GC works correctly.
-    if (HasProcessedInit(self)) {
-        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p already processed -- skip (super-call dedupe)",
-                self);
-        return;
-    }
-    MarkProcessedInit(self);
-
-    // Storage-container spawn fix (2026-05-25): defer broadcast for actors
-    // spawned from inside a takeObj call. At Init POST time the actor's
-    // Key is a freshly-generated NewGuid (the deferred-spawn UCS just ran);
-    // loadData hasn't yet restored the saved Key from the Fstruct_save. The
-    // takeObj POST observer fires AFTER loadData and broadcasts with the
-    // correct saved Key. Broadcasting here would (a) ship the wrong key
-    // (peer tracks under NewGuid; subsequent PropPose with the saved UUID
-    // fails to resolve), and (b) cause a double-broadcast (Init POST with
-    // NewGuid, takeObj POST with saved UUID = two PropSpawns for the same
-    // actor on the receiver).
-    if (g_takeObjInFlight) {
-        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p spawned inside takeObj -- defer to takeObj POST (Key not yet restored by loadData)",
-                self);
-        return;
-    }
-
-    // v5 Phase 5N Stream B (2026-05-24): host-authoritative client-side
-    // suppression for intermediate-variant props (mushroom7_C, etc.). On
-    // CLIENT, if this is a locally-spawned intermediate variant (NOT in
-    // incoming-set -- already checked above), destroy it. The HOST keeps
-    // running the growth pipeline; the eventual mature variant
-    // (mushroom_C) broadcast arrives through normal Inc2 channels.
-    const std::wstring cls = R::ClassNameOf(self);
-    if (g_session.role() == coop::net::Role::Client) {
-        if (IsWireSuppressedPropClass(cls)) {
-            UE_LOGI("spawner-suppress[client.Init]: scheduling deferred destroy for local intermediate variant '%ls' actor=%p (host-authoritative; mature variant will arrive via wire)",
-                    cls.c_str(), self);
-            // Audit I-3 (2026-05-24): defer the destroy via GT::Post so
-            // the engine's FinishSpawningActor + the calling BP graph
-            // (mushroomMaster_C::form's spawnedNaturally call on the
-            // returned actor) complete BEFORE we mark PendingKill.
-            DestroyLocalProp(self, /*deferred=*/true);
-            return;
-        }
-        // Client doesn't broadcast world spawns (host-authoritative).
-        return;
-    }
-
-    // From here on: role == Host.
-    //
-    // Audit C-2 (2026-05-24): host MUST NOT broadcast intermediate-variant
-    // classes. The receiver drops them anyway but the round-trip wastes
-    // reliable-channel bandwidth (~10 ms per packet on stop-and-wait) per
-    // growing-mushroom spawn. Host-authoritative invariant: the
-    // intermediate state stays internal; only the mature variant
-    // broadcasts when host's growth-timer transforms.
-    if (IsWireSuppressedPropClass(cls)) {
-        UE_LOGI("spawner-suppress[host.Init]: skipping broadcast for intermediate-variant '%ls' actor=%p (host-authoritative; will broadcast mature variant on transform)",
-                cls.c_str(), self);
-        return;
-    }
-
-    coop::net::PropSpawnPayload p{};
-    // `cls` reused from the Stream-B suppression check above (cached once).
-    p.className.len = 0;
-    for (size_t i = 0; i < cls.size() && i < 63; ++i) {
-        p.className.data[p.className.len++] = static_cast<char>(cls[i]);
-    }
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
-    if (keyStr.empty()) {
-        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p (class '%ls') has empty key -- skip (unkeyed = non-syncable)",
-                self, cls.c_str());
-        return;
-    }
-    p.key.len = 0;
-    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
-        p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
-    }
-    const auto loc = ue_wrap::engine::GetActorLocation(self);
-    const auto rot = ue_wrap::engine::GetActorRotation(self);
-    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
-    p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
-    p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
-    p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
-    p.scaleX = 1.f; p.scaleY = 1.f; p.scaleZ = 1.f;
-    p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
-    if (ue_wrap::prop::IsHeavy(self))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
-    if (ue_wrap::prop::IsFrozen(self)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
-    p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
-    p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-    UE_LOGI("grab_hook[Aprop.Init POST]: HOST broadcasting SPAWN cls='%ls' key='%ls' loc=(%.1f,%.1f,%.1f) heavy=%d frozen=%d",
-            cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
-            (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
-            (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
-    if (!g_session.SendPropSpawn(p)) {
-        EnqueuePropSpawnForRetry(p);
-    }
-}
-
-// --- v5 Inc2: K2_DestroyActor PRE observer -- the universal destroy detector.
-//
-// Catches every BP-initiated AActor::K2_DestroyActor for Aprop derivatives
-// (food eaten, container broken, mushroom harvested, hostile gibbed, etc.).
-// HOST broadcasts PropDestroy; CLIENT skips. Echo-suppressed: receiver's
-// OnDestroy marks the actor in g_incomingDestroys before calling
-// K2_DestroyActor; this observer consumes the mark and skips broadcast.
-//
-// PRE timing: we read self->Key BEFORE the engine starts destruction. The
-// actor is still fully addressable at this point (mark-PendingKill happens
-// inside the K2_DestroyActor body).
-void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void* /*params*/) {
-    if (!self) return;
-    // 2026-05-25 audit cleanup: evict from the Init-processed dedupe set
-    // BEFORE the role gate so client-side Stream B destroys (deferred
-    // DestroyLocalProp on mushroom7_C) also clear their entries. Otherwise
-    // the set could fill with stale pointers from destroyed actors,
-    // triggering the cap-clear path more often than needed. Cheap
-    // erase-if-present (O(1) hash lookup; no-op for non-prop actor
-    // destroys that were never marked).
-    UnmarkProcessedInit(self);
-    // Gate order (audit I-1 2026-05-24): this observer is hooked on AActor
-    // base -> fires for EVERY actor destroy in the game (NPCs, projectiles,
-    // UI actors, world cleanup, etc.), not just props. Cheapest checks
-    // FIRST to short-circuit before the expensive SuperStruct walk:
-    //   atomic load -> field read -> hash lookup -> class chain walk.
-    if (!g_session.connected()) return;
-    // 2026-05-25 cross-peer destroy: REMOVED the role==Host gate. Per the
-    // food-consumption RE, world-state destroys must replicate
-    // BIDIRECTIONALLY:
-    //   * HOST destroy -> broadcast -> CLIENT destroys local
-    //   * CLIENT destroy (eats food, picks up world item to inventory,
-    //     breaks container) -> broadcast -> HOST destroys local + frees
-    //     PHC if holding (via OnDestroy's ReleaseLocalGrabIfHoldingActor).
-    // Echo loop is suppressed by g_incomingDestroys: a wire-received
-    // destroy MarkIncomingDestroy's before calling K2_DestroyActor, and
-    // this observer ConsumeIncomingDestroy's to skip the rebroadcast.
-    //
-    // Known race (acceptable interim, retirement plan): if BOTH peers
-    // eat the same food within the wire RTT (~50 ms), each runs
-    // addFood locally (each gets fed once each, instead of one peer
-    // getting fed). This requires deliberate user coordination and
-    // isn't the reported bug. Retire by escalating to host-authoritative
-    // eat (Option B from
-    // research/findings/votv-food-consumption-and-cross-peer-destroy-RE-2026-05-25.md)
-    // IF hands-on testing surfaces this race in normal play.
-    if (coop::remote_prop::ConsumeIncomingDestroy(self)) {
-        UE_LOGI("grab_hook[K2_DestroyActor PRE]: actor %p was wire-received destroy -- skip rebroadcast",
-                self);
-        return;
-    }
-    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;     // skip non-prop destroys (NPCs etc -- their own phase)
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
-    if (keyStr.empty()) return;                               // unkeyed = non-syncable
-    coop::net::WireKey wk{};
-    wk.len = 0;
-    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
-        wk.data[wk.len++] = static_cast<char>(keyStr[i]);
-    }
-    const char* roleStr =
-        g_session.role() == coop::net::Role::Host ? "HOST" : "CLIENT";
-    UE_LOGI("grab_hook[K2_DestroyActor PRE]: %s broadcasting DESTROY actor=%p key='%ls'",
-            roleStr, self, keyStr.c_str());
-    if (!g_session.SendPropDestroy(wk)) {
-        EnqueuePropDestroyForRetry(wk);
-    }
-}
-
-// --- v5 Bug C: UpropInventory_C::takeObj POST observer. THE bottom call all
-// inventory drop paths funnel through (per
-// research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md). The signature
-// is `(int32 Index, bool removeVol, bool& return, Fstruct_save& Output,
-// AActor*& Object)` -- POST observer reads the Object out-param to get the
-// just-spawned actor, then builds a PropSpawnPayload from its class + Key +
-// transform + Aprop_C bools. NO echo loop: the receiver's OnSpawn spawns via
-// GameplayStatics direct (BeginDeferredActorSpawnFromClass), NOT through this
-// takeObj path, so the observer never fires for receiver-applied spawns.
-//
-// Param offset for `Object` is resolved lazily (one FindParamOffset per
-// observer install, cached in a function-local static atomic).
-// PRE observer for propInventory_C::takeObj. Sets g_takeObjInFlight so the
-// Aprop_C::Init POST observer (which fires INSIDE FinishSpawningActor, which
-// runs INSIDE takeObj's body, BEFORE loadData restores the saved Key) knows
-// to defer the broadcast. The takeObj POST observer (below) clears the flag
-// after loadData has run and broadcasts with the correct saved Key.
-//
-// Storage-container spawn fix (2026-05-25). See g_takeObjInFlight doc.
-void GrabObserver_PropInventory_TakeObj_PRE(void* self, void* /*function*/, void* /*params*/) {
-    if (!self) return;
-    if (!g_session.connected()) return;
-    g_takeObjInFlight = true;
-}
-
-void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* params) {
-    // Storage-container spawn fix (2026-05-25): clear the in-flight flag
-    // first, BEFORE any other return path. The PRE observer set it; this
-    // observer is the bracket-close. Even if any check below short-circuits
-    // (no params, no session, non-prop result, etc.), the flag must be
-    // cleared so the NEXT Init POST that fires (next prop spawned by any
-    // path -- a normal world spawn, a save-load drop, a respawn) is not
-    // accidentally deferred.
-    g_takeObjInFlight = false;
-
-    if (!self || !params || !function) return;
-    // Cache Object out-param offset. Atomic because the observer can dispatch
-    // on either the game thread (typical) or a task-graph worker (per
-    // game_thread.h note); -2 sentinel means "unresolved", -1 = "tried and
-    // failed, don't retry every call".
-    static std::atomic<int32_t> sObjectOff{-2};
-    int32_t off = sObjectOff.load(std::memory_order_acquire);
-    if (off == -2) {
-        const int32_t resolved = R::FindParamOffset(function, L"Object");
-        sObjectOff.store(resolved >= 0 ? resolved : -1, std::memory_order_release);
-        off = resolved >= 0 ? resolved : -1;
-        UE_LOGI("grab_hook[takeObj POST]: resolved Object out-param offset = %d", resolved);
-    }
-    if (off < 0) return;
-    void* spawnedActor = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(params) + off);
-    if (!spawnedActor || !R::IsLive(spawnedActor)) return;
-    // Only broadcast when connected -- otherwise we'd queue PropSpawn forever.
-    if (!g_session.connected()) {
-        UE_LOGI("grab_hook[takeObj POST]: spawned %p but session not connected -- skipping broadcast",
-                spawnedActor);
-        return;
-    }
-    // Storage-container spawn fix (2026-05-25): the prior host-skip gate
-    // was REMOVED. The old comment claimed "Aprop_C::Init handles host
-    // broadcasts" -- but Init POST fires BEFORE loadData restores the saved
-    // Key, so its broadcast carried a fresh NewGuid that the receiver
-    // couldn't subsequently resolve when PropPose/PropGrab/PropDestroy
-    // arrived with the correct saved UUID. Now takeObj POST broadcasts on
-    // BOTH host and client (the Init POST observer defers via
-    // g_takeObjInFlight when we're inside a takeObj call -- echo
-    // suppression on the receiver side still applies because OnSpawn marks
-    // incoming actors in g_incomingSpawns before FinishSpawning).
-    // Defensive: only broadcast for Aprop_C derivatives. If a non-prop class
-    // somehow flows through takeObj (BP refactor regression), the receiver's
-    // OnSpawn would still try to spawn it -- which is fine but wastes bytes.
-    if (!ue_wrap::prop::IsDescendantOfProp(spawnedActor)) {
-        UE_LOGW("grab_hook[takeObj POST]: spawned actor %p is NOT a prop_C derivative -- skipping",
-                spawnedActor);
-        return;
-    }
-
-    coop::net::PropSpawnPayload p{};
-    // ClassName: actor's UClass leaf name (e.g. "Aprop_equipment_flashlight_C").
-    const std::wstring cls = R::ClassNameOf(spawnedActor);
-    p.className.len = 0;
-    for (size_t i = 0; i < cls.size() && i < 63; ++i) {
-        p.className.data[p.className.len++] = static_cast<char>(cls[i]);
-    }
-    // Key: Aprop_C.Key.ToString() via prop_wrap. After takeObj completes,
-    // loadData has restored Key from Fstruct_save -- this is the stable
-    // cross-peer identifier.
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(spawnedActor);
-    p.key.len = 0;
-    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
-        p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
-    }
-    // Transform: spawned actor's world location + rotation, normalized to
-    // FRotator axis canonical range so the receiver's FRotator->FQuat
-    // conversion lands on the right hemisphere (matches PropPose pattern).
-    const auto loc = ue_wrap::engine::GetActorLocation(spawnedActor);
-    const auto rot = ue_wrap::engine::GetActorRotation(spawnedActor);
-    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
-    p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
-    p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
-    p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
-    // Scale: BP-spawned props typically have (1,1,1) -- send literal 1's.
-    // (Reading GetActorScale3D via reflection would be a 4th UFunction call
-    // for a value that's almost always 1; defer until a real non-1 case
-    // surfaces.)
-    p.scaleX = 1.f; p.scaleY = 1.f; p.scaleZ = 1.f;
-    // Physics flags: inventory drops always spawn with SimulatePhysics on
-    // (Aprop_C.Init enables it). The heavy + frozen bits are data-driven on
-    // propData -- read both so the receiver can grab-path prime correctly.
-    p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
-    if (ue_wrap::prop::IsHeavy(spawnedActor))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
-    if (ue_wrap::prop::IsFrozen(spawnedActor)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
-    // Initial velocity: a just-spawned prop is at rest (Aprop_C.Init wakes
-    // the body but doesn't apply velocity). Tap-drop / place-drop both
-    // produce a stationary spawn that gravity then takes over.
-    p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
-    p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-
-    UE_LOGI("grab_hook[takeObj POST]: SPAWN broadcast cls='%ls' key='%ls' loc=(%.1f, %.1f, %.1f) heavy=%d frozen=%d",
-            cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
-            (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
-            (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
-    // Try direct send first; if the reliable channel is busy (chat or
-    // PropRelease in flight), enqueue for NetPumpTick to drain (audit C-3).
-    // Dropping silently would leave the peer with no actor for this Key
-    // forever -- PropPose updates can't resolve a Key that never spawned.
-    if (!g_session.SendPropSpawn(p)) {
-        EnqueuePropSpawnForRetry(p);
-    }
-}
-
-// v5 Inc2: track Aprop_C::Init + AActor::K2_DestroyActor observer install
-// separately from the core grab observers (same reason as the takeObj
-// observer): they depend on BP/engine classes that may not be loaded at
-// first InstallGrabObservers call. NetPumpTick retries each tick until
-// the classes appear.
-//
-// 2026-05-25 mushroom RE finding: prop subclasses (prop_food_mushroom_C,
-// other overriders) define their OWN Init UFunction (separate UObject with
-// separate address). Our game_thread detour does pointer-equality dispatch
-// against the registered observer target. Registering ONLY on
-// prop_C::Init means the observer never fires for any subclass instance
-// whose Init is overridden -- Stream B suppression + Inc2 continuous
-// broadcast both silently dead for mushrooms. Fix: walk GUObjectArray
-// ONCE when prop_C first loads, find every UFunction named "Init" whose
-// owning UClass is in the prop_C lineage, register the POST observer on
-// each. The set tracks dedupe so a re-scan (currently not used; documented
-// limitation below) doesn't double-register.
-//
-// Known limitation: BP subclasses that LOAD LATER (e.g. streamed-level
-// content with own Init overrides) are missed by this one-shot scan. If
-// hands-on testing surfaces a late-load miss, promote to a periodic
-// rescan (cost: one GUObjectArray walk per N seconds; cheap when
-// throttled).
-// g_propInitScanDone (renamed 2026-05-25 from g_propInitObserverInstalled,
-// audit #3): records that the one-shot subclass-aware Init UFunction scan
-// has completed. The vector below records WHICH UFunctions were
-// registered; this flag records WHETHER we ran the scan at all (so we
-// don't re-walk GUObjectArray every NetPumpTick). Both states are
-// necessary -- the flag could be derived from "vector non-empty + scan
-// guard latched" but separating them keeps the gate semantics readable.
-bool g_propInitScanDone             = false;
-bool g_propDestroyObserverInstalled = false;
-std::vector<void*> g_registeredPropInitFns;
-
-void InstallPropLifecycleObserversIfReady() {
-    if (!g_propInitScanDone) {
-        // Gate: wait for prop_C base class to load. IsClassDescendantOfProp
-        // returns false until then so the scan would yield zero registrations
-        // -- no point doing the GUObjectArray walk before the gate's open.
-        void* propBase = R::FindClass(P::name::PropClass);
-        if (propBase) {
-            // One-shot GUObjectArray scan. Cost profile: ~237k slots, each
-            // with one ClassNameOf wstring allocation + compare with
-            // L"Function" -- O(N) with N total UObjects, ~50-200 ms one-shot
-            // single tick stall during world load. NOT a per-frame cost; runs
-            // exactly once when prop_C first appears in the obj array.
-            const std::wstring kInitName(P::name::PropInitFn);
-            const int32_t n = R::NumObjects();
-            int registered = 0;
-            for (int32_t i = 0; i < n; ++i) {
-                void* obj = R::ObjectAt(i);
-                if (!obj) continue;
-                // Cheap-first: class-name check (exactly L"Function" excludes
-                // DelegateFunction / SparseDelegateFunction); then function-
-                // name check; then SuperStruct walk for the prop lineage.
-                if (R::ClassNameOf(obj) != L"Function") continue;
-                if (R::ToString(R::NameOf(obj)) != kInitName) continue;
-                void* owningCls = R::OuterOf(obj);
-                if (!ue_wrap::prop::IsClassDescendantOfProp(owningCls)) continue;
-                // Dedupe (linear search; expected pop is small ~3-10).
-                bool already = false;
-                for (void* fn : g_registeredPropInitFns) {
-                    if (fn == obj) { already = true; break; }
-                }
-                if (already) continue;
-                if (ue_wrap::game_thread::RegisterPostObserver(obj, GrabObserver_Aprop_Init_POST)) {
-                    const std::wstring owner = R::ToString(R::NameOf(owningCls));
-                    UE_LOGI("grab_hook: registered POST observer for %ls::Init @ %p (subclass-aware)",
-                            owner.c_str(), obj);
-                    g_registeredPropInitFns.push_back(obj);
-                    ++registered;
-                } else {
-                    const std::wstring owner = R::ToString(R::NameOf(owningCls));
-                    UE_LOGW("grab_hook: failed to register Init observer for %ls (observer table full)",
-                            owner.c_str());
-                }
-            }
-            UE_LOGI("grab_hook: subclass-aware Init scan: %d new registrations (total %zu Init UFunctions hooked across prop_C lineage)",
-                    registered, g_registeredPropInitFns.size());
-            // Mark installed once we've found AT LEAST the base prop_C::Init.
-            // If the scan found zero, propBase resolved but the base Init
-            // UFunction isn't in the obj array yet (very unlikely -- the
-            // UClass and its UFunctions load together). Keep retrying next
-            // tick to be safe.
-            if (!g_registeredPropInitFns.empty()) {
-                g_propInitScanDone = true;
-            }
-        }
-    }
-    if (!g_propDestroyObserverInstalled) {
-        // K2_DestroyActor is on AActor base class -- always loaded by the
-        // time we're past the initial class lookup.
-        if (void* actorCls = R::FindClass(P::name::ActorClassName)) {
-            if (void* fn = R::FindFunction(actorCls, P::name::DestroyActorFn)) {
-                if (ue_wrap::game_thread::RegisterPreObserver(fn, GrabObserver_Actor_K2DestroyActor_PRE)) {
-                    UE_LOGI("grab_hook: registered PRE observer for %ls.%ls @ %p (continuous destroy broadcast)",
-                            P::name::ActorClassName, P::name::DestroyActorFn, fn);
-                    g_propDestroyObserverInstalled = true;
-                }
-            } else {
-                UE_LOGW("grab_hook: %ls.%ls UFunction not found -- destroy broadcast disabled",
-                        P::name::ActorClassName, P::name::DestroyActorFn);
-                g_propDestroyObserverInstalled = true;  // stop retry
-            }
-        }
-    }
-}
-
-// Helper: install ONLY the propInventory_C::takeObj POST observer. Separate
-// from InstallGrabObservers (audit C-2) so NetPumpTick can re-attempt this
-// observer each tick if propInventory_C is loaded later than the core
-// observers. Idempotent via g_inventoryObserverInstalled.
-void InstallInventoryObserverIfReady() {
-    if (g_inventoryObserverInstalled) return;
-    void* invCls = R::FindClass(P::name::PropInventoryClass);
-    if (!invCls) return;  // not loaded yet -- retry next tick
-    void* fn = R::FindFunction(invCls, P::name::PropInventoryTakeObjFn);
-    if (!fn) {
-        // The class exists but the function doesn't -- this is a permanent
-        // mismatch (class renamed or function moved). Log once and stop
-        // retrying so we don't spam the log.
-        UE_LOGW("grab_hook: %ls.%ls UFunction not found -- Bug C disabled permanently this session",
-                P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn);
-        g_inventoryObserverInstalled = true;  // stop the retry loop
-        return;
-    }
-    if (!ue_wrap::game_thread::RegisterPostObserver(fn, GrabObserver_PropInventory_TakeObj_POST)) {
-        UE_LOGW("grab_hook: failed to register takeObj POST observer (table full?)");
-        return;
-    }
-    // Storage-container spawn fix (2026-05-25): PRE observer brackets the
-    // takeObj call so Aprop_C::Init POST (which fires nested inside takeObj's
-    // FinishSpawningActor) knows to defer broadcast. Non-fatal if registration
-    // fails -- the only consequence is degraded correctness: Init POST will
-    // broadcast with NewGuid and takeObj POST with the saved UUID = two
-    // PropSpawns per extract, mismatched keys. We log the failure and proceed.
-    if (!ue_wrap::game_thread::RegisterPreObserver(fn, GrabObserver_PropInventory_TakeObj_PRE)) {
-        UE_LOGW("grab_hook: failed to register takeObj PRE observer (table full?) -- container extracts may double-broadcast with mismatched keys");
-    } else {
-        UE_LOGI("grab_hook: registered PRE observer for %ls.%ls (takeObj-in-flight bracket)",
-                P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn);
-    }
-    UE_LOGI("grab_hook: registered POST observer for %ls.%ls @ %p (Bug C inventory drop ready)",
-            P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn, fn);
-    g_inventoryObserverInstalled = true;
-}
-
-// Phase 5N1 (NPC sync foundation, 2026-05-25).
-//
-// Engine-level UGameplayStatics::BeginDeferredActorSpawnFromClass
-// interceptor. EVERY BP "spawn actor of class" graph compiles down to
-// this two-step (BeginDeferred -> set props -> FinishSpawning). One
-// interceptor here replaces 14 per-spawner-class ReceiveTick observers
-// (the architecture-doc original plan); RULE 2 baggage-prevention.
-//
-// Filter chain (interceptor body):
-//   1. session must be CLIENT (host runs spawners normally; the wire
-//      will deliver host's NPCs to client via Phase 5N1 Inc2).
-//   2. ActorClass param must be in g_npcAllowlist (linear 12-compare).
-//   3. -> return true (skip the original); zero the AActor* return
-//      param so the calling BP graph sees nullptr and bails per UE4's
-//      standard nullptr-check pattern.
-//
-// At install time we resolve:
-//   - the UFunction pointer (via R::FindFunction on GameplayStatics)
-//   - the `ActorClass` and ReturnValue param FFrame offsets (via
-//     R::FindParamOffset)
-//   - the 12 allowlist UClass pointers (via R::FindClass on each name)
-//
-// The 12 NPC classes are loaded on first gameplay-level transition
-// (not at menu), so we may need NetPumpTick to retry until all 12
-// Top-level orchestrator: retried each NetPumpTick. Each subsystem's Install()
-// is idempotent and short-circuits once successful, so this is safe to call
-// every tick. The four subsystems are independent (a late-loading BP class
-// affects only its own subsystem):
+// Top-level observer orchestrator: retried each NetPumpTick. Each
+// subsystem's Install() is idempotent and short-circuits once successful,
+// so this is safe to call every tick. The four subsystems are independent
+// (a late-loading BP class affects only its own subsystem):
 //   - coop::grab_observer::Install -- physics-prop grab/release/throw
-//   - InstallInventoryObserverIfReady -- propInventory_C::takeObj PRE/POST
-//   - InstallPropLifecycleObserversIfReady -- Aprop_C::Init POST + K2_DestroyActor PRE
+//   - coop::prop_lifecycle::InstallInventory -- propInventory_C::takeObj PRE/POST
+//   - coop::prop_lifecycle::Install -- Aprop_C::Init POST + K2_DestroyActor PRE
 //   - coop::npc_sync::Install -- Phase 5N1 NPC class allowlist + interceptor
 void InstallGrabObservers() {
     coop::grab_observer::Install();
-    InstallInventoryObserverIfReady();
-    InstallPropLifecycleObserversIfReady();
+    coop::prop_lifecycle::InstallInventory(&g_session);
+    coop::prop_lifecycle::Install(&g_session);
     coop::npc_sync::Install(&g_session);
 }
 
@@ -1718,17 +986,7 @@ void NetPumpTick(float displayOffsetX) {
         // now-dead session; shipping them to the NEXT peer (which may be a
         // DIFFERENT machine after IP change) would carry stale or wrong-
         // peer state. A fresh snapshot enqueues on the next connected-edge.
-        size_t droppedSpawns, droppedDestroys;
-        {
-            std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-            droppedSpawns = g_pendingSpawns.size();
-            g_pendingSpawns.clear();
-        }
-        {
-            std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-            droppedDestroys = g_pendingDestroys.size();
-            g_pendingDestroys.clear();
-        }
+        const auto propStats = coop::prop_lifecycle::OnDisconnect();
         size_t snapPending = 0;
         if (!g_snapshotCandidates.empty()) {
             snapPending = g_snapshotCandidates.size() - g_snapshotCandidateIdx;
@@ -1736,25 +994,12 @@ void NetPumpTick(float displayOffsetX) {
             g_snapshotCandidates.shrink_to_fit();
             g_snapshotCandidateIdx = 0;
         }
-        // 2026-05-25 audit: clear the Init-processed dedupe set on
-        // disconnect. Stale entries from a previous session would
-        // incorrectly suppress legitimate spawns from the NEXT peer's
-        // snapshot. (The registered observers stay; only the per-actor
-        // state needs reset.)
-        const size_t initProcessedDropped = g_processedInitActors.size();
-        g_processedInitActors.clear();
-        // Storage-container spawn fix (2026-05-25): defensive reset of the
-        // takeObj-in-flight flag. If a peer disconnects mid-extract (e.g.,
-        // socket dies after takeObj PRE fires but before its POST), the
-        // flag would persist and incorrectly defer the next session's
-        // Init POST broadcasts. The single bool reset is cheap.
-        g_takeObjInFlight = false;
         // Phase 5N1 Inc2 (2026-05-25): reset host-side NPC tracking state
         // on disconnect (sessionId counter + tracked map + bypass slot --
         // see coop/npc_sync.cpp OnDisconnect).
         coop::npc_sync::OnDisconnect();
         UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
-                droppedSpawns, droppedDestroys, snapPending, initProcessedDropped);
+                propStats.droppedSpawns, propStats.droppedDestroys, snapPending, propStats.initProcessedDropped);
     }
     // Phase 5S0 (snapshot bootstrap): on every false->true transition of
     // Connected, the host enumerates Aprop_C derivatives and broadcasts
@@ -1780,8 +1025,8 @@ void NetPumpTick(float displayOffsetX) {
     // when the queue is empty (mutex lock + size check). Order preserved.
     // Same pattern for PropDestroy (audit I-2 2026-05-24).
     if (isConnected) {
-        DrainPendingPropSpawns();
-        DrainPendingPropDestroys();
+        coop::prop_lifecycle::DrainPendingPropSpawns();
+        coop::prop_lifecycle::DrainPendingPropDestroys();
     }
 
     if (g_netLocal && !R::IsLive(g_netLocal)) { g_netLocal = nullptr; g_netLocalController = nullptr; }
