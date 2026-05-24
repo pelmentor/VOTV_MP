@@ -100,27 +100,53 @@ bool RemotePlayer::Spawn() {
     // runtime, and Crouch updates it in lockstep with Mesh.RelLoc.Z so the
     // -halfH formula stays valid through crouch transitions on the source.
     // (Receiver-side crouch handling is Phase 2 wire bump.)
-    if (void* srcMeshComp = Pup::GetMeshPlayerVisibleComponent(local)) {
+    // 2026-05-25 v6: branch yaw + Z offset by puppet kind.
+    //
+    //   SkelMesh BACKUP:
+    //     Yaw -- capture the mesh-frame shim (+Y-forward authoring vs
+    //       +X-forward actor convention) from the local player's
+    //       mesh_playerVisible.world.forward vs local.actor.Yaw. Typically
+    //       -90 for VOTV's BP-authored mesh. Applied at the puppet's
+    //       ACTOR transform because on SkelMeshActor the SMC IS the root.
+    //     Z   -- -halfH for the same reason (SMC is root, so reconstruct
+    //       the BP-authored mesh.RelLoc.Z = -halfH shim at actor level).
+    //
+    //   MainPlayer DEFAULT:
+    //     Yaw -- 0. The mainPlayer_C BP construction script applies the
+    //       +Y-forward shim INSIDE the mesh_playerVisible.RelRot.Yaw
+    //       (= -90). So puppet.mesh.world.Yaw = puppet.actor.Yaw - 90,
+    //       same as source.mesh.world.Yaw = source.actor.Yaw - 90.
+    //       Setting puppet.actor.Yaw = source.actor.Yaw produces matching
+    //       mesh world yaws. Applying -90 here would DOUBLE the shim and
+    //       face the puppet 90 degrees off (user's "facing sideways"
+    //       hands-on report 2026-05-25).
+    //     Z   -- +halfH. Source's Z-trace shows mesh.world.Z =
+    //       source.actor.Z (delta=0), so source's BP graph lifts the
+    //       mesh chain composite to 0 at runtime via BP mutation. The
+    //       puppet has actor tick + GameMode disabled (suppression
+    //       intentional -- prevents save corruption + per-frame SP
+    //       logic) so that BP mutation does NOT run on the puppet --
+    //       chain composite stays at the class-default -halfH (mesh
+    //       hangs below capsule). To produce puppet.mesh.world.Z =
+    //       source.actor.Z, we add +halfH at the actor transform.
+    if (Pup::IsMainPlayerPuppetKind()) {
+        meshOffsetYaw_ = 0.f;
+    } else if (void* srcMeshComp = Pup::GetMeshPlayerVisibleComponent(local)) {
         const ue_wrap::FRotator localActorRot = E::GetActorRotation(local);
         const ue_wrap::FVector meshFwd = E::GetComponentForwardVector(srcMeshComp);
         const float meshWorldYaw = std::atan2(meshFwd.Y, meshFwd.X) * 57.29577951f;
         meshOffsetYaw_ = ue_wrap::NormalizeAxis(meshWorldYaw - localActorRot.Yaw);
     }
-    // 2026-05-25 puppet rework: meshOffsetZ_ now depends on puppet kind.
-    //   MainPlayer (default): 0 -- the ACharacter's CapsuleComponent IS
-    //     the root, mesh hangs at -halfH below via BP construction; wire
-    //     actor.Z maps directly to puppet.actor.Z.
-    //   SkelMesh (backup): -halfH -- the SkeletalMeshComponent IS the
-    //     root; reconstruct the -halfH shim at the actor transform level.
-    // Helper centralizes the decision; remote_player just consumes the
-    // value at spawn + uses it per-tick in ApplyToEngine.
-    meshOffsetZ_ = Pup::GetSpawnMeshOffsetZ(local);
-    UE_LOGI("RemotePlayer::Spawn: meshOffsetZ_=%.2f (puppet-kind=%ls) "
-            "meshOffsetYaw_=%.2f",
-            meshOffsetZ_,
-            Pup::IsMainPlayerPuppetKind() ? L"MainPlayer (0)"
-                                          : L"SkelMesh (-halfH)",
-            meshOffsetYaw_);
+    if (Pup::IsMainPlayerPuppetKind()) {
+        const float halfH = E::GetActorCharacterHalfHeight(local);
+        meshOffsetZ_ = +halfH;
+    } else {
+        meshOffsetZ_ = Pup::GetSpawnMeshOffsetZ(local);
+    }
+    UE_LOGI("RemotePlayer::Spawn: meshOffsetZ_=%.2f meshOffsetYaw_=%.2f puppet-kind=%ls",
+            meshOffsetZ_, meshOffsetYaw_,
+            Pup::IsMainPlayerPuppetKind() ? L"MainPlayer (+halfH, yaw=0)"
+                                          : L"SkelMesh (-halfH, yaw=mesh-frame-shim)");
 
     // Spawn-placement Z = actor.Z + meshOffsetZ_, same formula as ApplyToEngine.
     // No visual pop between SpawnActor and the first ApplyToEngine because both
