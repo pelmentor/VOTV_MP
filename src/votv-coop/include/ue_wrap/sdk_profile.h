@@ -561,13 +561,21 @@ inline constexpr const wchar_t* PropClass             = L"prop_C";
 inline constexpr const wchar_t* PropThrownFn          = L"thrown";
 
 // Native UPrimitiveComponent UFunctions used by the receiver-side puppet
-// path to put a held prop into kinematic mode + apply throw impulse. These
-// ARE ProcessEvent-dispatchable (native exec thunks already RVA'd in IDB by
-// the IDA agent for the PhysicsHandle siblings, but the Primitive
-// SetSimulatePhysics / SetPhysicsLinearVelocity / SetPhysicsAngular* are
-// the canonical ones we drive on the puppet's local prop instance).
-inline constexpr const wchar_t* SetSimulatePhysicsFn               = L"SetSimulatePhysics";
-inline constexpr const wchar_t* SetPhysicsLinearVelocityFn         = L"SetPhysicsLinearVelocity";
+// path to put a held prop into kinematic mode + apply inherited physics
+// velocity. These ARE ProcessEvent-dispatchable (native exec thunks already
+// RVA'd in IDB by the IDA agent: SetPhysicsLinearVelocity @ 0x1430DFA40,
+// SetPhysicsAngularVelocityInDegrees @ 0x1430DF7B0,
+// GetPhysicsLinearVelocity @ 0x1430DC550,
+// GetPhysicsAngularVelocityInDegrees @ 0x1430DC320 -- see
+// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md). Host reads
+// GetPhysics* on the held mesh AT THE RELEASE EDGE to capture the body's
+// inherited tracking velocity; receiver writes the matching SetPhysics*
+// AFTER SetSimulatePhysics(true) so the body re-enters dynamic sim with the
+// correct launch state.
+inline constexpr const wchar_t* SetSimulatePhysicsFn                 = L"SetSimulatePhysics";
+inline constexpr const wchar_t* GetPhysicsLinearVelocityFn           = L"GetPhysicsLinearVelocity";
+inline constexpr const wchar_t* GetPhysicsAngularVelocityInDegreesFn = L"GetPhysicsAngularVelocityInDegrees";
+inline constexpr const wchar_t* SetPhysicsLinearVelocityFn           = L"SetPhysicsLinearVelocity";
 inline constexpr const wchar_t* SetPhysicsAngularVelocityInDegreesFn = L"SetPhysicsAngularVelocityInDegrees";
 }  // namespace name
 

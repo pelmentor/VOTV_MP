@@ -95,8 +95,9 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             break;
         }
         case net::ReliableKind::PropRelease: {
-            // v4: peer released a held prop. Dispatch to remote_prop which
-            // re-enables SimulatePhysics + AddImpulse if throw.
+            // v5: peer released a held prop. Dispatch to remote_prop which
+            // re-enables SimulatePhysics + sets linear/angular velocity, and
+            // fires Aprop_C.thrown if the launch crosses the throw threshold.
             if (msg.payload.size() < sizeof(net::PropReleasePayload)) {
                 UE_LOGW("event_feed: PropRelease payload too short (%zu < %zu)",
                         msg.payload.size(), sizeof(net::PropReleasePayload));
@@ -104,22 +105,36 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             }
             net::PropReleasePayload p{};
             std::memcpy(&p, msg.payload.data(), sizeof(p));
-            // Trust-boundary validation: a NaN/Inf or absurd-magnitude impulse
-            // reaches UPrimitiveComponent::AddImpulse -> PhysX UB. Reject
-            // before dispatch. Audit fix 2026-05-24.
-            if (!std::isfinite(p.impulseX) || !std::isfinite(p.impulseY) || !std::isfinite(p.impulseZ)) {
-                UE_LOGW("event_feed: PropRelease impulse non-finite -- dropping");
+            // Trust-boundary validation: a NaN/Inf or absurd-magnitude velocity
+            // reaches UPrimitiveComponent::SetPhysicsLinearVelocity ->
+            // SetPhysicsAngularVelocityInDegrees -> PhysX UB. Reject before
+            // dispatch.
+            const float vals[6] = {p.linVelX, p.linVelY, p.linVelZ,
+                                   p.angVelX, p.angVelY, p.angVelZ};
+            bool finite = true;
+            for (float v : vals) {
+                if (!std::isfinite(v)) { finite = false; break; }
+            }
+            if (!finite) {
+                UE_LOGW("event_feed: PropRelease velocity non-finite -- dropping");
                 break;
             }
-            // kMaxImpulse cap: VOTV's throw mechanic uses impulses on the
-            // order of 100-1000 cm/s * mass; 1e7 is well above any legitimate
-            // throw and below any value that would teleport a body to infinity.
-            constexpr float kMaxImpulse = 1.0e7f;
-            if (std::fabs(p.impulseX) > kMaxImpulse ||
-                std::fabs(p.impulseY) > kMaxImpulse ||
-                std::fabs(p.impulseZ) > kMaxImpulse) {
-                UE_LOGW("event_feed: PropRelease impulse out of bounds (%.1f, %.1f, %.1f) -- dropping",
-                        p.impulseX, p.impulseY, p.impulseZ);
+            // Linear velocity bound: realistic throws peak at a few thousand
+            // cm/s. 1e6 cm/s = 10 km/s -- well beyond any legitimate throw and
+            // below any value that would teleport a body to infinity in one
+            // tick. Angular velocity bound: a fast tumble is ~3600 deg/s
+            // (10 rps); 1e6 is generous headroom.
+            constexpr float kMaxLinVel = 1.0e6f;
+            constexpr float kMaxAngVel = 1.0e6f;
+            if (std::fabs(p.linVelX) > kMaxLinVel ||
+                std::fabs(p.linVelY) > kMaxLinVel ||
+                std::fabs(p.linVelZ) > kMaxLinVel ||
+                std::fabs(p.angVelX) > kMaxAngVel ||
+                std::fabs(p.angVelY) > kMaxAngVel ||
+                std::fabs(p.angVelZ) > kMaxAngVel) {
+                UE_LOGW("event_feed: PropRelease velocity out of bounds (lin=(%.1f,%.1f,%.1f) ang=(%.1f,%.1f,%.1f)) -- dropping",
+                        p.linVelX, p.linVelY, p.linVelZ,
+                        p.angVelX, p.angVelY, p.angVelZ);
                 break;
             }
             remote_prop::OnRelease(p, localPlayer);

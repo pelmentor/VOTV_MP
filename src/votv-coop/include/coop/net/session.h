@@ -98,12 +98,18 @@ public:
     // when new, to skip redundant engine writes when the stream pauses).
     bool TryGetRemotePropPose(PropPoseSnapshot& out, bool* outIsNew = nullptr);
 
-    // v4: signal the peer that we released the prop (one-shot, reliable).
-    // `impulse` = (0,0,0) for drop, non-zero for throw -> receiver does
-    // AddImpulse on the prop after re-enabling SimulatePhysics. Returns false
-    // if the reliable channel is busy (stop-and-wait queue is currently
-    // carrying another message); caller should retry next tick.
-    bool SendPropRelease(const WireKey& key, float impulseX, float impulseY, float impulseZ);
+    // v5: signal the peer that we released the prop (one-shot, reliable).
+    // linVel = body's PhysX linear velocity in cm/s at release (the body's
+    // INHERITED kinematic-tracking velocity + any AddImpulse the engine just
+    // applied -- ONE number captures everything). angVel = angular velocity
+    // in deg/s. Receiver: re-enable SimulatePhysics + SetPhysicsLinearVelocity
+    // + SetPhysicsAngularVelocityInDegrees; fires Aprop_C.thrown if |linVel|
+    // > kThrownLinVelThreshold so the natural whoosh dispatches.
+    // Returns false if the reliable channel is busy (stop-and-wait queue is
+    // currently carrying another message); caller should retry next tick.
+    bool SendPropRelease(const WireKey& key,
+                         float linVelX, float linVelY, float linVelZ,
+                         float angVelX, float angVelY, float angVelZ);
 
     // Diagnostics / validation (methodology 5.2: packets sent/received counts).
     uint64_t packetsSent() const { return sent_.load(); }

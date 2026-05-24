@@ -147,6 +147,84 @@ NearestResult FindNearest(const FVector& anchor, bool wantHeavy, ScanStats* outS
     return best;
 }
 
+namespace {
+
+// Cached UFunction resolutions for the host-side velocity capture. Resolved
+// lazily on first GetPhysicsVelocity call; both UFunctions are on
+// UPrimitiveComponent (engine-stable) so a single class lookup suffices. The
+// frame is a fixed 32 B (BoneName FName 8 + FVector ReturnValue 12 + pad);
+// kept inline with no allocation. Game-thread only.
+struct PrimVelocityResolved {
+    void*    cls       = nullptr;  // UPrimitiveComponent UClass
+    void*    getLinFn  = nullptr;
+    void*    getAngFn  = nullptr;
+    int32_t  linFrameSize = 0;
+    int32_t  linBoneOff   = -1;
+    int32_t  linRetOff    = -1;
+    int32_t  angFrameSize = 0;
+    int32_t  angBoneOff   = -1;
+    int32_t  angRetOff    = -1;
+    bool     ok = false;
+};
+PrimVelocityResolved g_pvr;
+
+bool ResolvePrimVelocity() {
+    if (g_pvr.ok && R::IsLive(g_pvr.cls)) return true;
+    g_pvr = {};
+    void* cls = R::FindClass(P::name::PrimitiveComponentClass);
+    if (!cls) {
+        UE_LOGW("prop::GetPhysicsVelocity: PrimitiveComponent class not found");
+        return false;
+    }
+    void* fnLin = R::FindFunction(cls, P::name::GetPhysicsLinearVelocityFn);
+    void* fnAng = R::FindFunction(cls, P::name::GetPhysicsAngularVelocityInDegreesFn);
+    if (!fnLin || !fnAng) {
+        UE_LOGW("prop::GetPhysicsVelocity: UFunction lookup failed");
+        return false;
+    }
+    g_pvr.cls          = cls;
+    g_pvr.getLinFn     = fnLin;
+    g_pvr.getAngFn     = fnAng;
+    g_pvr.linFrameSize = R::FunctionFrameSize(fnLin);
+    g_pvr.linBoneOff   = R::FindParamOffset(fnLin, L"BoneName");
+    g_pvr.linRetOff    = R::FindParamOffset(fnLin, L"ReturnValue");
+    g_pvr.angFrameSize = R::FunctionFrameSize(fnAng);
+    g_pvr.angBoneOff   = R::FindParamOffset(fnAng, L"BoneName");
+    g_pvr.angRetOff    = R::FindParamOffset(fnAng, L"ReturnValue");
+    if (g_pvr.linBoneOff < 0 || g_pvr.linRetOff < 0 ||
+        g_pvr.angBoneOff < 0 || g_pvr.angRetOff < 0) {
+        UE_LOGW("prop::GetPhysicsVelocity: param offsets failed");
+        g_pvr = {};
+        return false;
+    }
+    g_pvr.ok = true;
+    return true;
+}
+
+}  // namespace
+
+VelocityState GetPhysicsVelocity(void* prop) {
+    VelocityState out;
+    if (!prop) return out;
+    void* mesh = GetStaticMesh(prop);
+    if (!mesh) return out;
+    if (!ResolvePrimVelocity()) return out;
+    // Linear -- 32-byte frame covers FName(8) + FVector(12) + padding.
+    unsigned char frameL[32] = {};
+    if (g_pvr.linFrameSize > static_cast<int32_t>(sizeof(frameL))) return out;
+    *reinterpret_cast<R::FName*>(frameL + g_pvr.linBoneOff) = R::FName{0, 0};
+    if (!R::CallFunction(mesh, g_pvr.getLinFn, frameL)) return out;
+    out.linearCmS = *reinterpret_cast<FVector*>(frameL + g_pvr.linRetOff);
+    // Angular -- same shape, separate frame buffer.
+    unsigned char frameA[32] = {};
+    if (g_pvr.angFrameSize > static_cast<int32_t>(sizeof(frameA))) return out;
+    *reinterpret_cast<R::FName*>(frameA + g_pvr.angBoneOff) = R::FName{0, 0};
+    if (!R::CallFunction(mesh, g_pvr.getAngFn, frameA)) return out;
+    out.angularDegS = *reinterpret_cast<FVector*>(frameA + g_pvr.angRetOff);
+    out.ok = true;
+    return out;
+}
+
 void* FindByKeyString(const std::wstring& keyString) {
     if (keyString.empty()) return nullptr;
     void* base = PropBaseClass();

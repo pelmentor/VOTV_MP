@@ -10,6 +10,7 @@
 #include "ue_wrap/sdk_profile.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -35,18 +36,29 @@ struct ActiveDrive {
 ActiveDrive g_drive;
 
 // Cached UFunction pointers for the engine PrimComp ops we call per release.
-// SetSimulatePhysics + AddImpulse live on UPrimitiveComponent. PropThrown
-// is on Aprop_C (BP-class lookup). One-shot resolve; IsLive checks re-
-// resolve if the UClass got GC'd at a level unload.
-void*  g_primCompCls       = nullptr;
-void*  g_setSimulateFn     = nullptr;
-void*  g_addImpulseFn      = nullptr;
-int32_t g_setSimulateFrameSize = 0;
-int32_t g_setSimulatePSim      = -1;  // offset of bSimulate bool in the frame
-int32_t g_addImpulseFrameSize  = 0;
-int32_t g_addImpulsePImpulse   = -1;
-int32_t g_addImpulsePBone      = -1;
-int32_t g_addImpulsePVelChange = -1;
+// SetSimulatePhysics + SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
+// live on UPrimitiveComponent. PropThrown is on Aprop_C (BP-class lookup).
+// One-shot resolve; IsLive checks re-resolve if the UClass got GC'd at a
+// level unload.
+//
+// v5 design (post-RE 2026-05-24): the launch energy is the body's inherited
+// PhysX tracking velocity captured by the HOST at the release edge (see
+// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md). Receiver
+// applies linear + angular velocity AFTER SetSimulatePhysics(true) so the
+// body resumes dynamic sim with the matching launch state. No AddImpulse
+// (the impulse was the v4 partial fix; replaced cleanly per RULE 2).
+void*  g_primCompCls            = nullptr;
+void*  g_setSimulateFn          = nullptr;
+void*  g_setLinVelFn            = nullptr;
+void*  g_setAngVelFn            = nullptr;
+int32_t g_setSimulateFrameSize  = 0;
+int32_t g_setSimulatePSim       = -1;  // offset of bSimulate bool in the frame
+int32_t g_setLinVelFrameSize    = 0;
+int32_t g_setLinVelPVec         = -1;  // FVector NewVel
+int32_t g_setLinVelPBone        = -1;  // FName BoneName
+int32_t g_setAngVelFrameSize    = 0;
+int32_t g_setAngVelPVec         = -1;
+int32_t g_setAngVelPBone        = -1;
 bool    g_resolved = false;
 
 // Separately resolved (different class). Aprop_C.thrown(Player) is the BP
@@ -91,24 +103,32 @@ bool ResolveUFns() {
         return false;
     }
     g_setSimulateFn = R::FindFunction(g_primCompCls, P::name::SetSimulatePhysicsFn);
-    g_addImpulseFn  = R::FindFunction(g_primCompCls, P::name::AddImpulseFn);
-    if (!g_setSimulateFn || !g_addImpulseFn) {
-        UE_LOGW("remote_prop: UFunction lookup failed (sim=%p addImp=%p)",
-                g_setSimulateFn, g_addImpulseFn);
+    g_setLinVelFn   = R::FindFunction(g_primCompCls, P::name::SetPhysicsLinearVelocityFn);
+    g_setAngVelFn   = R::FindFunction(g_primCompCls, P::name::SetPhysicsAngularVelocityInDegreesFn);
+    if (!g_setSimulateFn || !g_setLinVelFn || !g_setAngVelFn) {
+        UE_LOGW("remote_prop: UFunction lookup failed (sim=%p setLin=%p setAng=%p)",
+                g_setSimulateFn, g_setLinVelFn, g_setAngVelFn);
         return false;
     }
     g_setSimulateFrameSize = R::FunctionFrameSize(g_setSimulateFn);
-    // Param is `bSimulate` per Engine.hpp:17349 (Hungarian b- prefix for bool,
-    // different convention than AddImpulse's lowercase `impulse`).
+    // Param is `bSimulate` per Engine.hpp:17349 (Hungarian b- prefix for bool).
     g_setSimulatePSim = R::FindParamOffset(g_setSimulateFn, L"bSimulate");
-    g_addImpulseFrameSize = R::FunctionFrameSize(g_addImpulseFn);
-    g_addImpulsePImpulse  = R::FindParamOffset(g_addImpulseFn, L"impulse");
-    g_addImpulsePBone     = R::FindParamOffset(g_addImpulseFn, L"BoneName");
-    g_addImpulsePVelChange = R::FindParamOffset(g_addImpulseFn, L"bVelChange");
-    if (g_setSimulatePSim < 0 || g_addImpulsePImpulse < 0 ||
-        g_addImpulsePBone < 0 || g_addImpulsePVelChange < 0) {
-        UE_LOGW("remote_prop: param offsets failed (sim=%d / imp=%d bone=%d vel=%d)",
-                g_setSimulatePSim, g_addImpulsePImpulse, g_addImpulsePBone, g_addImpulsePVelChange);
+    // UPrimitiveComponent.SetPhysicsLinearVelocity(FVector NewVel, bool
+    // bAddToCurrent, FName BoneName). Per UE4 4.27 Engine.hpp; UFunction param
+    // names match exactly. bAddToCurrent we leave 0 (overwrite, not accumulate).
+    g_setLinVelFrameSize = R::FunctionFrameSize(g_setLinVelFn);
+    g_setLinVelPVec   = R::FindParamOffset(g_setLinVelFn, L"NewVel");
+    g_setLinVelPBone  = R::FindParamOffset(g_setLinVelFn, L"BoneName");
+    g_setAngVelFrameSize = R::FunctionFrameSize(g_setAngVelFn);
+    g_setAngVelPVec   = R::FindParamOffset(g_setAngVelFn, L"NewAngVel");
+    g_setAngVelPBone  = R::FindParamOffset(g_setAngVelFn, L"BoneName");
+    if (g_setSimulatePSim < 0 ||
+        g_setLinVelPVec < 0 || g_setLinVelPBone < 0 ||
+        g_setAngVelPVec < 0 || g_setAngVelPBone < 0) {
+        UE_LOGW("remote_prop: param offsets failed (sim=%d / linVec=%d linBone=%d / angVec=%d angBone=%d)",
+                g_setSimulatePSim,
+                g_setLinVelPVec, g_setLinVelPBone,
+                g_setAngVelPVec, g_setAngVelPBone);
         return false;
     }
     // Aprop_C.thrown is handled by TryResolvePropThrown() at the top of
@@ -117,10 +137,12 @@ bool ResolveUFns() {
     // 2026-05-24).
     TryResolvePropThrown();
     UE_LOGI("remote_prop: resolved -- SetSimulatePhysics frame=%d (sim@%d), "
-            "AddImpulse frame=%d (imp@%d bone@%d vel@%d), "
+            "SetPhysicsLinearVelocity frame=%d (vec@%d bone@%d), "
+            "SetPhysicsAngularVelocityInDegrees frame=%d (vec@%d bone@%d), "
             "Aprop_C.thrown frame=%d (player@%d) %s",
             g_setSimulateFrameSize, g_setSimulatePSim,
-            g_addImpulseFrameSize, g_addImpulsePImpulse, g_addImpulsePBone, g_addImpulsePVelChange,
+            g_setLinVelFrameSize, g_setLinVelPVec, g_setLinVelPBone,
+            g_setAngVelFrameSize, g_setAngVelPVec, g_setAngVelPBone,
             g_propThrownFrameSize, g_propThrownPPlayer,
             g_propThrownFn ? "OK" : "(MISSING -- natural sound disabled)");
     g_resolved = true;
@@ -159,16 +181,26 @@ void DriveSimulate(void* mesh, bool simulate) {
     R::CallFunction(mesh, g_setSimulateFn, frame);
 }
 
-void DriveAddImpulse(void* mesh, float ix, float iy, float iz) {
+void DriveSetLinearVelocity(void* mesh, float vx, float vy, float vz) {
     if (!mesh) return;
     if (!ResolveUFns()) return;
     unsigned char frame[64] = {};
-    if (g_addImpulseFrameSize > static_cast<int32_t>(sizeof(frame))) return;
-    *reinterpret_cast<ue_wrap::FVector*>(frame + g_addImpulsePImpulse) =
-        ue_wrap::FVector{ix, iy, iz};
-    *reinterpret_cast<R::FName*>(frame + g_addImpulsePBone) = R::FName{0, 0};
-    *reinterpret_cast<bool*>(frame + g_addImpulsePVelChange) = false;
-    R::CallFunction(mesh, g_addImpulseFn, frame);
+    if (g_setLinVelFrameSize > static_cast<int32_t>(sizeof(frame))) return;
+    *reinterpret_cast<ue_wrap::FVector*>(frame + g_setLinVelPVec) =
+        ue_wrap::FVector{vx, vy, vz};
+    *reinterpret_cast<R::FName*>(frame + g_setLinVelPBone) = R::FName{0, 0};
+    R::CallFunction(mesh, g_setLinVelFn, frame);
+}
+
+void DriveSetAngularVelocity(void* mesh, float wx, float wy, float wz) {
+    if (!mesh) return;
+    if (!ResolveUFns()) return;
+    unsigned char frame[64] = {};
+    if (g_setAngVelFrameSize > static_cast<int32_t>(sizeof(frame))) return;
+    *reinterpret_cast<ue_wrap::FVector*>(frame + g_setAngVelPVec) =
+        ue_wrap::FVector{wx, wy, wz};
+    *reinterpret_cast<R::FName*>(frame + g_setAngVelPBone) = R::FName{0, 0};
+    R::CallFunction(mesh, g_setAngVelFn, frame);
 }
 
 // Extract null-terminated wstring from a WireKey for FindByKeyString.
@@ -277,11 +309,17 @@ void Tick(coop::net::Session& session) {
 
 void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) {
     const std::wstring keyW = KeyToWString(payload.key);
-    UE_LOGI("remote_prop: RELEASE wire '%ls' impulse=(%.1f, %.1f, %.1f)",
-            keyW.c_str(), payload.impulseX, payload.impulseY, payload.impulseZ);
+    const float linSpeedSq = payload.linVelX * payload.linVelX +
+                             payload.linVelY * payload.linVelY +
+                             payload.linVelZ * payload.linVelZ;
+    const float linSpeed = std::sqrt(linSpeedSq);
+    UE_LOGI("remote_prop: RELEASE wire '%ls' linVel=(%.1f, %.1f, %.1f) |v|=%.1f cm/s angVel=(%.1f, %.1f, %.1f) deg/s",
+            keyW.c_str(),
+            payload.linVelX, payload.linVelY, payload.linVelZ, linSpeed,
+            payload.angVelX, payload.angVelY, payload.angVelZ);
     // If we don't currently drive this prop (e.g. release arrived without a
     // preceding PropPose stream because we missed/dropped them), resolve fresh
-    // so we can re-enable physics + apply the impulse + fire thrown event.
+    // so we can re-enable physics + apply velocity + fire thrown event.
     void* propActor = nullptr;
     void* meshToActOn = nullptr;
     if (g_drive.actor && KeyMatchesCache(payload.key)) {
@@ -292,20 +330,23 @@ void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) 
         meshToActOn = ue_wrap::prop::GetStaticMesh(prop);
     }
     if (meshToActOn) {
+        // Order matters: SetSimulate(true) FIRST so the body re-enters
+        // dynamic sim BEFORE we write velocity (a kinematic body's velocity
+        // write would be ignored / cause a PhysX kinematic-target chase).
         DriveSimulate(meshToActOn, true);
-        const bool hasImpulse =
-            payload.impulseX != 0.f || payload.impulseY != 0.f || payload.impulseZ != 0.f;
-        if (hasImpulse) {
-            DriveAddImpulse(meshToActOn, payload.impulseX, payload.impulseY, payload.impulseZ);
-            // RULE 1 natural-sound dispatch: fire Aprop_C.thrown(Player) so
-            // the prop's BP graph plays throw-whoosh sound + particle trail
-            // identically to a local throw. Without this, only the visual
-            // physics changes -- no audio, no FX.
-            if (propActor) {
-                DrivePropThrown(propActor, localPlayer);
-                UE_LOGI("remote_prop: fired Aprop_C.thrown(player=%p) -> natural sound + particle trail",
-                        localPlayer);
-            }
+        DriveSetLinearVelocity(meshToActOn, payload.linVelX, payload.linVelY, payload.linVelZ);
+        DriveSetAngularVelocity(meshToActOn, payload.angVelX, payload.angVelY, payload.angVelZ);
+        // RULE 1 natural-sound dispatch: fire Aprop_C.thrown(Player) so the
+        // prop's BP graph plays throw-whoosh sound + particle trail
+        // identically to a local throw. Gated on linear speed: a passive drop
+        // (residual walk velocity ~30 cm/s) shouldn't whoosh; a deliberate
+        // throw (>200 cm/s, per kThrownLinVelThreshold) should. Without this
+        // gate the BP fires on every release; without the call entirely
+        // (Bug A) it never fires on the remote at all.
+        if (propActor && linSpeed > coop::net::kThrownLinVelThreshold) {
+            DrivePropThrown(propActor, localPlayer);
+            UE_LOGI("remote_prop: fired Aprop_C.thrown(player=%p) -- launch speed %.1f cm/s > threshold %.1f",
+                    localPlayer, linSpeed, coop::net::kThrownLinVelThreshold);
         }
     }
     g_drive.actor = nullptr;

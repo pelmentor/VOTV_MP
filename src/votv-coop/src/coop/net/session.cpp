@@ -125,10 +125,13 @@ bool Session::TryGetReliable(ReliableChannel::Message& out) {
     return reliable_.TryDrain(out);
 }
 
-bool Session::SendPropRelease(const WireKey& key, float ix, float iy, float iz) {
+bool Session::SendPropRelease(const WireKey& key,
+                              float linVelX, float linVelY, float linVelZ,
+                              float angVelX, float angVelY, float angVelZ) {
     PropReleasePayload p{};
     p.key = key;
-    p.impulseX = ix; p.impulseY = iy; p.impulseZ = iz;
+    p.linVelX = linVelX; p.linVelY = linVelY; p.linVelZ = linVelZ;
+    p.angVelX = angVelX; p.angVelY = angVelY; p.angVelZ = angVelZ;
     return reliable_.Send(ReliableKind::PropRelease, &p, sizeof(p));
 }
 

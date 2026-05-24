@@ -125,4 +125,20 @@ NearestResult FindNearest(const FVector& anchor, bool wantHeavy = false,
 // at GRAB packet handling; subsequent POSE packets use the cached pointer.
 void* FindByKeyString(const std::wstring& keyString);
 
+// Body velocity at THIS instant, read via UPrimitiveComponent reflection
+// UFunctions on the prop's StaticMesh component. Used by the host's
+// release-edge to capture the body's INHERITED tracking velocity (the
+// dominant "вжух" launch energy per
+// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md, Bug B).
+// linear in cm/s, angular in deg/s. ok=false if the prop / mesh / UFunctions
+// can't be resolved or if the read fails. Game-thread only. One-shot
+// reflection lookup cached internally; subsequent calls are 2 ProcessEvent
+// dispatches each.
+struct VelocityState {
+    FVector linearCmS{0.f, 0.f, 0.f};
+    FVector angularDegS{0.f, 0.f, 0.f};
+    bool ok = false;
+};
+VelocityState GetPhysicsVelocity(void* prop);
+
 }  // namespace ue_wrap::prop

@@ -20,18 +20,32 @@ namespace coop::net {
 // Opaque magic guard (rejects stray datagrams that hit our port). Both peers
 // just agree on the constant; the spelling is "VMTP" (VoTv MultiPlayer).
 inline constexpr uint32_t kMagic = 0x564D5450u;
+// v5 (2026-05-24 post-compact): PropRelease replaces throw-impulse with
+// inherited-physics-velocity (FVector linVel + FVector angVel). Root-cause RE
+// (research/findings/votv-throw-release-pipeline-RE-2026-05-24.md) showed the
+// "вжух" mouse-flick launch is NOT a discrete AddImpulse call -- it is the
+// kinematic-tracking velocity PhysX accumulates while the player flicks the
+// camera (UPhysicsHandleComponent.SetTargetLocation jumps the target each tick;
+// PhysX integrates a tracking velocity in the constrained body to follow it);
+// on ReleaseComponent the body re-enters dynamic sim INHERITING that velocity.
+// v4 shipped only the (optional) AddImpulse boost and missed the dominant
+// inherited velocity entirely (Bug B). Capture is via
+// UPrimitiveComponent.GetPhysicsLinearVelocity / GetPhysicsAngularVelocityInDegrees
+// on the release edge; apply via the matching Set... pair after
+// SetSimulatePhysics(true).
 // v4 (2026-05-24): physics-object grab replication added.
 //   - MsgType::PropPose = per-frame world transform of the prop the sender
 //     currently holds (unreliable; receiver lookup-by-Key on first arrival,
 //     SetSimulatePhysics(false) + drive transform per packet)
-//   - ReliableKind::PropRelease = one-shot release signal carrying optional
-//     throw-impulse FVector; receiver re-enables SimulatePhysics + AddImpulse
+//   - ReliableKind::PropRelease = one-shot release signal; v5 carries inherited
+//     linear+angular velocity (replaces v4's throw-impulse FVector); receiver
+//     re-enables SimulatePhysics + SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
 //   - WireKey carries the FName string (cross-peer stable, idx is NOT --
 //     see research/findings/votv-physics-interaction-deep-re-2026-05-23.md)
 // v3 (2026-05-23 PM): PoseSnapshot grew from 24 -> 28 bytes (added headYawDelta).
-// Both peers must run v4; v3 packets are rejected at the header check. No
+// Both peers must run v5; v3/v4 packets are rejected at the header check. No
 // back-compat layer (RULE 2 -- mod is pre-ship; bump cleanly).
-inline constexpr uint16_t kProtocolVersion = 4;
+inline constexpr uint16_t kProtocolVersion = 5;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -54,10 +68,12 @@ enum class MsgType : uint8_t {
 // label the remote player. (Chat text is a future ReliableKind.)
 enum class ReliableKind : uint8_t {
     Join = 1,         // payload: [uint8 len][len bytes UTF-8 nickname]
-    PropRelease = 2,  // v4: host released a held prop. Payload: PropReleasePayload
-                      //     (WireKey + FVector impulse; impulse=(0,0,0) for drop,
-                      //     non-zero for throw). Receiver re-enables
-                      //     SetSimulatePhysics(true) + AddImpulse if non-zero.
+    PropRelease = 2,  // v5: host released a held prop. Payload: PropReleasePayload
+                      //     (WireKey + FVector linVel cm/s + FVector angVel deg/s).
+                      //     Receiver: SetSimulatePhysics(true) +
+                      //     SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees;
+                      //     fires Aprop_C.thrown if |linVel| > kThrownThreshold so
+                      //     the BP's natural whoosh + particle FX dispatch.
 };
 
 #pragma pack(push, 1)
@@ -165,17 +181,32 @@ struct PropPosePacket {
 };
 static_assert(sizeof(PropPosePacket) == 76, "PropPosePacket must be 76 bytes");
 
-// v4: PropRelease reliable payload. Sent ONCE when the sender's grab ends.
-// Receiver re-enables SimulatePhysics on the cached prop + AddImpulse if the
-// impulse vector is non-zero (throw vs drop). Carries the Key so a release
-// out of order vs the last PropPose still finds the right prop.
+// v5: PropRelease reliable payload. Sent ONCE when the sender's grab ends.
+// Receiver re-enables SimulatePhysics on the cached prop, then sets linear +
+// angular velocity (the body's INHERITED PhysX state at release: tracking
+// velocity from the kinematic chase + any post-release AddImpulse boost the
+// engine applied -- ONE number captures the body's full launch state). Carries
+// the Key so a release that arrives out of order vs the last PropPose still
+// finds the right prop. Fires Aprop_C.thrown(localPlayer) when |linVel| exceeds
+// the throw threshold so the BP's natural whoosh + particle trail dispatch.
 struct PropReleasePayload {
     WireKey key;
-    float   impulseX;
-    float   impulseY;
-    float   impulseZ;  // (0,0,0) = drop; non-zero = throw
+    float   linVelX;   // cm/s -- GetPhysicsLinearVelocity at release
+    float   linVelY;
+    float   linVelZ;
+    float   angVelX;   // deg/s -- GetPhysicsAngularVelocityInDegrees at release
+    float   angVelY;
+    float   angVelZ;
 };
-static_assert(sizeof(PropReleasePayload) == 44, "PropReleasePayload must be 44 bytes");
+static_assert(sizeof(PropReleasePayload) == 56, "PropReleasePayload must be 56 bytes");
+
+// Velocity magnitude (cm/s) above which a release is classified as a THROW
+// (vs a passive drop) on the receiver -- fires Aprop_C.thrown(localPlayer) so
+// the BP's whoosh sound + particle trail dispatch. 200 cm/s = 2 m/s, well above
+// the residual velocity from a walking drop (camera moves ~30 cm/s at walk,
+// rarely transferring even half that to a held prop) and well below any
+// deliberate flick-throw. Calibrate vs hands-on if hover threshold matters.
+inline constexpr float kThrownLinVelThreshold = 200.f;
 
 #pragma pack(pop)
 
