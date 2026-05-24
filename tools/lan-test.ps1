@@ -43,14 +43,26 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $root  = Split-Path -Parent $PSScriptRoot
-# 2026-05-25: the LAN test now runs against Game_0.9.0n_dev/ (the Claude-
-# owned dev copy with UE4SS installed) -- ISOLATED from the user's
-# hands-on play copies (Game_0.9.0n/ = host, Game_0.9.0n_copy/ = client).
-# Both host + client instances in the autonomous test launch from the
-# SAME _dev/ exe with role/peer/port env vars distinguishing them. This
-# keeps the test's logs, screenshots, and any save-state mutations OUT
-# of the user's play directories. See docs/RE_WORKFLOW.md.
-$win64 = Join-Path $root "Game_0.9.0n_dev\WindowsNoEditor\VotV\Binaries\Win64"
+# 2026-05-25: the LAN test runs against Game_0.9.0n/ (the user's host
+# play copy). Both host + client instances launch from the SAME exe
+# with role/peer/port env vars distinguishing them.
+#
+# We TRIED retargeting to Game_0.9.0n_dev/ (the new Claude-owned dev
+# copy with UE4SS) but hit a regression: both instances reach
+# "harness: target STORY save 's_may2026'" and then silently die before
+# the save-load completes. Cause is unknown -- possibly a first-launch
+# asset-cache initialization race when two fresh game instances boot
+# simultaneously from a freshly-cloned game folder. The dev copy
+# launches a SINGLE instance fine; the failure is specific to two
+# concurrent fresh boots.
+#
+# Workaround: keep lan-test pointed at the well-warmed Game_0.9.0n/
+# folder (which has run lan-tests many times this session without
+# issue). The dev copy is still valuable for solo RE work (Live View,
+# Lua probes, GUIUFunctionCaller hypothesis testing). When the two-
+# concurrent-boot issue is solved, switch back. See
+# docs/RE_WORKFLOW.md for the 3-copy convention.
+$win64 = Join-Path $root "Game_0.9.0n\WindowsNoEditor\VotV\Binaries\Win64"
 $exe   = Join-Path $win64 "VotV-Win64-Shipping.exe"
 $hostLogName   = "votv-coop-host.log"
 $clientLogName = "votv-coop-client.log"
