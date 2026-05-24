@@ -49,7 +49,7 @@ void SetLocalNickname(const std::wstring& nick) {
     if (!nick.empty()) g_localNick = nick;
 }
 
-void Update(net::Session& session, RemotePlayer* remote) {
+void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
     const bool connected = session.connected();
 
     // Forward the latest RTT into the remote player so the nameplate can show
@@ -122,7 +122,7 @@ void Update(net::Session& session, RemotePlayer* remote) {
                         p.impulseX, p.impulseY, p.impulseZ);
                 break;
             }
-            remote_prop::OnRelease(p);
+            remote_prop::OnRelease(p, localPlayer);
             break;
         }
         }

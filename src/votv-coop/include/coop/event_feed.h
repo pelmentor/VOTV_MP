@@ -27,9 +27,11 @@ void SetLocalNickname(const std::wstring& nick);
 // Per-tick pump (game thread): on connect, announce ourselves (reliable Join with our
 // nickname); on disconnect, post the peer's departure; drain delivered reliable
 // messages (a peer Join -> "<nick> joined" + label the remote player). `remote` may be
-// null before the puppet spawns.
+// null before the puppet spawns. `localPlayer` is the local mainPlayer_C ptr,
+// passed through to remote_prop::OnRelease so the `Aprop_C.thrown(Player)`
+// dispatch has a non-null player arg (BP graph may null-check).
 // On disconnect it resets the announce flag so a reconnect re-announces.
-void Update(net::Session& session, RemotePlayer* remote);
+void Update(net::Session& session, RemotePlayer* remote, void* localPlayer);
 
 }  // namespace event_feed
 }  // namespace coop

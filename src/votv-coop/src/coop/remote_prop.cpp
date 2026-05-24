@@ -35,8 +35,9 @@ struct ActiveDrive {
 ActiveDrive g_drive;
 
 // Cached UFunction pointers for the engine PrimComp ops we call per release.
-// SetSimulatePhysics + AddImpulse live on UPrimitiveComponent. One-shot resolve;
-// IsLive check re-resolves if the UClass got GC'd at a level unload.
+// SetSimulatePhysics + AddImpulse live on UPrimitiveComponent. PropThrown
+// is on Aprop_C (BP-class lookup). One-shot resolve; IsLive checks re-
+// resolve if the UClass got GC'd at a level unload.
 void*  g_primCompCls       = nullptr;
 void*  g_setSimulateFn     = nullptr;
 void*  g_addImpulseFn      = nullptr;
@@ -48,13 +49,41 @@ int32_t g_addImpulsePBone      = -1;
 int32_t g_addImpulsePVelChange = -1;
 bool    g_resolved = false;
 
+// Separately resolved (different class). Aprop_C.thrown(Player) is the BP
+// event the prop's graph wires to throw-whoosh sound + particle trail.
+// Calling it on the receiver is the RULE 1 natural-dispatch path -- the
+// same mechanism NPCs/local player use, so sound/effects fire identically.
+void*   g_propThrownFn      = nullptr;
+int32_t g_propThrownFrameSize = 0;
+int32_t g_propThrownPPlayer  = -1;
+
 uint64_t NowMs() {
     using namespace std::chrono;
     return static_cast<uint64_t>(
         duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
+// Lazy resolver for Aprop_C.thrown. Called separately so primary-resolved
+// callers can still drive AddImpulse even if prop_C hasn't loaded yet, and
+// the next caller can pick up `thrown` once it does. Idempotent.
+void TryResolvePropThrown() {
+    if (g_propThrownFn) return;
+    void* propCls = R::FindClass(P::name::PropClass);
+    if (!propCls) return;
+    g_propThrownFn = R::FindFunction(propCls, P::name::PropThrownFn);
+    if (!g_propThrownFn) return;
+    g_propThrownFrameSize = R::FunctionFrameSize(g_propThrownFn);
+    g_propThrownPPlayer  = R::FindParamOffset(g_propThrownFn, L"Player");
+    UE_LOGI("remote_prop: late-resolved Aprop_C.thrown frame=%d (player@%d)",
+            g_propThrownFrameSize, g_propThrownPPlayer);
+}
+
 bool ResolveUFns() {
+    // Always poke the thrown resolver -- it self-gates on g_propThrownFn and
+    // costs one null-check on the steady state. If g_resolved already
+    // succeeded but `prop_C` had not yet loaded, this picks up `thrown` the
+    // next time a release fires.
+    TryResolvePropThrown();
     if (g_resolved && R::IsLive(g_primCompCls)) return true;
     g_primCompCls = R::FindClass(P::name::PrimitiveComponentClass);
     if (!g_primCompCls) {
@@ -82,12 +111,43 @@ bool ResolveUFns() {
                 g_setSimulatePSim, g_addImpulsePImpulse, g_addImpulsePBone, g_addImpulsePVelChange);
         return false;
     }
+    // Aprop_C.thrown is handled by TryResolvePropThrown() at the top of
+    // this function; it's separate so it can be re-attempted on later
+    // calls if `prop_C` wasn't loaded yet on the first call (audit
+    // 2026-05-24).
+    TryResolvePropThrown();
     UE_LOGI("remote_prop: resolved -- SetSimulatePhysics frame=%d (sim@%d), "
-            "AddImpulse frame=%d (imp@%d bone@%d vel@%d)",
+            "AddImpulse frame=%d (imp@%d bone@%d vel@%d), "
+            "Aprop_C.thrown frame=%d (player@%d) %s",
             g_setSimulateFrameSize, g_setSimulatePSim,
-            g_addImpulseFrameSize, g_addImpulsePImpulse, g_addImpulsePBone, g_addImpulsePVelChange);
+            g_addImpulseFrameSize, g_addImpulsePImpulse, g_addImpulsePBone, g_addImpulsePVelChange,
+            g_propThrownFrameSize, g_propThrownPPlayer,
+            g_propThrownFn ? "OK" : "(MISSING -- natural sound disabled)");
     g_resolved = true;
     return true;
+}
+
+// Fire Aprop_C.thrown(Player) on the prop actor so the BP's sound +
+// particle-trail effects play. `propActor` is the Aprop_C; `localPlayer`
+// is the local mainPlayer_C ptr (BP uses it for stats; semantically we're
+// crediting local for a remote throw, accepted for natural-sound benefit).
+//
+// Skips silently when localPlayer is null -- a null Player would feed the
+// BP graph a guaranteed-null cast, almost always producing a no-op or
+// null-deref. Audit-found 2026-05-24 (RULE 1: degrade gracefully, never
+// dispatch a known-null into BP we can't statically inspect).
+//
+// Frame buffer matches DriveSimulate/DriveAddImpulse (64 B). PropertiesSize
+// covers params + locals, so a BP event with temporaries can exceed the
+// 8 bytes the `Player` param alone takes.
+void DrivePropThrown(void* propActor, void* localPlayer) {
+    if (!propActor || !g_propThrownFn || !localPlayer) return;
+    unsigned char frame[64] = {};
+    if (g_propThrownFrameSize > static_cast<int32_t>(sizeof(frame))) return;
+    if (g_propThrownPPlayer >= 0) {
+        *reinterpret_cast<void**>(frame + g_propThrownPPlayer) = localPlayer;
+    }
+    R::CallFunction(propActor, g_propThrownFn, frame);
 }
 
 void DriveSimulate(void* mesh, bool simulate) {
@@ -215,20 +275,21 @@ void Tick(coop::net::Session& session) {
     }
 }
 
-void OnRelease(const coop::net::PropReleasePayload& payload) {
+void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) {
     const std::wstring keyW = KeyToWString(payload.key);
     UE_LOGI("remote_prop: RELEASE wire '%ls' impulse=(%.1f, %.1f, %.1f)",
             keyW.c_str(), payload.impulseX, payload.impulseY, payload.impulseZ);
     // If we don't currently drive this prop (e.g. release arrived without a
     // preceding PropPose stream because we missed/dropped them), resolve fresh
-    // so we can re-enable physics + apply the impulse.
+    // so we can re-enable physics + apply the impulse + fire thrown event.
+    void* propActor = nullptr;
     void* meshToActOn = nullptr;
     if (g_drive.actor && KeyMatchesCache(payload.key)) {
+        propActor = g_drive.actor;
         meshToActOn = g_drive.mesh;
-    } else {
-        if (void* prop = ue_wrap::prop::FindByKeyString(keyW)) {
-            meshToActOn = ue_wrap::prop::GetStaticMesh(prop);
-        }
+    } else if (void* prop = ue_wrap::prop::FindByKeyString(keyW)) {
+        propActor = prop;
+        meshToActOn = ue_wrap::prop::GetStaticMesh(prop);
     }
     if (meshToActOn) {
         DriveSimulate(meshToActOn, true);
@@ -236,6 +297,15 @@ void OnRelease(const coop::net::PropReleasePayload& payload) {
             payload.impulseX != 0.f || payload.impulseY != 0.f || payload.impulseZ != 0.f;
         if (hasImpulse) {
             DriveAddImpulse(meshToActOn, payload.impulseX, payload.impulseY, payload.impulseZ);
+            // RULE 1 natural-sound dispatch: fire Aprop_C.thrown(Player) so
+            // the prop's BP graph plays throw-whoosh sound + particle trail
+            // identically to a local throw. Without this, only the visual
+            // physics changes -- no audio, no FX.
+            if (propActor) {
+                DrivePropThrown(propActor, localPlayer);
+                UE_LOGI("remote_prop: fired Aprop_C.thrown(player=%p) -> natural sound + particle trail",
+                        localPlayer);
+            }
         }
     }
     g_drive.actor = nullptr;

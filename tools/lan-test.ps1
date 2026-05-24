@@ -193,9 +193,14 @@ if ($pass) {
         Capture-Pair "before-tilt"
         Start-Sleep -Seconds 10
         Capture-Pair "after-tilt"
-        # Let the routine fully complete (release + post-grab arms) before the
-        # final state capture.
-        Start-Sleep -Seconds 8
+        # Wait ~3 s for the host's grab routine to reach the post-throw
+        # window (release+throw happens ~2 s after tick 26 / after-tilt
+        # screenshot, then 700 ms of mid-flight). Capture mid-flight on
+        # BOTH peers to prove the v4 wire propagates the throw impulse.
+        Start-Sleep -Seconds 3
+        Capture-Pair "post-throw"
+        # Let the rest of the routine complete (heavy arm + Timeline tail).
+        Start-Sleep -Seconds 6
     } else {
         Step "PASS detected; waiting 6 s for pose stream to settle before screenshot..."
         Start-Sleep -Seconds 6

@@ -553,6 +553,13 @@ inline constexpr const wchar_t* TimelineStopFn               = L"Stop";
 // Aprop_C BP class name (for PropKeyRegistry GUObjectArray scan, Stage 4).
 inline constexpr const wchar_t* PropClass             = L"prop_C";
 
+// `Aprop_C.thrown(AmainPlayer_C* Player)` -- the natural throw event the
+// prop's BP wires to throw-whoosh sound + particle-trail activation.
+// Calling this on the receiver as part of OnRelease (when impulse non-zero)
+// makes the sound/effects fire identically to a local throw -- RULE 1
+// natural dispatch, NOT a separate sound-trigger crutch. Per prop.hpp:166.
+inline constexpr const wchar_t* PropThrownFn          = L"thrown";
+
 // Native UPrimitiveComponent UFunctions used by the receiver-side puppet
 // path to put a held prop into kinematic mode + apply throw impulse. These
 // ARE ProcessEvent-dispatchable (native exec thunks already RVA'd in IDB by

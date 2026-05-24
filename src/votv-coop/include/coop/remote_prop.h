@@ -35,10 +35,16 @@ void Tick(coop::net::Session& session);
 
 // Handle an incoming RELIABLE PropRelease message. Receiver re-enables
 // SimulatePhysics on the cached prop and, if the impulse vector is non-
-// zero, AddImpulse for the throw. Clears the cached pointer so the next
-// PropPose has to re-resolve (covers the case where the host releases
-// the prop and then re-grabs the SAME prop or a different one).
-void OnRelease(const coop::net::PropReleasePayload& payload);
+// zero, AddImpulse for the throw + calls `Aprop_C.thrown(localPlayer)`
+// to fire the natural throw-sound + particle-trail dispatch the prop's
+// BP wires (RULE 1 -- same path NPCs and the local player use). Clears
+// the cached pointer so the next PropPose has to re-resolve.
+//
+// `localPlayer` is passed so `prop.thrown` has a non-null Player param
+// (the BP may null-check). Caller supplies the LOCAL mainPlayer_C ptr;
+// the BP's "throw stats" attribution will credit local (semantically a
+// minor inaccuracy in exchange for natural sound/effects).
+void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer);
 
 // Force-release: called on disconnect / level unload to put any cached
 // prop back into normal physics state. Safe to call when not holding.

@@ -863,6 +863,18 @@ void RunAutonomousGrabTest() {
     });
     while (done->load() == 0) ::Sleep(5);
 
+    // ---- 6c. POST-THROW: wait 700 ms for the prop to fly + start its arc,
+    // then capture HOST screenshot. The lan-test framework captures a
+    // matching CLIENT screenshot at the same wall-clock moment for the
+    // cross-peer comparison (client should show its OWN local suitcase
+    // flying via the v4 wire's AddImpulse). 700 ms = enough for the throw
+    // arc to be visible but before the suitcase lands and stops moving.
+    ::Sleep(700);
+    {
+        const bool ok = harness::screenshot::Capture(L"grab-post-throw");
+        UE_LOGI("grab_test: HOST SCREENSHOT 3 (post-throw, mid-flight) saved=%d", ok);
+    }
+
     // ---- 7. (HOST + heavy prop nearby) Heavy-grab arm: drive
     // UPhysicsConstraintComponent observers. Different class than PHC.
     if (pr->heavyProp && pr->heavyMesh) {
@@ -1149,7 +1161,10 @@ void NetPumpTick(float displayOffsetX) {
     coop::remote_prop::Tick(g_session);
 
     // Surface session events (joins/disconnects) to the feed + send our Join.
-    coop::event_feed::Update(g_session, &g_orphan);
+    // Pass g_netLocal so remote_prop::OnRelease can call Aprop_C.thrown(player)
+    // for the natural throw-sound dispatch (Path B in
+    // research/findings/votv-throw-sound-path-2026-05-24.md).
+    coop::event_feed::Update(g_session, &g_orphan, g_netLocal);
 
     // Expire old chat-feed lines (10 s TTL) so a "X joined the game" line
     // doesn't linger forever like the early version did.
