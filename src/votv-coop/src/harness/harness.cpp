@@ -267,6 +267,30 @@ void* g_lastHeldProp = nullptr;
 coop::net::WireKey g_lastHeldKey{};
 uint64_t g_propEmitCount = 0;
 
+// v4 throw-impulse cache: GrabObserver_PrimComp_AddImpulse populates these on
+// each AddImpulse dispatch (most are explosions / hits, only a tiny minority
+// are throws). On the release-edge in NetPumpTick, we check whether the
+// cached impulse was applied to the just-released prop's mesh within the
+// last few ticks; if so, it WAS a throw -- forward the impulse vector in
+// the SendPropRelease so the peer's prop launches the same way. If no
+// recent impulse for THIS mesh, send zeros (drop semantics). See
+// COOP_SCOPE.md for the design + RULE 2 retirement plan.
+//
+// ATOMIC: writer is GrabObserver_PrimComp_AddImpulse which the ProcessEvent
+// detour dispatches on the dispatching thread -- usually game thread but
+// per game_thread.h:91 may be a task-graph worker. Reader is NetPumpTick on
+// the game thread. Without atomics this is a data race (especially the
+// 12-byte FVector which has no lock-free wide store on x64). Write order:
+// vec X/Y/Z relaxed, then comp relaxed, then ms with RELEASE. Read order:
+// ms load with ACQUIRE first, then comp/vec relaxed -- the ms acquire pairs
+// with the writer's release so the vec/comp reads see the matching write.
+// Pattern matches the in-file `sCount` precedent in the SetTarget observer.
+std::atomic<void*>    g_lastImpulseComp{nullptr};
+std::atomic<float>    g_lastImpulseX{0.f};
+std::atomic<float>    g_lastImpulseY{0.f};
+std::atomic<float>    g_lastImpulseZ{0.f};
+std::atomic<uint64_t> g_lastImpulseMs{0};
+
 // ---- Physics-prop pickup observers (Stage 1 of [[project-physics-object-pickup]]) ----
 //
 // Hook surface: engine-native UPhysicsHandleComponent UFunctions + BP-Timeline
@@ -360,11 +384,25 @@ void GrabObserver_PCC_BreakConstraint_PRE(void* self, void* /*function*/, void* 
 
 void GrabObserver_PrimComp_AddImpulse(void* self, void* /*function*/, void* params) {
     if (!self || !params) return;
-    // Param frame: FVector impulse @ 0, FName BoneName @ 12 (?), bool bVelChange.
-    // Layout depends on alignment -- use reflection if we need the values.
-    // For Stage 1 just log self+occurrence; the actual impulse params can be
-    // read once we add their offsets to sdk_profile.
-    UE_LOGI("grab_hook[PrimComp.AddImpulse]: component=%p (throw or impulse event)", self);
+    // Param frame layout (verified by autonomous test):
+    //   FVector impulse    @ 0   (12 bytes)
+    //   FName   BoneName   @ 12  (8 bytes)
+    //   bool    bVelChange @ 20  (1 byte) + pad
+    const ue_wrap::FVector imp = *reinterpret_cast<ue_wrap::FVector*>(params);
+    using namespace std::chrono;
+    const uint64_t ms = static_cast<uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+    // Write order matters: vec+comp first (relaxed), then ms with release.
+    // The reader loads ms with acquire and uses ms != 0 as the validity gate;
+    // the acquire pairs with this release so the vec/comp loads after it see
+    // the matching writes.
+    g_lastImpulseX.store(imp.X, std::memory_order_relaxed);
+    g_lastImpulseY.store(imp.Y, std::memory_order_relaxed);
+    g_lastImpulseZ.store(imp.Z, std::memory_order_relaxed);
+    g_lastImpulseComp.store(self, std::memory_order_relaxed);
+    g_lastImpulseMs.store(ms, std::memory_order_release);
+    UE_LOGI("grab_hook[PrimComp.AddImpulse]: component=%p impulse=(%.1f, %.1f, %.1f)",
+            self, imp.X, imp.Y, imp.Z);
 }
 
 // --- Secondary: BP-Timeline + input (`self` IS mainPlayer_C). These prove
@@ -776,31 +814,22 @@ void RunAutonomousGrabTest() {
         }
     }
 
-    // ---- 6. ReleaseComponent + clear BP state. NetPumpTick will see the
-    // grabbing_actor transition non-null -> null on the NEXT tick and emit
-    // PropRelease (reliable) so the peer re-enables SimulatePhysics.
+    // ---- 6. Release + Throw arm: AddImpulse FIRST (caches the impulse via
+    // the AddImpulse observer), then ReleaseComponent + clear grabbing_actor
+    // in the SAME game-thread lambda so NetPumpTick can't observe the
+    // intermediate state. Without this single-lambda atomicity, NetPumpTick
+    // (running asynchronously at 60Hz) could detect the release-edge between
+    // the prior AddImpulse and the clear -> sees grabbing_actor still set ->
+    // no edge fired. Or worse: fires the edge BEFORE AddImpulse caches ->
+    // throw path can't engage. Doing it all in one lambda guarantees the
+    // post-state NetPumpTick observes is (impulse cached, grabbing_actor
+    // cleared) -- the held->released edge fires WITH the impulse in cache.
     done->store(0);
-    GT::Post([rsv, done] {
-        const bool ok = R::CallFunction(rsv->grabHandle, rsv->releaseFn, nullptr);
-        *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(rsv->player) + P::off::mainPlayer_grabbing_actor) = nullptr;
-        *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(rsv->player) + P::off::mainPlayer_grabbing_component) = nullptr;
-        UE_LOGI("grab_test: CallFunction(ReleaseComponent) -> %d + cleared mainPlayer.grabbing_{actor,component}", ok);
-        done->store(1);
-    });
-    while (done->load() == 0) ::Sleep(5);
-
-    // ---- 6b. THROW arm: PrimitiveComponent.AddImpulse on the released
-    // suitcase mesh, to exercise the AddImpulse observer.
-    done->store(0);
-    GT::Post([pr, done] {
+    GT::Post([rsv, pr, done] {
         void* primCls = R::FindClass(P::name::PrimitiveComponentClass);
         void* addImpulseFn = R::FindFunction(primCls, P::name::AddImpulseFn);
         if (!addImpulseFn) { UE_LOGW("grab_test: AddImpulse UFunction not found"); done->store(2); return; }
         const int32_t frameSize = R::FunctionFrameSize(addImpulseFn);
-        // UE4 BP param names are case-preserving and match the SDK dump
-        // literally. AddImpulse uses lowercase `impulse`.
         const int32_t pImp  = R::FindParamOffset(addImpulseFn, L"impulse");
         const int32_t pBone = R::FindParamOffset(addImpulseFn, L"BoneName");
         const int32_t pVel  = R::FindParamOffset(addImpulseFn, L"bVelChange");
@@ -808,13 +837,28 @@ void RunAutonomousGrabTest() {
             UE_LOGW("grab_test: AddImpulse param offsets missing (imp=%d bone=%d vel=%d)", pImp, pBone, pVel);
             done->store(2); return;
         }
+        // (a) AddImpulse FIRST. Z=500 cm/s = upward throw -- receiver should
+        //     see its local suitcase launched upward after re-enabling
+        //     SimulatePhysics. The AddImpulse observer fires inline (we're
+        //     on the game thread) and caches g_lastImpulseComp + Vec + Ms.
         std::vector<uint8_t> frame(static_cast<size_t>(frameSize), 0);
-        // Impulse = up + forward, scale ~500 (cm/s mass-adjusted). Throw-ish.
         *reinterpret_cast<ue_wrap::FVector*>(frame.data() + pImp) = ue_wrap::FVector{0.f, 0.f, 500.f};
         *reinterpret_cast<R::FName*>(frame.data() + pBone) = R::FName{0, 0};
         *reinterpret_cast<bool*>(frame.data() + pVel) = false;
-        const bool ok = R::CallFunction(pr->mesh, addImpulseFn, frame.data());
-        UE_LOGI("grab_test: CallFunction(AddImpulse on suitcase mesh) -> %d (expect grab_hook[PrimComp.AddImpulse])", ok);
+        const bool impOk = R::CallFunction(pr->mesh, addImpulseFn, frame.data());
+        // (b) ReleaseComponent (PhysX releases the kinematic constraint;
+        //     fires PHC.Release PRE observer).
+        const bool relOk = R::CallFunction(rsv->grabHandle, rsv->releaseFn, nullptr);
+        // (c) Clear BP state -- the held->released edge NetPumpTick checks.
+        //     By the time NetPumpTick runs next, the impulse cache (set in
+        //     step a) is populated AND grabbing_actor is null -> the
+        //     release-edge sees the impulse and forwards it.
+        *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(rsv->player) + P::off::mainPlayer_grabbing_actor) = nullptr;
+        *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(rsv->player) + P::off::mainPlayer_grabbing_component) = nullptr;
+        UE_LOGI("grab_test: AddImpulse=%d Release=%d (atomic in same game-thread tick)",
+                impOk, relOk);
         done->store(1);
     });
     while (done->load() == 0) ::Sleep(5);
@@ -1022,11 +1066,45 @@ void NetPumpTick(float displayOffsetX) {
             g_lastHeldKey = pp.key;
         } else if (g_lastHeldProp) {
             // Edge: was holding, now not. Stop sending PropPose + tell peer.
+            // Detect throw vs drop: if the AddImpulse observer cached an
+            // impulse for THIS prop's mesh within the last few ticks, the
+            // BP's throwHoldingProp path called AddImpulse after Release ->
+            // forward the impulse so the peer's prop launches too. Otherwise
+            // (no recent matching impulse) it's a drop -- send zeros.
+            //
+            // Read order: ms with ACQUIRE first; ms!=0 gates the vec/comp
+            // reads which use relaxed. Pairs with the AddImpulse observer's
+            // release store.
             g_session.SetLocalPropPose(false, {});
-            g_session.SendPropRelease(g_lastHeldKey, 0.f, 0.f, 0.f);  // drop (no throw impulse yet -- see scope item)
-            UE_LOGI("net: held -> released, sent PropRelease (key.len=%d)", g_lastHeldKey.len);
+            float ix = 0.f, iy = 0.f, iz = 0.f;
+            void* heldMesh = ue_wrap::prop::GetStaticMesh(g_lastHeldProp);
+            using namespace std::chrono;
+            const uint64_t nowMs = static_cast<uint64_t>(
+                duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+            const uint64_t impMs = g_lastImpulseMs.load(std::memory_order_acquire);
+            const bool recent = (impMs != 0) && (nowMs - impMs) <= 200;
+            void* impComp = g_lastImpulseComp.load(std::memory_order_relaxed);
+            if (impComp && impComp == heldMesh && recent) {
+                ix = g_lastImpulseX.load(std::memory_order_relaxed);
+                iy = g_lastImpulseY.load(std::memory_order_relaxed);
+                iz = g_lastImpulseZ.load(std::memory_order_relaxed);
+                UE_LOGI("net: held -> THROWN, impulse=(%.1f, %.1f, %.1f) cached %llu ms ago",
+                        ix, iy, iz, static_cast<unsigned long long>(nowMs - impMs));
+            } else {
+                UE_LOGI("net: held -> released (drop, no recent impulse for this mesh)");
+            }
+            g_session.SendPropRelease(g_lastHeldKey, ix, iy, iz);
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
+            // Clear the impulse cache so a stale value can't be re-applied to
+            // the NEXT release. All four atomics cleared for consistency
+            // (audit: don't leave stale vec components behind even though
+            // the comp/ms guards gate them).
+            g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
+            g_lastImpulseX.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseY.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseMs.store(0, std::memory_order_release);
         }
     }
 
@@ -1424,6 +1502,11 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
             g_propEmitCount = 0;
+            g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
+            g_lastImpulseX.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseY.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
+            g_lastImpulseMs.store(0, std::memory_order_release);
             g_session.Start(netCfg);
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
                     netCfg.role == coop::net::Role::Host ? "host" : "client");
@@ -1593,6 +1676,15 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         cfg.initiate = true;  // host targets itself for the loopback handshake
         coop::event_feed::SetLocalNickname(ReadNickname());
         g_wasConnected = false;  // fresh edge-detector for the disconnect cleanup
+        // Same reset as the play branch -- audit fe68c03 missed this site.
+        g_lastHeldProp = nullptr;
+        g_lastHeldKey = {};
+        g_propEmitCount = 0;
+        g_lastImpulseComp.store(nullptr, std::memory_order_relaxed);
+        g_lastImpulseX.store(0.f, std::memory_order_relaxed);
+        g_lastImpulseY.store(0.f, std::memory_order_relaxed);
+        g_lastImpulseZ.store(0.f, std::memory_order_relaxed);
+        g_lastImpulseMs.store(0, std::memory_order_release);
         g_session.Start(cfg);
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
         int tick = 0;

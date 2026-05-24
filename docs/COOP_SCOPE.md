@@ -98,17 +98,13 @@ items.
   STATUS 2026-05-24: protocol v4 + sender + receiver SHIPPED (commit
   `8623991` and audit fixes in subsequent commits); host's autonomous
   grab propagates to client cross-process (verified numerically + visually
-  via lan-test). KNOWN GAP for full feature completeness:
-  THROW IMPULSE — the host's `SendPropRelease` currently transmits
-  `impulse=(0,0,0)` always (drop semantics only). The receiver path is
-  ready (`DriveAddImpulse` in `remote_prop.cpp`); to complete throw, the
-  host needs to (a) capture the impulse vector at throw time (the
-  `GrabObserver_PrimComp_AddImpulse` observer already fires; needs to
-  cache the impulse), (b) on the next NetPumpTick after a held->released
-  edge, pass the cached impulse to `SendPropRelease` instead of zeros,
-  (c) reset the cache after sending. ~30 lines in harness.cpp +
-  observer; not blocking baseline coop. Tracked here per RULE 2 (no
-  "not yet" comments without a written plan).
+  via lan-test). THROW IMPULSE: also shipped same day -- AddImpulse
+  observer caches impulse vector + timestamp + target component; the
+  NetPumpTick release edge passes the cached impulse to SendPropRelease
+  if it was applied to THIS prop's mesh within 200 ms. Receiver
+  applies via UPrimitiveComponent::AddImpulse after re-enabling
+  SimulatePhysics. Drop semantics remain when no recent impulse for
+  the released mesh.
 
 <!--
 Template for an entry:
