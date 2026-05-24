@@ -568,6 +568,22 @@ inline constexpr const wchar_t* PropThrownFn          = L"thrown";
 // HOST broadcasts; CLIENT skips (host-authoritative).
 inline constexpr const wchar_t* PropInitFn            = L"Init";
 
+// Phase 5N Stream B (host-authoritative spawners 2026-05-24): classes that
+// represent INTERMEDIATE STATE for a host-authoritative pipeline. Mushrooms
+// have a 2-class growth state machine: mushroom7_C (growing, hidden,
+// collision-off) -> mushroom_C (mature) via timer-driven Transform.
+// Per mushroom-state RE: growth is encoded by CLASS IDENTITY, not a field.
+//
+// On CLIENT: any local spawn of these classes (from per-peer spawners) is
+// DESTROYED on Init POST. Any wire-received PropSpawn for these classes is
+// DROPPED in event_feed. The mature variant flows through normally via
+// Inc2 broadcast when host's growth timer transforms mushroom7_C -> mushroom_C.
+//
+// Extensible -- add other intermediate-variant classes as identified in
+// future RE (e.g. growable plants, food spoilage transitions). Each entry
+// is the BP class FName (no A- prefix; matches sdk_profile convention).
+inline constexpr const wchar_t* PropMushroomGrowingClass = L"prop_food_mushroom7_C";
+
 // v5 Bug C (inventory drop): the BP function that all 4 drop paths funnel
 // through (per research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md).
 // We POST-hook this on UpropInventory_C and read the out-params to broadcast

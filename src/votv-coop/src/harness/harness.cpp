@@ -692,6 +692,41 @@ void GrabObserver_grab_Finished_PRE(void* self, void* /*function*/, void* /*para
 // Save-load is naturally gated by g_session.connected() == false at that
 // time (save loads pre-handshake; connected becomes true only after the
 // peer joins). No broadcast bandwidth wasted on save-load.
+// v5 Phase 5N Stream B (2026-05-24): is this prop class an intermediate-
+// variant that should NOT exist on the CLIENT? (Host-authoritative growth
+// pipeline; client only sees the mature variant via wire.) Extend the
+// allowlist as new intermediate-variant cases surface in RE.
+bool IsClientSuppressedPropClass(const std::wstring& cls) {
+    return cls == P::name::PropMushroomGrowingClass;
+}
+
+// v5 Phase 5N Stream B: destroy a client-local instance of a suppressed
+// intermediate-variant prop. Uses K2_DestroyActor via reflection (the same
+// path the receiver-side remote_prop::OnDestroy uses for incoming destroys).
+// Idempotent class resolution cached.
+void DestroyLocalProp(void* actor) {
+    if (!actor) return;
+    static void* sActorCls = nullptr;
+    static void* sDestroyFn = nullptr;
+    if (!sActorCls || !R::IsLive(sActorCls)) {
+        sActorCls = R::FindClass(P::name::ActorClassName);
+        sDestroyFn = nullptr;
+    }
+    if (sActorCls && !sDestroyFn) {
+        sDestroyFn = R::FindFunction(sActorCls, P::name::DestroyActorFn);
+    }
+    if (!sDestroyFn) {
+        UE_LOGW("spawner-suppress: K2_DestroyActor UFunction unresolved -- cannot destroy local %p", actor);
+        return;
+    }
+    // Mark BEFORE calling destroy so OUR PRE-observer on K2_DestroyActor
+    // sees it as wire-induced and skips the cross-peer broadcast (the
+    // destruction is a LOCAL host-authoritative cleanup, not an event the
+    // host should be notified about).
+    coop::remote_prop::MarkIncomingDestroy(actor);
+    R::CallFunction(actor, sDestroyFn, nullptr);
+}
+
 void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params*/) {
     if (!self) return;
     // Gate order (audit L-1 2026-05-24): cheapest checks FIRST so the hot path
@@ -700,7 +735,6 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
     // pre-handshake; the connected() short-circuit avoids the hash lookup on
     // every one of those.
     if (!g_session.connected()) return;                       // pre-handshake save-load -> skip
-    if (g_session.role() != coop::net::Role::Host) return;    // client doesn't broadcast world spawns (host-authoritative)
     if (coop::remote_prop::ConsumeIncomingSpawn(self)) {
         UE_LOGI("grab_hook[Aprop.Init POST]: actor %p was wire-received -- skip broadcast (echo suppression)",
                 self);
@@ -711,8 +745,28 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
     // installed on PropClass but a fast misregistration would surface here).
     if (!ue_wrap::prop::IsDescendantOfProp(self)) return;
 
-    coop::net::PropSpawnPayload p{};
+    // v5 Phase 5N Stream B (2026-05-24): host-authoritative client-side
+    // suppression for intermediate-variant props (mushroom7_C, etc.). On
+    // CLIENT, if this is a locally-spawned intermediate variant (NOT in
+    // incoming-set -- already checked above), destroy it. The HOST keeps
+    // running the growth pipeline; the eventual mature variant
+    // (mushroom_C) broadcast arrives through normal Inc2 channels.
     const std::wstring cls = R::ClassNameOf(self);
+    if (g_session.role() == coop::net::Role::Client) {
+        if (IsClientSuppressedPropClass(cls)) {
+            UE_LOGI("spawner-suppress[client.Init]: destroying local intermediate variant '%ls' actor=%p (host-authoritative; mature variant will arrive via wire)",
+                    cls.c_str(), self);
+            DestroyLocalProp(self);
+            return;
+        }
+        // Client doesn't broadcast world spawns (host-authoritative).
+        return;
+    }
+
+    // From here on: role == Host. The rest of the function is the broadcast path.
+
+    coop::net::PropSpawnPayload p{};
+    // `cls` reused from the Stream-B suppression check above (cached once).
     p.className.len = 0;
     for (size_t i = 0; i < cls.size() && i < 63; ++i) {
         p.className.data[p.className.len++] = static_cast<char>(cls[i]);

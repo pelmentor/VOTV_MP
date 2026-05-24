@@ -5,11 +5,13 @@
 #include "coop/remote_prop.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/log.h"
+#include "ue_wrap/sdk_profile.h"
 
 #include <windows.h>
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace coop::event_feed {
@@ -193,6 +195,26 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             if (p.key.len > 31) {
                 UE_LOGW("event_feed: PropSpawn key.len=%u > 31 -- dropping", p.key.len);
                 break;
+            }
+            // Phase 5N Stream B (2026-05-24): drop wire-spawns of
+            // intermediate-variant classes that the receiver doesn't want
+            // (mushroom7_C growing state). Host-authoritative growth
+            // pipeline -- the mature variant (mushroom_C) will arrive when
+            // host's transform-timer fires. Mirrors the role==Client +
+            // IsClientSuppressedPropClass check in harness.cpp::
+            // GrabObserver_Aprop_Init_POST so the suppression is symmetric:
+            // never spawn locally AND never accept wire spawns of these.
+            {
+                std::wstring cls;
+                cls.reserve(p.className.len);
+                for (uint8_t i = 0; i < p.className.len; ++i) {
+                    cls.push_back(static_cast<wchar_t>(static_cast<unsigned char>(p.className.data[i])));
+                }
+                if (cls == ue_wrap::profile::name::PropMushroomGrowingClass) {
+                    UE_LOGI("event_feed: PropSpawn drop -- intermediate-variant class '%ls' suppressed on this peer (host-authoritative; mature variant will arrive when host transforms)",
+                            cls.c_str());
+                    break;
+                }
             }
             remote_prop::OnSpawn(p);
             break;
