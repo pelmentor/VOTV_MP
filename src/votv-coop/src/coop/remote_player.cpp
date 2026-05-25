@@ -644,12 +644,18 @@ ue_wrap::FVector RemotePlayer::GetHeadPosition() const {
     //
     // Fix: anchor to the ACTOR pivot + a fixed Z offset. The pivot is moved
     // by our pose drive (RemotePlayer::ApplyToEngine, same tick as the pose
-    // update) so it stays in lockstep with the visible mesh. 200 cm above
-    // the pivot (feet) sits just above the head on the mainPlayer_C capsule
-    // (~180 cm tall). The bone-anchor branch is removed per RULE 2 (no
-    // parallel old + new code paths).
+    // update) so it stays in lockstep with the visible mesh. The bone-anchor
+    // branch is removed per RULE 2 (no parallel old + new code paths).
+    //
+    // Offset 120 cm: for an ACharacter the actor pivot sits at the CAPSULE
+    // CENTER (capsule half-height ~88 cm for mainPlayer_C, so the pivot is
+    // ~88 cm above the feet). Head crown is ~88 cm above the pivot.
+    // +120 cm puts the nameplate ~32 cm above the head crown -- a clean gap
+    // without floating absurdly high. Pre-fix used +200 cm under the wrong
+    // assumption that the pivot was at feet level; that put the nameplate
+    // ~112 cm above the crown ("way too high" per user retest +4).
     ue_wrap::FVector p = GetLocation();
-    p.Z += 200.f;
+    p.Z += 120.f;
     return p;
 }
 
