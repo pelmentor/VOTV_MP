@@ -31,19 +31,27 @@ int32_t Resolve(const wchar_t* className, const wchar_t* fieldName) {
     if (cls) {
         off = R::FindPropertyOffset(cls, fieldName);
     }
+    // Audit fix 2026-05-25: separate success + failure sets so the
+    // success log line is NOT suppressed when an earlier "class not
+    // loaded yet" warning landed first. Previous single-set design
+    // meant the log permanently showed the WARN even after the BP
+    // class loaded + the offset resolved successfully -- misleading
+    // for debugging.
     static std::mutex sLogMtx;
-    static std::set<std::wstring> sLogged;
+    static std::set<std::wstring> sLoggedSuccess;
+    static std::set<std::wstring> sLoggedFail;
     std::wstring key = std::wstring(className) + L"::" + fieldName;
-    bool firstTime = false;
+    bool firstSuccess = false, firstFail = false;
     {
         std::lock_guard<std::mutex> lk(sLogMtx);
-        firstTime = sLogged.insert(key).second;
+        if (off >= 0) firstSuccess = sLoggedSuccess.insert(key).second;
+        else          firstFail    = sLoggedFail.insert(key).second;
     }
-    if (firstTime) {
-        if (off >= 0) {
-            UE_LOGI("reflected_offset: %ls -> 0x%X (resolved once via FindPropertyOffset)",
-                    key.c_str(), off);
-        } else if (!cls) {
+    if (firstSuccess) {
+        UE_LOGI("reflected_offset: %ls -> 0x%X (resolved once via FindPropertyOffset)",
+                key.c_str(), off);
+    } else if (firstFail) {
+        if (!cls) {
             UE_LOGW("reflected_offset: %ls UNRESOLVED -- class '%ls' not loaded yet (will retry on next call)",
                     key.c_str(), className);
         } else {

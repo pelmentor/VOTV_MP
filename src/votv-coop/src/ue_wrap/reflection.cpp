@@ -277,13 +277,27 @@ int32_t FunctionFrameSize(void* function) {
 
 int32_t FindPropertyOffset(void* owningClass, const wchar_t* propName) {
     if (!owningClass || !propName) return -1;
-    auto* field = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(owningClass) +
-                                               O::UStruct_ChildProperties);
-    while (field) {
-        if (ToString(FieldName(field)) == propName) {
-            return *reinterpret_cast<int32_t*>(field + O::FProperty_Offset_Internal);
+    // Walk OWN ChildProperties, then climb SuperStruct on miss. UE4 BP-
+    // generated classes inline BP-added properties directly into the leaf
+    // class's chain (BP compiler convention), so the original local-only
+    // scan happened to work for every existing call site -- but the moment
+    // a future accessor targets an inherited native UE4 UPROPERTY (e.g.
+    // `APawn::bCanAffectNavigationGeneration` queried with `mainPlayer_C`
+    // as the owner), the local-only scan would silently return -1.
+    // Audit fix 2026-05-25 (commit ~09c003b): walk SuperStruct chain to
+    // close the latent footgun. Bound the loop at 32 hops to cap pathological
+    // cycles.
+    void* cls = owningClass;
+    for (int hops = 0; hops < 32 && cls; ++hops) {
+        auto* field = *reinterpret_cast<uint8_t**>(reinterpret_cast<uint8_t*>(cls) +
+                                                   O::UStruct_ChildProperties);
+        while (field) {
+            if (ToString(FieldName(field)) == propName) {
+                return *reinterpret_cast<int32_t*>(field + O::FProperty_Offset_Internal);
+            }
+            field = *reinterpret_cast<uint8_t**>(field + O::FField_Next);
         }
-        field = *reinterpret_cast<uint8_t**>(field + O::FField_Next);
+        cls = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(cls) + O::UStruct_SuperStruct);
     }
     return -1;
 }
