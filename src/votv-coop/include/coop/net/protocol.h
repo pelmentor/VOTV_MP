@@ -127,6 +127,19 @@ enum class ReliableKind : uint8_t {
                        //     applies via K2_TeleportTo on its local mainPlayer.
                        //     Host->client only; no echo. Payload:
                        //     TeleportClientPayload (24 bytes).
+    ItemActivate = 12, // Phase 5F (2026-05-25 NIGHT-3): unified item-activation
+                       //     state sync. First instance: flashlight on/off
+                       //     (Case b per the RE doc -- the world light cone is
+                       //     mainPlayer_C::light_R, NOT a component on the item
+                       //     actor). itemClassHash distinguishes flashlight vs
+                       //     radio vs torch etc.; peerSessionId identifies the
+                       //     puppet whose state changes; actorKeyHash carries
+                       //     the Aprop_C::Key hash for Case-a world props
+                       //     (radio, torch, lamp) and is 0 for Case-b player-
+                       //     equipment items. Reserved IDs 9-11 are queued for
+                       //     Phase 5D DoorState/LightState/LockState (RE doc
+                       //     landed earlier; impl pending).
+                       //     Payload: ItemActivatePayload (16 bytes).
 };
 
 #pragma pack(push, 1)
@@ -391,6 +404,51 @@ static_assert(sizeof(TeleportClientPayload) <= 256 - 20 - 8,
 
 // RestoreVitals (ReliableKind = 7) carries NO payload. The action is fixed:
 // receiver max-outs food/sleep/health/coffeePower on its local UsaveSlot_C.
+
+// ItemActivate (ReliableKind = 12) -- Phase 5F flashlight + future radio/torch/
+// lamp / etc. Single unified packet for "item state with WORLD EFFECT changed"
+// per the project-coop-inventory-private carve-out. RE docs:
+//   research/findings/votv-flashlight-RE-2026-05-25.md
+//
+// Two cases the same packet covers:
+//
+//  Case (b) -- player equipment with effect on the player actor.
+//    Example: Aprop_equipment_flashlight_C / _b_C. The world light is
+//    mainPlayer_C::light_R @0x0678 (the puppet has it too). Sender hooks
+//    AmainPlayer_C::updateFlashlight POST + sends. flags.has_actor_key=0,
+//    actorKeyHash=0. Receiver: find puppet by peerSessionId, write
+//    puppet.flashlight @0x0838 + toggle puppet.light_R visibility.
+//
+//  Case (a) -- world prop with own light/audio component.
+//    Example: Aprop_radio_C (bool A toggles MediaSound), Aprop_torch_C
+//    (bool burning + ignite/extinguishFire UFunctions), Aprop_lamp_C.
+//    Sender hooks the appropriate toggle UFunction + sends.
+//    flags.has_actor_key=1, actorKeyHash=CRC32(prop.Key string).
+//    Receiver: lookup actor by actorKeyHash via a class-specific table
+//    built at session connect, apply state.
+//
+// itemClassHash = CRC32 of the item UClass FName string (e.g.
+//   "prop_equipment_flashlight_C"). Cross-peer stable because UClass
+//   FNames are deterministic from the cooked content.
+//
+// paramBlob -- spare bytes for class-specific extras (e.g. _c crank
+// lantern energy byte). Initially zeroed for flashlight _a/_b.
+struct ItemActivatePayload {
+    uint32_t itemClassHash;   // CRC32 of item UClass FName string (cross-peer stable)
+    uint8_t  peerSessionId;   // sender peer id (host=0, joiners 1..)
+    uint8_t  state;           // 0 = off / inactive, 1 = on / active
+    uint8_t  flags;           // bit0: has_actor_key (1 = use actorKeyHash)
+    uint8_t  _pad;
+    uint32_t actorKeyHash;    // CRC32(Aprop_C::Key string) when flags.has_actor_key=1; 0 otherwise
+    uint8_t  paramBlob[4];    // spare; class-specific (e.g. energy for crank lantern)
+};
+static_assert(sizeof(ItemActivatePayload) == 16,
+              "ItemActivatePayload must be exactly 16 bytes (wire-format)");
+static_assert(sizeof(ItemActivatePayload) <= 256 - 20 - 8,
+              "ItemActivatePayload must fit in one reliable datagram");
+
+// flags bits for ItemActivatePayload.flags
+inline constexpr uint8_t kItemActivateFlag_HasActorKey = 0x01;
 
 #pragma pack(pop)
 

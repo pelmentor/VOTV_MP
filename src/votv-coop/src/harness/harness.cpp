@@ -10,6 +10,7 @@
 #include "dev/teleport_client.h"
 #include "coop/event_feed.h"
 #include "coop/grab_observer.h"
+#include "coop/item_activate.h"
 #include "coop/nameplate.h"
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"
@@ -262,6 +263,7 @@ void InstallGrabObservers() {
     coop::prop_lifecycle::InstallInventory(&g_session);
     coop::prop_lifecycle::Install(&g_session);
     coop::npc_sync::Install(&g_session);
+    coop::item_activate::Install(&g_session);  // Phase 5F flashlight
 }
 
 // Autonomous grab test moved to harness/autotest.cpp.

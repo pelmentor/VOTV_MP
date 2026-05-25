@@ -1,5 +1,6 @@
 #include "coop/event_feed.h"
 
+#include "coop/item_activate.h"
 #include "coop/net/session.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
@@ -444,6 +445,50 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
                 p.rotPitch, p.rotYaw, p.rotRoll,
             };
             ue_wrap::game_thread::Post([args] { ::dev::teleport_client::ApplyLocally(args); });
+            break;
+        }
+        case net::ReliableKind::ItemActivate: {
+            // Phase 5F flashlight (and future radio/torch/lamp) -- peer's
+            // item state changed and produces a WORLD effect both peers
+            // must see. For Case (b) flashlight: apply to the puppet's
+            // light_R. RE doc: research/findings/votv-flashlight-RE-
+            // 2026-05-25.md.
+            if (msg.payload.size() < sizeof(net::ItemActivatePayload)) {
+                UE_LOGW("event_feed: ItemActivate payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::ItemActivatePayload));
+                break;
+            }
+            net::ItemActivatePayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            // Trust-boundary: state is a uint8 but only 0/1 are valid.
+            if (p.state != 0 && p.state != 1) {
+                UE_LOGW("event_feed: ItemActivate state=%u out of range -- dropping",
+                        static_cast<unsigned>(p.state));
+                break;
+            }
+            // Self-echo guard: if peerSessionId says the sender was US, the
+            // packet must be a loopback bounce and applying it would toggle
+            // the WRONG puppet's light (the only puppet is the remote's).
+            // Mirrors TeleportClient self-echo handling above. peerSessionId
+            // convention in 1v1: host=0, client=1.
+            const uint8_t selfId =
+                (session.role() == net::Role::Host) ? 0u : 1u;
+            if (p.peerSessionId == selfId) {
+                UE_LOGI("event_feed: ItemActivate self-echo (peerSessionId=%u) -- dropping",
+                        static_cast<unsigned>(p.peerSessionId));
+                break;
+            }
+            // 1v1: the only puppet is &g_orphan (remote).
+            if (!remote || !remote->valid()) {
+                UE_LOGI("event_feed: ItemActivate received but no puppet yet -- dropping");
+                break;
+            }
+            void* puppet = remote->GetActor();
+            const uint32_t classHash = p.itemClassHash;
+            const uint8_t state = p.state;
+            ue_wrap::game_thread::Post([puppet, classHash, state] {
+                ::coop::item_activate::ApplyToPuppet(puppet, classHash, state);
+            });
             break;
         }
         default: {

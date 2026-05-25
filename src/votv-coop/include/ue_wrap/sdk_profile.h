@@ -305,6 +305,18 @@ inline constexpr size_t Aprop_StaticMesh    = 0x0238;  // UStaticMeshComponent*
 // (WeightedBlendables @0x550) -- zero it in the copy so the two cameras don't alias
 // the same heap array (double-free).
 inline constexpr size_t AmainPlayer_Camera = 0x0530;                    // UCameraComponent*  mainPlayer.hpp:20
+
+// Phase 5F flashlight (mainPlayer.hpp + RE doc). The player-held world
+// light is the SpotLight on mainPlayer itself (Case b per the RE doc) --
+// the flashlight ITEM actor for the _a / _b variants carries no light
+// component of its own. Puppets are mainPlayer_C orphans so they have
+// the same offsets.
+inline constexpr size_t AmainPlayer_light_R         = 0x0678;  // USpotLightComponent* (mainPlayer.hpp:61)
+inline constexpr size_t AmainPlayer_lag_fl          = 0x0670;  // USpringArmComponent* parenting light_R (mainPlayer.hpp:60)
+inline constexpr size_t AmainPlayer_flashlight     = 0x0838;  // bool -- canonical on/off (mainPlayer.hpp:115)
+inline constexpr size_t AmainPlayer_flashlightMode = 0x0C79;  // uint8 -- beam mode (mainPlayer.hpp:251)
+inline constexpr size_t AmainPlayer_hasFlashlight  = 0x0CC2;  // bool -- equipped guard (mainPlayer.hpp:260)
+inline constexpr size_t AmainPlayer_crankFlashlight = 0x0CC4;  // bool -- _c variant marker (mainPlayer.hpp:262)
 inline constexpr size_t ACameraActor_CameraComponent = 0x0228;          // UCameraComponent*  Engine.hpp:6947
 inline constexpr size_t UCameraComponent_PostProcessBlendWeight = 0x0240; // float  Engine.hpp:9762
 inline constexpr size_t UCameraComponent_PostProcessSettings = 0x0270;    // FPostProcessSettings  Engine.hpp (size 0x560)
@@ -647,6 +659,14 @@ inline constexpr const wchar_t* AddImpulseFn                           = L"AddIm
 inline constexpr const wchar_t* MainPlayerGrabUpdateFn       = L"grab__UpdateFunc";
 inline constexpr const wchar_t* MainPlayerGrabFinishedFn     = L"grab__FinishedFunc";
 inline constexpr const wchar_t* MainPlayerUseInputEventFn    = L"InpActEvt_use_K2Node_InputActionEvent_41";
+
+// Phase 5F flashlight (item activation sync). updateFlashlight is the BP
+// function that VOTV's input handler calls on F-press; it flips the
+// `flashlight` bool and the `light_R` component visibility, then fires the
+// `flashlightStateChanged` multicast delegate. POST-hooking it = state at
+// dispatch end = what we want to broadcast. Confirmed in
+// mainPlayer.hpp:435 + research/findings/votv-flashlight-RE-2026-05-25.md.
+inline constexpr const wchar_t* MainPlayerUpdateFlashlightFn = L"updateFlashlight";
 
 // UTimelineComponent BP-callable methods (used to force the `grab` Timeline
 // from the autonomous test, so the 3 BP-Timeline observers fire without a
