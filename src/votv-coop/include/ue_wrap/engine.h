@@ -72,6 +72,13 @@ bool SetActorRotation(void* actor, const FRotator& rotation);
 // destroy). Game thread only.
 bool SetActorTickEnabled(void* actor, bool enabled);
 
+// AActor::SetActorScale3D. World-space scale of the actor; used to shrink the
+// nameplate world quad WITHOUT shrinking the WidgetComponent's render-target
+// pixel count (bDrawAtDesiredSize=true couples RT pixels with quad cm at the
+// widget's content desired size -- scaling the actor decouples visual size
+// from texel density). Game thread only.
+bool SetActorScale3D(void* actor, const FVector& scale);
+
 // APawn::GetController on `pawn` -- returns the AController* (or nullptr).
 void* GetController(void* pawn);
 

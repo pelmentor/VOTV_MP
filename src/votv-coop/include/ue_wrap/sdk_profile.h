@@ -479,6 +479,7 @@ inline constexpr const wchar_t* GetActorRotationFn = L"K2_GetActorRotation";
 inline constexpr const wchar_t* GetActorVelocityFn = L"GetVelocity";  // AActor::GetVelocity -> FVector (cm/s)
 inline constexpr const wchar_t* GetActorForwardVectorFn = L"GetActorForwardVector";
 inline constexpr const wchar_t* SetActorRotationFn = L"K2_SetActorRotation";
+inline constexpr const wchar_t* SetActorScale3DFn = L"SetActorScale3D";  // void(FVector NewScale3D) -- world-space scale, used to shrink the nameplate world quad while keeping the WidgetComponent's RT resolution
 inline constexpr const wchar_t* SetActorTickEnabledFn = L"SetActorTickEnabled";
 inline constexpr const wchar_t* DestroyActorFn = L"K2_DestroyActor";
 inline constexpr const wchar_t* TeleportToFn = L"K2_TeleportTo";  // bool(FVector, FRotator); large-distance teleport that survives Character/CMC constraints

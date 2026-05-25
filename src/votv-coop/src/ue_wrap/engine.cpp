@@ -373,6 +373,17 @@ bool SetActorTickEnabled(void* actor, bool enabled) {
     return Call(actor, f);
 }
 
+namespace { void* g_setScaleFn = nullptr; }
+
+bool SetActorScale3D(void* actor, const FVector& scale) {
+    if (!actor || !ResolveActorFns()) return false;
+    if (!g_setScaleFn) g_setScaleFn = R::FindFunction(g_actorClass, P::name::SetActorScale3DFn);
+    if (!g_setScaleFn) { UE_LOGE("engine: SetActorScale3D unresolved"); return false; }
+    ParamFrame f(g_setScaleFn);
+    f.SetRaw(L"NewScale3D", &scale, sizeof(scale));
+    return Call(actor, f);
+}
+
 
 
 namespace { void* g_teleportToFn = nullptr; void* g_getActorBoundsFn = nullptr; }
