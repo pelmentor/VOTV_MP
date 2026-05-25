@@ -74,6 +74,7 @@ const ClassCheck kClasses[] = {
     {P::name::GameplayStaticsClass,          Severity::Critical,  "deferred spawn + LoadGameFromSlot + NPC interceptor"},
     {P::name::GameInstanceClass,             Severity::Critical,  "persistent world context + save registration"},
     {P::name::MainPlayerClass,               Severity::Critical,  "puppet hijack + observer install + autotest"},
+    {P::name::GamemodeClass,                 Severity::Important, "puppet spawn world-context lookup (puppet.cpp)"},
     // --- Important: gameplay subsystems (degrade silently if missing) ---
     {P::name::PropClass,                     Severity::Important, "prop_C base -- ALL prop wire sync"},
     {P::name::PropInventoryClass,            Severity::Important, "storage container extract sync"},
@@ -142,6 +143,8 @@ const FunctionCheck kFunctions[] = {
     {P::name::PlayerCameraManagerClass, P::name::GetCameraLocationFn,        Severity::Important, "autotest hand placement"},
     {P::name::PlayerCameraManagerClass, P::name::GetCameraRotationFn,        Severity::Important, "autotest camera tilt"},
     {P::name::PropClass,                P::name::PropInitFn,                 Severity::Important, "Aprop_C::Init POST observer (spawn detector)"},
+    {P::name::PropClass,                P::name::PropSetKeyFn,               Severity::Critical,  "wire-Key apply before Init -- prop identity (without this, every receiver-spawned prop has wrong key + tracking lost)"},
+    {P::name::PropClass,                P::name::PropThrownFn,               Severity::Important, "prop throw sound + particle effects on receiver"},
     {P::name::PropInventoryClass,       P::name::PropInventoryTakeObjFn,     Severity::Important, "storage extract observer"},
     {P::name::PhysicsHandleComponentClass, P::name::GrabComponentAtLocationFn,    Severity::Important, "grab observer (light)"},
     {P::name::PhysicsHandleComponentClass, P::name::SetTargetLocationFn,          Severity::Important, "per-tick grab driver observer"},
@@ -150,7 +153,9 @@ const FunctionCheck kFunctions[] = {
     {P::name::PhysicsConstraintComponentClass, P::name::BreakConstraintFn,        Severity::Important, "heavy grab release observer"},
     {P::name::PrimitiveComponentClass,  P::name::AddImpulseFn,               Severity::Important, "throw impulse observer"},
     {P::name::PrimitiveComponentClass,  P::name::SetSimulatePhysicsFn,       Severity::Important, "receiver prop kinematic toggle"},
-    {P::name::PrimitiveComponentClass,  P::name::GetPhysicsLinearVelocityFn, Severity::Important, "throw velocity capture"},
+    {P::name::PrimitiveComponentClass,  P::name::GetPhysicsLinearVelocityFn, Severity::Important, "throw velocity capture (host-side release)"},
+    {P::name::PrimitiveComponentClass,  P::name::SetPhysicsLinearVelocityFn, Severity::Important, "receiver prop re-entry linear velocity (throw sync)"},
+    {P::name::PrimitiveComponentClass,  P::name::SetPhysicsAngularVelocityInDegreesFn, Severity::Important, "receiver prop re-entry angular velocity (spin sync)"},
     {P::name::PrimitiveComponentClass,  P::name::SetCollisionEnabledFn,      Severity::Important, "mushroom collision restore (wire-converged props)"},
     {P::name::TextBlockClass,           P::name::NameplateSetTextFn,         Severity::Important, "nameplate + HUD text"},
     {P::name::KismetTextLibraryClass,   P::name::ConvStringToTextFn,         Severity::Important, "FString -> FText for widget text"},
@@ -159,6 +164,11 @@ const FunctionCheck kFunctions[] = {
     {P::name::UserWidgetClass,          P::name::RemoveFromViewportFn,       Severity::Important, "HUD feed detach"},
     {P::name::WidgetClass,              P::name::WidgetSetVisibilityFn,      Severity::Important, "HUD overlay input-transparent"},
     {P::name::WidgetComponentClass,     P::name::SetWidgetFn,                Severity::Important, "nameplate widget attach"},
+    {P::name::WidgetComponentClass,     P::name::SetTintColorAndOpacityFn,   Severity::Important, "nameplate tint (full opacity)"},
+    {P::name::WidgetComponentClass,     P::name::RequestRedrawFn,            Severity::Important, "nameplate per-tick redraw"},
+    {P::name::WidgetComponentClass,     P::name::RequestRenderUpdateFn,      Severity::Important, "nameplate render-target refresh"},
+    {P::name::UserWidgetClass,          P::name::SetPositionInViewportFn,    Severity::Important, "HUD feed + dev HUD positioning"},
+    {P::name::UserWidgetClass,          P::name::SetAlignmentInViewportFn,   Severity::Important, "HUD feed + dev HUD alignment"},
     // --- BP-Timeline observers on mainPlayer_C (K2Node ordinal embedded!) ---
     {P::name::MainPlayerClass,          P::name::MainPlayerUseInputEventFn,  Severity::Important, "E-press observer (K2Node ordinal embedded -- BP recook breaks)"},
     {P::name::MainPlayerClass,          P::name::MainPlayerGrabUpdateFn,     Severity::Important, "grab Timeline tick observer"},
@@ -214,14 +224,15 @@ void RunFunctionChecks(int& ok, int& fail, int& failPriority) {
 
 void RunNpcAllowlistCheck(int& ok, int& fail, int& failPriority) {
     UE_LOGI("sdk-check: --- Phase 5N1 NPC ALLOWLIST (12 classes) ---");
+    constexpr Severity kNpcSev = Severity::Important;
     int npcOk = 0;
     for (size_t i = 0; i < P::name::kNpcAllowlistSize; ++i) {
         if (R::FindClass(P::name::kNpcAllowlist[i])) {
             ++ok; ++npcOk;
         } else {
             ++fail; ++failPriority;
-            UE_LOGW("sdk-check[IMPORTANT]: NPC CLASS '%ls' NOT FOUND -- this NPC will spawn on both peers (suppression no-op)",
-                    P::name::kNpcAllowlist[i]);
+            UE_LOGW("sdk-check[%s]: NPC CLASS '%ls' NOT FOUND -- this NPC will spawn on both peers (suppression no-op)",
+                    SevTag(kNpcSev), P::name::kNpcAllowlist[i]);
         }
     }
     UE_LOGI("sdk-check: NPC allowlist: %d/%zu resolved", npcOk, P::name::kNpcAllowlistSize);
