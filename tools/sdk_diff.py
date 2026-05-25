@@ -199,7 +199,12 @@ def diff_classes(old: dict[str, Klass], new: dict[str, Klass]) -> dict[str, list
         removed -= k2_old_done
 
         # Heuristic rename: pair removed fn with added fn of same param count + small edit dist.
-        matched_added = set()
+        # Track BOTH sides of the pairing so dedup in the listing loop is
+        # set-membership (O(1)) and immune to false negatives from substring
+        # scans (audit fix 2026-05-25: a function named e.g. `Init` would
+        # incorrectly dedup against any rename line containing "InitComponent").
+        matched_added: set[str] = set()
+        matched_removed: set[str] = set()
         for r in sorted(removed):
             r_pc = oc.fns[r].param_count
             best: tuple[int, str] | None = None
@@ -218,11 +223,11 @@ def diff_classes(old: dict[str, Klass], new: dict[str, Klass]) -> dict[str, list
                     f"~ **{n}::{r}** -> **{n}::{best[1]}** (edit-distance {best[0]}, params={r_pc})"
                 )
                 matched_added.add(best[1])
+                matched_removed.add(r)
 
         for r in sorted(removed):
-            # Skip if already paired with an added rename.
-            if any(f"{n}::{r}" in line for line in out["renamed_functions"]):
-                continue
+            if r in matched_removed:
+                continue  # already paired in renamed_functions
             out["removed_functions"].append(f"- **{n}::{r}**")
         for a in sorted(added):
             if a in matched_added:

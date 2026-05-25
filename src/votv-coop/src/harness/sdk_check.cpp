@@ -83,11 +83,15 @@ void ReportLine(const char* line) {
     g_report << line << "\n";
 }
 
-void ReportFooter(int ok, int total, int fail, int failPriority) {
+void ReportFooter(int ok, int total, int fail, int failPriority, int skipped) {
     g_report << "\n=== SUMMARY ===\n";
     g_report << "  resolved:           " << ok << " / " << total << "\n";
     g_report << "  total failures:     " << fail << "\n";
     g_report << "  CRITICAL+IMPORTANT: " << failPriority << "\n";
+    if (skipped > 0) {
+        g_report << "  skipped (dead cls): " << skipped
+                 << "  (UFunction checks whose owning UClass already failed above)\n";
+    }
     if (failPriority == 0 && fail == 0) {
         g_report << "Status: HEALTHY (every checked name resolved against the live build)\n";
     } else if (failPriority == 0) {
@@ -320,14 +324,19 @@ void RunClassChecks(int& ok, int& fail, int& failPriority) {
     }
 }
 
-void RunFunctionChecks(int& ok, int& fail, int& failPriority) {
+void RunFunctionChecks(int& ok, int& fail, int& failPriority, int& skipped) {
     UE_LOGI("sdk-check: --- UFUNCTION resolution ---");
     g_report << "--- UFUNCTION resolution ---\n";
     for (const auto& f : kFunctions) {
         void* cls = R::FindClass(f.className);
         if (!cls) {
-            // Already counted as a class failure above; skip the function
-            // (we'd get a noisy second log line for every fn on the dead class).
+            // Class already counted as a CLASS failure (RunClassChecks); to
+            // avoid noisy double-counts the function attempt is SKIPPED here,
+            // but tracked in the `skipped` counter so the SUMMARY reflects the
+            // true total. Audit fix 2026-05-25: previously skipped entries
+            // silently vanished from `total = ok + fail`, making "resolved: 45/47"
+            // misleading when 23 function entries were skipped on a dead class.
+            ++skipped;
             continue;
         }
         void* fn = R::FindFunction(cls, f.fnName);
@@ -396,9 +405,9 @@ int Run() {
     UE_LOGI("sdk-check: === self-check START (target VOTV %s, engine %s) ===",
             P::kTargetGameVersion, P::kTargetEngineVersion);
     ReportHeader();
-    int ok = 0, fail = 0, failPriority = 0;
+    int ok = 0, fail = 0, failPriority = 0, skipped = 0;
     RunClassChecks(ok, fail, failPriority);
-    RunFunctionChecks(ok, fail, failPriority);
+    RunFunctionChecks(ok, fail, failPriority, skipped);
     RunNpcAllowlistCheck(ok, fail, failPriority);
     RunAssetChecks(ok, fail, failPriority);
     const int total = ok + fail;
@@ -408,13 +417,14 @@ int Run() {
         UE_LOGI("sdk-check: === HEALTHY %d/%d resolved (%d cosmetic failure(s) only) ===",
                 ok, total, fail);
     } else {
-        UE_LOGE("sdk-check: === DEGRADED %d/%d resolved (%d total failures, %d CRITICAL+IMPORTANT) -- see WARN lines above ===",
-                ok, total, fail, failPriority);
+        UE_LOGE("sdk-check: === DEGRADED %d/%d resolved (%d total failures, %d CRITICAL+IMPORTANT%s) -- see WARN lines above ===",
+                ok, total, fail, failPriority,
+                skipped > 0 ? "; some UFunction checks skipped due to dead owning UClass" : "");
         UE_LOGE("sdk-check: VOTV build likely diverged from target (%s). Re-run UE4SS SDK dump + diff sdk_profile.h.",
                 P::kTargetGameVersion);
         UE_LOGE("sdk-check: see votv-coop-compat-report.txt next to the mod DLL for the shareable diff.");
     }
-    ReportFooter(ok, total, fail, failPriority);
+    ReportFooter(ok, total, fail, failPriority, skipped);
     WriteReportFile();
     return failPriority;
 }
