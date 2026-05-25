@@ -112,6 +112,18 @@ enum class ReliableKind : uint8_t {
                       //     the existing AActor::K2_DestroyActor PRE observer
                       //     (filtered by host-side tracked-NPC set). Payload:
                       //     EntityDestroyPayload (sessionId only -- 8 bytes).
+    RestoreVitals = 7, // 2026-05-25 LATE +5h: F3 dev-key triggered by host.
+                      //     Host applies vitals max-out locally + broadcasts
+                      //     this packet so both peers' food/sleep/health/
+                      //     coffeePower are restored simultaneously. No
+                      //     payload beyond the ReliableHeader -- the action
+                      //     is fixed (max-out the 4 vitals on the local
+                      //     UsaveSlot_C). [dev] devkeys=1 gated.
+    TeleportClient = 8, // 2026-05-25 LATE +5h: F4 dev-key triggered by host.
+                       //     Host snapshots own pose + sends to client; client
+                       //     applies via K2_TeleportTo on its local mainPlayer.
+                       //     Host->client only; no echo. Payload:
+                       //     TeleportClientPayload (24 bytes).
 };
 
 #pragma pack(push, 1)
@@ -358,6 +370,24 @@ static_assert(sizeof(EntityDestroyPayload) == 8, "EntityDestroyPayload must be 8
 // guard; absence breaks the established consistency.
 static_assert(sizeof(EntityDestroyPayload) <= 256 - 20 - 8,
               "EntityDestroyPayload must fit in one reliable datagram (kMaxReliablePayload)");
+
+// 2026-05-25 LATE +5h dev feature F4: teleport client to host's pose.
+// Host snapshots its own mainPlayer Location + Rotation and sends; client
+// applies via K2_TeleportTo. NaN/Inf rejected at the receiver before the
+// engine call (same trust-boundary defensive pattern as PropRelease velocity
+// bounds). Direction: host->client only; the receiver no-op's if it is the
+// host itself (a stale loopback would teleport host to its own pose, harmless
+// but pointless). [dev] devkeys=1 gated on the sender side.
+struct TeleportClientPayload {
+    float locX, locY, locZ;        // 12 -- world cm
+    float rotPitch, rotYaw, rotRoll; // 12 -- degrees
+};
+static_assert(sizeof(TeleportClientPayload) == 24, "TeleportClientPayload must be 24 bytes");
+static_assert(sizeof(TeleportClientPayload) <= 256 - 20 - 8,
+              "TeleportClientPayload must fit in one reliable datagram");
+
+// RestoreVitals (ReliableKind = 7) carries NO payload. The action is fixed:
+// receiver max-outs food/sleep/health/coffeePower on its local UsaveSlot_C.
 
 #pragma pack(pop)
 

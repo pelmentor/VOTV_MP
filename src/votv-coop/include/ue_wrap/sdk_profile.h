@@ -391,6 +391,19 @@ inline constexpr const wchar_t* KismetSystemLibraryClass = L"KismetSystemLibrary
 inline constexpr const wchar_t* ExecuteConsoleCommandFn = L"ExecuteConsoleCommand";
 inline constexpr const wchar_t* GameInstanceClass = L"mainGameInstance_C";
 
+// 2026-05-25 LATE +5h (F3 RestoreVitals dev feature): the live UsaveSlot_C
+// instance holds the player's CURRENT runtime vitals (food/sleep/health/
+// coffeePower), not just the persisted save record -- the BP code mutates
+// these fields in-place, then the SaveGameToSlot UFunction serializes the
+// whole object on save. So `FindObjectByClass(SaveSlotClass)` returns the
+// object whose float fields ARE the live vitals; writing them via reflection
+// max-outs the meters immediately. Field names confirmed via the
+// CXXHeaderDump of saveSlot.hpp (food @0x00E4, sleep @0x00E8, health
+// @0x0428, coffeePower @0x04D0 -- but offsets resolved at runtime via
+// FindPropertyOffset, not hardcoded, per the BP-cooked-offset-volatile
+// rule in reflected_offset.{h,cpp}).
+inline constexpr const wchar_t* SaveSlotClass = L"saveSlot_C";
+
 // Actor spawning (the BlueprintCallable deferred-spawn pair the K2
 // SpawnActorFromClass node uses) + transform get/set.
 inline constexpr const wchar_t* GameplayStaticsClass = L"GameplayStatics";

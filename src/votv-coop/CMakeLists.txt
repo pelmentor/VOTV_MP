@@ -60,6 +60,8 @@ add_library(votv-coop SHARED
     src/dev/common.cpp
     src/dev/freecam.cpp
     src/dev/pos_hud.cpp
+    src/dev/restore_vitals.cpp
+    src/dev/teleport_client.cpp
     src/harness/harness.cpp
     src/harness/autotest.cpp
     src/harness/config.cpp

@@ -6,6 +6,8 @@
 #include "harness/sdk_check.h"
 #include "dev/freecam.h"
 #include "dev/pos_hud.h"
+#include "dev/restore_vitals.h"
+#include "dev/teleport_client.h"
 #include "coop/event_feed.h"
 #include "coop/grab_observer.h"
 #include "coop/nameplate.h"
@@ -828,6 +830,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             coop::prop_lifecycle::SetSession(&g_session);
             coop::npc_sync::SetSession(&g_session);
             coop::prop_snapshot::SetSession(&g_session);
+            dev::restore_vitals::SetSession(&g_session);
+            dev::teleport_client::SetSession(&g_session);
             g_session.Start(netCfg);
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
                     netCfg.role == coop::net::Role::Host ? "host" : "client");
@@ -1005,6 +1009,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         coop::prop_lifecycle::SetSession(&g_session);
         coop::npc_sync::SetSession(&g_session);
         coop::prop_snapshot::SetSession(&g_session);
+        dev::restore_vitals::SetSession(&g_session);
+        dev::teleport_client::SetSession(&g_session);
         g_session.Start(cfg);
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
         int tick = 0;
@@ -1090,6 +1096,13 @@ void Start() {
 
     // Dev pos + camera-rotation overlay (F2 toggle). No-op unless ini enables it.
     dev::pos_hud::Init();
+
+    // Dev F3 (restore stamina/hunger) + F4 (teleport client to host). Both
+    // gated by [dev] devkeys=1; no-op otherwise. SetSession was already
+    // called above for the play / netloopback paths -- the hotkey threads
+    // just acquire it atomically and broadcast on press.
+    dev::restore_vitals::Init();
+    dev::teleport_client::Init();
 
     auto* scenario = new std::string(cfg::ReadScenario());
     if (HANDLE t = ::CreateThread(nullptr, 0, TimelineThread, scenario, 0, nullptr)) {

@@ -3,6 +3,9 @@
 #include "coop/net/session.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
+#include "dev/restore_vitals.h"
+#include "dev/teleport_client.h"
+#include "ue_wrap/game_thread.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/sdk_profile.h"
@@ -381,6 +384,76 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             std::memcpy(&p, msg.payload.data(), sizeof(p));
             UE_LOGI("event_feed[Inc2 detection-only]: received EntityDestroy sessionId=%u -- Inc3 will destroy the local mirror",
                     p.sessionId);
+            break;
+        }
+        case net::ReliableKind::RestoreVitals: {
+            // 2026-05-25 LATE +5h (F3 dev key): peer pressed F3 to refill
+            // food/sleep/health/coffeePower. No payload to validate -- the
+            // action is fixed. Idempotent so an echo bounce is harmless.
+            ue_wrap::game_thread::Post([] { ::dev::restore_vitals::ApplyLocally(); });
+            break;
+        }
+        case net::ReliableKind::TeleportClient: {
+            // 2026-05-25 LATE +5h (F4 dev key): host snapshotted its pose and
+            // sent it; client applies to local mainPlayer. Host echo is
+            // a no-op below.
+            if (msg.payload.size() < sizeof(net::TeleportClientPayload)) {
+                UE_LOGW("event_feed: TeleportClient payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::TeleportClientPayload));
+                break;
+            }
+            net::TeleportClientPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            // Trust-boundary validation (same defensive pattern as
+            // PropRelease velocity check at line 196 above): reject NaN/Inf
+            // before the engine call. UE's K2_TeleportTo with a NaN
+            // location asserts inside FSweepData::ClampSweepParameters.
+            const float vals[6] = {p.locX, p.locY, p.locZ, p.rotPitch, p.rotYaw, p.rotRoll};
+            bool finite = true;
+            for (float v : vals) { if (!std::isfinite(v)) { finite = false; break; } }
+            if (!finite) {
+                UE_LOGW("event_feed: TeleportClient payload non-finite -- dropping");
+                break;
+            }
+            // AABB bound (audit-fix 2026-05-25 LATE +5h): finite-check alone
+            // allows extreme-but-finite coords (e.g. 1e30) that would still
+            // assert inside the engine's teleport math. Mirror the project's
+            // own kMaxCoord = 1.0e6f trust boundary from ValidatePose /
+            // PropSpawnPayload receiver -- one consistent magnitude rule for
+            // any world-position payload. Rotations don't need a magnitude
+            // bound because FRotator components are angles (any value is
+            // normalized inside K2_TeleportTo).
+            if (std::fabs(p.locX) > net::kMaxCoord ||
+                std::fabs(p.locY) > net::kMaxCoord ||
+                std::fabs(p.locZ) > net::kMaxCoord) {
+                UE_LOGW("event_feed: TeleportClient location out of bounds (%.1f,%.1f,%.1f) -- dropping",
+                        p.locX, p.locY, p.locZ);
+                break;
+            }
+            // Host echo gate: if WE are the host, this packet originated from
+            // us (broadcast bounced back via the reliable channel). Applying
+            // would teleport host to its own pose -- harmless but pointless.
+            // Skip explicitly so we don't accidentally collide with whatever
+            // host was doing the moment it pressed F4.
+            if (session.role() == net::Role::Host) {
+                UE_LOGI("event_feed: TeleportClient self-echo on host -- no-op");
+                break;
+            }
+            ::dev::teleport_client::ApplyArgs args{
+                p.locX, p.locY, p.locZ,
+                p.rotPitch, p.rotYaw, p.rotRoll,
+            };
+            ue_wrap::game_thread::Post([args] { ::dev::teleport_client::ApplyLocally(args); });
+            break;
+        }
+        default: {
+            // Audit-fix 2026-05-25 LATE +5h: log-and-drop unknown ReliableKind
+            // values instead of silently discarding. A peer running a newer
+            // protocol could send a kind we don't yet handle; this surfaces
+            // the gap in the log rather than letting it look like nothing
+            // happened. Existing pattern across the project.
+            UE_LOGW("event_feed: unknown ReliableKind %u -- dropping",
+                    static_cast<unsigned>(msg.kind));
             break;
         }
         }
