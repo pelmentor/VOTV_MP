@@ -253,6 +253,15 @@ bool DebugForceToggle(void* mp) {
     //
     // The autotest already calls DebugForceToggle from its worker
     // thread (NOT inside a GT::Post), so this layering works.
+    //
+    // 2026-05-26: also drive the LOCAL light_R.Intensity so the
+    // SENDER's flashlight is visually on too -- the BP toggle path is
+    // gated by reflection-untouchable input state, so calling
+    // Flashlight Update / updateFlashlight via reflection produces no
+    // visible toggle. Writing flashlight bool + Intensity is the same
+    // pair of fields the BP would have written; we just skip the BP
+    // graph. This makes the autotest's wire path also visually exercise
+    // both peers' lights end-to-end.
     auto done = std::make_shared<std::atomic<int>>(0);
     auto newStateOut = std::make_shared<std::atomic<bool>>(false);
     GT::Post([mp, done, newStateOut] {
@@ -260,9 +269,36 @@ bool DebugForceToggle(void* mp) {
             reinterpret_cast<uint8_t*>(mp) + P::off::AmainPlayer_flashlight);
         const bool newState = !(*fl);
         *fl = newState;
+
+        // Drive the local light_R's Intensity to match the new state.
+        // Mirrors the BP's toggle effect so the SENDER also visually
+        // toggles. Use the same SetIntensity reflection path the
+        // puppet receiver uses (MarkRenderStateDirty internally).
+        void* light_R = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(mp) + P::off::AmainPlayer_light_R);
+        float localTarget = kIntensityOffDefault;
+        if (newState) {
+            localTarget = g_latchedOnIntensity.load(std::memory_order_acquire);
+            if (localTarget == 0.f) localTarget = kIntensityOnFallback;
+        }
+        static void* sLocalSetIntensityFn = nullptr;
+        if (!sLocalSetIntensityFn) {
+            void* lightCls = R::FindClass(L"LightComponent");
+            if (lightCls) sLocalSetIntensityFn = R::FindFunction(lightCls, P::name::SetIntensityFn);
+        }
+        if (light_R && R::IsLive(light_R) && sLocalSetIntensityFn) {
+            ue_wrap::ParamFrame f(sLocalSetIntensityFn);
+            f.Set<float>(L"NewIntensity", localTarget);
+            ue_wrap::Call(light_R, f);
+        }
+        // Also latch the on-value so the receiver gets the same intensity
+        // we're using locally (instead of falling back to 5.0).
+        if (newState && localTarget > 1.f) {
+            g_latchedOnIntensity.store(localTarget, std::memory_order_release);
+        }
         newStateOut->store(newState, std::memory_order_release);
-        UE_LOGI("flashlight: DebugForceToggle wrote flashlight=%d on %p (LAN test path)",
-                newState ? 1 : 0, mp);
+        UE_LOGI("flashlight: DebugForceToggle wrote flashlight=%d Intensity=%.2f on %p (LAN test path)",
+                newState ? 1 : 0, localTarget, mp);
         done->store(1, std::memory_order_release);
     });
     while (done->load(std::memory_order_acquire) == 0) ::Sleep(1);

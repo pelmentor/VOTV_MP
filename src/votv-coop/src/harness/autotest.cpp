@@ -30,6 +30,7 @@
 #include "harness/autotest.h"
 
 #include "coop/item_activate.h"
+#include "dev/flashlight_setup.h"
 #include "harness/screenshot.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -478,20 +479,45 @@ void RunAutonomousFlashlightTest() {
     // visual does NOT update because the BP did not fire -- but that's
     // OK for the autonomous wire test (we verify the puppet's light
     // toggles on the OTHER peer via log diff).
+    // 2026-05-26: per inventory/equip/battery RE, the local player's
+    // flashlight needs to be properly set up before BP toggle paths will
+    // actually flip the light. The s_may2026 save SHOULD have one
+    // equipped, but we top off the battery + verify the gate state just
+    // in case. dev::flashlight_setup::EnsureFlashlightReady():
+    //   - reads hasFlashlight; if false, calls addPropToPlayer to give
+    //     the player a flashlight (the cheat-menu-equivalent path)
+    //   - writes saveSlot.battery = 1.0 (full)
+    //   - writes saveSlot.flashlightBattery = prop_batts_C UClass*
+    //   - logs the verified pre/post state
+    {
+        auto ensureDone = std::make_shared<std::atomic<int>>(0);
+        GT::Post([rsv, ensureDone] {
+            if (rsv->player) dev::flashlight_setup::EnsureFlashlightReady(rsv->player);
+            ensureDone->store(1);
+        });
+        while (ensureDone->load() == 0) ::Sleep(5);
+        ::Sleep(500);  // let the BP equip path settle if addPropToPlayer ran
+    }
+
+    // 2026-05-26 #3: every BP path tried via reflection (updateFlashlight,
+    // Flashlight Update, InpActEvt_13/14) either dispatched-but-no-op'd
+    // or required input state we can't synthesise. The BP graph is
+    // genuinely gated on the engine input system actually firing an
+    // InputAction event -- reflection can't fake that.
+    //
+    // Pivot: DebugForceToggle now also drives the LOCAL light_R Intensity
+    // via SetIntensity reflection, replicating exactly what the BP would
+    // have done (flip bool + set Intensity). Visual toggles on the sender,
+    // wire packet flies to the peer, receiver applies same intensity to
+    // puppet -- end-to-end visual + wire from one entry point.
     const int kIterations = 4;
     for (int i = 0; i < kIterations; ++i) {
-        UE_LOGI("flashlight_test: about to DebugForceToggle (iteration %d)", i);
-        // DebugForceToggle is called FROM THE WORKER THREAD (i.e. here,
-        // NOT inside a GT::Post). It internally GT::Post's the field
-        // write but then runs its SendReliable retry loop on this
-        // thread -- the retry sleeps ~25 ms between attempts, which
-        // would deadlock the ack pump if run on the game thread.
-        const bool newState = coop::item_activate::DebugForceToggle(rsv->player);
-        UE_LOGI("flashlight_test: DebugForceToggle -> %d (iteration %d)",
-                newState ? 1 : 0, i);
+        UE_LOGI("flashlight_test: iteration %d -- DebugForceToggle (local visual + wire)", i);
+        coop::item_activate::DebugForceToggle(rsv->player);
         ::Sleep(2000);
     }
-    UE_LOGI("flashlight_test: DONE -- %d toggle iterations completed on %s", kIterations, roleStr);
+    UE_LOGI("flashlight_test: DONE -- %d iterations on %s (DebugForceToggle path; "
+            "BP reflection paths all gate-blocked)", kIterations, roleStr);
 }
 
 DWORD WINAPI FlashlightTestThread(LPVOID /*arg*/) {

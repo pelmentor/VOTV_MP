@@ -60,6 +60,7 @@ add_library(votv-coop SHARED
     src/coop/net/reliable_channel.cpp
     src/dev/common.cpp
     src/dev/freecam.cpp
+    src/dev/flashlight_setup.cpp
     src/dev/pos_hud.cpp
     src/dev/restore_vitals.cpp
     src/dev/teleport_client.cpp

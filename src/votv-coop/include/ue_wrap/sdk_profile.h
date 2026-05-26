@@ -725,6 +725,22 @@ inline constexpr const wchar_t* SetIntensityUnitsFn = L"SetIntensityUnits";
 inline constexpr const wchar_t* MainPlayerFlashlightInput13Fn = L"InpActEvt_flashlight_K2Node_InputActionEvent_13";
 inline constexpr const wchar_t* MainPlayerFlashlightInput14Fn = L"InpActEvt_flashlight_K2Node_InputActionEvent_14";
 
+// Phase 5F autotest helpers (2026-05-26): give/equip/battery setup.
+// AmainPlayer_C::addPropToPlayer(FName prop) -- cheat-menu-equivalent
+// path. Spawns the actor + adds to player inventory + (per F-INV-2
+// open flag) MAY auto-equip when it's an equipment item.
+// See research/findings/votv-inventory-equip-battery-RE-2026-05-26.md.
+inline constexpr const wchar_t* MainPlayerAddPropToPlayerFn = L"addPropToPlayer";
+
+// Battery item class for the standard flashlight (Aprop_batts_C).
+// We write a TSubclassOf<Aprop_batts_C> pointer into saveSlot.flashlightBattery
+// to mark "a battery is inserted"; the class CDO is fine (it's a class ref,
+// not an instance).
+inline constexpr const wchar_t* BattsClass = L"prop_batts_C";
+
+// Flashlight equipment class (the FName the BP uses to identify the item).
+inline constexpr const wchar_t* FlashlightEquipmentClass = L"prop_equipment_flashlight_C";
+
 // UTimelineComponent BP-callable methods (used to force the `grab` Timeline
 // from the autonomous test, so the 3 BP-Timeline observers fire without a
 // real E-press). These ARE ProcessEvent-dispatched (BP CallFunction nodes).
