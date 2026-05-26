@@ -58,6 +58,15 @@ void* ObjectAt(int32_t index);
 // longer matches, so this returns false instead of dereferencing freed memory.
 bool IsLive(void* obj);
 
+// Mark a UObject as part of the root set so UE4 GC never collects it. We pin
+// runtime-constructed UObjects (NewObject / SpawnObject results) we want to
+// keep referenced indefinitely from C++ -- C++ static void* doesn't qualify as
+// a reachable reference for the GC reachability scan, so without rooting the
+// object gets reaped on the next GC pass and our cached pointer dangles.
+// Sets EInternalObjectFlags::RootSet (0x40000000) on FUObjectItem.Flags @+0x08.
+// Returns false if obj is null or its index is out of range.
+bool AddToRoot(void* obj);
+
 // UObjectBase accessors (offsets are the standard UE4.27 layout).
 const FName& NameOf(void* uobject);   // NamePrivate  @ +0x18
 void*        ClassOf(void* uobject);  // ClassPrivate @ +0x10

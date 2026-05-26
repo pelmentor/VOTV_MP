@@ -52,6 +52,7 @@ add_library(votv-coop SHARED
     src/coop/event_feed.cpp
     src/coop/grab_observer.cpp
     src/coop/item_activate.cpp
+    src/coop/flashlight_click_sound.cpp
     src/coop/players_registry.cpp
     src/coop/npc_sync.cpp
     src/coop/prop_lifecycle.cpp

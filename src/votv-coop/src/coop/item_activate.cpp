@@ -14,6 +14,7 @@
 
 #include "coop/item_activate.h"
 
+#include "coop/flashlight_click_sound.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
@@ -31,7 +32,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
 
 namespace coop::item_activate {
 namespace {
@@ -630,52 +630,12 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& payl
             puppetActor, newState ? 1 : 0, targetIntensity,
             payload.outerConeAngle, payload.innerConeAngle, payload.mode);
 
-    // Diagnostic readback: confirm the puppet's light_R actually has the
-    // fields we expect AFTER our writes. The 2026-05-26 deep-RE plan
-    // identified ULightComponent::SceneProxy @+0x03F8 as the SMOKING-GUN
-    // field: SetIntensity hard no-ops when SceneProxy is null. We dump
-    // SceneProxy, bRegistered (UActorComponent @+0x88 bit 0), Mobility
-    // (USceneComponent @+0x14F), bAffectsWorld (ULightComponentBase
-    // @+0x214 bit 0), bVisible (USceneComponent @+0x14C bit 4), and
-    // Intensity (ULightComponentBase @+0x20C) -- all on puppet AND on
-    // local for differential diagnosis. If puppet.SceneProxy is null
-    // and local.SceneProxy is non-null, we've localized the failure
-    // to the orphan's component-registration path.
-    auto dumpLight = [](const wchar_t* tag, void* light) {
-        if (!light) { UE_LOGI("flashlight[diag %ls]: <null>", tag); return; }
-        const float    intensity   = *reinterpret_cast<float*>   (reinterpret_cast<uint8_t*>(light) + P::off::ULightComponentBase_Intensity);
-        const uint8_t  regByte     = *reinterpret_cast<uint8_t*> (reinterpret_cast<uint8_t*>(light) + P::off::UActorComponent_RegFlagsByte);
-        const uint8_t  visByte     = *reinterpret_cast<uint8_t*> (reinterpret_cast<uint8_t*>(light) + P::off::USceneComponent_VisFlagsByte);
-        const uint8_t  hidByte     = *reinterpret_cast<uint8_t*> (reinterpret_cast<uint8_t*>(light) + P::off::USceneComponent_HiddenFlagsByte);
-        const uint8_t  mobility    = *reinterpret_cast<uint8_t*> (reinterpret_cast<uint8_t*>(light) + P::off::USceneComponent_Mobility);
-        const uint8_t  worldByte   = *reinterpret_cast<uint8_t*> (reinterpret_cast<uint8_t*>(light) + P::off::ULightComponentBase_FlagsByte);
-        void*          sceneProxy  = *reinterpret_cast<void**>   (reinterpret_cast<uint8_t*>(light) + P::off::ULightComponent_SceneProxy);
-        void*          attachParent= *reinterpret_cast<void**>   (reinterpret_cast<uint8_t*>(light) + P::off::USceneComponent_AttachParent);
-        UE_LOGI("flashlight[diag %ls]: light=%p SceneProxy=%p Intensity=%.2f "
-                "bRegistered=%d bVisible=%d bHiddenInGame=%d Mobility=%u "
-                "bAffectsWorld=%d (regByte=0x%02X visByte=0x%02X hidByte=0x%02X worldByte=0x%02X) "
-                "AttachParent=%p",
-                tag, light, sceneProxy, intensity,
-                (regByte & 0x01) ? 1 : 0,
-                (visByte & 0x10) ? 1 : 0,
-                (hidByte & 0x04) ? 1 : 0,
-                static_cast<unsigned>(mobility),
-                (worldByte & 0x01) ? 1 : 0,
-                regByte, visByte, hidByte, worldByte,
-                attachParent);
-    };
-    dumpLight(L"puppet ", light_R);
-    // Local player's light_R for differential comparison. Use the
-    // Registry (not FindObjectByClass) since FindObjectByClass may
-    // return the puppet on its first hit.
-    void* localPlayer = coop::players::Registry::Get().Local();
-    if (localPlayer && localPlayer != puppetActor) {
-        void* localLightR = *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(localPlayer) + P::off::AmainPlayer_light_R);
-        if (localLightR && R::IsLive(localLightR)) {
-            dumpLight(L"local ", localLightR);
-        }
-    }
+    // 3D positional click sound at the puppet -- extracted to its own
+    // subsystem (see coop/flashlight_click_sound.h). Gated on state-CHANGE
+    // (hold-F mode-change packets don't click). Runtime-constructs its
+    // own USoundAttenuation, AddToRoot's it for GC stability.
+    coop::flashlight_click_sound::PlayIfStateChanged(
+        puppetActor, payload.peerSessionId, newState);
 }
 
 }  // namespace coop::item_activate

@@ -389,6 +389,34 @@ inline constexpr size_t UCameraComponent_PostProcessSettings = 0x0270;    // FPo
 inline constexpr size_t FPostProcessSettings_Size = 0x0560;
 inline constexpr size_t FPostProcessSettings_WeightedBlendables = 0x0550; // TArray (0x10) within the PP struct
 
+// USoundAttenuation field offsets (FSoundAttenuationSettings + parent
+// FBaseAttenuationSettings). Used to configure a runtime-constructed
+// attenuation object for 3D positional sound (Phase 5F v6 click sound at
+// puppet, RULE-1 native path -- no borrowing of VOTV `att_*` assets).
+// Confirmed via UE4SS_ObjectDump_GAMEPLAY_SAVE.txt lines 34449-36817:
+//   SoundAttenuation UObject @+0x28 = FSoundAttenuationSettings struct
+//     extends FBaseAttenuationSettings @+0x00:
+//       DistanceAlgorithm: enum @+0x08
+//       AttenuationShape:  byte @+0x09 (0=Sphere, 1=Capsule, 2=Box, 3=Cone)
+//       dBAttenuationAtMax:float @+0x0C
+//       FalloffMode:        enum @+0x10
+//       AttenuationShapeExtents: FVector @+0x14 (sphere -> X is radius cm)
+//       ConeOffset:        float @+0x20
+//       FalloffDistance:   float @+0x24
+//     plus SoundAttenuationSettings own bytes:
+//       bAttenuate  bit @ byte+0xB0 mask 0x01
+//       bSpatialize bit @ byte+0xB0 mask 0x02
+namespace att {
+inline constexpr size_t DistanceAlgorithm       = 0x28 + 0x08;  // uint8 enum
+inline constexpr size_t AttenuationShape        = 0x28 + 0x09;  // uint8 enum
+inline constexpr size_t dBAttenuationAtMax      = 0x28 + 0x0C;  // float
+inline constexpr size_t FalloffMode             = 0x28 + 0x10;  // uint8 enum
+inline constexpr size_t AttenuationShapeExtents = 0x28 + 0x14;  // FVector (12 B)
+inline constexpr size_t ConeOffset              = 0x28 + 0x20;  // float
+inline constexpr size_t FalloffDistance         = 0x28 + 0x24;  // float
+inline constexpr size_t FlagsByte               = 0x28 + 0xB0;  // bAttenuate@0x01, bSpatialize@0x02
+}  // namespace att
+
 inline constexpr size_t AHUD_bShowHUD = 0x0228;     // uint8  Engine.hpp:7413 (VOTV draws via UMG -> default HUD canvas off; force 1 to get ReceiveDrawHUD)
 inline constexpr size_t AHUD_Canvas = 0x0270;       // UCanvas*  Engine.hpp:7422
 inline constexpr size_t UCanvas_SizeX = 0x0040;     // int32     Engine.hpp:9846
@@ -788,6 +816,28 @@ inline constexpr const wchar_t* MainPlayerFlashlightInput14Fn = L"InpActEvt_flas
 // receiver mirrors the new cone shape on the puppet. Same hook style as
 // updateFlashlight / Flashlight Update / InpActEvt_13/14 (mainPlayer.hpp:655).
 inline constexpr const wchar_t* MainPlayerTimerHoldFlashlightFn = L"timerHoldFlashlight";
+
+// 2026-05-26 PM (v6 click-sound at puppet): VOTV plays the flashlight
+// click as USoundWave `/Game/audio/effects/flashlight.flashlight`
+// (confirmed via UE4SS_ObjectDump_GAMEPLAY_SAVE.txt:149975). The
+// receiver plays it at the puppet's world location via
+// UGameplayStatics::PlaySoundAtLocation so the local player hears the
+// click come from the remote player's direction with full 3D
+// attenuation. FindObject resolves by leaf name `flashlight` filtered
+// by className `SoundWave` (linear GUObjectArray walk; done once at
+// first apply and cached).
+inline constexpr const wchar_t* FlashlightClickSoundName = L"flashlight";
+inline constexpr const wchar_t* SoundWaveClass           = L"SoundWave";
+inline constexpr const wchar_t* PlaySoundAtLocationFn    = L"PlaySoundAtLocation";
+
+// USoundWave alone has no spatialization -- PlaySoundAtLocation needs an
+// AttenuationSettings override or it plays 2D (same volume everywhere).
+// RULE 1 native path 2026-05-26: instead of borrowing VOTV's content
+// `att_*` assets (which would couple our code to specific cooked content
+// names + their author-chosen radii), we CONSTRUCT a USoundAttenuation
+// at runtime via UGameplayStatics::SpawnObject. Field offsets live in
+// the `off::att` namespace (block at the top of this file).
+inline constexpr const wchar_t* SoundAttenuationClass = L"SoundAttenuation";
 
 // 2026-05-26 deep-RE breakthrough: BP graphs for input handlers + the
 // updateFlashlight / 'Flashlight Update' functions all compile to

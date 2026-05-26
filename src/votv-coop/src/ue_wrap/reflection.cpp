@@ -79,6 +79,17 @@ void* ObjectAt(int32_t index) {
     return item ? *reinterpret_cast<void**>(item) : nullptr;  // FUObjectItem.Object @ +0x00
 }
 
+bool AddToRoot(void* obj) {
+    if (!obj) return false;
+    const int32_t idx = *reinterpret_cast<int32_t*>(
+        reinterpret_cast<uint8_t*>(obj) + O::UObject_InternalIndex);
+    uint8_t* item = ItemAt(idx);
+    if (!item) return false;
+    int32_t& flags = *reinterpret_cast<int32_t*>(item + O::FUObjectItem_Flags);
+    flags |= 0x40000000;  // EInternalObjectFlags::RootSet (UE4.27)
+    return true;
+}
+
 bool IsLive(void* obj) {
     if (!obj) return false;
     const int32_t idx = *reinterpret_cast<int32_t*>(
