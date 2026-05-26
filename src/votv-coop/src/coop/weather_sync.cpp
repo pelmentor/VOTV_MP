@@ -738,29 +738,34 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
     const uint8_t curFlags = cur.flags;
     using namespace coop::net::weather_flags;
 
-    // Receiver apply follows the SAME order as DebugForceRain on the host
-    // (per votv-weather-RE-mainGamemode-2026-05-26.md + the 2026-05-27 deep
-    // RE pass): config bits FIRST so any BP body that checks them sees
-    // the new value; THEN setRainProperties to write all 5 scalars
-    // BEFORE causeRain (so causeRain's particle-Activate path reads the
-    // intended rainStrength, not whatever stale value was on the field);
-    // THEN causeRain to trigger the BP transition (particle Activate,
-    // audio cue start, isRaining @0x02E4 flip + fan-out); finally
-    // setWindParameters to propagate wind speed to AdirectionalWind_C.
+    // Phase 5W Inc-fix-1 (2026-05-27): RULE-1 receiver rewrite per
+    // research/findings/votv-weather-RE-rendering-2026-05-27.md.
     //
-    // The previous order (causeRain BEFORE setRainProperties) was the
-    // root cause of "client receives applied=N but no visible rain":
-    // causeRain started the particle system reading rainStrength=0 (the
-    // default), then setRainProperties wrote 1.0 too late -- particles
-    // were already emitting at zero rate. Verified by host screenshot
-    // (DebugForceRain order = properties-then-causeRain = visible rain)
-    // vs client screenshot (old order = causeRain-then-properties = no
-    // visible rain).
+    // PRIOR DESIGN (failed): called causeRain(bool) to "trigger BP
+    // transition + particle Activate". RE pass revealed causeRain's BP
+    // body has 3 RandomFloat + 3 Ease calls -- it is a RANDOMIZED rain-
+    // strength re-roller, NOT a particle-Activate dispatcher. It
+    // overwrote our wire-received rainStrength and produced no visible
+    // particles on the client (post-apply readback showed bool=1 but
+    // particles silent).
+    //
+    // NEW DESIGN: bypass the BP ubergraph entirely. Direct memory writes
+    // for all state fields (no UFunction Random-roll interference) +
+    // direct UParticleSystemComponent::Activate() / Deactivate() on the
+    // cycle's eff_rain @ 0x0228 component. Activate/Deactivate are
+    // engine-inherited UFunctions (Cascade semantics, deterministic);
+    // they are documented at Engine.hpp:7207-7208 and have no BP body
+    // (pure native dispatch). This is the load-bearing change.
+    //
+    // We retain setRainParticles + setRainParameters + setWindParameters
+    // as the safe BP helpers per the RE doc Q1.2/Q2.3 (no Random rolls in
+    // their bodies). They do the template swap + parameter derivation
+    // that's needed when the active weather TYPE changes (rain vs snow).
 
     const bool newRain = (newFlags & kIsRaining) != 0;
     const bool curRain = (curFlags & kIsRaining) != 0;
 
-    // ---- Step 1: direct-write config bits ----
+    // ---- Step A: write all 6 config bits directly ----
     if (((curFlags ^ newFlags) & kEnableRain) != 0)
         *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enable_rain) =
             (newFlags & kEnableRain) != 0;
@@ -780,67 +785,116 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
         *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_permanentRain) =
             (newFlags & kPermanentRain) != 0;
 
-    // ---- Step 2: setRainProperties FIRST (writes all rain scalars
-    // including rainDeactivateChance=0 to lock in for the duration). Even
-    // when rain is going OFF, calling this with isRaining=false zeros the
-    // scalar block cleanly.
-    const bool rainScalarsChanged =
+    // ---- Step B: write isRaining bool directly ----
+    *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_isRaining) = newRain;
+
+    // ---- Step C: write all 4 rain scalar fields directly. Skip the
+    // setRainProperties UFunction -- it internally calls setRainParameters
+    // (safe) but ALSO chains into the BP ubergraph which has Ease-based
+    // interp. Direct writes are deterministic.
+    *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rainStrength)         = payload.rainStrength;
+    *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rainLightningChance)  = payload.rainLightningChance;
+    *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rainDeactivateChance) = payload.rainDeactivateChance;
+    *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rainWindSpeed)        = payload.rainWindSpeed;
+
+    // ---- Step D: write the `rain` field @0x02E0 to match rainStrength.
+    // This is the per-frame Ease interpolation target. Without this the
+    // ubergraph's tick body would slowly drag rainStrength back toward
+    // the OLD `rain` value over the next ~60 frames (visible flicker).
+    // Setting them equal anchors the interp at our intended value.
+    *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rain) = payload.rainStrength;
+
+    // ---- Step E: setRainParticles (safe -- template swap; no Random in
+    // body per RE doc Q1.2). Ensures the eff_rain component has the
+    // correct UParticleSystem template assigned (rain vs snow). Skipped
+    // when nothing about the rain state changed.
+    const bool rainStateChanged =
         newRain != curRain ||
         cur.rainStrength != payload.rainStrength ||
         cur.rainLightningChance != payload.rainLightningChance ||
         cur.rainDeactivateChance != payload.rainDeactivateChance ||
         cur.rainWindSpeed != payload.rainWindSpeed;
-    if (rainScalarsChanged && g_setRainPropertiesFn) {
-        ue_wrap::ParamFrame f(g_setRainPropertiesFn);
-        f.Set<bool>(L"isRaining",            newRain);
-        f.Set<float>(L"rainStrength",        payload.rainStrength);
-        f.Set<float>(L"rainLightningChance", payload.rainLightningChance);
-        f.Set<float>(L"rainDeactivateChance",payload.rainDeactivateChance);
-        f.Set<float>(L"rainWindSpeed",       payload.rainWindSpeed);
-        ue_wrap::Call(cycle, f);
-    }
-
-    // ---- Step 3: causeRain triggers BP transition VFX/SFX. Particles
-    // Activate now read the rainStrength that Step 2 just wrote.
-    if (newRain != curRain && g_causeRainFn) {
-        ue_wrap::ParamFrame f(g_causeRainFn);
-        f.Set<bool>(L"isRaining", newRain);
-        ue_wrap::Call(cycle, f);
-    }
-
-    // ---- Step 4: setRainParticles -- explicit fallback to directly drive
-    // the UParticleSystemComponent rainEffect Activate/Deactivate (per the
-    // RE doc's fallback recommendation). causeRain's BP transition path
-    // may not always reliably start the particle system on a client cycle
-    // (hands-on verification 2026-05-27: client log showed apply=N but no
-    // visible rain particles -- screenshot diff host vs client). Calling
-    // setRainParticles unconditionally on any rain-state change forces
-    // the particle component into the canonical state derived from the
-    // cycle's current isRaining + rainStrength fields.
-    if ((rainScalarsChanged || newRain != curRain) && g_setRainParticlesFn) {
+    if (rainStateChanged && g_setRainParticlesFn) {
         ue_wrap::ParamFrame f(g_setRainParticlesFn);
         ue_wrap::Call(cycle, f);
     }
 
-    // ---- Step 5: setWindParameters propagates rainWindSpeed to
-    // AdirectionalWind_C (no-arg; reads cycle state).
-    if (rainScalarsChanged && g_setWindParametersFn) {
+    // ---- Step F: directly Activate/Deactivate the eff_rain
+    // UParticleSystemComponent. THIS is the load-bearing call -- engine-
+    // inherited UFunction with deterministic Cascade semantics, no BP
+    // randomness. Activate(bReset=false) starts emission; Deactivate
+    // stops it. Replaces the buggy causeRain UFunction path.
+    void* effRain = *reinterpret_cast<void**>(
+        base + P::off::AdaynightCycle_eff_rain);
+    if (effRain && R::IsLive(effRain) && newRain != curRain) {
+        // Resolve Activate/Deactivate UFunctions. Strategy: get the
+        // UClass DIRECTLY off the eff_rain instance (UObject_ClassPrivate
+        // @0x10) rather than by name lookup. The instance is guaranteed
+        // to be a UParticleSystemComponent (per the .hpp dump); we use
+        // its actual class. This avoids the prior issue where
+        // FindClass(L"ParticleSystemComponent") returned null at apply
+        // time (likely a class-load-ordering issue). Cache the resolved
+        // function pointers across calls; the engine class is static.
+        static void* sActivateFn   = nullptr;
+        static void* sDeactivateFn = nullptr;
+        if (!sActivateFn || !sDeactivateFn) {
+            void* cls = R::ClassOf(effRain);
+            if (cls) {
+                if (!sActivateFn)
+                    sActivateFn = R::FindFunction(cls, P::name::ActorComponent_ActivateFn);
+                if (!sDeactivateFn)
+                    sDeactivateFn = R::FindFunction(cls, P::name::ActorComponent_DeactivateFn);
+            }
+            if (sActivateFn || sDeactivateFn) {
+                UE_LOGI("weather: resolved eff_rain UFunctions via instance class "
+                        "(cls=%p Activate=%p Deactivate=%p)",
+                        cls, sActivateFn, sDeactivateFn);
+            }
+        }
+        if (newRain && sActivateFn) {
+            ue_wrap::ParamFrame f(sActivateFn);
+            f.Set<bool>(L"bReset", false);
+            ue_wrap::Call(effRain, f);
+            UE_LOGI("weather: eff_rain->Activate() called (component=%p)", effRain);
+        } else if (!newRain && sDeactivateFn) {
+            ue_wrap::ParamFrame f(sDeactivateFn);
+            ue_wrap::Call(effRain, f);
+            UE_LOGI("weather: eff_rain->Deactivate() called (component=%p)", effRain);
+        } else {
+            UE_LOGW("weather: eff_rain Activate/Deactivate UFunction NOT resolved "
+                    "(Activate=%p Deactivate=%p) -- visible particles will not toggle",
+                    sActivateFn, sDeactivateFn);
+        }
+    } else if (!effRain && newRain != curRain) {
+        UE_LOGW("weather: cycle.eff_rain @ 0x0228 is null on this peer -- "
+                "visible particles cannot be driven (cycle component not yet "
+                "registered? cycle=%p)", cycle);
+    }
+
+    // ---- Step G: setWindParameters propagates wind to AdirectionalWind_C.
+    if (rainStateChanged && g_setWindParametersFn) {
         ue_wrap::ParamFrame f(g_setWindParametersFn);
         ue_wrap::Call(cycle, f);
     }
 
-    // ---- Post-apply diagnostic readback. Confirms the fields we wrote are
-    // actually live on the cycle. If isRaining-readback != newRain, something
-    // (another BP path, the suppressed scheduler firing despite intercept,
-    // or a UFunction internal write) is overwriting our intent.
+    // ---- Post-apply diagnostic readback. Confirms our writes are live.
+    // eff_rain.bIsActive (UActorComponent::bIsActive @+0x008A per RE doc
+    // Q9.6) tells us whether Activate actually engaged the component.
     {
         const bool isRainingActual = *reinterpret_cast<bool*>(
             base + P::off::AdaynightCycle_isRaining);
         const float rainStrengthActual = *reinterpret_cast<float*>(
             base + P::off::AdaynightCycle_rainStrength);
+        bool effActive = false;
+        if (effRain && R::IsLive(effRain)) {
+            // UActorComponent::bIsActive @ 0x008A per Engine.hpp.
+            effActive = *reinterpret_cast<bool*>(
+                reinterpret_cast<uint8_t*>(effRain) + 0x008A);
+        }
         UE_LOGI("weather: post-apply readback isRaining=%d rainStrength=%.2f "
-                "(expected isRaining=%d rainStrength=%.2f)",
+                "eff_rain=%p bIsActive=%d (expected isRaining=%d rainStrength=%.2f)",
                 isRainingActual ? 1 : 0, rainStrengthActual,
+                effRain, effActive ? 1 : 0,
                 newRain ? 1 : 0, payload.rainStrength);
     }
 
@@ -861,7 +915,7 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
             payload.rainDeactivateChance, payload.rainWindSpeed,
             (newRain != curRain) ? 1 : 0,
             (newSnow != curSnow) ? 1 : 0,
-            rainScalarsChanged ? 1 : 0);
+            rainStateChanged ? 1 : 0);
 }
 
 }  // namespace coop::weather_sync

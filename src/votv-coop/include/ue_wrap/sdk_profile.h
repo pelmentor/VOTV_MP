@@ -428,6 +428,8 @@ inline constexpr size_t UEngine_SmallFont = 0x0050; // UFont*    Engine.hpp:1073
 // dump. Owned by mainGamemode.daynightCycle@0x0450 (singleton per session).
 // See research/findings/votv-weather-RE-mainGamemode-2026-05-26.md for the
 // derivation.
+inline constexpr size_t AdaynightCycle_eff_rain             = 0x0228;  // UParticleSystemComponent* (the actual rain VFX driver)
+inline constexpr size_t AdaynightCycle_rain                 = 0x02E0;  // float (per-frame Ease interp target -- write to anchor rainStrength)
 inline constexpr size_t AdaynightCycle_isRaining            = 0x02E4;  // bool
 inline constexpr size_t AdaynightCycle_isSnow               = 0x03B0;  // bool
 inline constexpr size_t AdaynightCycle_enableSunlight       = 0x03D8;  // bool
@@ -1030,6 +1032,18 @@ inline constexpr const wchar_t* DaynightCycle_setFogDensityFn      = L"SetFogDen
 // flagged this as a fallback path. Receiver calls this after causeRain to
 // guarantee the visible particle component matches state.
 inline constexpr const wchar_t* DaynightCycle_setRainParticlesFn   = L"setRainParticles";
+
+// Phase 5W Inc-fix-1 (2026-05-27): direct UParticleSystemComponent::Activate
+// path on the cycle's eff_rain component. Per
+// research/findings/votv-weather-RE-rendering-2026-05-27.md the previous
+// receiver chain (causeRain UFunction) does NOT reliably activate eff_rain
+// on the client because causeRain's BP body is a Random-roll function, not
+// a particle-Activate dispatcher. Bypass it entirely: direct memory writes
+// for the bools + scalars, then call eff_rain->Activate() directly.
+// Activate is the engine-inherited UActorComponent UFunction; deterministic.
+inline constexpr const wchar_t* ParticleSystemComponentClass    = L"ParticleSystemComponent";
+inline constexpr const wchar_t* ActorComponent_ActivateFn       = L"Activate";
+inline constexpr const wchar_t* ActorComponent_DeactivateFn     = L"Deactivate";
 // SetCollisionEnabled lives on UPrimitiveComponent; used by remote_prop::OnSpawn
 // to restore default collision (QueryAndPhysics=3) on wire-converged props
 // whose local copy had collision disabled by a natural-spawn pipeline (e.g.
