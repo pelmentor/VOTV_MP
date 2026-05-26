@@ -18,6 +18,7 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
+#include "coop/remote_player.h"
 #include "dev/common.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
@@ -105,6 +106,34 @@ uint32_t g_flashlightClassHash = 0;
 // Session pointer (atomic so the observer's BG read can't race with
 // a setter on another thread -- same pattern as dev::teleport_client).
 std::atomic<coop::net::Session*> g_session{nullptr};
+
+// Phase 5F Inc5 (connect-time replay) -- pending broadcast.
+// On the harness's !wasConnected->isConnected edge we queue our LOCAL
+// flashlight state for retransmit. The send happens from TickConnect()
+// (NOT from the edge itself) because:
+//   - The reliable channel is stop-and-wait; on a busy edge (PropSpawn
+//     snapshot burst is firing at the same time) the first SendReliable
+//     attempt is likely to fail. Per-tick retry handles that without
+//     blocking the calling thread.
+//   - Building the payload requires reading the local mp's fields,
+//     which is game-thread-only. TickConnect() is already on the GT.
+// Single-slot is fine: a fresh edge replaces any not-yet-sent queued
+// payload (we only ever care about the LATEST state).
+bool g_pendingBroadcast = false;
+coop::net::ItemActivatePayload g_pendingBroadcastPayload{};
+
+// Phase 5F Inc5 (connect-time replay) -- pending receiver-side applies.
+// Per-peer slot keyed by peerSessionId. Stashes the latest ItemActivate
+// payload that arrived BEFORE the corresponding puppet was spawned (the
+// puppet is only created on first PoseSnapshot for that peer; a tightly-
+// ordered connect-edge can race the reliable ItemActivate ahead of the
+// unreliable PoseSnapshot). Drained per-tick by TickConnect() once the
+// puppet becomes valid in the players::Registry. Latest-wins: a newer
+// ApplyToPuppetOrDefer for the same peer overrides the prior pending.
+// All access on the game thread (event_feed dispatches via GT::Post,
+// TickConnect is called from the game-thread net pump tick).
+bool g_pendingApplyValid[coop::players::kMaxPeers] = {};
+coop::net::ItemActivatePayload g_pendingApplyPayload[coop::players::kMaxPeers] = {};
 
 // Echo-suppression: when we APPLY a remote flashlight state to the
 // puppet, we don't directly invoke updateFlashlight (which would
@@ -636,6 +665,134 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& payl
     // own USoundAttenuation, AddToRoot's it for GC stability.
     coop::flashlight_click_sound::PlayIfStateChanged(
         puppetActor, payload.peerSessionId, newState);
+}
+
+void ApplyToPuppetOrDefer(uint8_t peerSessionId, void* puppetActor,
+                          const coop::net::ItemActivatePayload& p) {
+    if (peerSessionId >= coop::players::kMaxPeers) {
+        UE_LOGW("flashlight: ApplyToPuppetOrDefer peerSessionId=%u out of range -- dropping",
+                static_cast<unsigned>(peerSessionId));
+        return;
+    }
+    if (puppetActor && R::IsLive(puppetActor)) {
+        // Puppet is ready -- clear any stale pending entry (defensive:
+        // a fresh apply supersedes a still-pending one) + apply now.
+        g_pendingApplyValid[peerSessionId] = false;
+        ApplyToPuppet(puppetActor, p);
+        return;
+    }
+    // Puppet not ready yet -- stash latest-wins. The TickConnect pump
+    // will pick it up once the registry has a puppet for this peer.
+    g_pendingApplyPayload[peerSessionId] = p;
+    g_pendingApplyValid[peerSessionId] = true;
+    UE_LOGI("flashlight: ApplyToPuppetOrDefer puppet not ready for peer=%u -- "
+            "stashing (state=%d Intensity=%.2f)",
+            static_cast<unsigned>(peerSessionId), p.state, p.intensity);
+}
+
+void QueueConnectBroadcast() {
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s) {
+        UE_LOGW("flashlight: QueueConnectBroadcast called with no session");
+        return;
+    }
+    void* mp = coop::players::Registry::Get().Local();
+    if (!mp) {
+        // Local mp not yet alive (still in OMEGA / menu). Without a local
+        // we have no state to broadcast. Edge will fire again on the next
+        // reconnect; this connect-edge case (connected before mp loads)
+        // is rare in practice (mp spawns in the loading splash before
+        // session.Connected). Drop silently.
+        UE_LOGI("flashlight: QueueConnectBroadcast no local mp yet -- no broadcast");
+        return;
+    }
+    coop::net::ItemActivatePayload p{};
+    if (!BuildPayloadFromLocal(mp, p, s)) {
+        UE_LOGW("flashlight: QueueConnectBroadcast BuildPayloadFromLocal failed");
+        return;
+    }
+    // Skip broadcast if LOCAL flashlight is OFF -- the receiver's puppet
+    // defaults to OFF on spawn, so an OFF broadcast is a redundant packet.
+    // (When the local user toggles to ON later, the normal POST observer
+    // path ships it.)
+    if (p.state == 0) {
+        UE_LOGI("flashlight: QueueConnectBroadcast local state is OFF -- "
+                "skipping (puppet default is OFF; no replay needed)");
+        return;
+    }
+    g_pendingBroadcastPayload = p;
+    g_pendingBroadcast = true;
+    UE_LOGI("flashlight: QueueConnectBroadcast queued state=%d Intensity=%.2f "
+            "outerCone=%.1f mode=%u (will retry SendReliable each tick "
+            "until channel free)",
+            p.state, p.intensity, p.outerConeAngle, p.mode);
+}
+
+void TickConnect() {
+    // (a) Drain pending broadcast. Single SendReliable attempt per tick --
+    // if the channel is busy we retry next tick. NetPumpTick runs at
+    // ~125 Hz so the worst-case wait for the channel to free is bounded.
+    if (g_pendingBroadcast) {
+        auto* s = g_session.load(std::memory_order_acquire);
+        if (s && s->connected()) {
+            const bool sent = s->SendReliable(
+                coop::net::ReliableKind::ItemActivate,
+                &g_pendingBroadcastPayload, sizeof(g_pendingBroadcastPayload));
+            if (sent) {
+                // Update the observer dedup signature so an immediate-after
+                // press observer doesn't re-broadcast the identical state.
+                const uint64_t sig = SignaturePayload(g_pendingBroadcastPayload);
+                const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
+                g_lastSentSig.store(storeSig, std::memory_order_release);
+                UE_LOGI("flashlight: connect-replay broadcast sent (state=%d "
+                        "Intensity=%.2f peer=%u)",
+                        g_pendingBroadcastPayload.state,
+                        g_pendingBroadcastPayload.intensity,
+                        g_pendingBroadcastPayload.peerSessionId);
+                g_pendingBroadcast = false;
+            }
+            // else: silent retry next tick. Logging here would spam at
+            // ~125 Hz while a PropSpawn snapshot is mid-burst.
+        } else {
+            // Session went away before we got a chance to ship. Drop -- a
+            // future connect-edge will re-queue.
+            g_pendingBroadcast = false;
+        }
+    }
+
+    // (b) Drain pending applies. For each peer slot with a pending payload,
+    // look up the puppet via the registry; if it's now valid, apply + clear.
+    for (uint8_t peer = 0; peer < coop::players::kMaxPeers; ++peer) {
+        if (!g_pendingApplyValid[peer]) continue;
+        auto* rp = coop::players::Registry::Get().Puppet(peer);
+        if (!rp || !rp->valid()) continue;
+        void* puppet = rp->GetActor();
+        if (!puppet || !R::IsLive(puppet)) continue;
+        coop::net::ItemActivatePayload p = g_pendingApplyPayload[peer];
+        g_pendingApplyValid[peer] = false;
+        UE_LOGI("flashlight: draining deferred apply for peer=%u (state=%d Intensity=%.2f)",
+                static_cast<unsigned>(peer), p.state, p.intensity);
+        ApplyToPuppet(puppet, p);
+    }
+}
+
+void OnDisconnect() {
+    if (g_pendingBroadcast) {
+        UE_LOGI("flashlight: OnDisconnect clearing pending broadcast (state=%d)",
+                g_pendingBroadcastPayload.state);
+    }
+    g_pendingBroadcast = false;
+    g_pendingBroadcastPayload = {};
+    int clearedApplies = 0;
+    for (uint8_t i = 0; i < coop::players::kMaxPeers; ++i) {
+        if (g_pendingApplyValid[i]) ++clearedApplies;
+        g_pendingApplyValid[i] = false;
+        g_pendingApplyPayload[i] = {};
+    }
+    if (clearedApplies > 0) {
+        UE_LOGI("flashlight: OnDisconnect cleared %d pending apply slot(s)",
+                clearedApplies);
+    }
 }
 
 }  // namespace coop::item_activate

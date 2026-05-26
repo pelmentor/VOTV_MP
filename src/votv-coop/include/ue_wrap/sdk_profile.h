@@ -422,6 +422,29 @@ inline constexpr size_t AHUD_Canvas = 0x0270;       // UCanvas*  Engine.hpp:7422
 inline constexpr size_t UCanvas_SizeX = 0x0040;     // int32     Engine.hpp:9846
 inline constexpr size_t UCanvas_SizeY = 0x0044;     // int32     Engine.hpp:9847
 inline constexpr size_t UEngine_SmallFont = 0x0050; // UFont*    Engine.hpp:10732
+
+// Phase 5W (2026-05-26): AdaynightCycle_C weather state fields. All offsets
+// from CXXHeaderDump/daynightCycle.hpp -- literal `@ 0xNNN` comments in the
+// dump. Owned by mainGamemode.daynightCycle@0x0450 (singleton per session).
+// See research/findings/votv-weather-RE-mainGamemode-2026-05-26.md for the
+// derivation.
+inline constexpr size_t AdaynightCycle_isRaining            = 0x02E4;  // bool
+inline constexpr size_t AdaynightCycle_isSnow               = 0x03B0;  // bool
+inline constexpr size_t AdaynightCycle_enableSunlight       = 0x03D8;  // bool
+inline constexpr size_t AdaynightCycle_rainStrength         = 0x0404;  // float
+inline constexpr size_t AdaynightCycle_rainLightningChance  = 0x0408;  // float
+inline constexpr size_t AdaynightCycle_rainDeactivateChance = 0x040C;  // float
+inline constexpr size_t AdaynightCycle_rainWindSpeed        = 0x041C;  // float
+inline constexpr size_t AdaynightCycle_permanentRain        = 0x042C;  // bool
+inline constexpr size_t AdaynightCycle_enableMoonlight      = 0x0448;  // bool
+inline constexpr size_t AdaynightCycle_enable_fog           = 0x0449;  // bool
+inline constexpr size_t AdaynightCycle_enable_superfog      = 0x044A;  // bool
+inline constexpr size_t AdaynightCycle_enable_rain          = 0x044B;  // bool
+
+// AmainGamemode_C::daynightCycle is the cycle singleton pointer. We RESOLVE
+// this via R::FindObjectByClass(L"daynightCycle_C") rather than dereferencing
+// off the gamemode -- saves needing the gamemode offset and matches the
+// resolution pattern used elsewhere in the project.
 }  // namespace off
 
 // EPropertyFlags bits we test (engine-stable).
@@ -962,6 +985,36 @@ inline constexpr const wchar_t* GetPhysicsLinearVelocityFn           = L"GetPhys
 inline constexpr const wchar_t* GetPhysicsAngularVelocityInDegreesFn = L"GetPhysicsAngularVelocityInDegrees";
 inline constexpr const wchar_t* SetPhysicsLinearVelocityFn           = L"SetPhysicsLinearVelocity";
 inline constexpr const wchar_t* SetPhysicsAngularVelocityInDegreesFn = L"SetPhysicsAngularVelocityInDegrees";
+
+// Phase 5W (2026-05-26) weather. AdaynightCycle_C is the singleton weather
+// authority -- owns all scheduler timers + state fields + mutator UFunctions.
+// Resolved on the receiver via R::FindObjectByClass since it's the only
+// instance per session. See research/findings/votv-weather-DESIGN-2026-05-26.md.
+inline constexpr const wchar_t* DaynightCycleClass = L"daynightCycle_C";
+
+// Scheduler UFunctions -- client INTERCEPTS these (PRE-cancel via the
+// multi-slot interceptor) so the client side never decides "rain now" / etc.
+// Host's POST observer on the same UFunctions reads the post-mutation state
+// off the cycle and broadcasts the WeatherState packet.
+inline constexpr const wchar_t* DaynightCycle_timerRainFn       = L"timerRain";
+inline constexpr const wchar_t* DaynightCycle_timerLightningFn  = L"timerLightning";
+inline constexpr const wchar_t* DaynightCycle_fogEventFn        = L"fogEvent";
+inline constexpr const wchar_t* DaynightCycle_superFogEventFn   = L"superFogEvent";
+inline constexpr const wchar_t* DaynightCycle_permaRainTimerFn  = L"permaRain_timer";
+
+// Mutator UFunctions -- receiver invokes these to apply the host's state.
+// causeRain(bool) starts/stops the visible rain (particle + audio + bool flip
+// on the cycle). setRainProperties(bool, 4 floats) writes the scalar state
+// block + drives setRainParameters internally (RE doc). intComs_triggerSnow
+// fans out to 53 BP listeners -- direct field write would miss them.
+// setWindParameters() is no-arg; reads cycle state, propagates to
+// AdirectionalWind_C. spawnFog/SetFogDensity are the fog applies.
+inline constexpr const wchar_t* DaynightCycle_causeRainFn          = L"causeRain";
+inline constexpr const wchar_t* DaynightCycle_setRainPropertiesFn  = L"setRainProperties";
+inline constexpr const wchar_t* DaynightCycle_setWindParametersFn  = L"setWindParameters";
+inline constexpr const wchar_t* DaynightCycle_intComsTriggerSnowFn = L"intComs_triggerSnow";
+inline constexpr const wchar_t* DaynightCycle_spawnFogFn           = L"spawnFog";
+inline constexpr const wchar_t* DaynightCycle_setFogDensityFn      = L"SetFogDensity";
 // SetCollisionEnabled lives on UPrimitiveComponent; used by remote_prop::OnSpawn
 // to restore default collision (QueryAndPhysics=3) on wire-converged props
 // whose local copy had collision disabled by a natural-spawn pipeline (e.g.

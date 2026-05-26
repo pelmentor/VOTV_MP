@@ -4,6 +4,7 @@
 #include "coop/net/session.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
+#include "coop/weather_sync.h"
 #include "dev/restore_vitals.h"
 #include "dev/teleport_client.h"
 #include "ue_wrap/game_thread.h"
@@ -478,18 +479,64 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
                         static_cast<unsigned>(p.peerSessionId));
                 break;
             }
-            // 1v1: the only puppet is &g_orphan (remote).
-            if (!remote || !remote->valid()) {
-                UE_LOGI("event_feed: ItemActivate received but no puppet yet -- dropping");
+            // 1v1: the puppet is the only remote. May be null if this
+            // packet beat the first PoseSnapshot (the puppet is spawned
+            // lazily on first pose; ItemActivate rides the reliable
+            // channel and CAN arrive first under a connect-edge burst).
+            // Inc5: hand to ApplyToPuppetOrDefer which stashes the
+            // payload if the puppet isn't ready; TickConnect drains it
+            // once the puppet appears in the registry.
+            void* puppet = (remote && remote->valid()) ? remote->GetActor() : nullptr;
+            net::ItemActivatePayload pCopy = p;
+            const uint8_t peerId = p.peerSessionId;
+            ue_wrap::game_thread::Post([peerId, puppet, pCopy] {
+                ::coop::item_activate::ApplyToPuppetOrDefer(peerId, puppet, pCopy);
+            });
+            break;
+        }
+        case net::ReliableKind::WeatherState: {
+            // Phase 5W Inc1 (2026-05-26): host-authoritative weather state.
+            // Sender = host. Receiver looks up local AdaynightCycle_C and
+            // invokes the cycle's mutator UFunctions to apply each delta.
+            // See coop/weather_sync.cpp::ApplyFromHost for the full apply
+            // logic + research/findings/votv-weather-DESIGN-2026-05-26.md.
+            if (msg.payload.size() < sizeof(net::WeatherStatePayload)) {
+                UE_LOGW("event_feed: WeatherState payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::WeatherStatePayload));
                 break;
             }
-            void* puppet = remote->GetActor();
-            // Copy the parsed payload by value so the GT::Post lambda owns
-            // a stable snapshot (the msg buffer doesn't survive past this
-            // scope). v6 layout carries intensity + cone shape too.
-            net::ItemActivatePayload pCopy = p;
-            ue_wrap::game_thread::Post([puppet, pCopy] {
-                ::coop::item_activate::ApplyToPuppet(puppet, pCopy);
+            net::WeatherStatePayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            // Self-echo guard: weather is host->client only; if our role
+            // says we ARE the host, a WeatherState packet must be a loopback
+            // bounce (we'd never send to ourselves but defensive). Drop.
+            if (session.role() == net::Role::Host) {
+                UE_LOGI("event_feed: WeatherState received on host -- dropping "
+                        "(host is the authority; no inbound from client)");
+                break;
+            }
+            // Trust-boundary: validate floats finite + within sane range.
+            // Rain scalars are unitless in [0, ~10] in BP usage; allow a
+            // generous (-1e3, 1e3) range to catch garbage without
+            // legitimately clamping anything.
+            const float vals[4] = {
+                p.rainStrength, p.rainLightningChance,
+                p.rainDeactivateChance, p.rainWindSpeed
+            };
+            bool bad = false;
+            for (float v : vals) {
+                if (!std::isfinite(v) || std::fabs(v) > 1.0e3f) { bad = true; break; }
+            }
+            if (bad) {
+                UE_LOGW("event_feed: WeatherState scalars out of bounds (rain=%.2f "
+                        "lc=%.2f dc=%.2f ws=%.2f) -- dropping",
+                        p.rainStrength, p.rainLightningChance,
+                        p.rainDeactivateChance, p.rainWindSpeed);
+                break;
+            }
+            net::WeatherStatePayload pCopy = p;
+            ue_wrap::game_thread::Post([pCopy] {
+                ::coop::weather_sync::ApplyFromHost(pCopy);
             });
             break;
         }

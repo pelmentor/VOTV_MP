@@ -44,6 +44,40 @@ void Install(coop::net::Session* session);
 // payloads -- mismatched classes no-op. Game thread only.
 void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& p);
 
+// Phase 5F Inc5 (connect-time replay) receiver entry: if `puppetActor`
+// is valid, applies immediately (= ApplyToPuppet). Otherwise stashes
+// the latest payload in a per-peer slot keyed by `peerSessionId`. The
+// stashed payload is drained on the next TickConnect() call once the
+// puppet has been spawned. Latest-wins -- a newer ItemActivate
+// overrides a still-pending older one. Game thread only.
+void ApplyToPuppetOrDefer(uint8_t peerSessionId, void* puppetActor,
+                          const coop::net::ItemActivatePayload& p);
+
+// Phase 5F Inc5 (connect-time replay) sender entry: snapshot the LOCAL
+// mainPlayer's current flashlight state/cone shape and stash it for a
+// retried broadcast on subsequent TickConnect() calls. Called from the
+// harness's !wasConnected->isConnected edge so a newly-joined peer sees
+// our current flashlight state without us having to press F. No-op if
+// the local flashlight is OFF (saves a redundant packet -- the puppet
+// default on receiver side is already OFF). Game thread only.
+void QueueConnectBroadcast();
+
+// Phase 5F Inc5 per-tick worker. Drains:
+//   (a) pending broadcast queued by QueueConnectBroadcast() -- retries
+//       SendReliable until the channel accepts it, then updates the
+//       observer dedup signature so the next press doesn't re-send.
+//   (b) per-peer pending applies stashed by ApplyToPuppetOrDefer --
+//       walks the puppet registry; for each peer slot with a pending
+//       payload AND a valid puppet, applies + clears.
+// Cheap (early-return) when no pending state. Game thread only.
+void TickConnect();
+
+// Phase 5F Inc5 disconnect hook: clears the pending broadcast + every
+// per-peer pending apply. The stashed state belonged to the dead
+// session; replaying it onto the next session's peers (possibly a
+// different machine after IP change) would be wrong.
+void OnDisconnect();
+
 // FNV-1a 32-bit hash of a wide string. Used for itemClassHash
 // (CRC32 was named in the RE doc but FNV-1a is just as cross-peer
 // stable, simpler to inline, no table). Exposed so the receiver can

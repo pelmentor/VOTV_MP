@@ -20,6 +20,7 @@
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
 #include "coop/shutdown.h"
+#include "coop/weather_sync.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -267,6 +268,7 @@ void InstallGrabObservers() {
     coop::prop_lifecycle::Install(&g_session);
     coop::npc_sync::Install(&g_session);
     coop::item_activate::Install(&g_session);  // Phase 5F flashlight
+    coop::weather_sync::Install(&g_session);   // Phase 5W weather (host POST observers OR client PRE interceptors per role)
     // NOTE: coop::shutdown::Install / UpdateWindowTitle are called from
     // the timeline tick lambda DIRECTLY (NetPumpTick / play branch /
     // netloopback branch). They MUST NOT be gated on `g_netLocal` like
@@ -333,6 +335,14 @@ void NetPumpTick(float displayOffsetX) {
         // on disconnect (sessionId counter + tracked map + bypass slot --
         // see coop/npc_sync.cpp OnDisconnect).
         coop::npc_sync::OnDisconnect();
+        // Phase 5F Inc5 (2026-05-26): clear any pending connect-replay
+        // broadcast + per-peer pending applies. Their contents belong to
+        // the now-dead session; reapplying onto the next session's peers
+        // (possibly a different machine after IP change) would be wrong.
+        coop::item_activate::OnDisconnect();
+        // Phase 5W Inc1 (2026-05-26): clear any pending weather broadcast +
+        // reset the dedup signature so a fresh connect re-snapshots state.
+        coop::weather_sync::OnDisconnect();
         UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 propStats.droppedSpawns, propStats.droppedDestroys, snapPending, propStats.initProcessedDropped);
     }
@@ -346,6 +356,19 @@ void NetPumpTick(float displayOffsetX) {
     if (!g_wasConnected && isConnected) {
         UE_LOGI("net: connected edge -- triggering Phase 5S0 snapshot");
         coop::prop_snapshot::Trigger();
+        // Phase 5F Inc5 (2026-05-26): queue our LOCAL flashlight state for
+        // the newly-joined peer. Both peers run this on each connect edge
+        // -- symmetric: host sends host's state to client puppet, client
+        // sends client's state to host puppet. Skipped internally if the
+        // local light is OFF (puppet default already matches). The send
+        // itself happens in TickConnect() below (reliable channel may be
+        // mid-burst from the PropSpawn enumeration; per-tick retry).
+        coop::item_activate::QueueConnectBroadcast();
+        // Phase 5W Inc1 (2026-05-26): queue our LOCAL weather state for the
+        // newly-joined peer. HOST-only sender (no-op on client). Sends
+        // current rain/snow/fog/wind state so a client joining mid-storm
+        // doesn't see clear weather. Send itself retries per tick.
+        coop::weather_sync::QueueConnectBroadcast();
     }
     g_wasConnected = isConnected;
 
@@ -353,6 +376,22 @@ void NetPumpTick(float displayOffsetX) {
     // candidates per tick if a snapshot enumeration is in progress.
     // Cheap when no enumeration is active (no-op on empty vector).
     if (isConnected) coop::prop_snapshot::DrainChunk();
+
+    // Phase 5F Inc5 (2026-05-26) per-tick drain. Handles:
+    //   - retrying any queued connect-time broadcast until the reliable
+    //     channel accepts it
+    //   - applying any per-peer ItemActivate payloads that arrived BEFORE
+    //     the corresponding puppet was spawned
+    // Cheap (early-return) when no pending state. Independent of
+    // isConnected: even on disconnect-edge frame TickConnect's broadcast
+    // check is a session->connected() guard, and the per-peer apply only
+    // runs if a puppet is in the registry (which is cleared on disconnect).
+    coop::item_activate::TickConnect();
+
+    // Phase 5W Inc1 (2026-05-26) per-tick weather drain. Retries the
+    // host's queued connect-edge weather broadcast until the reliable
+    // channel accepts it. Same shape as item_activate's TickConnect.
+    coop::weather_sync::TickConnect();
 
     // Drain any pending PropSpawn payloads that couldn't ship at observer
     // fire time because the reliable channel was busy (audit C-3). Cheap

@@ -42,14 +42,20 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 //     re-enables SimulatePhysics + SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
 //   - WireKey carries the FName string (cross-peer stable, idx is NOT --
 //     see research/findings/votv-physics-interaction-deep-re-2026-05-23.md)
+// v7 (2026-05-26 NIGHT): Phase 5W weather sync. Adds
+//   ReliableKind::WeatherState = 13 (continuous rain/snow/fog/wind state)
+//   ReliableKind::LightningStrike = 14 (discrete strike events)
+// Host-authoritative model: client suppresses its 5 scheduler UFunctions on
+// AdaynightCycle_C via multi-slot interceptor and receives state via reliable
+// pushes. See research/findings/votv-weather-DESIGN-2026-05-26.md.
 // v6 (2026-05-26 PM): ItemActivatePayload grew 16 -> 24 bytes -- added float
 // intensity + outerConeAngle + innerConeAngle + uint8 mode so the receiver can
 // mirror the sender's EXACT cone shape (Phase 5F user feedback: puppet's
 // flashlight was too bright AND focused-vs-spread mode wasn't synced).
 // v3 (2026-05-23 PM): PoseSnapshot grew from 24 -> 28 bytes (added headYawDelta).
-// Both peers must run v6; older packets are rejected at the header check. No
+// Both peers must run v7; older packets are rejected at the header check. No
 // back-compat layer (RULE 2 -- mod is pre-ship; bump cleanly).
-inline constexpr uint16_t kProtocolVersion = 6;
+inline constexpr uint16_t kProtocolVersion = 7;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -131,6 +137,41 @@ enum class ReliableKind : uint8_t {
                        //     applies via K2_TeleportTo on its local mainPlayer.
                        //     Host->client only; no echo. Payload:
                        //     TeleportClientPayload (24 bytes).
+    WeatherState = 13, // Phase 5W (2026-05-26): host-authoritative continuous
+                       //     weather state push. Sender = host only; client
+                       //     SUPPRESSES its own 5 scheduler UFunctions on
+                       //     AdaynightCycle_C (timerRain / timerLightning /
+                       //     fogEvent / superFogEvent / permaRain_timer) via
+                       //     the multi-slot interceptor. Host's POST observer
+                       //     on those same 5 UFunctions reads the post-mutation
+                       //     state off the live AdaynightCycle_C and sends if
+                       //     changed (FNV1a dedup). On connect-edge the host
+                       //     also queues a forced broadcast so a newly-joined
+                       //     client doesn't miss a storm that started before
+                       //     it joined (mirrors Phase 5F Inc5 pattern).
+                       //     Receiver applies state by calling
+                       //     causeRain / setRainProperties / setWindParameters /
+                       //     intComs_triggerSnow on its local AdaynightCycle_C
+                       //     (NOT direct field writes -- intComs_triggerSnow
+                       //     has 53 BP listeners that need the UFunction
+                       //     dispatch fan-out). Save persists nothing live
+                       //     (RE doc -- only gameRules.permanentRain/Fog), so
+                       //     this packet is the ONLY way client weather
+                       //     converges to host. RE: research/findings/votv-
+                       //     weather-RE-{mainGamemode,effect-actors,scheduler}-
+                       //     2026-05-26.md. Payload: WeatherStatePayload.
+    LightningStrike = 14, // Phase 5W Inc2 (2026-05-27): discrete strike event.
+                       //     Host hooks the SpawnActor of AlightningStrike_C
+                       //     (via K2_BeginDeferredActorSpawnFromClass class
+                       //     filter, since the actual spawn is BP-internal to
+                       //     AdaynightCycle_C::timerLightning). Sends
+                       //     (location). Client suppresses local lightning via
+                       //     the timerLightning interceptor (covered by Inc1's
+                       //     5-fn suppression set); on receiving this packet,
+                       //     spawns AlightningStrike_C locally at the received
+                       //     world point. Self-destructs via the actor's own
+                       //     Timeline -- no cleanup needed. Payload:
+                       //     LightningStrikePayload.
     ItemActivate = 12, // Phase 5F (2026-05-25 NIGHT-3): unified item-activation
                        //     state sync. First instance: flashlight on/off
                        //     (Case b per the RE doc -- the world light cone is
@@ -462,6 +503,79 @@ static_assert(sizeof(ItemActivatePayload) <= 256 - 20 - 8,
 
 // flags bits for ItemActivatePayload.flags
 inline constexpr uint8_t kItemActivateFlag_HasActorKey = 0x01;
+
+// Phase 5W Inc1 (2026-05-26): host-authoritative weather state push. The host
+// reads these fields off the live AdaynightCycle_C after its own scheduler
+// UFunction runs; client receives + applies via the cycle's mutator
+// UFunctions. See protocol.h's ReliableKind::WeatherState doc above and
+// research/findings/votv-weather-DESIGN-2026-05-26.md for the field-by-field
+// derivation. peerSessionId is always 0 (host) in v7; receiver validates and
+// drops non-host senders defensively.
+//
+// `flags` bits (mapped one-to-one with the AdaynightCycle_C boolean fields).
+// The receiver applies each by:
+//   - writing the literal bit to the matching field offset (config bits with
+//     no BP listeners), THEN
+//   - dispatching the right APPLY UFunction so any subscribers fan out.
+// E.g. isRaining bit is applied via causeRain(bool) so the BP-side particle
+// system + audio cue start; isSnow bit via intComs_triggerSnow(bool) so the
+// 53 listeners fan out (RE doc).
+//   bit 0: isRaining          @0x02E4   (apply: causeRain(bool) UFunction)
+//   bit 1: isSnow             @0x03B0   (apply: intComs_triggerSnow(bool))
+//   bit 2: enable_rain        @0x044B   (config bool; direct write)
+//   bit 3: enable_fog         @0x0449   (config bool)
+//   bit 4: enable_superfog    @0x044A   (config bool)
+//   bit 5: enableSunlight     @0x03D8   (config bool)
+//   bit 6: enableMoonlight    @0x0448   (config bool)
+//   bit 7: permanentRain      @0x042C   (config bool)
+//
+// Wind: NOT a separate field block on the wire. AdaynightCycle_C's
+// setWindParameters() is no-arg -- it reads internal cycle state and
+// propagates to AdirectionalWind_C. The only wind-state field we need to
+// sync is rainWindSpeed @0x041C (already in payload via the rain block);
+// the receiver writes it then calls setWindParameters() so the wind actor
+// updates. A SEPARATE AdirectionalWind_C::setParameters wire path would
+// be a parallel sync mechanism for the same state (RULE 2 violation).
+struct WeatherStatePayload {
+    uint8_t peerSessionId;       // sender peer id (host=0; receiver drops if !=0)
+    uint8_t flags;               // see bit layout above
+    uint16_t _pad;               // 4-byte align the float block
+    float   rainStrength;        // AdaynightCycle_C::rainStrength @0x0404
+    float   rainLightningChance; // AdaynightCycle_C::rainLightningChance @0x0408
+    float   rainDeactivateChance;// AdaynightCycle_C::rainDeactivateChance @0x040C
+    float   rainWindSpeed;       // AdaynightCycle_C::rainWindSpeed @0x041C
+};
+static_assert(sizeof(WeatherStatePayload) == 20, "WeatherStatePayload must be 20 bytes");
+static_assert(sizeof(WeatherStatePayload) <= 256 - 20 - 8,
+              "WeatherStatePayload must fit in one reliable datagram");
+
+namespace weather_flags {
+inline constexpr uint8_t kIsRaining       = 0x01;
+inline constexpr uint8_t kIsSnow          = 0x02;
+inline constexpr uint8_t kEnableRain      = 0x04;
+inline constexpr uint8_t kEnableFog       = 0x08;
+inline constexpr uint8_t kEnableSuperfog  = 0x10;
+inline constexpr uint8_t kEnableSunlight  = 0x20;
+inline constexpr uint8_t kEnableMoonlight = 0x40;
+inline constexpr uint8_t kPermanentRain   = 0x80;
+}  // namespace weather_flags
+
+// Phase 5W Inc2: lightning strike discrete event. Carries only the strike's
+// world location -- AdaynightCycle_C::timerLightning ubergraph spawns
+// AlightningStrike_C with the SpawnTransform at the strike point (per the
+// effect-actors RE doc, lightningStrike.hpp shows the strike's location IS
+// the actor's own world transform; no separate field). Receiver spawns the
+// same class at the same point via the existing BeginDeferredActorSpawnFromClass
+// + FinishSpawningActor pair pattern (see remote_prop.cpp for the reference).
+// The strike's Timeline self-destructs after ~3s -- no cleanup wire needed.
+struct LightningStrikePayload {
+    uint8_t peerSessionId;   // host=0
+    uint8_t _pad[3];
+    float   locX, locY, locZ; // world cm
+};
+static_assert(sizeof(LightningStrikePayload) == 16, "LightningStrikePayload must be 16 bytes");
+static_assert(sizeof(LightningStrikePayload) <= 256 - 20 - 8,
+              "LightningStrikePayload must fit in one reliable datagram");
 
 #pragma pack(pop)
 
