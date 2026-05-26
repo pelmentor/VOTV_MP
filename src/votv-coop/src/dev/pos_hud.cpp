@@ -1,5 +1,6 @@
 #include "dev/pos_hud.h"
 
+#include "coop/players_registry.h"
 #include "dev/common.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -98,11 +99,13 @@ void Refresh() {
     }
 
     wchar_t buf[256] = {};
-    // Cache pattern (post-ship audit H1): one FindObjectByClass at boot / after a
-    // level kills the pointer. NEVER walk GUObjectArray every refresh tick.
-    if (g_local && !R::IsLive(g_local)) g_local = nullptr;
-    if (!g_local) g_local = R::FindObjectByClass(P::name::MainPlayerClass);
-    void* local = g_local;
+    // 2026-05-26: use the central coop::local_player registry instead of
+    // raw FindObjectByClass -- the latter could return the PUPPET (a
+    // mainPlayer_C orphan) and display its position as if it were the
+    // local player. local_player::Get() filters via controller-not-null
+    // and caches.
+    void* local = coop::players::Registry::Get().Local();
+    g_local = local;  // keep the file-static for legacy diagnostics
     if (local) {
         const ue_wrap::FVector loc = E::GetActorLocation(local);
         const ue_wrap::FRotator cam = E::GetCameraRotation();

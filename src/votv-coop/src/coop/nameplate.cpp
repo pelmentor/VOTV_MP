@@ -1,5 +1,6 @@
 #include "coop/nameplate.h"
 
+#include "coop/players_registry.h"
 #include "coop/remote_player.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
@@ -92,45 +93,13 @@ void Update() {
     // own position -> yaw is meaningless / oscillates wildly when the
     // puppet walks (= the "horizontally flipped" symptom user reported).
     //
-    // Filter: exclude any actor that's registered as a puppet entry.
-    if (g_viewer && !R::IsLive(g_viewer)) g_viewer = nullptr;
-    // Also drop the cache if the cached actor turns out to be one of OUR
-    // puppets (could happen after a puppet spawns into a previously-
-    // valid slot, or the first cache happened before the puppet existed
-    // and the wrong actor was selected).
-    if (g_viewer) {
-        for (const auto& e : g_entries) {
-            if (e.player && e.player->valid() &&
-                e.player->GetActor() == g_viewer) {
-                g_viewer = nullptr;
-                break;
-            }
-        }
-    }
-    if (!g_viewer) {
-        // Walk GUObjectArray, find a mainPlayer_C that is NOT one of our
-        // puppet actors. The local player spawns at game-load time and is
-        // typically the first mainPlayer_C in GUObjectArray; the puppet
-        // spawns later. But after a level reload or slot reuse the order
-        // can flip, so we filter explicitly.
-        const int32_t n = R::NumObjects();
-        for (int32_t i = 0; i < n; ++i) {
-            void* obj = R::ObjectAt(i);
-            if (!obj) continue;
-            if (R::ClassNameOf(obj) != P::name::MainPlayerClass) continue;
-            const std::wstring nm = R::ToString(R::NameOf(obj));
-            if (nm.rfind(L"Default__", 0) == 0) continue;
-            if (!R::IsLive(obj)) continue;
-            bool isPuppet = false;
-            for (const auto& e : g_entries) {
-                if (e.player && e.player->valid() &&
-                    e.player->GetActor() == obj) { isPuppet = true; break; }
-            }
-            if (isPuppet) continue;
-            g_viewer = obj;
-            break;
-        }
-    }
+    // 2026-05-26 (RULE 1 unification): use the central
+    // coop::players::Registry to identify the local player. The
+    // registry's Local() is filtered + cached; we no longer walk
+    // GUObjectArray here. Identity comes from ONE place across the
+    // codebase. The viewer for billboarding nameplates is always the
+    // LOCAL player.
+    g_viewer = coop::players::Registry::Get().Local();
     const ue_wrap::FVector viewer =
         g_viewer ? E::GetActorLocation(g_viewer) : ue_wrap::FVector{};
 

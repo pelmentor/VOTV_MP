@@ -1,5 +1,6 @@
 #include "dev/teleport_client.h"
 
+#include "coop/players_registry.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "dev/common.h"
@@ -42,39 +43,12 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 // in-game teleports (e.g. backrooms exit, door teleports). It bypasses the
 // CMC constraints that K2_TeleportTo loses to. Falls back to TeleportTo +
 // SetActorLocation only if the VOTV function can't be resolved.
-void* g_local = nullptr;
 void* g_teleportWObackroomsFn = nullptr;  // mainPlayer_C::teleportWObackrooms UFunction*
 
 bool KeyDown(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
 
-// Find the LOCAL mainPlayer_C (the one the user actually controls), filtering
-// out our puppets via the Controller check. The local is possessed by a
-// PlayerController; puppets are explicitly NOT possessed (AutoPossessPlayer /
-// AutoPossessAI disabled at deferred-spawn, AIControllerClass=null per
-// [[project-coop-enemies-target-both]]). So GetController() != nullptr is
-// the definitive local-vs-puppet test -- stronger than nameplate.cpp's
-// list-based exclusion because it doesn't depend on registration order.
-//
-// Game-thread only (UObject access).
-void* GetLocalMainPlayer() {
-    if (g_local && R::IsLive(g_local) && E::GetController(g_local)) {
-        return g_local;
-    }
-    g_local = nullptr;
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
-        void* obj = R::ObjectAt(i);
-        if (!obj) continue;
-        if (R::ClassNameOf(obj) != P::name::MainPlayerClass) continue;
-        const std::wstring name = R::ToString(R::NameOf(obj));
-        if (name.rfind(L"Default__", 0) == 0) continue;  // skip CDO
-        if (!R::IsLive(obj)) continue;
-        if (!E::GetController(obj)) continue;            // puppet (no controller) -- skip
-        g_local = obj;
-        return obj;
-    }
-    return nullptr;
-}
+// Local-vs-puppet lookup + caching now lives in coop::local_player.
+// This module is a thin wrapper that calls Get().
 
 // Resolve mainPlayer_C::teleportWObackrooms once. The signature
 // (per mainPlayer.hpp:471) is:
@@ -102,7 +76,7 @@ void SetSession(coop::net::Session* session) {
 }
 
 void ApplyLocally(const ApplyArgs& args) {
-    void* local = GetLocalMainPlayer();
+    void* local = coop::players::Registry::Get().Local();
     if (!local) {
         UE_LOGW("teleport_client: no local mainPlayer_C found (not in gameplay?)");
         return;
@@ -151,7 +125,7 @@ void ApplyLocally(const ApplyArgs& args) {
 namespace {
 
 void SnapshotAndSend(coop::net::Session* s) {
-    void* local = GetLocalMainPlayer();
+    void* local = coop::players::Registry::Get().Local();
     if (!local) {
         UE_LOGW("teleport_client: F4 pressed but no local mainPlayer_C");
         return;

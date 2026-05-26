@@ -11,6 +11,7 @@
 #include "coop/event_feed.h"
 #include "coop/grab_observer.h"
 #include "coop/item_activate.h"
+#include "coop/players_registry.h"
 #include "coop/nameplate.h"
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"
@@ -173,9 +174,10 @@ void Report(const char* label) {
 // coop::RemotePlayer spawned + pose-driven via our own CallFunction path.
 coop::RemotePlayer g_orphan;
 
-// Cached local mainPlayer_C for the net pump. FindObjectByClass walks the whole
-// GUObjectArray, so we resolve it ONCE, hold it, re-validate with IsLive, and only
-// re-find if it died (level change) -- never a full scan per tick (post-ship audit).
+// Cached local mainPlayer_C for the net pump. coop::players::Registry::Get().Local()
+// already caches + filters puppets via the controller discriminator
+// (per RULE 1 + [[feedback-always-use-user-test-poses]]); we just hold
+// a local cache on top to skip the atomic load in the hot pump path.
 void* g_netLocal = nullptr;
 // Cached controller for the same pawn -- avoids 2 ProcessEvent dispatches per
 // pump tick (GetController + GetControlRotation). Bound to g_netLocal's lifetime:
@@ -293,7 +295,17 @@ void NetPumpTick(float displayOffsetX) {
         // 500 ms stream-stop timeout fires from inside remote_prop::Tick
         // but only if Tick keeps running; relying on it solely is fragile.
         // Audit fix 2026-05-24).
-        if (g_orphan.valid()) g_orphan.Destroy();
+        if (g_orphan.valid()) {
+            // Unregister from the central players::Registry BEFORE destroying
+            // the actor -- anyone doing a lookup mid-disconnect should get a
+            // clean nullptr, not a dangling pointer to a half-destroyed puppet.
+            const uint8_t puppetPeerId =
+                (g_session.role() == coop::net::Role::Host)
+                ? coop::players::kPeerIdHost + 1u
+                : coop::players::kPeerIdHost;
+            coop::players::Registry::Get().UnregisterPuppet(puppetPeerId);
+            g_orphan.Destroy();
+        }
         coop::remote_prop::ForceRelease();
         // Audit C-1 (2026-05-24): clear the pending-spawn queue + any
         // half-drained snapshot enumeration. Their contents belong to the
@@ -337,7 +349,7 @@ void NetPumpTick(float displayOffsetX) {
     }
 
     if (g_netLocal && !R::IsLive(g_netLocal)) { g_netLocal = nullptr; g_netLocalController = nullptr; }
-    if (!g_netLocal) g_netLocal = R::FindObjectByClass(P::name::MainPlayerClass);
+    if (!g_netLocal) g_netLocal = coop::players::Registry::Get().Local();
     if (g_netLocal) {
         // Re-resolve the controller only when missing or invalidated; the
         // controller pointer stays stable between possess events. Caching here
@@ -447,6 +459,21 @@ void NetPumpTick(float displayOffsetX) {
                 sNextSpawnAttempt = now + seconds(1);
                 return;
             }
+            // Register with the players::Registry so any subsystem can look
+            // up the puppet by peerId (instead of scattered &g_orphan
+            // references). 1v1 transitional mapping: the OTHER peer's id is
+            // the opposite of our role -- if we're host (id 0), the puppet
+            // represents the client (id 1); vice versa. N-peer (4-player
+            // target) will switch this to a session-assigned id table.
+            const uint8_t puppetPeerId =
+                (g_session.role() == coop::net::Role::Host)
+                ? coop::players::kPeerIdHost + 1u  // client #1 == 1
+                : coop::players::kPeerIdHost;       // the host == 0
+            coop::players::Registry::Get().RegisterPuppet(puppetPeerId, &g_orphan);
+            coop::players::Registry::Get().SetLocalPeerId(
+                (g_session.role() == coop::net::Role::Host)
+                ? coop::players::kPeerIdHost
+                : static_cast<uint8_t>(coop::players::kPeerIdHost + 1u));
         }
         // Only RE-BASE the interpolation on a NEW packet; re-pushing the latest
         // every frame would zero `errorPos_` mid-window and freeze motion. The
@@ -569,7 +596,7 @@ void SpawnSecondPlayerWhenReady() {
         auto state = std::make_shared<std::atomic<int>>(0);  // 0 pending,1 not-ready,2 ok,3 failed
         Post([state, i] {
             if (g_orphan.valid()) { state->store(2); return; }
-            void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+            void* local = coop::players::Registry::Get().Local();
             const bool diag = (i % 20 == 0);  // ~every 2 s
             if (!local) {
                 if (diag) {
@@ -778,7 +805,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                 for (int attempt = 0; attempt < 50 && !teleported; ++attempt) {
                     auto okFlag = std::make_shared<std::atomic<int>>(0);  // 0=pending,1=ok,2=nope
                     Post([target, targetRot, ayaw, okFlag] {
-                        void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+                        void* local = coop::players::Registry::Get().Local();
                         if (!local) { okFlag->store(2); return; }
                         ue_wrap::engine::TeleportTo(local, target, targetRot);
                         if (void* ctrl = ue_wrap::engine::GetController(local)) {
@@ -796,7 +823,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                     if (!teleported) ::Sleep(100);
                 }
                 Post([ax, ay, az, ayaw, apitch, teleported] {
-                    void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+                    void* local = coop::players::Registry::Get().Local();
                     const auto cur = local ? ue_wrap::engine::GetActorLocation(local) : ue_wrap::FVector{};
                     UE_LOGI("autotest teleport: target=(%.0f,%.0f,%.0f) yaw=%.1f pitch=%.1f "
                             "-> actual=(%.0f,%.0f,%.0f) settled=%d",
@@ -805,7 +832,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                 ::Sleep(100);
             } else if (netCfg.role == coop::net::Role::Client) {
                 Post([] {
-                    void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+                    void* local = coop::players::Registry::Get().Local();
                     if (!local) {
                         UE_LOGW("client KPP teleport: local mainPlayer not in world yet");
                         return;
@@ -889,7 +916,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                 // BeginPlay / save-restore reverting our teleport.
                 if (autotestActive && steady_clock::now() < autotestUntil && (tick % 30 == 0)) {
                     Post([atx, aty, atz, atyaw, atpitch] {
-                        void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+                        void* local = coop::players::Registry::Get().Local();
                         if (!local) return;
                         const auto cur = ue_wrap::engine::GetActorLocation(local);
                         const float dx = cur.X - atx, dy = cur.Y - aty, dz = cur.Z - atz;
@@ -918,7 +945,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                 const bool tightTrace = (steady_clock::now() - sTickEpoch) < seconds(30);
                 if (tightTrace && (tick % 60 == 0)) {  // ~500 ms at 125 Hz
                     Post([] {
-                        void* lp = R::FindObjectByClass(P::name::MainPlayerClass);
+                        void* lp = coop::players::Registry::Get().Local();
                         if (!lp) return;
                         const auto actorLoc = ue_wrap::engine::GetActorLocation(lp);
                         float meshWorldZ = NAN, meshRelZ = NAN;
@@ -953,7 +980,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                         // (if alive) world positions. Lets us see whether the
                         // autotest teleport stuck + whether the pose stream is
                         // updating the puppet position vs leaving it at spawn.
-                        if (void* lp = R::FindObjectByClass(P::name::MainPlayerClass)) {
+                        if (void* lp = coop::players::Registry::Get().Local()) {
                             const auto loc = ue_wrap::engine::GetActorLocation(lp);
                             const auto rot = ue_wrap::engine::GetActorRotation(lp);
                             ue_wrap::FRotator cRot{};
@@ -1081,7 +1108,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         ::Sleep(2000);
         Post([] {
             R::DebugProbeSuperStructOffset();
-            void* local = R::FindObjectByClass(P::name::MainPlayerClass);
+            void* local = coop::players::Registry::Get().Local();
             DumpComponents("local mainPlayer_C", local);
             g_orphan.Spawn();
         });

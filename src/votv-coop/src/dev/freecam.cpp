@@ -1,5 +1,6 @@
 #include "dev/freecam.h"
 
+#include "coop/players_registry.h"
 #include "dev/common.h"
 
 #include "ue_wrap/engine.h"
@@ -52,31 +53,11 @@ inline void* ReadPtr(void* base, size_t off) {
 }
 
 // Walk GUObjectArray for THE local mainPlayer_C -- the one possessed by a
-// PlayerController. Puppets are explicitly unpossessed (AutoPossessPlayer /
-// AutoPossessAI disabled + AIControllerClass=null per the puppet spawn path),
-// so GetController() != nullptr is the definitive local-vs-puppet
-// discriminator. 2026-05-25 NIGHT (user retest +3): before this filter,
-// FindObjectByClass(MainPlayerClass) sometimes returned the puppet, causing
-// freecam Enable() to bail with "no controller" on every HOME press. Same
-// fix the F4 teleport_client got -- mirror the discriminator instead of
-// relying on GUObjectArray creation order.
-void* FindLocalMainPlayerSafe() {
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
-        void* obj = R::ObjectAt(i);
-        if (!obj) continue;
-        if (R::ClassNameOf(obj) != P::name::MainPlayerClass) continue;
-        const std::wstring name = R::ToString(R::NameOf(obj));
-        if (name.rfind(L"Default__", 0) == 0) continue;  // skip CDO
-        if (!R::IsLive(obj)) continue;
-        if (!E::GetController(obj)) continue;            // puppet -- skip
-        return obj;
-    }
-    return nullptr;
-}
+// Local-vs-puppet discriminator + caching now lives in coop::local_player
+// per RULE 1 (2026-05-26 unification). This module just calls Get().
 
 void Enable() {
-    g_player = FindLocalMainPlayerSafe();
+    g_player = coop::players::Registry::Get().Local();
     if (!g_player) { UE_LOGW("freecam: no local player (no mainPlayer_C with a Controller)"); return; }
     g_pc = E::GetController(g_player);
     if (!g_pc) { UE_LOGW("freecam: no controller"); return; }

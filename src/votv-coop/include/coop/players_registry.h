@@ -1,0 +1,116 @@
+// coop/players_registry.h -- central source of truth for player identity.
+//
+// MTA-inspired (`reference/mtasa-blue/`'s CClientPlayerManager): all
+// player-identity lookups go through ONE singleton registry instead of
+// scattered `FindObjectByClass(MainPlayer)` scans that ambiguously
+// return either the local mainPlayer_C or a puppet (since both share
+// the same UClass).
+//
+// Why one registry, not one Player class (deviation from full MTA mirror):
+// our `coop::RemotePlayer` carries puppet-specific state (Spawn, Tick,
+// SetTargetPose, satellite Character pull, AnimBP rewiring, nameplate
+// anchor, ping). The LOCAL player has NONE of that -- it's just an
+// actor pointer + peerSessionId. Forcing a unified class would have
+// `Player.Spawn()` no-op'd for the local, `Player.Tick()` ignored, etc.
+// Splitting keeps the puppet machinery in `RemotePlayer` where it
+// belongs and adds a thin `LocalEntry` to the registry for the local.
+//
+// Identity invariants (RULE 1 root-cause fix, 2026-05-26):
+// - `Registry::Get().Local()` returns the actor pointer of the local
+//   mainPlayer_C (the one with a non-null Controller) OR nullptr if
+//   not yet alive.
+// - `Registry::Get().Puppet(peerSessionId)` returns the RemotePlayer*
+//   for that peer's puppet OR nullptr.
+// - `Registry::Get().IsLocal(actor)` is the canonical "is this the
+//   local player?" predicate. Use this instead of
+//   `GetController(actor) != nullptr` everywhere.
+// - `Registry::Get().PeerIdOfActor(actor)` -> the peer id of either
+//   the local or any puppet matching the actor; -1 if unknown.
+//
+// All UObject access on the game thread. Lookups are O(1) via cached
+// pointers; the initial scan for the local mainPlayer_C happens on
+// first Local() call and re-validates via IsLive each query (the
+// engine recycles actor slots on level change).
+
+#pragma once
+
+#include <cstdint>
+
+namespace coop { class RemotePlayer; }
+
+namespace coop::players {
+
+// Peer session ids. Host=0; clients 1..(kMaxPeers-1). Each peer only
+// ever has ONE local + up to (kMaxPeers-1) puppets (other peers'
+// players). 2026-05-26 user direction: support at least 4 players
+// total in coop. kMaxPeers = 4 covers host + 3 clients.
+inline constexpr uint8_t kMaxPeers       = 4;
+inline constexpr uint8_t kPeerIdHost     = 0;
+inline constexpr uint8_t kPeerIdUnknown  = 0xFF;  // not in registry
+
+class Registry {
+public:
+    // Singleton accessor. Thread-safe (the underlying static initializer
+    // is C++17 thread-safe; no manual locking needed for construction).
+    static Registry& Get();
+
+    // ---- Local player ----
+
+    // Returns the local mainPlayer_C actor pointer, or nullptr if not
+    // yet alive. Cached + IsLive-validated; the underlying GUObjectArray
+    // scan happens only when the cache is empty/stale. Game thread only.
+    void* Local();
+
+    // The peer session id assigned to THE LOCAL player on THIS process.
+    // Set by Session at connect time (host=0, client=1). 0xFF until set.
+    uint8_t LocalPeerId() const;
+    void SetLocalPeerId(uint8_t id);
+
+    // Force re-resolve of the local cache. Call on level change.
+    void InvalidateLocal();
+
+    // ---- Puppets (remote players) ----
+
+    // Returns the RemotePlayer* for a given peer id, or nullptr. The
+    // puppet's actor is `RemotePlayer::GetActor()`.
+    RemotePlayer* Puppet(uint8_t peerSessionId);
+
+    // Register / unregister a puppet. The RemotePlayer instance is
+    // OWNED by the caller (typically harness.cpp's `g_orphan`); the
+    // registry just holds a non-owning pointer + clears it on
+    // UnregisterPuppet (or when the actor goes away on level change).
+    void RegisterPuppet(uint8_t peerSessionId, RemotePlayer* puppet);
+    void UnregisterPuppet(uint8_t peerSessionId);
+
+    // ---- Generic identity queries ----
+
+    // The canonical "is this actor the local player?" predicate. Use
+    // this instead of GetController(actor) != nullptr.
+    bool IsLocal(void* actor);
+
+    // True if `actor` is one of our spawned puppets (any peer).
+    bool IsPuppet(void* actor);
+
+    // -> peer session id for `actor`, or kPeerIdUnknown if not in registry.
+    uint8_t PeerIdOfActor(void* actor);
+
+private:
+    Registry() = default;
+    Registry(const Registry&) = delete;
+    Registry& operator=(const Registry&) = delete;
+
+    // Re-resolve the local cache by walking GUObjectArray for a
+    // mainPlayer_C with a non-null Controller. Game thread only.
+    void* RescanLocal();
+
+    void* localCached_ = nullptr;       // local mainPlayer_C actor, cached
+    uint8_t localPeerId_ = kPeerIdUnknown;
+    // One puppet slot per peer id. Local is NOT in this array; it's
+    // tracked via `localCached_` + `localPeerId_`. So if localPeerId_=1
+    // (this peer is client #1), `puppetByPeer_[0]` is the host's puppet
+    // on this peer's process, and slots [2], [3] would carry clients 2/3
+    // (when N-peer scope expands beyond 1v1).
+    RemotePlayer* puppetByPeer_[kMaxPeers] = {};
+};
+
+}  // namespace coop::players
