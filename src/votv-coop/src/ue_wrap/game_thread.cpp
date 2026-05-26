@@ -23,12 +23,65 @@ bool g_installed = false;
 std::atomic<unsigned long> g_gameThreadId{0};
 std::atomic<unsigned long long> g_tasksRun{0};
 
-// Single UFunction-pre-dispatch interceptor. Plain atomics (raw pointers, no
-// std::function) so the hot ProcessEvent path does a single relaxed load and
-// pointer compare -- no map lookup, no allocation. Set/cleared only at puppet
-// spawn/teardown (rare; game thread).
-std::atomic<void*> g_interceptUFunc{nullptr};
-std::atomic<UFunctionInterceptor> g_interceptCb{nullptr};
+// Multi-slot UFunction-pre-dispatch interceptor table. Same atomic-slot shape
+// as the observer tables; null targetFn = free slot. The detour walks the
+// table on each dispatch; first cb returning true cancels the original.
+struct InterceptorSlot {
+    std::atomic<void*> targetFn{nullptr};
+    std::atomic<UFunctionInterceptor> cb{nullptr};
+};
+InterceptorSlot g_interceptors[kMaxInterceptors];
+
+bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
+    if (!targetFn || !cb) return false;
+    // First pass: replace existing entry for this target (idempotent registration).
+    for (int i = 0; i < kMaxInterceptors; ++i) {
+        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
+            g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
+            g_interceptors[i].targetFn.store(targetFn, std::memory_order_release);
+            return true;
+        }
+    }
+    // Second pass: take the first empty slot.
+    for (int i = 0; i < kMaxInterceptors; ++i) {
+        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == nullptr) {
+            g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
+            g_interceptors[i].targetFn.store(targetFn, std::memory_order_release);
+            return true;
+        }
+    }
+    return false;  // table full
+}
+
+void ClearInterceptorSlot(void* targetFn) {
+    for (int i = 0; i < kMaxInterceptors; ++i) {
+        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
+            g_interceptors[i].targetFn.store(nullptr, std::memory_order_release);
+            g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
+        }
+    }
+}
+
+void ClearAllInterceptors() {
+    for (int i = 0; i < kMaxInterceptors; ++i) {
+        g_interceptors[i].targetFn.store(nullptr, std::memory_order_release);
+        g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
+    }
+}
+
+// Returns true if any interceptor for `function` returns true. Acquire load
+// on the function pointer pairs with the release store in SetInterceptorSlot
+// (no torn target+cb pair on weakly-ordered ISAs; on x86-64 TSO acquire is
+// free, ordering matters for a future ARM port).
+inline bool FireInterceptors(void* self, void* function, void* params) {
+    for (int i = 0; i < kMaxInterceptors; ++i) {
+        void* tgt = g_interceptors[i].targetFn.load(std::memory_order_acquire);
+        if (!tgt || tgt != function) continue;
+        UFunctionInterceptor cb = g_interceptors[i].cb.load(std::memory_order_relaxed);
+        if (cb && cb(self, params)) return true;
+    }
+    return false;
+}
 
 // Multi-target POST and PRE observers (fixed-size tables, no allocation).
 // Each entry is {UFunction*, ProcessEventObserverFn}. A null UFunction*
@@ -191,21 +244,12 @@ void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
         }
     }
 
-    // UFunction interceptor: pre-dispatch hook on a single target function. If
-    // the interceptor returns true, the original ProcessEvent is SKIPPED -- the
-    // UFunction's body is replaced for this call. Single pointer compare on the
-    // hot path. The function-pointer load is `acquire` to pair with the `release`
-    // store in SetInterceptor: that pairing guarantees that whenever we observe
-    // a non-null target function, we also observe the matching callback store
-    // that preceded it (no transient null-cb window on weakly-ordered ISAs).
-    // On x86-64 (TSO) acquire is free; the ordering matters for a future ARM
-    // port. The cb load can stay relaxed because the function-pointer load
-    // already established the happens-before.
-    void* iuf = g_interceptUFunc.load(std::memory_order_acquire);
-    if (iuf && function == iuf) {
-        UFunctionInterceptor cb = g_interceptCb.load(std::memory_order_relaxed);
-        if (cb && cb(self, params)) return;  // skipped: do NOT forward
-    }
+    // UFunction interceptors: pre-dispatch hooks on a multi-slot table. If
+    // any interceptor for `function` returns true, the original ProcessEvent
+    // is SKIPPED -- the UFunction's body is replaced for this call. The walk
+    // is kMaxInterceptors (16) acquire-loads of a function-pointer, with
+    // the cb load only happening on a target match -- cheap empty-table case.
+    if (FireInterceptors(self, function, params)) return;
 
     // PRE-observers: fire BEFORE the original. Used to snapshot state the BP
     // is about to clear (e.g. PHC.ReleaseComponent PRE reads handle+176
@@ -262,8 +306,7 @@ bool Install() {
 void Uninstall() {
     if (!g_installed) return;
     ClearAllObservers();
-    g_interceptUFunc.store(nullptr, std::memory_order_release);
-    g_interceptCb.store(nullptr, std::memory_order_relaxed);
+    ClearAllInterceptors();
     hook::Uninstall(g_hookTarget);
     g_installed = false;
     g_hookTarget = nullptr;
@@ -285,18 +328,12 @@ bool IsGameThread() {
 
 unsigned long long TasksRun() { return g_tasksRun.load(std::memory_order_relaxed); }
 
-void SetInterceptor(void* targetUFunction, UFunctionInterceptor cb) {
-    // Order matters: set the callback FIRST, then publish the function pointer.
-    // The detour loads the function pointer first; if it sees a valid function
-    // it then loads the callback. Reverse ordering would risk a window where
-    // function is set but callback is still null.
-    g_interceptCb.store(cb, std::memory_order_relaxed);
-    g_interceptUFunc.store(targetUFunction, std::memory_order_release);
+bool RegisterInterceptor(void* targetUFunction, UFunctionInterceptor cb) {
+    return SetInterceptorSlot(targetUFunction, cb);
 }
 
-void ClearInterceptor() {
-    g_interceptUFunc.store(nullptr, std::memory_order_release);
-    g_interceptCb.store(nullptr, std::memory_order_relaxed);
+void UnregisterInterceptor(void* targetUFunction) {
+    ClearInterceptorSlot(targetUFunction);
 }
 
 bool RegisterPostObserver(void* targetUFunction, ProcessEventObserverFn cb) {

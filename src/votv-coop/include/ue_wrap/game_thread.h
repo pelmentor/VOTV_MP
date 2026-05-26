@@ -46,23 +46,44 @@ unsigned long long TasksRun();
 // `function == targetUFunction`, the detour calls `cb(self, params)` and, if it
 // returns true, returns WITHOUT forwarding to the original ProcessEvent --
 // effectively replacing the UFunction's body for this dispatch. If cb returns
-// false, the original runs normally. Multiple interceptors are NOT supported;
-// a second SetInterceptor overwrites.
+// false, the original runs normally.
 //
-// Use case: substitute a UFunction body for SPECIFIC objects (filter on `self`
-// inside cb). Born from Bug 2 -- the kerfur AnimBP's BlueprintUpdateAnimation
-// writes spd=0 on a null-Pawn puppet, clobbering our streamed locomotion data.
-// Intercepting BUA for the puppet's AnimInstance lets us write spd OURSELVES
-// in BUA's slot, with no race against EvaluateGraphExposedInputs.
+// Multiple interceptors supported (fixed-size table, no allocation, no hashing
+// -- same shape as the observer tables). Each (target, cb) pair is registered
+// independently. If MULTIPLE interceptors fire for the same UFunction in the
+// same dispatch (only possible if two registrations share a target), any one
+// returning true cancels the original.
 //
-// Performance: the detour does ONE pointer compare per ProcessEvent dispatch
-// (ProcessEvent is hot -- thousands of calls/sec -- so no map lookup, no
-// allocation, no virtual). Game-thread-only (interceptors must NOT post tasks
-// or call CallFunction recursively without re-entrancy care; the detour's
-// t_inPump guard does NOT shield interceptor execution from re-entry).
+// Use cases:
+//   - Substitute a UFunction body for SPECIFIC objects (filter on `self` inside
+//     cb). Born from npc_sync -- suppressing client-side NPC spawns by
+//     intercepting the spawn UFunction and returning early.
+//   - Client-side weather scheduler suppression -- 5 distinct UFunctions
+//     (timerRain/timerLightning/fogEvent/superFogEvent/permaRain_timer) on
+//     AdaynightCycle_C all need PRE-cancel on the client; the host runs them
+//     all unchanged. The multi-slot table lets one subsystem own multiple
+//     slots without a global mutex or rendezvous between subsystems.
+//
+// Performance: the detour walks the table linearly; cost is O(kMaxInterceptors)
+// pointer compares per dispatch. With kMaxInterceptors=16 and ProcessEvent at
+// ~thousands/sec the loop is well under 1 us. Empty slots null-check out
+// before the (rare) match path.
+//
+// Thread-safety: registration uses an atomic store so the detour reads a
+// consistent state. Game-thread-only is NOT required for the interceptor cb
+// itself, but interceptors must NOT post tasks or call CallFunction
+// recursively without re-entrancy care; the detour's t_inPump guard does NOT
+// shield interceptor execution from re-entry.
 using UFunctionInterceptor = bool(*)(void* self, void* params);
-void SetInterceptor(void* targetUFunction, UFunctionInterceptor cb);
-void ClearInterceptor();
+inline constexpr int kMaxInterceptors = 16;
+
+// Register a PRE-dispatch interceptor for `targetUFunction`. Returns false if
+// the table is full or arguments are null. Idempotent: re-registering the
+// same target replaces its cb.
+bool RegisterInterceptor(void* targetUFunction, UFunctionInterceptor cb);
+
+// Remove the interceptor (if any) for `targetUFunction`. No-op if absent.
+void UnregisterInterceptor(void* targetUFunction);
 
 // Post-dispatch UFunction observers. Unlike SetInterceptor, observers are
 // SIDE-EFFECT ONLY -- the original UFunction body always runs. Multiple

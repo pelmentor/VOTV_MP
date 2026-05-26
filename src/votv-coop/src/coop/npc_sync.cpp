@@ -300,12 +300,12 @@ void Install(coop::net::Session* session) {
     }
 
     // All 12 NPC classes resolved. Cache the function pointer + offsets
-    // and install the interceptor. SetInterceptor takes a single slot;
-    // we own it for the whole session.
+    // and register the interceptor. RegisterInterceptor stores one slot in
+    // the multi-slot table; we own that slot for the whole session.
     g_npcSpawnFn = fn;
     g_npcSpawnActorClassParamOff = classOff;
     g_npcSpawnReturnParamOff = retOff;
-    ue_wrap::game_thread::SetInterceptor(fn, &NpcSuppress_Interceptor);
+    ue_wrap::game_thread::RegisterInterceptor(fn, &NpcSuppress_Interceptor);
     g_installed = true;
     UE_LOGI("npc-suppress: installed interceptor on %ls.%ls @ %p (ActorClass@%d, ReturnValue@%d, 12/12 NPC classes resolved)",
             P::name::GameplayStaticsClass, P::name::BeginDeferredSpawnFn,

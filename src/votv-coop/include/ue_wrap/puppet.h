@@ -139,8 +139,8 @@ void DumpKerfurHeadGraph(void* skeletalMeshComponent);
 // null-Pawn puppet, BUA short-circuits and the AnimInstance is vastly
 // under-populated -> state machine stays in idle even with our spd writes.
 //
-// Earlier Plan B1 (intercept BUA via game_thread::SetInterceptor and skip
-// the original) was retired because skipping BUA left ALL the other
+// Earlier Plan B1 (intercept BUA via game_thread::RegisterInterceptor and
+// skip the original) was retired because skipping BUA left ALL the other
 // AnimInstance fields zero, not just spd. The full AnimBP_vars_all diff
 // dump (2026-05-23) proved this empirically: 8 set fields on puppet vs ~26
 // on local.
