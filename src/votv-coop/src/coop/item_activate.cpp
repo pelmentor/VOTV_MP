@@ -61,17 +61,25 @@ void* g_flashlightInput14Fn = nullptr;
 std::atomic<int> g_lastSentState{-1};
 
 // Latched "on" intensity. Sampled from the LOCAL player's light_R the
-// first time we observe it non-zero (i.e. the user just turned their
-// flashlight on). The receiver uses it to drive the puppet's light_R
-// intensity -- a flashlight that the BP toggles via Intensity=0 vs
-// Intensity=N won't render on the puppet unless we also set Intensity
-// on the receiver side.
+// first time we observe it greater than the off-state default (which
+// is 0.2 in Unitless mode -- VOTV's flashlight). The receiver uses
+// this to drive the puppet's light_R intensity.
+//
+// CRITICAL: VOTV's light_R uses ELightUnits::Unitless (offset 0x0328
+// on ULocalLightComponent). In that mode Intensity is a small
+// multiplier (we see 0.2 in default state; real "on" is roughly
+// 5-10). Stock UE4.27 default of 5000 lumens DOES NOT APPLY -- a
+// 5000 Unitless multiplier is wildly different. The g_intensityOnFallback
+// is set to a safe Unitless value used only until the latch sees a
+// real on value.
 //
 // 0 = not yet sampled. Cross-peer assumption: the "on" intensity is
-// the same on both peers because both run the same VOTV BP defaults.
-// If a future peer turns out to use a different intensity, we'd need
-// to ship the value over the wire (paramBlob has room).
+// the same on both peers because both run the same VOTV BP defaults
+// (the latch will reach the SAME value on each peer once each peer's
+// user toggles their own flashlight even once).
 std::atomic<float> g_latchedOnIntensity{0.f};
+inline constexpr float kIntensityOnFallback = 5.f;  // Unitless safe default
+inline constexpr float kIntensityOffDefault = 0.f;  // turn light fully off
 
 // Hash of "prop_equipment_flashlight_C" -- the class the wire packet's
 // itemClassHash field carries for flashlight events. Both _a and _b
@@ -179,21 +187,21 @@ void OnUpdateFlashlightPost(void* self, void* function, void* /*params*/) {
         return;
     }
 
-    // Latch the local "on" intensity the first time we see it. After
-    // the BP runs to turn the light ON, light_R.Intensity should be
-    // non-zero -- record it so the receiver can drive its puppet
-    // intensity to the SAME value. If we never see a non-zero (user
-    // never turns flashlight on), the receiver falls back to a
-    // hardcoded default in ApplyToPuppet.
+    // Latch the local "on" intensity the first time we see it clearly
+    // above the off-state value. VOTV's flashlight Unitless default in
+    // off state is ~0.2 (not 0 -- a sentinel "barely visible" value).
+    // The on state is much higher (Unitless scale, roughly 5-10 per
+    // Agent 1's research). Require >1.0 to filter out the off-state
+    // sentinel.
     if (flashlight) {
         void* light_R = *reinterpret_cast<void**>(
             reinterpret_cast<uint8_t*>(self) + P::off::AmainPlayer_light_R);
         if (light_R && R::IsLive(light_R)) {
             const float intensity = *reinterpret_cast<float*>(
                 reinterpret_cast<uint8_t*>(light_R) + P::off::ULightComponentBase_Intensity);
-            if (intensity > 0.f && g_latchedOnIntensity.load(std::memory_order_acquire) == 0.f) {
+            if (intensity > 1.f && g_latchedOnIntensity.load(std::memory_order_acquire) == 0.f) {
                 g_latchedOnIntensity.store(intensity, std::memory_order_release);
-                UE_LOGI("flashlight: latched local 'on' intensity = %.1f (will drive puppet)", intensity);
+                UE_LOGI("flashlight: latched local 'on' intensity = %.2f (will drive puppet)", intensity);
             }
         }
     }
@@ -426,34 +434,46 @@ void ApplyToPuppet(void* puppetActor, uint32_t classHash, uint8_t state) {
         return;
     }
     g_echoSuppress.store(true, std::memory_order_release);
-    // 1) Toggle bVisible (cheap belt-and-suspenders; some lights gate
-    //    on this independent of intensity).
-    const bool visOk = E::SetComponentVisible(light_R, newState, /*propagate=*/false);
-
-    // 2) Drive Intensity to the latched local "on" value (or 0 for off).
-    //    This is the mechanism VOTV's BP uses for the flashlight toggle --
-    //    light_R.Intensity flips between 0 and a saved positive value.
-    //    Without this, bVisible alone may not render the cone (probe log
-    //    showed bVisible stays 0 even when local flashlight is visibly on).
-    float targetIntensity = 0.f;
+    // The ONLY thing the receiver mutates is light_R.Intensity. VOTV's
+    // BP also gates by intensity (the local probe proved bVisible stays
+    // 0 even when the flashlight visibly toggles), so visibility-flag
+    // toggles are a distractor here. The cascading parent-visibility
+    // problem (lag_fl + light_R inheriting hidden state from the CDO)
+    // is fixed ONCE at puppet spawn in puppet.cpp::SpawnPuppetMainPlayer
+    // via SetComponentVisible(lag_fl + light_R, true, false). After that,
+    // per-toggle just needs to drive Intensity through SetIntensity
+    // (which internally MarkRenderStateDirty's the light proxy).
+    float targetIntensity = kIntensityOffDefault;
     if (newState) {
         targetIntensity = g_latchedOnIntensity.load(std::memory_order_acquire);
         if (targetIntensity == 0.f) {
-            // Fallback: typical UE4 flashlight intensity. If the local
-            // player never turned theirs on, we don't know the BP's
-            // saved value -- use a reasonable default. The latch will
-            // update once the local player toggles, so subsequent
-            // applies will use the real value.
-            targetIntensity = 5000.f;
-            UE_LOGW("flashlight: no latched intensity yet -- using fallback %.0f", targetIntensity);
+            // The local player hasn't toggled their flashlight on yet,
+            // so we don't have the BP's real "on" value latched. Use
+            // a Unitless-safe fallback. The latch updates as soon as
+            // either peer toggles their real flashlight; subsequent
+            // applies will use the real value on each receiver.
+            targetIntensity = kIntensityOnFallback;
+            UE_LOGW("flashlight: no latched intensity yet -- using Unitless fallback %.2f",
+                    targetIntensity);
         }
     }
-    // Call ULightComponent::SetIntensity(float) via reflection. Lazy-
-    // resolve the UFunction on the light component's class once.
+    // Resolve ULightComponent::SetIntensity once. SetIntensity is declared
+    // on ULightComponent (the PARENT of USpotLightComponent), not on
+    // USpotLightComponent itself -- ue_wrap::reflection::FindFunction does
+    // NOT walk the inheritance chain (it only checks the immediate Outer),
+    // so we have to look up the parent class explicitly. Lookup is by
+    // string "LightComponent" (UClass name, no "U" prefix per UE4 reflection).
+    // SetIntensity internally calls MarkRenderStateDirty on the proxy --
+    // direct field writes do NOT, so the renderer wouldn't pick up the
+    // change. Never fall back to direct write.
     static void* sSetIntensityFn = nullptr;
     if (!sSetIntensityFn) {
-        void* lightCls = R::ClassOf(light_R);
+        void* lightCls = R::FindClass(L"LightComponent");
         if (lightCls) sSetIntensityFn = R::FindFunction(lightCls, P::name::SetIntensityFn);
+        if (!sSetIntensityFn) {
+            UE_LOGW("flashlight: failed to resolve SetIntensity on LightComponent class "
+                    "(lightCls=%p) -- intensity writes will no-op", lightCls);
+        }
     }
     bool intOk = false;
     if (sSetIntensityFn) {
@@ -461,21 +481,63 @@ void ApplyToPuppet(void* puppetActor, uint32_t classHash, uint8_t state) {
         f.Set<float>(L"NewIntensity", targetIntensity);
         intOk = ue_wrap::Call(light_R, f);
     } else {
-        // No UFunction -- fall back to direct field write (still works
-        // for the rendering path; the engine recomputes lighting on
-        // the next tick when the field changes).
-        *reinterpret_cast<float*>(
-            reinterpret_cast<uint8_t*>(light_R) + P::off::ULightComponentBase_Intensity)
-            = targetIntensity;
-        intOk = true;
+        UE_LOGW("flashlight: SetIntensity UFunction unresolved on light_R class "
+                "(this should never happen on a stock UE4.27 USpotLightComponent)");
     }
     g_echoSuppress.store(false, std::memory_order_release);
-    if (!visOk) {
-        UE_LOGW("flashlight: SetComponentVisible(light_R=%p, %d) failed",
-                light_R, newState ? 1 : 0);
+    UE_LOGI("flashlight: applied to puppet=%p state=%d Intensity=%.2f (intOk=%d, latched=%.2f)",
+            puppetActor, newState ? 1 : 0, targetIntensity, intOk ? 1 : 0,
+            g_latchedOnIntensity.load(std::memory_order_acquire));
+
+    // Diagnostic readback: confirm the puppet's light_R actually has the
+    // fields we expect AFTER our writes. If Intensity reads back as the
+    // target but bAffectsWorld is 0 or visByte bit-4 is 0, the light is
+    // STILL not rendering. Also dump the LOCAL player's light_R so we
+    // can diff puppet vs local (the local works visually, the puppet
+    // doesn't -- the gating field must differ between them).
+    const float puppetIntensityAfter = *reinterpret_cast<float*>(
+        reinterpret_cast<uint8_t*>(light_R) + P::off::ULightComponentBase_Intensity);
+    const uint8_t puppetFlagsByte = *reinterpret_cast<uint8_t*>(
+        reinterpret_cast<uint8_t*>(light_R) + 0x0214);  // bAffectsWorld + cast flags packed
+    const uint8_t puppetVisByte = *reinterpret_cast<uint8_t*>(
+        reinterpret_cast<uint8_t*>(light_R) + P::off::USceneComponent_VisFlagsByte);
+    UE_LOGI("flashlight[POST-APPLY puppet]: light_R=%p Intensity=%.1f flags@0x214=0x%02X "
+            "visByte@0x14C=0x%02X (bAffectsWorld=bit0, bVisible=bit4)",
+            light_R, puppetIntensityAfter, puppetFlagsByte, puppetVisByte);
+    // Local player's light_R, for comparison.
+    void* localPlayer = R::FindObjectByClass(P::name::MainPlayerClass);
+    if (localPlayer && localPlayer != puppetActor) {
+        // GUObjectArray walk may return the puppet on its first hit; skip
+        // if equal. (Find the OTHER one if needed via E::GetController.)
+        if (!E::GetController(localPlayer)) {
+            // Got the puppet -- walk for the real local.
+            const int32_t n = R::NumObjects();
+            for (int32_t i = 0; i < n; ++i) {
+                void* obj = R::ObjectAt(i);
+                if (!obj || obj == puppetActor) continue;
+                if (R::ClassNameOf(obj) != P::name::MainPlayerClass) continue;
+                if (!R::IsLive(obj)) continue;
+                if (!E::GetController(obj)) continue;
+                localPlayer = obj;
+                break;
+            }
+        }
     }
-    UE_LOGI("flashlight: applied to puppet=%p state=%d Intensity=%.1f (visOk=%d intOk=%d)",
-            puppetActor, newState ? 1 : 0, targetIntensity, visOk ? 1 : 0, intOk ? 1 : 0);
+    if (localPlayer && localPlayer != puppetActor) {
+        void* localLightR = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(localPlayer) + P::off::AmainPlayer_light_R);
+        if (localLightR && R::IsLive(localLightR)) {
+            const float li = *reinterpret_cast<float*>(
+                reinterpret_cast<uint8_t*>(localLightR) + P::off::ULightComponentBase_Intensity);
+            const uint8_t lf = *reinterpret_cast<uint8_t*>(
+                reinterpret_cast<uint8_t*>(localLightR) + 0x0214);
+            const uint8_t lv = *reinterpret_cast<uint8_t*>(
+                reinterpret_cast<uint8_t*>(localLightR) + P::off::USceneComponent_VisFlagsByte);
+            UE_LOGI("flashlight[POST-APPLY local-cmp]: localLight_R=%p Intensity=%.1f "
+                    "flags@0x214=0x%02X visByte@0x14C=0x%02X",
+                    localLightR, li, lf, lv);
+        }
+    }
 }
 
 }  // namespace coop::item_activate

@@ -572,6 +572,31 @@ void RemotePlayer::ApplyToEngine() {
     E::SetActorLocation(actor_, puppetLoc);
     E::SetActorRotation(actor_, ue_wrap::FRotator{0.f, curYaw_ + meshOffsetYaw_, 0.f});
 
+    // Phase 5F (flashlight cone direction): drive the puppet's lag_fl
+    // spring arm pitch so the flashlight cone points where the source
+    // is looking. On a real player, lag_fl follows the camera pitch via
+    // the actor's tick + spring arm update; on the puppet we explicitly
+    // disabled actor tick (orphan-safety), so lag_fl freezes at spawn-
+    // time orientation. Without this write the cone points at a static
+    // angle (typically the BP's authored default which may face the
+    // ground), making the flashlight invisible even when intensity is
+    // correctly applied.
+    //
+    // Direct field write to lag_fl.RelativeRotation.Pitch (FRotator
+    // layout is {Pitch, Yaw, Roll} so Pitch is the first float at the
+    // RelativeRotation offset). No UFunction call needed -- the spring
+    // arm reads this field on next render. Cost: one float write per
+    // puppet per tick (negligible).
+    if (auto* mp = reinterpret_cast<uint8_t*>(actor_)) {
+        if (void* lag_fl = *reinterpret_cast<void**>(mp + P::off::AmainPlayer_lag_fl)) {
+            if (R::IsLive(lag_fl)) {
+                *reinterpret_cast<float*>(
+                    reinterpret_cast<uint8_t*>(lag_fl) + P::off::USceneComponent_RelativeRotation) =
+                    curPitch_;
+            }
+        }
+    }
+
     // Bug 2 Plan B2: drive the satellite Character (the AnimBP Pawn pull source)
     // so its CharacterMovementComponent.Velocity carries the streamed velocity.
     // Co-locate the satellite with the puppet so any IK targets BUA computes

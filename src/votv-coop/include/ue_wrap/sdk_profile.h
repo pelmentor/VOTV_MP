@@ -325,6 +325,24 @@ inline constexpr size_t AmainPlayer_crankFlashlight = 0x0CC4;  // bool -- _c var
 // field in the probe gives the new state directly; the receiver mirrors
 // it on the puppet's light_R via SetIntensity (name::SetIntensityFn).
 inline constexpr size_t ULightComponentBase_Intensity = 0x020C;  // float
+
+// ULocalLightComponent::IntensityUnits (Engine.hpp:13636). The unit
+// scale for Intensity (ELightUnits enum: 0=Unitless, 1=Candelas, 2=Lumens).
+// VOTV's mainPlayer flashlight uses Unitless (we read Intensity=0.2 in
+// default state -- 0.2 lumens would be invisible, and stock UE4.27
+// CDO Intensity default in Lumens mode is 5000). On Unitless scale,
+// real "on" intensity is roughly 5-10. Used by Phase 5F receiver to
+// mirror the source's scale when applying intensity to the puppet.
+inline constexpr size_t ULocalLightComponent_IntensityUnits = 0x0328;  // uint8 (ELightUnits)
+
+// USceneComponent RelativeRotation (Engine.hpp:17900-ish, FRotator at
+// offset 0x0128). FRotator layout is {Pitch, Yaw, Roll} so Pitch is the
+// first float at +0x0128, Yaw at +0x012C, Roll at +0x0130. Used to
+// drive the puppet's lag_fl spring arm pitch from the pose snapshot
+// (the cone direction depends on the spring arm's pitch; without this
+// the spring arm freezes at spawn-time orientation because we disable
+// the puppet's actor tick).
+inline constexpr size_t USceneComponent_RelativeRotation = 0x0128;  // FRotator (12 bytes)
 inline constexpr size_t ACameraActor_CameraComponent = 0x0228;          // UCameraComponent*  Engine.hpp:6947
 inline constexpr size_t UCameraComponent_PostProcessBlendWeight = 0x0240; // float  Engine.hpp:9762
 inline constexpr size_t UCameraComponent_PostProcessSettings = 0x0270;    // FPostProcessSettings  Engine.hpp (size 0x560)
@@ -686,7 +704,12 @@ inline constexpr const wchar_t* MainPlayerFlashlightUpdateFn = L"Flashlight Upda
 // (Engine.hpp:13551). The receiver calls this on the puppet's light_R
 // to mirror the local sender's intensity -- bVisible alone is
 // insufficient (VOTV's BP toggles via Intensity, not bVisible).
-inline constexpr const wchar_t* SetIntensityFn = L"SetIntensity";
+// SetIntensityUnits(ELightUnits) on ULocalLightComponent (Engine.hpp:13641)
+// is the matching unit-scale setter. Both go through ProcessEvent and
+// internally MarkRenderStateDirty on the light proxy -- direct field
+// writes do NOT mark dirty so the renderer won't pick up changes.
+inline constexpr const wchar_t* SetIntensityFn      = L"SetIntensity";
+inline constexpr const wchar_t* SetIntensityUnitsFn = L"SetIntensityUnits";
 
 // Phase 5F retest fallback (2026-05-25 NIGHT-3): hands-on showed that
 // BOTH updateFlashlight AND 'Flashlight Update' are BP-inlined into
