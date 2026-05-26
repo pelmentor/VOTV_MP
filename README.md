@@ -9,7 +9,7 @@ VOTV's own `APawn` / `APlayerController` systems for a second player.
 ## Status
 
 **Target game version: Alpha 0.9.0-n** (the mod version mirrors the
-VOTV release it targets — versioning rule in `CLAUDE.md`).
+VOTV release it targets).
 
 **Phases 0-3 + 5 done.** The transport, the puppet, the LAN test
 framework, the reliable channel, the chat + event feed, the physics-
