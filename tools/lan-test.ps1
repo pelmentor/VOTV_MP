@@ -55,7 +55,13 @@ param(
     # mutator UFunctions (causeRain + setRainProperties). Verification
     # checks both host's `weather: host broadcast` and client's `weather:
     # applied flags` log lines.
-    [switch]$WeatherTest
+    [switch]$WeatherTest,
+    # Phase 5W Inc-fix-2 (2026-05-27): autonomous RED SKY sync test.
+    # Host calls DebugForceRedSky(true) -- spawns AredSkyEvent_C on the
+    # gamemode + swaps color curves to the red set. Host POST observer
+    # broadcasts; client invokes same. Visual signal: entire sky/scene
+    # goes RED on both peers. Unambiguous, unlike rain particles.
+    [switch]$RedSkyTest
 )
 $ErrorActionPreference = "Stop"
 $root  = Split-Path -Parent $PSScriptRoot
@@ -110,7 +116,7 @@ $hostPose   = @{ X = "-37730"; Y = "69943";  Z = "6420"; Yaw = "-86.8"; Pitch = 
 $clientPose = @{ X = "-37640"; Y = "68532";  Z = "6399"; Yaw = "88.2";  Pitch = "-4.7" }
 
 # --- launch the two instances with per-process env --------------------------
-function Launch-Instance($role, $nick, $logName, $extraEnv, $pose, $grabTest, $flashlightTest, $weatherTest) {
+function Launch-Instance($role, $nick, $logName, $extraEnv, $pose, $grabTest, $flashlightTest, $weatherTest, $redSkyTest) {
     $env:VOTVCOOP_SCENARIO = "play"
     $env:VOTVCOOP_NET_ROLE = $role
     $env:VOTVCOOP_NET_PORT = "$Port"
@@ -137,6 +143,9 @@ function Launch-Instance($role, $nick, $logName, $extraEnv, $pose, $grabTest, $f
     if ($weatherTest) {
         $env:VOTVCOOP_RUN_WEATHER_TEST = "1"
     }
+    if ($redSkyTest) {
+        $env:VOTVCOOP_RUN_REDSKY_TEST = "1"
+    }
     $p = Start-Process -FilePath $exe `
             -ArgumentList "-windowed","-ResX=$ResX","-ResY=$ResY" -PassThru
     # Clear so the next launch / this shell isn't polluted.
@@ -145,15 +154,15 @@ function Launch-Instance($role, $nick, $logName, $extraEnv, $pose, $grabTest, $f
                 Env:VOTVCOOP_AUTOTEST_X,Env:VOTVCOOP_AUTOTEST_Y,Env:VOTVCOOP_AUTOTEST_Z,`
                 Env:VOTVCOOP_AUTOTEST_YAW,Env:VOTVCOOP_AUTOTEST_PITCH,Env:VOTVCOOP_RUN_GRAB_TEST,`
                 Env:VOTVCOOP_GRAB_TEST_ANCHOR_X,Env:VOTVCOOP_GRAB_TEST_ANCHOR_Y,Env:VOTVCOOP_GRAB_TEST_ANCHOR_Z,`
-                Env:VOTVCOOP_RUN_FLASHLIGHT_TEST,Env:VOTVCOOP_RUN_WEATHER_TEST `
+                Env:VOTVCOOP_RUN_FLASHLIGHT_TEST,Env:VOTVCOOP_RUN_WEATHER_TEST,Env:VOTVCOOP_RUN_REDSKY_TEST `
                 -ErrorAction SilentlyContinue
     return $p
 }
 
-Step "launching HOST (nick=Host, binds port $Port, autotest pose @ host$(if($GrabTest){', GRAB TEST armed (full)'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (host drives, client observes)'}))..."
-$hostProc = Launch-Instance "host" "Host" $hostLogName "" $hostPose $GrabTest $FlashlightTest $WeatherTest
+Step "launching HOST (nick=Host, binds port $Port, autotest pose @ host$(if($GrabTest){', GRAB TEST armed (full)'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (host drives, client observes)'})$(if($RedSkyTest){', RED SKY TEST armed (host drives)'}))..."
+$hostProc = Launch-Instance "host" "Host" $hostLogName "" $hostPose $GrabTest $FlashlightTest $WeatherTest $RedSkyTest
 Start-Sleep -Seconds 4   # let the host process come up first
-Step "launching CLIENT (nick=Client, peer=127.0.0.1:$Port, autotest pose @ client$(if($GrabTest){', SCAN ONLY'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (observer-only)'}))..."
+Step "launching CLIENT (nick=Client, peer=127.0.0.1:$Port, autotest pose @ client$(if($GrabTest){', SCAN ONLY'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (observer-only)'})$(if($RedSkyTest){', RED SKY TEST armed (observer-only)'}))..."
 # Client also gets VOTVCOOP_RUN_GRAB_TEST=1 -- it runs the prop scan + logs
 # fields for cross-peer Key comparison, but does NOT drive any UFunctions.
 # Flashlight test: BOTH peers drive toggles so we verify the wire goes
@@ -162,7 +171,7 @@ Step "launching CLIENT (nick=Client, peer=127.0.0.1:$Port, autotest pose @ clien
 # the routine self-gates on role -- only the host actually forces rain;
 # the client logs "not host" and exits. Setting the env on both keeps
 # launcher symmetry simple.
-$clientProc = Launch-Instance "client" "Client" $clientLogName "127.0.0.1" $clientPose $GrabTest $FlashlightTest $WeatherTest
+$clientProc = Launch-Instance "client" "Client" $clientLogName "127.0.0.1" $clientPose $GrabTest $FlashlightTest $WeatherTest $RedSkyTest
 Step "host pid=$($hostProc.Id)  client pid=$($clientProc.Id)"
 
 # --- verification helpers ---------------------------------------------------
@@ -227,7 +236,19 @@ function Capture-Pair($labelSuffix) {
 }
 
 if ($pass) {
-    if ($WeatherTest) {
+    if ($RedSkyTest) {
+        # Red sky test timing (matches RunAutonomousRedSkyTest):
+        #   PASS + ~20 s    routine starts (stabilization wait)
+        #   PASS + ~20 s    phase ON  (DebugForceRedSky(true) -- spawnRedSky)
+        #   PASS + ~30 s    phase OFF (DebugForceRedSky(false) -- set false)
+        #   PASS + ~36 s    routine done
+        # Capture mid-ON (peak red), then post-OFF (reverted).
+        Step "PASS detected; RED SKY TEST armed -- host fires spawnRedSky..."
+        Start-Sleep -Seconds 25         # PASS+25, midway through 10 s ON dwell
+        Capture-Pair "redsky-on"
+        Start-Sleep -Seconds 10         # PASS+35, midway through 6 s OFF dwell
+        Capture-Pair "redsky-off"
+    } elseif ($WeatherTest) {
         # Weather test timing (matches RunAutonomousWeatherTest's
         # 4-phase routine, each phase 6s):
         #   PASS + ~20 s    routine starts (host stabilization wait)
@@ -325,6 +346,29 @@ if ($pass) {
 function Count-Matches($path, $pattern) {
     if (-not (Test-Path $path)) { return 0 }
     return @(Select-String -Path $path -Pattern $pattern -ErrorAction SilentlyContinue).Count
+}
+
+# Phase 5W Inc-fix-2: separate verdict for the red sky test.
+if ($pass -and $RedSkyTest) {
+    Write-Host ""
+    Step "==== RED SKY TEST verdict ===="
+    $hostForce     = Count-Matches $hostLog   "weather: DebugForceRedSky"
+    $hostBroadcast = Count-Matches $hostLog   "weather: host broadcast RedSky"
+    $clientApplied = Count-Matches $clientLog "weather: ApplyRedSky"
+    Step "host   log: DebugForceRedSky=$hostForce  host-broadcast=$hostBroadcast"
+    Step "client log: ApplyRedSky=$clientApplied"
+    $rspass = ($hostForce -ge 1) -and ($hostBroadcast -ge 1) -and ($clientApplied -ge 1)
+    if ($rspass) {
+        Write-Host "[lan-test] RED SKY RESULT: PASS -- host fired $hostForce times; broadcast $hostBroadcast; client applied $clientApplied." -ForegroundColor Green
+    } else {
+        Write-Host "[lan-test] RED SKY RESULT: FAIL -- low counts." -ForegroundColor Red
+        Step "==== HOST red-sky lines ===="
+        Select-String -Path $hostLog -Pattern "weather:|RedSky|redSky" -ErrorAction SilentlyContinue |
+            Select-Object -Last 20 | ForEach-Object { Write-Host "  $($_.Line)" }
+        Step "==== CLIENT red-sky lines ===="
+        Select-String -Path $clientLog -Pattern "weather:|RedSky|redSky" -ErrorAction SilentlyContinue |
+            Select-Object -Last 20 | ForEach-Object { Write-Host "  $($_.Line)" }
+    }
 }
 
 # Phase 5W: separate verdict for the weather test. PASS means host's

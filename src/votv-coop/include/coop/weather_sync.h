@@ -35,7 +35,7 @@
 
 #include <cstdint>
 
-namespace coop::net { class Session; struct WeatherStatePayload; struct LightningStrikePayload; }
+namespace coop::net { class Session; struct WeatherStatePayload; struct LightningStrikePayload; struct RedSkyPayload; }
 
 namespace coop::weather_sync {
 
@@ -94,5 +94,21 @@ bool ReadLocalIsRaining(bool* outFound);
 // pair. The actor's own Timeline self-destructs after a few seconds; no
 // teardown wire needed. Game thread only.
 void ApplyLightningStrike(const coop::net::LightningStrikePayload& payload);
+
+// Phase 5W Inc-fix-2 (2026-05-27): red sky test entrypoint (host only).
+// Forces the red-sky visual on/off via reflection. ON path: if the
+// gamemode's redSky pointer @0x0888 is null, call spawnRedSky (which
+// instantiates AredSkyEvent_C + stashes the pointer). If non-null,
+// call redSky.set(true). OFF path: if non-null, call redSky.set(false).
+// Returns false if the gamemode isn't live or UFunctions aren't
+// resolved. Used by the autonomous LAN test as the unambiguous visual
+// signal (per user 2026-05-27: rain particles were too subtle to
+// verify cross-peer; red sky is unmistakable).
+bool DebugForceRedSky(bool red);
+
+// Receiver-side apply for the RedSky discrete event packet. Same
+// invocation pattern as DebugForceRedSky (spawnRedSky first time +
+// redSky.set thereafter). Validates peerSessionId==0 (host-only sender).
+void ApplyRedSky(const coop::net::RedSkyPayload& payload);
 
 }  // namespace coop::weather_sync

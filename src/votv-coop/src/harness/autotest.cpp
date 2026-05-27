@@ -643,4 +643,63 @@ DWORD WINAPI WeatherTestThread(LPVOID /*arg*/) {
     return 0;
 }
 
+// ---- Phase 5W Inc-fix-2 autonomous RED SKY test ------------------------
+//
+// Host-only. After stabilization, fires DebugForceRedSky(true) -- spawns
+// AredSkyEvent_C on the gamemode + the BP swaps the 4 color-curve assets
+// to the "red" set. Host's POST observer on spawnRedSky catches +
+// broadcasts; client invokes the same. Both peers' subsequent
+// screenshots should show the entire sky / ambient lighting in red.
+//
+// 2 phases: ON / OFF (revert). Final state OFF so the next test run
+// starts clean. 10 s ON dwell gives the visual change ample time to
+// settle + the screenshot window to capture.
+void RunAutonomousRedSkyTest() {
+    const std::string roleEnv = ReadEnv("VOTVCOOP_NET_ROLE");
+    const bool isHost = (roleEnv != "client");
+    if (!isHost) {
+        UE_LOGI("redsky_test: not host -- this routine is host-only "
+                "(client observes via wire). Returning.");
+        return;
+    }
+    UE_LOGI("redsky_test: starting autonomous routine on host (waiting "
+            "20 s for stabilization)");
+    ::Sleep(20000);
+
+    UE_LOGI("redsky_test: phase ON -- DebugForceRedSky(true)");
+    auto onDone = std::make_shared<std::atomic<int>>(0);
+    GT::Post([onDone] {
+        const bool ok = coop::weather_sync::DebugForceRedSky(true);
+        onDone->store(ok ? 1 : -1, std::memory_order_release);
+    });
+    while (onDone->load() == 0) ::Sleep(5);
+    if (onDone->load() < 0) {
+        UE_LOGW("redsky_test: ON phase failed (DebugForceRedSky returned false)");
+        return;
+    }
+
+    // 10 s ON dwell -- ample for client to receive + apply + screenshot.
+    ::Sleep(10000);
+
+    UE_LOGI("redsky_test: phase OFF -- DebugForceRedSky(false)");
+    auto offDone = std::make_shared<std::atomic<int>>(0);
+    GT::Post([offDone] {
+        const bool ok = coop::weather_sync::DebugForceRedSky(false);
+        offDone->store(ok ? 1 : -1, std::memory_order_release);
+    });
+    while (offDone->load() == 0) ::Sleep(5);
+
+    // 6 s OFF dwell -- color curves revert; verify both peers return to
+    // normal coloration.
+    ::Sleep(6000);
+
+    UE_LOGI("redsky_test: DONE (ON+OFF cycle complete; final state should "
+            "be normal sky)");
+}
+
+DWORD WINAPI RedSkyTestThread(LPVOID /*arg*/) {
+    RunAutonomousRedSkyTest();
+    return 0;
+}
+
 }  // namespace harness::autotest

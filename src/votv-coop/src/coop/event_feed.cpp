@@ -494,6 +494,33 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             });
             break;
         }
+        case net::ReliableKind::RedSky: {
+            // Phase 5W Inc-fix-2 (2026-05-27): one-shot/toggle red-sky
+            // story-event sync. Host's POST observer on spawnRedSky +
+            // redSky.set caught the change; broadcast it. Receiver
+            // invokes the same chain on its local gamemode.
+            if (msg.payload.size() < sizeof(net::RedSkyPayload)) {
+                UE_LOGW("event_feed: RedSky payload too short (%zu < %zu)",
+                        msg.payload.size(), sizeof(net::RedSkyPayload));
+                break;
+            }
+            net::RedSkyPayload p{};
+            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            if (session.role() == net::Role::Host) {
+                UE_LOGI("event_feed: RedSky received on host -- dropping");
+                break;
+            }
+            if (p.state != 0 && p.state != 1) {
+                UE_LOGW("event_feed: RedSky state=%u out of range -- dropping",
+                        static_cast<unsigned>(p.state));
+                break;
+            }
+            net::RedSkyPayload pCopy = p;
+            ue_wrap::game_thread::Post([pCopy] {
+                ::coop::weather_sync::ApplyRedSky(pCopy);
+            });
+            break;
+        }
         case net::ReliableKind::LightningStrike: {
             // Phase 5W Inc2 (2026-05-27): discrete strike event. Host's
             // POST observer on BeginDeferredActorSpawnFromClass caught

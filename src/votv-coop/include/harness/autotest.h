@@ -50,4 +50,17 @@ DWORD WINAPI FlashlightTestThread(LPVOID arg);
 void RunAutonomousWeatherTest();
 DWORD WINAPI WeatherTestThread(LPVOID arg);
 
+// Phase 5W Inc-fix-2 (2026-05-27): autonomous RED SKY sync test. Host-
+// only sender. After stabilization, host calls
+// weather_sync::DebugForceRedSky(true) to flip the entire scene's sky
+// + ambient color curves to the red set. Host's POST observer on
+// spawnRedSky catches + broadcasts; client invokes the same on its
+// local gamemode. Verification: both peers' screenshots show red sky.
+// Chosen over rain (user feedback 2026-05-27): rain particle rendering
+// turned out to be mostly atmospheric mist, ambiguous in screenshots;
+// red sky is unmistakable.
+// Gated by env VOTVCOOP_RUN_REDSKY_TEST="1" + role=Host.
+void RunAutonomousRedSkyTest();
+DWORD WINAPI RedSkyTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

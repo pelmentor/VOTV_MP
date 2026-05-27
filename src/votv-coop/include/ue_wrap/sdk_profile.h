@@ -443,6 +443,14 @@ inline constexpr size_t AdaynightCycle_enable_fog           = 0x0449;  // bool
 inline constexpr size_t AdaynightCycle_enable_superfog      = 0x044A;  // bool
 inline constexpr size_t AdaynightCycle_enable_rain          = 0x044B;  // bool
 
+// Phase 5W Inc-fix-2: AmainGamemode_C::redSky stash pointer for the
+// red-sky discrete event. Lazily filled by the gamemode's first
+// spawnRedSky call. Receiver reads this to find the existing
+// AredSkyEvent_C actor and invokes redSky.set(state) on it for
+// subsequent toggles; if null AND newState==1, calls spawnRedSky to
+// instantiate.
+inline constexpr size_t AmainGamemode_redSky                = 0x0888;  // AredSkyEvent_C*
+
 // AmainGamemode_C::daynightCycle is the cycle singleton pointer. We RESOLVE
 // this via R::FindObjectByClass(L"daynightCycle_C") rather than dereferencing
 // off the gamemode -- saves needing the gamemode offset and matches the
@@ -1044,6 +1052,17 @@ inline constexpr const wchar_t* DaynightCycle_setRainParticlesFn   = L"setRainPa
 inline constexpr const wchar_t* ParticleSystemComponentClass    = L"ParticleSystemComponent";
 inline constexpr const wchar_t* ActorComponent_ActivateFn       = L"Activate";
 inline constexpr const wchar_t* ActorComponent_DeactivateFn     = L"Deactivate";
+
+// Phase 5W Inc-fix-2 (2026-05-27): red sky path on AmainGamemode_C.
+// mainGamemode.spawnRedSky() spawns the redSkyEvent_C actor and stashes
+// the pointer at mainGamemode.redSky @0x0888 (per mainGamemode.hpp:150).
+// Subsequent toggles call redSky.set(bool isred) which swaps the 4
+// color-curve assets on the daynightCycle. set has 19 locals, all
+// deterministic curve-pointer selects (no Random; verified IDA RE
+// 2026-05-27).
+inline constexpr const wchar_t* MainGamemode_SpawnRedSkyFn      = L"spawnRedSky";
+inline constexpr const wchar_t* RedSkyEventClass               = L"redSkyEvent_C";
+inline constexpr const wchar_t* RedSkyEvent_SetFn              = L"set";
 // SetCollisionEnabled lives on UPrimitiveComponent; used by remote_prop::OnSpawn
 // to restore default collision (QueryAndPhysics=3) on wire-converged props
 // whose local copy had collision disabled by a natural-spawn pipeline (e.g.

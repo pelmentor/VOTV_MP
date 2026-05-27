@@ -160,6 +160,25 @@ enum class ReliableKind : uint8_t {
                        //     converges to host. RE: research/findings/votv-
                        //     weather-RE-{mainGamemode,effect-actors,scheduler}-
                        //     2026-05-26.md. Payload: WeatherStatePayload.
+    RedSky          = 15, // Phase 5W Inc-fix-2 (2026-05-27): one-shot story
+                       //     visual event. Lives on AmainGamemode_C (NOT
+                       //     the cycle): spawnRedSky() spawns AredSkyEvent_C
+                       //     and stashes it at mainGamemode.redSky @0x0888;
+                       //     subsequent on/off toggles call redSky.set(bool)
+                       //     to swap the 4 color-curve assets on the cycle
+                       //     (fog_color_A/B, amb_color, sun_color) to the
+                       //     "red" set. Pure deterministic (no Random in
+                       //     set's BP body per IDA RE 2026-05-27). Chosen
+                       //     as the autotest's visual signal because it
+                       //     produces an UNAMBIGUOUS scene-wide tint shift
+                       //     (entire sky goes red), unlike rain particles
+                       //     whose visibility is ambiguous (turns out to
+                       //     be mostly atmospheric mist, not particles --
+                       //     user feedback 2026-05-27). Host POST observer
+                       //     on spawnRedSky (first activation) + on
+                       //     redSky.set (subsequent toggles); broadcasts.
+                       //     Receiver invokes the same on its local
+                       //     gamemode. Payload: RedSkyPayload (8 bytes).
     LightningStrike = 14, // Phase 5W Inc2 (2026-05-27): discrete strike event.
                        //     Host hooks the SpawnActor of AlightningStrike_C
                        //     (via K2_BeginDeferredActorSpawnFromClass class
@@ -559,6 +578,21 @@ inline constexpr uint8_t kEnableSunlight  = 0x20;
 inline constexpr uint8_t kEnableMoonlight = 0x40;
 inline constexpr uint8_t kPermanentRain   = 0x80;
 }  // namespace weather_flags
+
+// Phase 5W Inc-fix-2 (2026-05-27): red sky one-shot/toggle event. Lives on
+// AmainGamemode_C; receiver invokes the same UFunction chain (spawnRedSky
+// on first ON if redSky is null; redSky.set(state) for subsequent
+// toggles). Echo-suppression is via role gate (host POST observer is
+// only registered on the host; client's same observer no-ops on the
+// role check).
+struct RedSkyPayload {
+    uint8_t peerSessionId;   // host=0
+    uint8_t state;           // 0 = revert color curves, 1 = red
+    uint8_t _pad[6];
+};
+static_assert(sizeof(RedSkyPayload) == 8, "RedSkyPayload must be 8 bytes");
+static_assert(sizeof(RedSkyPayload) <= 256 - 20 - 8,
+              "RedSkyPayload must fit in one reliable datagram");
 
 // Phase 5W Inc2: lightning strike discrete event. Carries only the strike's
 // world location -- AdaynightCycle_C::timerLightning ubergraph spawns

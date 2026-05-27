@@ -957,6 +957,14 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                     ::CloseHandle(h);
                 }
             }
+            // Phase 5W Inc-fix-2 red-sky test (visually unambiguous variant).
+            if (cfg::ReadEnv("VOTVCOOP_RUN_REDSKY_TEST") == "1") {
+                UE_LOGI("harness: VOTVCOOP_RUN_REDSKY_TEST=1 (%s) -- spawning red sky test thread",
+                        netCfg.role == coop::net::Role::Host ? "host" : "client");
+                if (HANDLE h = ::CreateThread(nullptr, 0, harness::autotest::RedSkyTestThread, nullptr, 0, nullptr)) {
+                    ::CloseHandle(h);
+                }
+            }
 
             // Autotest CONTINUED CORRECTION: VOTV's player late-init (BeginPlay /
             // possess / save-restore) can revert the autotest teleport AFTER it
