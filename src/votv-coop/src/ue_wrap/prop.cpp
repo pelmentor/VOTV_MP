@@ -2,13 +2,17 @@
 
 #include "ue_wrap/prop.h"
 
+#include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
+#include <unordered_map>
 
 namespace ue_wrap::prop {
 namespace {
@@ -61,6 +65,150 @@ bool IsClassDescendantOfProp(void* cls) {
             reinterpret_cast<uint8_t*>(cls) + P::off::UStruct_SuperStruct);
     }
     return false;
+}
+
+// ---- IsKeyedInteractable -----------------------------------------------
+//
+// The non-Aprop_C "prop-shaped" interactable bases (RE 2026-05-27). We cache
+// the 3 UClass pointers lazily; SuperStruct walk handles their subclass
+// variants (_erie / _leaves / _wetConcrete).
+
+namespace {
+// Per-class sticky resolution. Each pointer is set ONCE on first successful
+// FindClass and never re-walked. The std::atomic<void*> protects against
+// parallel-anim worker threads that can call IsKeyedInteractable concurrently
+// with the harness pump (audit Finding 1, 2026-05-27).
+//
+// Without per-class stickiness the previous code re-walked GUObjectArray
+// 3x on every call until ALL three classes were live -- if even one class
+// failed to load (e.g. cooked content not yet streamed in), the 125 Hz
+// PropPose-emit hot path would burn ~89M wstring allocations per second,
+// reproducing the bomb that took 19 GB RSS in the retired non_prop_entity
+// pipeline.
+std::atomic<void*> g_trashBitsPileCls{nullptr};
+std::atomic<void*> g_garbageClumpCls{nullptr};
+std::atomic<void*> g_actorChipPileCls{nullptr};
+// Whole-set latch: once all 3 resolved we skip even the per-class atomic
+// loads on the hot path. Set once, never cleared (UClasses are process-
+// scoped; session boundary doesn't invalidate them).
+std::atomic<bool> g_extrasAllResolved{false};
+
+void ResolveExtraBases() {
+    if (g_extrasAllResolved.load(std::memory_order_acquire)) return;
+    void* trash = g_trashBitsPileCls.load(std::memory_order_acquire);
+    void* clump = g_garbageClumpCls.load(std::memory_order_acquire);
+    void* chip  = g_actorChipPileCls.load(std::memory_order_acquire);
+    // Only walk GUObjectArray for classes we haven't yet found. Once a
+    // pointer is in the atomic, we never re-walk -- even if R::IsLive
+    // returns false later (no level reload covers these BP classes in
+    // VOTV's current shape; on a hypothetical reload, the existing
+    // ClassOf-based gate paths will simply miss until next session).
+    if (!trash) {
+        trash = R::FindClass(L"trashBitsPile_C");
+        if (trash) g_trashBitsPileCls.store(trash, std::memory_order_release);
+    }
+    if (!clump) {
+        clump = R::FindClass(L"prop_garbageClump_C");
+        if (clump) g_garbageClumpCls.store(clump, std::memory_order_release);
+    }
+    if (!chip) {
+        chip = R::FindClass(L"actorChipPile_C");
+        if (chip) g_actorChipPileCls.store(chip, std::memory_order_release);
+    }
+    if (trash && clump && chip) {
+        g_extrasAllResolved.store(true, std::memory_order_release);
+    }
+}
+
+// Read-only accessors used by IsClassKeyedInteractable + GetInteractableKey.
+inline void* TrashBitsPileCls() { return g_trashBitsPileCls.load(std::memory_order_acquire); }
+inline void* GarbageClumpCls()  { return g_garbageClumpCls.load(std::memory_order_acquire); }
+inline void* ActorChipPileCls() { return g_actorChipPileCls.load(std::memory_order_acquire); }
+
+bool WalksToBase(void* cls, void* base) {
+    if (!cls || !base) return false;
+    for (int hops = 0; hops < 16 && cls; ++hops) {
+        if (cls == base) return true;
+        cls = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(cls) + P::off::UStruct_SuperStruct);
+    }
+    return false;
+}
+}  // namespace
+
+bool IsClassKeyedInteractable(void* cls) {
+    if (!cls) return false;
+    if (IsClassDescendantOfProp(cls)) return true;
+    ResolveExtraBases();
+    return WalksToBase(cls, TrashBitsPileCls())
+        || WalksToBase(cls, GarbageClumpCls())
+        || WalksToBase(cls, ActorChipPileCls());
+}
+
+bool IsKeyedInteractable(void* obj) {
+    if (!obj) return false;
+    return IsClassKeyedInteractable(R::ClassOf(obj));
+}
+
+// ---- GetInteractableKey ------------------------------------------------
+//
+// Aprop_C: direct field @0x02E0.
+// AtrashBitsPile_C (Aactor_save_C lineage): direct field @0x0230.
+// chipPile/clump (no native Key field per CXX dump): dispatch BP UFunction
+//   GetKey(FName& out) via ProcessEvent. Cached per UClass.
+
+namespace {
+constexpr size_t kAactorSaveKeyOff = 0x0230;
+
+// Per-class GetKey UFunction cache. game-thread mutated; observers that
+// call us from a parallel-anim worker would race -- protect with atomic
+// snapshot via the unordered_map's internal coherence isn't enough. Use
+// a mutex; lookups are infrequent (per-spawn / per-destroy of these classes).
+std::mutex g_getKeyFnMutex;
+std::unordered_map<void*, void*> g_getKeyFnByClass;  // UClass* -> UFunction*
+
+void* ResolveGetKeyFn(void* cls) {
+    if (!cls) return nullptr;
+    std::lock_guard<std::mutex> lk(g_getKeyFnMutex);
+    auto it = g_getKeyFnByClass.find(cls);
+    if (it != g_getKeyFnByClass.end()) return it->second;
+    void* fn = R::FindFunction(cls, L"GetKey");
+    g_getKeyFnByClass[cls] = fn;  // cache even null so we don't re-walk
+    return fn;
+}
+
+R::FName CallGetKeyUFunction(void* obj) {
+    void* cls = R::ClassOf(obj);
+    void* fn = ResolveGetKeyFn(cls);
+    if (!fn) return R::FName{0, 0};
+    ue_wrap::ParamFrame f(fn);
+    if (!ue_wrap::Call(obj, f)) return R::FName{0, 0};
+    return f.Get<R::FName>(L"Key");
+}
+}  // namespace
+
+R::FName GetInteractableKey(void* obj) {
+    if (!obj) return R::FName{0, 0};
+    if (IsDescendantOfProp(obj)) {
+        return ReadField<R::FName>(obj, P::off::Aprop_Key);
+    }
+    // trashBitsPile (Aactor_save_C lineage) -- direct field
+    ResolveExtraBases();
+    void* cls = R::ClassOf(obj);
+    if (WalksToBase(cls, TrashBitsPileCls())) {
+        return ReadField<R::FName>(obj, kAactorSaveKeyOff);
+    }
+    // chipPile / clump -- BP UFunction dispatch
+    if (WalksToBase(cls, GarbageClumpCls()) || WalksToBase(cls, ActorChipPileCls())) {
+        return CallGetKeyUFunction(obj);
+    }
+    return R::FName{0, 0};
+}
+
+std::wstring GetInteractableKeyString(void* obj) {
+    if (!obj) return {};
+    const R::FName key = GetInteractableKey(obj);
+    return R::ToString(key);
 }
 
 R::FName GetKey(void* prop) {

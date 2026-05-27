@@ -5,6 +5,7 @@
 #include "coop/net/session.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
+#include "ue_wrap/fname_utils.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
@@ -367,14 +368,7 @@ void* g_gsCdo            = nullptr;
 void* g_beginSpawnFn     = nullptr;
 void* g_finishSpawnFn    = nullptr;
 void* g_propSetKeyFn     = nullptr;
-void* g_kslCdo           = nullptr;
-void* g_convStrToNameFn  = nullptr;
 bool  g_spawnResolved    = false;
-// Audit H6 (2026-05-27): resolve the Conv_StringToName "InString"/"inString"
-// param name ONCE. Pre-fix the dual-try fired UE_LOGE on every call (29 errors
-// per LAN test run) because SetRaw logs error on every failed param. Resolved
-// name pointer (one of the two constants below) — stable for the session.
-const wchar_t* g_convStrToNameInputParam = nullptr;
 
 bool ResolveSpawnFns() {
     if (g_spawnResolved && R::IsLive(g_gsCdo)) return true;
@@ -395,64 +389,8 @@ bool ResolveSpawnFns() {
     if (void* propCls = R::FindClass(P::name::PropClass)) {
         g_propSetKeyFn = R::FindFunction(propCls, P::name::PropSetKeyFn);
     }
-    // Conv_StringToName on KismetStringLibrary CDO (UE4 stock, always loaded).
-    if (!g_kslCdo) g_kslCdo = R::FindClassDefaultObject(P::name::KismetStringLibraryClass);
-    if (g_kslCdo && !g_convStrToNameFn) {
-        if (void* kc = R::ClassOf(g_kslCdo)) {
-            g_convStrToNameFn = R::FindFunction(kc, P::name::ConvStringToNameFn);
-        }
-    }
-    // Audit H6 (2026-05-27): resolve the param name ONCE here. Probe both
-    // casings via FindParamOffset (which doesn't log on miss, unlike SetRaw).
-    // Stock UE4 is `InString` but some VOTV cooks emit lowercase `inString`
-    // (same drift noted for Conv_StringToText). Whichever resolves wins.
-    if (g_convStrToNameFn && !g_convStrToNameInputParam) {
-        if (R::FindParamOffset(g_convStrToNameFn, L"InString") >= 0) {
-            g_convStrToNameInputParam = L"InString";
-        } else if (R::FindParamOffset(g_convStrToNameFn, L"inString") >= 0) {
-            g_convStrToNameInputParam = L"inString";
-        } else {
-            UE_LOGW("remote_prop: Conv_StringToName has neither 'InString' nor "
-                    "'inString' -- StringToFName will fail every call");
-        }
-    }
     g_spawnResolved = true;
     return true;
-}
-
-// Build a live FName from a wide string by dispatching
-// UKismetStringLibrary::Conv_StringToName(FString) -> FName via ProcessEvent.
-// Returns {0,0} on failure (the empty FName / NAME_None). The string is
-// registered in the engine's FName pool with a fresh local index; subsequent
-// FName equality compares with the same string will hit this index.
-R::FName StringToFName(const std::wstring& s) {
-    if (s.empty() || !g_kslCdo || !g_convStrToNameFn) return R::FName{0, 0};
-    using ue_wrap::ParamFrame;
-    using ue_wrap::Call;
-    // FString param: {Data ptr, Num including null, Max}. Copy to a local
-    // buffer so the FString points at stable memory across the call.
-    std::wstring buf(s);
-    R::FString fs{};
-    fs.Data = buf.data();
-    fs.Num  = static_cast<int32_t>(buf.size()) + 1;
-    fs.Max  = fs.Num;
-    ParamFrame f(g_convStrToNameFn);
-    // Audit H6 (2026-05-27): one resolved name, one SetRaw, no dual-try.
-    // g_convStrToNameInputParam was cached in ResolveSpawnFns via
-    // FindParamOffset (which doesn't UE_LOGE on miss; SetRaw does).
-    if (!g_convStrToNameInputParam) {
-        UE_LOGW("StringToFName: Conv_StringToName input param not resolved (Install incomplete?)");
-        return R::FName{0, 0};
-    }
-    if (!f.SetRaw(g_convStrToNameInputParam, &fs, sizeof(fs))) {
-        UE_LOGW("StringToFName: SetRaw failed on '%ls'", g_convStrToNameInputParam);
-        return R::FName{0, 0};
-    }
-    if (!Call(g_kslCdo, f)) {
-        UE_LOGW("StringToFName: ProcessEvent call failed");
-        return R::FName{0, 0};
-    }
-    return f.Get<R::FName>(L"ReturnValue");
 }
 
 // Build a wide string from WireClassName. Lossless for ASCII (VOTV class names).
@@ -561,8 +499,13 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
             payload.locX, payload.locY, payload.locZ,
             payload.rotPitch, payload.rotYaw, payload.rotRoll,
             static_cast<int>(payload.physFlags));
-    if (classW.empty() || keyW.empty()) {
-        UE_LOGW("remote_prop::OnSpawn: empty class or key -- dropping");
+    if (classW.empty() || keyW.empty() || keyW == L"None") {
+        // "None" = FName(NAME_None) stringified -- host shouldn't send these
+        // (lifecycle + snapshot guards prevent it), but reject defensively
+        // so any legacy/in-flight stragglers don't trigger the dedup spam
+        // loop on the receiver.
+        UE_LOGW("remote_prop::OnSpawn: unkeyed (cls='%ls' key='%ls') -- dropping",
+                classW.c_str(), keyW.c_str());
         return;
     }
     // Phase 5S0 de-dupe: if a local Aprop_C derivative with the same Key
@@ -642,7 +585,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
         // mainGamemode.keyObj_key/obj cross-peer; the old K_c orphan
         // entry is harmless (no host packet references it).
         if (ResolveSpawnFns() && g_propSetKeyFn) {
-            const R::FName keyFName = StringToFName(keyW);
+            const R::FName keyFName = ue_wrap::fname_utils::StringToFName(keyW);
             if (keyFName.ComparisonIndex != 0) {
                 ParamFrame sk(g_propSetKeyFn);
                 if (sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
@@ -725,35 +668,41 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
     // (via the BP-callable setKey UFunction) skips that overwrite branch and
     // the prop ends up with our wire Key + registered in
     // mainGamemode.keyObj_key/obj cross-peer.
-    if (!g_propSetKeyFn) {
-        // Late-resolve in case prop_C wasn't loaded earlier.
-        if (void* propCls = R::FindClass(P::name::PropClass)) {
-            g_propSetKeyFn = R::FindFunction(propCls, P::name::PropSetKeyFn);
-        }
-    }
-    if (g_propSetKeyFn) {
+    // Audit Fix 4 (2026-05-27): resolve setKey ON THE ACTUAL SPAWNED CLASS,
+    // not the cached Aprop_C.setKey UFunction*. ChipPile/clump/trashBits
+    // have their OWN setKey UFunctions on different UClasses with possibly
+    // different parameter layouts (per UE4 ProcessEvent, dispatching a
+    // foreign-class UFunction* on an actor of a different class can
+    // silently corrupt memory or crash). Per-class FindFunction is one
+    // GUObjectArray walk per CLASS (not per actor); the result is cached
+    // here ad-hoc since we only have ~10 keyed-interactable leaf classes.
+    void* setKeyFn = R::FindFunction(actorClass, P::name::PropSetKeyFn);
+    if (!setKeyFn) {
+        UE_LOGW("remote_prop::OnSpawn: setKey UFunction not found on class '%ls' -- spawn will use auto-generated Key",
+                classW.c_str());
+    } else {
         // Convert wire Key string -> live FName via Conv_StringToName, then
-        // call Aprop_C.setKey(FName) so the receiver's prop carries the
+        // call <class>.setKey(FName) so the receiver's prop carries the
         // SAME Key string as the sender's. Subsequent PropPose updates with
         // this key resolve via prop_wrap::FindByKeyString (which compares by
         // ToString, NOT by ComparisonIndex -- the cross-peer-stable path).
-        const R::FName keyFName = StringToFName(keyW);
+        const R::FName keyFName = ue_wrap::fname_utils::StringToFName(keyW);
         if (keyFName.ComparisonIndex == 0) {
             UE_LOGW("remote_prop::OnSpawn: StringToFName('%ls') -> NAME_None; setKey skipped",
                     keyW.c_str());
         } else {
-            ParamFrame sk(g_propSetKeyFn);
+            ParamFrame sk(setKeyFn);
             if (!sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
-                UE_LOGW("remote_prop::OnSpawn: setKey 'Key' param not found");
+                UE_LOGW("remote_prop::OnSpawn: setKey 'Key' param not found on '%ls'",
+                        classW.c_str());
             } else if (!Call(spawned, sk)) {
-                UE_LOGW("remote_prop::OnSpawn: setKey ProcessEvent call failed");
+                UE_LOGW("remote_prop::OnSpawn: setKey ProcessEvent call failed on '%ls'",
+                        classW.c_str());
             } else {
-                UE_LOGI("remote_prop::OnSpawn: setKey('%ls') ok (FName idx=%u)",
-                        keyW.c_str(), keyFName.ComparisonIndex);
+                UE_LOGI("remote_prop::OnSpawn: setKey('%ls') ok on '%ls' (FName idx=%u)",
+                        keyW.c_str(), classW.c_str(), keyFName.ComparisonIndex);
             }
         }
-    } else {
-        UE_LOGW("remote_prop::OnSpawn: prop_C.setKey UFunction not resolved -- spawn will use NewGuid'd Key");
     }
     // v5 Inc2 echo suppression: mark this actor as wire-induced BEFORE
     // FinishSpawningActor (which runs Aprop_C::Init via UserConstructionScript,

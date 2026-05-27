@@ -44,13 +44,14 @@ inline void WriteAt(void* base, size_t off, T value) {
 // per Drive() frame).
 std::unordered_map<void*, void*> g_meshComp;
 
-// Plan B1 (BUA interceptor) RETIRED 2026-05-23 in favour of Plan B2 (satellite
-// Character drives the AnimBP via real Pawn->Movement->Velocity pull). The
-// satellite makes BUA's normal velocity-pull work; intercepting and skipping
-// it caused the AnimInstance to be vastly under-populated (no Movement, no
-// IK fields), which kept the state machine stuck in idle even when spd was
-// being written. See [[project-bug2-locomotion-anim]] memo for the full
-// investigation trace.
+// Plan B1 (BUA interceptor) and Plan B2 (satellite ACharacter feeding the
+// AnimBP's Pawn pointer) are both retired. v2 (2026-05-27, see
+// research/findings/votv-local-anim-drive-RE-2026-05-27.md) writes
+// Velocity + MovementMode directly on the puppet's OWN CMC each tick
+// (CMC tick is parked, so we own those fields). BUA reads them naturally
+// via Pawn=orphan -> CMC=orphan.CMC, exactly like the LOCAL player's
+// possessed CMC -- same spd / IK gate behaviour with zero AnimInstance
+// pointer-redirect plumbing.
 
 // The live AnimInstance running on a SkeletalMeshComponent (comp + AnimScriptInstance).
 void* LiveAnimInstance(void* skeletalMeshComponent) {
@@ -354,7 +355,9 @@ static void* SpawnPuppetMainPlayer(const FVector& loc,
     // integration each tick and would fight ApplyToEngine's
     // SetActorLocation writes (rubber-banding the puppet between our
     // wire-driven position and CMC's gravity-integrated position).
-    // Mirror the satellite's CMC disable.
+    // 2026-05-27 v2 anim drive ALSO depends on the disabled tick: we
+    // own the CMC.Velocity + MovementMode fields per-tick (the local
+    // BUA-mirror path), so the CMC must not overwrite them.
     if (void* cmc = ReadPtr(actor, P::off::ACharacter_CharacterMovement)) {
         E::SetComponentTickEnabled(cmc, false);
         UE_LOGI("puppet[MainPlayer]: disabled orphan CMC tick @ %p (puppet driven by SetActorLocation, not physics)", cmc);
@@ -471,8 +474,9 @@ static void* SpawnPuppetMainPlayer(const FVector& loc,
     // UseAnimBlueprint). The class default likely already has it set,
     // but on an inert orphan with suppressed BP paths the BUA cache may
     // be stale; re-applying triggers a fresh BlueprintBeginPlay + caches
-    // Pawn/Movement from TryGetPawnOwner (= orphan, valid Pawn -- the
-    // satellite write later overrides this).
+    // Pawn/Movement from TryGetPawnOwner (= orphan, valid Pawn) -- which
+    // is exactly what v2 anim drive expects. CMC.Velocity + MovementMode
+    // are then driven from RemotePlayer::ApplyToEngine per tick.
     if (animClass) {
         E::SetAnimClass(meshComp, animClass);
         UE_LOGI("puppet[MainPlayer]: applied local AnimClass %p onto mesh_playerVisible",
@@ -487,14 +491,20 @@ static void* SpawnPuppetMainPlayer(const FVector& loc,
     E::SetAnimTickAlways(meshComp);
     E::SetComponentVisible(meshComp, true);
 
-    // AnimBP setup: IK legs ON (real Character has floor-trace context via
-    // the satellite Plan B2), removeArms ON (avoid grab-pose arm flail),
-    // head-look-at-player OFF (the streamed yaw via DriveAnimBP drives the
-    // head bone directly). Note: SetAnimClass above instantiated a fresh
-    // AnimInstance, so LiveAnimInstance is now the NEW one (the old
-    // pointer captured before SetAnimClass is stale).
+    // AnimBP setup: removeArms ON (avoid grab-pose arm flail);
+    // walkSpeedMultiplier seeded to 1.0. useLegIK is NOT written here -- BUA
+    // writes it natively each tick from Movement.MovementMode (the kerfur
+    // AnimBP gates foot-IK alpha off when MovementMode == MOVE_Falling, same
+    // path the LOCAL player uses). The puppet's MovementMode is mirrored
+    // from the source's airborne state via RemotePlayer::ApplyToEngine's
+    // direct write to puppet.CMC.MovementMode @+0x168 each tick.
+    // lookingAtPlayer is overwritten per tick by puppet::DriveAnimBP (kept
+    // here as a non-functional seed -- BP graph re-toggles it every frame
+    // so this write is a one-shot only).
+    // Note: SetAnimClass above instantiated a fresh AnimInstance, so
+    // LiveAnimInstance is the NEW one (any pointer captured before
+    // SetAnimClass is stale).
     if (void* anim = LiveAnimInstance(meshComp)) {
-        WriteAt<bool>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_useLegIK(),        true);
         WriteAt<bool>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_removeArms(),      true);
         WriteAt<bool>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_lookingAtPlayer(), false);
         WriteAt<float>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_walkSpeedMultiplier(), 1.f);
@@ -551,8 +561,8 @@ void DriveAnimBP(void* puppetActor, float /*speed*/, float headPitch, float head
     void* anim = LiveAnimInstance(comp);
     if (!anim) return;
 
-    // spd is driven by BUA reading the satellite Character's
-    // CharacterMovementComponent.Velocity (Plan B2).
+    // spd is driven by BUA reading the orphan puppet's OWN
+    // CharacterMovementComponent.Velocity (v2 anim drive, 2026-05-27).
     //
     // The visible head twist on the kerfur AnimBP comes from TWO native-engine
     // FAnimNode_LookAt skeletal-control nodes (proven by IDA agent 2026-05-23 PM

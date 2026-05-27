@@ -40,6 +40,18 @@ bool LoadStorySave(const wchar_t* slot);
 // the remote-pawn hijack (prevention, not post-hoc teardown).
 void* SpawnActor(void* actorClass, const FVector& location, bool inertPawn = false);
 
+// Split-API variant: call BeginDeferredSpawn -> patch class-specific fields on
+// the returned actor (before Init/BeginPlay run) -> call FinishDeferredSpawn.
+// Mirrors the K2 SpawnActorFromClass node's "Expose On Spawn" pattern. The
+// transform passed to FinishDeferredSpawn MUST equal the one passed to
+// BeginDeferredSpawn (the engine re-applies it post-construction).
+// Phase 5G Inc 2: the wire-spawn path for non-prop garbage entities needs to
+// stamp variantState (chipType, Shape, etc.) BEFORE Init rolls defaults --
+// without this split, the Init POST observer would echo-broadcast a randomly-
+// rolled state before the wire-supplied state lands.
+void* BeginDeferredSpawn(void* actorClass, const FVector& location, const FRotator& rotation);
+bool  FinishDeferredSpawn(void* actor, const FVector& location, const FRotator& rotation);
+
 // AActor::K2_GetActorLocation on `actor`. Returns (0,0,0) if it cannot be called.
 FVector GetActorLocation(void* actor);
 
@@ -133,41 +145,29 @@ bool DetachFromController(void* pawn);
 // stray 2nd PlayerController. Game thread only.
 bool DestroyActor(void* actor);
 
-// Bug 2 / Plan B2 (root-cause fix): spawn a HIDDEN satellite ACharacter as a
-// "data source" for the puppet's AnimInstance. The puppet itself stays a
-// SkeletalMeshActor (no SP-hijack cascade), but its AnimBP's Pawn field gets
-// pointed at this satellite. BUA then runs normally on the puppet's
-// AnimInstance, reads satellite->Movement->Velocity (which WE drive each
-// tick), and populates spd / Movement / IK fields naturally -- so the
-// state machine transitions on the same conditions the local player's does.
-//
-// The satellite is spawned with inertPawn=true (no auto-possess, no input)
-// and made invisible + non-collidable on top so it has zero gameplay effect.
-// Located co-located with the puppet (caller's responsibility) so any IK
-// targets BUA computes are at a sane place.
-void* SpawnSatelliteCharacter(const FVector& location);
-
-// Find the UCharacterMovementComponent default subobject on a Character. Used
-// by the per-tick velocity push for the AnimBP satellite. Returns nullptr if
-// the pawn isn't a Character or its CMC isn't present yet.
+// Find the UCharacterMovementComponent default subobject on a Character.
+// Used by ue_wrap::puppet::SpawnPuppetMainPlayer to park the orphan's CMC
+// tick (so the puppet doesn't fight our per-tick Velocity write) and by
+// RemotePlayer::Spawn (via puppet.cpp) for the chain-measurement Z anchor.
+// Returns nullptr if the pawn isn't a Character or its CMC isn't present.
 void* GetCharacterMovementComponent(void* characterPawn);
 
 // Write a FVector to a UMovementComponent's `Velocity` UPROPERTY (offset
 // resolved once at startup via reflection: FindPropertyOffset on UMovementComponent).
-// Used to drive the satellite Character's velocity from the network-streamed
-// speed/yaw, so the AnimBP's Pawn->GetVelocity() reads our value naturally.
-// Game thread only.
+// (Kept for potential future use; current v2 anim drive in RemotePlayer::
+// ApplyToEngine writes Velocity via a direct memory store at the known
+// 0xC4 offset rather than the reflection-resolved path.) Game thread only.
 bool SetMovementVelocity(void* movementComp, const FVector& velocity);
 
-// UActorComponent::SetComponentTickEnabled. Used to PARK a satellite Character's
-// CharacterMovementComponent (we just need it as a Velocity data carrier; we
-// don't want it integrating physics each frame and resetting Velocity from
-// its own state-machine). Game thread only.
+// UActorComponent::SetComponentTickEnabled. Used to PARK the orphan
+// puppet's CharacterMovementComponent in puppet::SpawnPuppetMainPlayer --
+// the puppet's CMC would otherwise integrate gravity/walking + reset
+// Velocity each tick, fighting our pose drive. Game thread only.
 bool SetComponentTickEnabled(void* component, bool enabled);
 
-// Direct field write of a UObject* slot at `byteOffset` inside `target`. Used
-// for the Bug 2 fix to set the puppet AnimInstance.Pawn pointer (offset
-// 0x2D70) to the satellite Character, so BUA reads the satellite naturally.
+// Direct field write of a UObject* slot at `byteOffset` inside `target`.
+// Used for the runtime Aprop_C wire-key restore (remote_prop::OnSpawn
+// rekey path) where a UFunction call would be heavyweight.
 // Game thread only.
 void WriteObjectField(void* target, size_t byteOffset, void* value);
 

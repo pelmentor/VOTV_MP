@@ -61,13 +61,13 @@ void Trigger() {
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
-        if (!ue_wrap::prop::IsDescendantOfProp(obj)) continue;
+        if (!ue_wrap::prop::IsKeyedInteractable(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) { ++skippedCDO; continue; }
         if (!R::IsLive(obj)) { ++skippedDying; continue; }
         g_snapshotCandidates.push_back(obj);
     }
-    UE_LOGI("snapshot: enumerated %zu Aprop_C live candidates (skipped %d CDOs, %d dying); will drain %zu per tick",
+    UE_LOGI("snapshot: enumerated %zu keyed-interactable live candidates (skipped %d CDOs, %d dying); will drain %zu per tick",
             g_snapshotCandidates.size(), skippedCDO, skippedDying, kSnapshotChunkSize);
 }
 
@@ -96,8 +96,11 @@ void DrainChunk() {
         for (size_t j = 0; j < cls.size() && j < 63; ++j) {
             p.className.data[p.className.len++] = static_cast<char>(cls[j]);
         }
-        const std::wstring keyStr = ue_wrap::prop::GetKeyString(obj);
-        if (keyStr.empty()) continue;
+        const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(obj);
+        // FName(NAME_None) stringifies to "None" -- unkeyed props are
+        // non-syncable (no stable cross-peer identity). Symmetric with
+        // prop_lifecycle.cpp Init POST + DestroyActor PRE guards.
+        if (keyStr.empty() || keyStr == L"None") continue;
         p.key.len = 0;
         for (size_t j = 0; j < keyStr.size() && j < 31; ++j) {
             p.key.data[p.key.len++] = static_cast<char>(keyStr[j]);
@@ -114,7 +117,10 @@ void DrainChunk() {
         if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
         p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
         p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-        coop::prop_lifecycle::EnqueuePropSpawnForRetry(p);
+        // 2026-05-27: channel internal queue replaces per-feature retry.
+        // SendPropSpawn always succeeds (returns false only on payload-too-
+        // large / queue overflow at 4096 backlog).
+        g_session_ptr->SendPropSpawn(p);
         ++sent;
     }
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) {

@@ -10,6 +10,7 @@
 #include "dev/restore_vitals.h"
 #include "dev/teleport_client.h"
 #include "coop/event_feed.h"
+#include "coop/garbage_sync.h"
 #include "coop/grab_observer.h"
 #include "coop/item_activate.h"
 #include "coop/players_registry.h"
@@ -22,6 +23,7 @@
 #include "coop/remote_prop.h"
 #include "coop/shutdown.h"
 #include "coop/weather_sync.h"
+#include "ue_wrap/call.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -137,6 +139,26 @@ bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) 
     // on a puppet. Normalized for the same wire-boundary reason as yaw/pitch.
     out.headYawDelta = ue_wrap::NormalizeAxis(ctlRot.Yaw - actorRot.Yaw);
     out.speed = std::sqrt(vel.X * vel.X + vel.Y * vel.Y);
+    // 2026-05-27 (v8): pack the source's airborne state. Read
+    // CMC.MovementMode @+0x168; MOVE_Falling=3 means the source is in the air
+    // (jump / fall). The receiver's BUA-POST observer reads this bit to clear
+    // useLegIK on the puppet during the airborne window so the foot-IK trace
+    // doesn't plant the puppet's feet to the satellite's grounded position
+    // (legs-stretch-to-ground-during-jump fix). Reading the CMC subobject by
+    // ACharacter::CharacterMovement @+0x288 (avoids a ChildObjectsOf walk
+    // on the hot pose-send path).
+    out.stateBits = 0;
+    if (auto* lp = reinterpret_cast<uint8_t*>(local)) {
+        void* cmc = *reinterpret_cast<void**>(lp + ue_wrap::profile::off::ACharacter_CharacterMovement);
+        if (cmc) {
+            const uint8_t mode = *reinterpret_cast<uint8_t*>(
+                reinterpret_cast<uint8_t*>(cmc) + ue_wrap::profile::off::UCharacterMovement_MovementMode);
+            if (mode == ue_wrap::profile::off::kMOVE_Falling) {
+                out.stateBits |= coop::net::kStateBitInAir;
+            }
+        }
+    }
+    out._pad[0] = out._pad[1] = out._pad[2] = 0;
     return true;
 }
 
@@ -270,6 +292,8 @@ void InstallGrabObservers() {
     coop::npc_sync::Install(&g_session);
     coop::item_activate::Install(&g_session);  // Phase 5F flashlight
     coop::weather_sync::Install(&g_session);   // Phase 5W weather (host POST observers OR client PRE interceptors per role)
+    coop::garbage_sync::SetSession(&g_session);
+    coop::garbage_sync::Install();             // Phase 5G Inc1 garbage open-container client-side BP-tick cancel + Inc3 spawner suppress
     // NOTE: coop::shutdown::Install / UpdateWindowTitle are called from
     // the timeline tick lambda DIRECTLY (NetPumpTick / play branch /
     // netloopback branch). They MUST NOT be gated on `g_netLocal` like
@@ -344,8 +368,8 @@ void NetPumpTick(float displayOffsetX) {
         // Phase 5W Inc1 (2026-05-26): clear any pending weather broadcast +
         // reset the dedup signature so a fresh connect re-snapshots state.
         coop::weather_sync::OnDisconnect();
-        UE_LOGI("net: disconnected -- cleared %zu pending PropSpawn(s) + %zu pending PropDestroy(s) + %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
-                propStats.droppedSpawns, propStats.droppedDestroys, snapPending, propStats.initProcessedDropped);
+        UE_LOGI("net: disconnected -- cleared %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
+                snapPending, propStats.initProcessedDropped);
     }
     // Phase 5S0 (snapshot bootstrap): on every false->true transition of
     // Connected, the host enumerates Aprop_C derivatives and broadcasts
@@ -394,14 +418,8 @@ void NetPumpTick(float displayOffsetX) {
     // channel accepts it. Same shape as item_activate's TickConnect.
     coop::weather_sync::TickConnect();
 
-    // Drain any pending PropSpawn payloads that couldn't ship at observer
-    // fire time because the reliable channel was busy (audit C-3). Cheap
-    // when the queue is empty (mutex lock + size check). Order preserved.
-    // Same pattern for PropDestroy (audit I-2 2026-05-24).
-    if (isConnected) {
-        coop::prop_lifecycle::DrainPendingPropSpawns();
-        coop::prop_lifecycle::DrainPendingPropDestroys();
-    }
+    // Per-feature PropSpawn/PropDestroy drain calls retired 2026-05-27 --
+    // reliable_channel.cpp queues internally + drains as ACKs arrive.
 
     if (g_netLocal && !R::IsLive(g_netLocal)) { g_netLocal = nullptr; g_netLocalController = nullptr; }
     if (!g_netLocal) g_netLocal = coop::players::Registry::Get().Local();
@@ -427,8 +445,28 @@ void NetPumpTick(float displayOffsetX) {
         // static-local would carry stale state across session restart.
         void* heldActor = *reinterpret_cast<void**>(
             reinterpret_cast<uint8_t*>(g_netLocal) + ue_wrap::reflected_offset::MainPlayer_grabbing_actor());
+        // 2026-05-27: chipPile/clump pickup sets mainPlayer.holding_actor
+        // INSTEAD of grabbing_actor (their morph path doesn't use PhysicsHandle).
+        // Fall back to holding_actor so the PropPose stream covers them too.
+        // Offset resolved via reflected_offset so sdk_check catches drift on
+        // future VOTV recooks (audit IMPORTANT-2 fix, 2026-05-27).
+        if (!heldActor) {
+            const int32_t holdingOff = ue_wrap::reflected_offset::MainPlayer_holding_actor();
+            if (holdingOff >= 0) {
+                void* maybeHolding = *reinterpret_cast<void**>(
+                    reinterpret_cast<uint8_t*>(g_netLocal) + holdingOff);
+                if (maybeHolding && R::IsLive(maybeHolding) &&
+                    ue_wrap::prop::IsKeyedInteractable(maybeHolding)) {
+                    heldActor = maybeHolding;
+                }
+            }
+        }
         if (heldActor && R::IsLive(heldActor)) {
-            const std::wstring keyW = ue_wrap::prop::GetKeyString(heldActor);
+            const std::wstring keyW = ue_wrap::prop::GetInteractableKeyString(heldActor);
+            // Diagnostic probes retired 2026-05-27 -- OPEN-A confirmed
+            // per-tick SetActorLocation (candidate B); OPEN-D confirmed
+            // fresh clump GetKey == None (handled by prop_lifecycle's
+            // EnsureKeyForBroadcast synth-key helper).
             coop::net::PropPoseSnapshot pp{};
             pp.key.len = 0;
             for (size_t i = 0; i < keyW.size() && i < 31; ++i) {

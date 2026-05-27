@@ -6,9 +6,11 @@
 // inertPawn=true; the class's built-in mesh_playerVisible carries the player
 // body skin + IK leg bones. Per-screen systems (PostProcess + mic + arms) are
 // stripped at spawn, GameMode pointer nulled, CMC tick disabled, actor tick
-// disabled. The orphan's AnimBP is satellite-driven (Plan B2) for the
-// locomotion BlendSpace. IK legs work (real Character has floor-trace
-// context).
+// disabled. The puppet's AnimBP reads its OWN CMC.Velocity + MovementMode
+// natively for locomotion + IK (v2 anim drive, 2026-05-27): RemotePlayer::
+// ApplyToEngine writes those CMC fields each tick from the streamed pose,
+// exactly mirroring what the LOCAL player's possessed CMC does. IK legs
+// work because the real Character has floor-trace context.
 //
 // The engine actor owns rendering/animation; RemotePlayer owns the pose data.
 // MTA shape: CClientPed::m_pPlayerPed -> CPlayerPed*.
@@ -117,40 +119,20 @@ private:
 
     void* actor_ = nullptr;  // the engine puppet actor (owned by the engine):
                              // a mainPlayer_C orphan spawned by ue_wrap::puppet::SpawnPuppet.
-    void* puppetAnim_ = nullptr;  // the puppet's live UAnimBlueprint_kerfurOmega_regular_C
-                                  // AnimInstance; cached at Spawn for later cleanup
-                                  // and to track Pawn-pointer write target.
-    void* satellite_ = nullptr;   // Bug 2 Plan B2 root-cause fix: a hidden, inert
-                                  // ACharacter co-located with the puppet that
-                                  // serves as the AnimBP's Pawn pull source. Its
-                                  // CharacterMovementComponent.Velocity carries the
-                                  // streamed pose's velocity; BUA reads it and
-                                  // populates Movement / spd / IK / state-machine
-                                  // inputs naturally. Owned by the engine; we
-                                  // destroy it in Destroy(). null until first
-                                  // successful spawn.
-    void* satelliteCmc_ = nullptr; // cached satellite->CharacterMovementComponent
-                                   // for per-tick Velocity writes.
-    void* localController_ = nullptr; // cached LOCAL player's APawn.Controller @0x0258
-                                      // at Spawn time. Animation-fix v2 (2026-05-25):
-                                      // the AnimBP state-machine idle->walk transition
-                                      // requires AnimBP.Controller @0x2D78 to be
-                                      // non-null. The puppet's mainPlayer_C orphan
-                                      // is unpossessed (no controller) by design,
-                                      // so AnimBP.Controller stays null after the
-                                      // satellite Pawn/Movement/Character writes
-                                      // -- the transition never fires -> BlendSpace
-                                      // stuck idle. We write the LOCAL PC pointer
-                                      // into AnimBP.Controller at Spawn and re-write
-                                      // each tick in ApplyToEngine (in case BUA's
-                                      // BlueprintBeginPlay re-runs and re-caches
-                                      // null from TryGetPawnOwner->GetController).
-                                      // Safe: the local PC is alive for the whole
-                                      // local game session; the AnimBP only reads
-                                      // it as a null-guard (the kerfur AnimBP is
-                                      // shared with NPC kerfurOmega which use
-                                      // AIController -- it doesn't call any PC-
-                                      // specific methods).
+                             // Its OWN UCharacterMovementComponent (at
+                             // ACharacter::CharacterMovement @0x0288) is what
+                             // we drive per-tick: ApplyToEngine writes
+                             // puppet.CMC.Velocity @+0xC4 and MovementMode
+                             // @+0x168 directly. CMC tick is parked
+                             // (SetComponentTickEnabled false in puppet::
+                             // SpawnPuppetMainPlayer) so nothing else touches
+                             // those fields. BUA naturally reads them via
+                             // Pawn.GetMovementComponent().Velocity -> spd
+                             // and ...MovementMode -> useLegIK/rise gates,
+                             // reproducing the LOCAL anim drive on the puppet.
+                             // No satellite, no observer, no AnimInstance
+                             // field overrides (post-2026-05-27 RE per
+                             // research/findings/votv-local-anim-drive-RE-2026-05-27.md).
 
     // Both offsets are captured ONCE at Spawn from the RECEIVER's own local
     // mainPlayer_C -- same BP class as the source, so the BP-authored RelLoc
@@ -194,6 +176,12 @@ private:
                                               // puppet's head visually follows where the
                                               // SOURCE is looking (free-look / camera lead).
     float            curSpeed_ = 0.f;
+    // v8 state flags (kStateBitInAir + reserved bits). NOT interpolated --
+    // snapped on every SetTargetPose. Read by ApplyToEngine to drive the
+    // puppet's CMC.MovementMode each tick: bit 0 set -> MOVE_Falling=3,
+    // clear -> MOVE_Walking=1. The kerfur AnimBP reads MovementMode
+    // natively to gate the foot-IK alpha (useLegIK/rise).
+    uint8_t          curStateBits_ = 0;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;

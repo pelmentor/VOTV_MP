@@ -7,3 +7,6 @@
 [submodule "src/votv-coop/third_party/minhook"]
 	path = src/votv-coop/third_party/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "src/votv-coop/third_party/GameNetworkingSockets"]
+	path = src/votv-coop/third_party/GameNetworkingSockets
+	url = https://github.com/ValveSoftware/GameNetworkingSockets.git

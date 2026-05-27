@@ -107,21 +107,6 @@ uint32_t g_flashlightClassHash = 0;
 // a setter on another thread -- same pattern as dev::teleport_client).
 std::atomic<coop::net::Session*> g_session{nullptr};
 
-// Phase 5F Inc5 (connect-time replay) -- pending broadcast.
-// On the harness's !wasConnected->isConnected edge we queue our LOCAL
-// flashlight state for retransmit. The send happens from TickConnect()
-// (NOT from the edge itself) because:
-//   - The reliable channel is stop-and-wait; on a busy edge (PropSpawn
-//     snapshot burst is firing at the same time) the first SendReliable
-//     attempt is likely to fail. Per-tick retry handles that without
-//     blocking the calling thread.
-//   - Building the payload requires reading the local mp's fields,
-//     which is game-thread-only. TickConnect() is already on the GT.
-// Single-slot is fine: a fresh edge replaces any not-yet-sent queued
-// payload (we only ever care about the LATEST state).
-bool g_pendingBroadcast = false;
-coop::net::ItemActivatePayload g_pendingBroadcastPayload{};
-
 // Phase 5F Inc5 (connect-time replay) -- pending receiver-side applies.
 // Per-peer slot keyed by peerSessionId. Stashes the latest ItemActivate
 // payload that arrived BEFORE the corresponding puppet was spawned (the
@@ -720,47 +705,23 @@ void QueueConnectBroadcast() {
                 "skipping (puppet default is OFF; no replay needed)");
         return;
     }
-    g_pendingBroadcastPayload = p;
-    g_pendingBroadcast = true;
-    UE_LOGI("flashlight: QueueConnectBroadcast queued state=%d Intensity=%.2f "
-            "outerCone=%.1f mode=%u (will retry SendReliable each tick "
-            "until channel free)",
-            p.state, p.intensity, p.outerConeAngle, p.mode);
+    // 2026-05-27: reliable channel buffers internally; Send always accepted.
+    s->SendReliable(coop::net::ReliableKind::ItemActivate, &p, sizeof(p));
+    const uint64_t sig = SignaturePayload(p);
+    const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
+    g_lastSentSig.store(storeSig, std::memory_order_release);
+    UE_LOGI("flashlight: connect-broadcast sent state=%d Intensity=%.2f "
+            "outerCone=%.1f mode=%u peer=%u",
+            p.state, p.intensity, p.outerConeAngle, p.mode, p.peerSessionId);
 }
 
 void TickConnect() {
-    // (a) Drain pending broadcast. Single SendReliable attempt per tick --
-    // if the channel is busy we retry next tick. NetPumpTick runs at
-    // ~125 Hz so the worst-case wait for the channel to free is bounded.
-    if (g_pendingBroadcast) {
-        auto* s = g_session.load(std::memory_order_acquire);
-        if (s && s->connected()) {
-            const bool sent = s->SendReliable(
-                coop::net::ReliableKind::ItemActivate,
-                &g_pendingBroadcastPayload, sizeof(g_pendingBroadcastPayload));
-            if (sent) {
-                // Update the observer dedup signature so an immediate-after
-                // press observer doesn't re-broadcast the identical state.
-                const uint64_t sig = SignaturePayload(g_pendingBroadcastPayload);
-                const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
-                g_lastSentSig.store(storeSig, std::memory_order_release);
-                UE_LOGI("flashlight: connect-replay broadcast sent (state=%d "
-                        "Intensity=%.2f peer=%u)",
-                        g_pendingBroadcastPayload.state,
-                        g_pendingBroadcastPayload.intensity,
-                        g_pendingBroadcastPayload.peerSessionId);
-                g_pendingBroadcast = false;
-            }
-            // else: silent retry next tick. Logging here would spam at
-            // ~125 Hz while a PropSpawn snapshot is mid-burst.
-        } else {
-            // Session went away before we got a chance to ship. Drop -- a
-            // future connect-edge will re-queue.
-            g_pendingBroadcast = false;
-        }
-    }
+    // 2026-05-27: host-side pending-broadcast retry retired (channel queues
+    // internally). Kept the receiver-side pending-apply drain -- that's a
+    // state-defer (waiting for the peer's puppet to spawn), NOT channel-busy
+    // retry.
 
-    // (b) Drain pending applies. For each peer slot with a pending payload,
+    // Drain pending applies. For each peer slot with a pending payload,
     // look up the puppet via the registry; if it's now valid, apply + clear.
     for (uint8_t peer = 0; peer < coop::players::kMaxPeers; ++peer) {
         if (!g_pendingApplyValid[peer]) continue;
@@ -777,12 +738,6 @@ void TickConnect() {
 }
 
 void OnDisconnect() {
-    if (g_pendingBroadcast) {
-        UE_LOGI("flashlight: OnDisconnect clearing pending broadcast (state=%d)",
-                g_pendingBroadcastPayload.state);
-    }
-    g_pendingBroadcast = false;
-    g_pendingBroadcastPayload = {};
     int clearedApplies = 0;
     for (uint8_t i = 0; i < coop::players::kMaxPeers; ++i) {
         if (g_pendingApplyValid[i]) ++clearedApplies;

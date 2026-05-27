@@ -6,19 +6,39 @@
 
 namespace coop::net {
 
+// Audit Fix H2 (2026-05-27): the stack buffer in Tick() is sized at
+// kMaxPacketBytes; Send() rejects payloads > kMaxReliablePayload. Make the
+// invariant load-bearing at compile time so a future header-size change
+// can't silently overflow.
+static_assert(
+    sizeof(PacketHeader) + sizeof(ReliableHeader) + kMaxReliablePayload
+        == kMaxPacketBytes,
+    "Tick() stack buffer must cover exactly one max-size reliable datagram");
+
+
+
 bool ReliableChannel::Send(ReliableKind kind, const void* payload, int payloadLen) {
     if (payloadLen < 0 || payloadLen > kMaxReliablePayload) {
-        UE_LOGW("net: reliable Send rejected (len=%d)", payloadLen);
+        UE_LOGW("net: reliable Send rejected (len=%d > %d)", payloadLen, kMaxReliablePayload);
         return false;
     }
     std::lock_guard<std::mutex> lk(outboxMutex_);
-    if (outPending_) return false;  // stop-and-wait: one in flight at a time
-    outPending_ = true;
-    outRelSeq_ = nextSendRelSeq_;
-    outKind_ = kind;
-    outPayload_.assign(static_cast<const uint8_t*>(payload),
-                       static_cast<const uint8_t*>(payload) + payloadLen);
-    nextRetransmit_ = std::chrono::steady_clock::now();  // send on the next Tick
+    if (outQueue_.size() >= kMaxQueuedSends) {
+        UE_LOGW("net: reliable outbox queue full (%zu) -- dropping new send (kind=%u)",
+                outQueue_.size(), static_cast<unsigned>(kind));
+        return false;
+    }
+    const bool wasEmpty = outQueue_.empty();
+    OutMsg m;
+    m.kind = kind;
+    m.payload.assign(static_cast<const uint8_t*>(payload),
+                     static_cast<const uint8_t*>(payload) + payloadLen);
+    m.relSeq = nextAssignSeq_++;
+    outQueue_.push_back(std::move(m));
+    if (wasEmpty) {
+        // New head -- kick transmission on the next Tick (no RTO wait).
+        nextRetransmit_ = std::chrono::steady_clock::now();
+    }
     return true;
 }
 
@@ -29,17 +49,19 @@ void ReliableChannel::Tick(const SendDatagramFn& sendToPeer, uint64_t token) {
     int total = 0;
     {
         std::lock_guard<std::mutex> lk(outboxMutex_);
-        if (!outPending_) return;
+        if (outQueue_.empty()) return;
         const auto now = std::chrono::steady_clock::now();
         if (now < nextRetransmit_) return;
+        const OutMsg& m = outQueue_.front();
         auto* hdr = reinterpret_cast<PacketHeader*>(buf);
-        WriteHeader(*hdr, MsgType::Reliable, outRelSeq_, token);
+        WriteHeader(*hdr, MsgType::Reliable, m.relSeq, token);
         auto* rh = reinterpret_cast<ReliableHeader*>(buf + sizeof(PacketHeader));
         std::memset(rh, 0, sizeof(*rh));
-        rh->kind = static_cast<uint8_t>(outKind_);
-        rh->payloadLen = static_cast<uint16_t>(outPayload_.size());
-        std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader), outPayload_.data(), outPayload_.size());
-        total = static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader) + outPayload_.size());
+        rh->kind = static_cast<uint8_t>(m.kind);
+        rh->payloadLen = static_cast<uint16_t>(m.payload.size());
+        std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader),
+                    m.payload.data(), m.payload.size());
+        total = static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader) + m.payload.size());
         nextRetransmit_ = now + kRto;
     }
     sendToPeer(buf, total);
@@ -56,13 +78,12 @@ void ReliableChannel::OnReliable(const void* data, int len, uint64_t token, cons
     if (len < static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader)) + payloadLen) return;
 
     // Decide accept/ack under the lock; SEND the ack outside it (never socket I/O
-    // while holding a mutex). Stop-and-wait, so:
+    // while holding a mutex). Receiver is single-message-inbox stop-and-wait:
     //  - seq < expected  : already delivered -> ack again (recovers a lost ack), no re-deliver.
-    //  - seq == expected & inbox free : deliver + advance + ack (the one new message).
-    //  - seq == expected & inbox FULL : drop without ack -> the sender keeps
-    //    retransmitting until the game thread drains, so nothing is lost (the bug
-    //    was: acking/advancing on a retransmit of an undrained delivery -> stall).
-    //  - seq > expected  : a gap (impossible in stop-and-wait) -> drop, no ack.
+    //  - seq == expected & inbox free : deliver + advance + ack.
+    //  - seq == expected & inbox FULL : drop without ack -> sender keeps retransmitting
+    //    until the game thread drains. Natural back-pressure.
+    //  - seq > expected  : gap (shouldn't happen given sender is FIFO + one-in-flight) -> drop, no ack.
     bool doAck = false;
     {
         std::lock_guard<std::mutex> lk(inboxMutex_);
@@ -89,9 +110,15 @@ void ReliableChannel::OnReliable(const void* data, int len, uint64_t token, cons
 
 void ReliableChannel::OnAck(uint32_t relSeq) {
     std::lock_guard<std::mutex> lk(outboxMutex_);
-    if (outPending_ && relSeq == outRelSeq_) {
-        outPending_ = false;
-        ++nextSendRelSeq_;
+    if (outQueue_.empty()) return;
+    if (outQueue_.front().relSeq != relSeq) return;  // stray / duplicate ack
+    outQueue_.pop_front();
+    if (!outQueue_.empty()) {
+        // Immediately kick the next message -- no RTO wait between consecutive
+        // successful ACKs (drain at 1/RTT, ~1000 msg/s on LAN). This is THE
+        // throughput optimization that makes a 1264-entity snapshot replay
+        // drain in ~1.3s instead of ~316s if we had waited 250ms per packet.
+        nextRetransmit_ = std::chrono::steady_clock::now();
     }
 }
 
@@ -104,10 +131,22 @@ bool ReliableChannel::TryDrain(Message& out) {
 }
 
 void ReliableChannel::Reset() {
-    { std::lock_guard<std::mutex> lk(outboxMutex_);
-      outPending_ = false; outRelSeq_ = 0; nextSendRelSeq_ = 0; outPayload_.clear(); }
-    { std::lock_guard<std::mutex> lk(inboxMutex_);
-      hasInbox_ = false; expectedRelSeq_ = 0; inbox_.payload.clear(); }
+    {
+        std::lock_guard<std::mutex> lk(outboxMutex_);
+        outQueue_.clear();
+        nextAssignSeq_ = 0;
+    }
+    {
+        std::lock_guard<std::mutex> lk(inboxMutex_);
+        hasInbox_ = false;
+        expectedRelSeq_ = 0;
+        inbox_.payload.clear();
+    }
+}
+
+size_t ReliableChannel::QueuedSendCount() const {
+    std::lock_guard<std::mutex> lk(outboxMutex_);
+    return outQueue_.size();
 }
 
 }  // namespace coop::net

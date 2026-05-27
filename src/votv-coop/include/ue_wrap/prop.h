@@ -45,6 +45,33 @@ bool IsDescendantOfProp(void* obj);
 // pass to FindFunction. Returns false for null inputs.
 bool IsClassDescendantOfProp(void* cls);
 
+// True if `obj`'s UClass is one of the "prop-shaped" interactable lineages:
+// Aprop_C (the canonical prop family) OR one of the non-Aprop garbage/trash
+// families that expose the SAME BP interaction protocol (GetKey,
+// canBeUsedHold, playerTryToHold, etc.) -- AactorChipPile_C,
+// Aprop_garbageClump_C, AtrashBitsPile_C, plus their _erie/_leaves/
+// _wetConcrete subclasses. Use this for grab + Init POST + K2_DestroyActor
+// gating where the coop layer cares about ANY keyed-interactable, not just
+// the C++-level Aprop_C chain. Class pointers are cached at first call;
+// SuperStruct walk per call is O(<=16 hops). Returns false for null inputs.
+//
+// 2026-05-27: introduced after the STAGE 2 non_prop_entity_sync side-pipeline
+// was retired (RULE 2). Existing Aprop_C-only gates were the reason chipPile/
+// clump never synced -- they slip through IsDescendantOfProp despite having
+// identical BP interaction surfaces.
+bool IsKeyedInteractable(void* obj);
+bool IsClassKeyedInteractable(void* cls);
+
+// Per-class Key reader for keyed-interactable actors. Aprop_C lineage reads
+// the FName field directly @+0x02E0. AtrashBitsPile_C reads @+0x0230 (the
+// Aactor_save_C lineage offset). chipPile/clump have NO native Key field --
+// they expose Key only via the BP `GetKey(FName&)` UFunction; this helper
+// resolves + caches the UFunction per UClass and dispatches via ProcessEvent.
+// Returns NAME_None on failure (uninitialized Key, unresolved UFunction).
+// Game-thread only for the UFunction-dispatch branch.
+reflection::FName GetInteractableKey(void* obj);
+std::wstring GetInteractableKeyString(void* obj);
+
 // Reads Aprop_C.Key (FName) at +0x02E0. Returns {0,0} for null prop.
 // CALLER must have already established `prop` IS an Aprop_C-derived live actor.
 reflection::FName GetKey(void* prop);

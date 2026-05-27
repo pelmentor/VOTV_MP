@@ -12,9 +12,6 @@
 //     the nested Init POST defers its broadcast (Key is NewGuid pre-
 //     loadData) and takeObj POST broadcasts with the restored saved UUID.
 //
-// Also owns the bounded retry queues used by all three send sites + the
-// snapshot drainer. Drain* are called by NetPumpTick each frame.
-//
 // Principle 7: this is gameplay/network logic; talks to ue_wrap through
 // reflection + engine + game_thread.
 
@@ -49,16 +46,10 @@ void Install(coop::net::Session* session);
 // retried each NetPumpTick until propInventory_C appears.
 void InstallInventory(coop::net::Session* session);
 
-// Bounded retry queues. PropSpawn capacity 4096 (sized for a snapshot
-// bootstrap ~2000 props x 160B payload = ~320 KB); PropDestroy capacity
-// 256. Drops oldest on overflow with a warning. Game-thread access only.
-void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload);
-void EnqueuePropDestroyForRetry(const coop::net::WireKey& key);
-
-// Drainers called by NetPumpTick each frame. Send until the reliable
-// channel reports busy; preserve enqueue order. No-op when empty.
-void DrainPendingPropSpawns();
-void DrainPendingPropDestroys();
+// 2026-05-27: per-feature retry queues retired -- the reliable channel
+// (coop/net/reliable_channel.cpp) now buffers internally so Send() always
+// succeeds. EnqueuePropSpawnForRetry / DrainPendingPropSpawns / their
+// PropDestroy twins went with them per RULE 2.
 
 // Host-authoritative intermediate-variant suppression predicate. Three
 // call sites (Init POST host-broadcast, snapshot enumerate, client local
@@ -67,11 +58,8 @@ void DrainPendingPropDestroys();
 bool IsWireSuppressedPropClass(const std::wstring& cls);
 
 // Per-session state cleanup on disconnect. Returns counters for the
-// log line. Clears: retry queues, takeObj-in-flight flag, processed-Init
-// dedupe set.
+// log line. Clears: takeObj-in-flight flag, processed-Init dedupe set.
 struct DisconnectStats {
-    size_t droppedSpawns = 0;
-    size_t droppedDestroys = 0;
     size_t initProcessedDropped = 0;
 };
 DisconnectStats OnDisconnect();

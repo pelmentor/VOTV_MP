@@ -44,8 +44,50 @@ add_library(minhook STATIC
 )
 target_include_directories(minhook PUBLIC ${MINHOOK_DIR}/include)
 
+# --- GameNetworkingSockets (BSD-3, vendored as git submodule, pinned v1.5.1) ---
+#
+# Wire-layer substrate for the 4-PR GNS migration plan in
+# research/findings/votv-gns-integration-plan-2026-05-27.md +
+# research/findings/votv-gns-sandbox-pass-2026-05-28.md (sandbox PASS report).
+#
+# PR-1 (this commit): vendor + link only. No GNS API calls; src/coop/net/
+# gns_smoke.cpp pulls one symbol so the linker must consume the static lib.
+# PR-2 swaps coop::net::Session over to ConnectByIPAddress + lanes.
+#
+# Static-link configuration (sandbox-verified 2026-05-28):
+#   USE_CRYPTO=BCrypt           Windows-native AES+SHA, no external crypto dep
+#   USE_CRYPTO25519=Reference   donna impl bundled in GNS src/common/
+#   Protobuf_USE_STATIC_LIBS    static libprotobuf via vcpkg x64-windows-static
+#   MSVC_CRT_STATIC=ON          /MT to match our DLL's static CRT
+#   BUILD_STATIC_LIB=ON         everything else OFF
+#
+# Build requires vcpkg with protobuf:x64-windows-static pre-installed; the
+# caller passes CMAKE_TOOLCHAIN_FILE + VCPKG_TARGET_TRIPLET + (if vcpkg cloned
+# shallow) VCPKG_MANIFEST_MODE=OFF. See BUILDING.md.
+set(BUILD_STATIC_LIB         ON  CACHE BOOL   "" FORCE)
+set(BUILD_SHARED_LIB         OFF CACHE BOOL   "" FORCE)
+set(BUILD_EXAMPLES           OFF CACHE BOOL   "" FORCE)
+set(BUILD_TESTS              OFF CACHE BOOL   "" FORCE)
+set(BUILD_TOOLS              OFF CACHE BOOL   "" FORCE)
+set(USE_CRYPTO               "BCrypt"    CACHE STRING "" FORCE)
+set(USE_CRYPTO25519          "Reference" CACHE STRING "" FORCE)
+set(Protobuf_USE_STATIC_LIBS ON  CACHE BOOL   "" FORCE)
+set(ENABLE_ICE               ON  CACHE BOOL   "" FORCE)
+set(USE_STEAMWEBRTC          OFF CACHE BOOL   "" FORCE)
+
+# Static-CRT for GNS targets. Note: GNS's own MSVC_CRT_STATIC option does
+# `string(REPLACE "/MD" "/MT")` on CMAKE_*_FLAGS, which is a no-op under
+# CMP0091=NEW (default since CMake 3.15) where the runtime is a TARGET
+# property, not part of the flag string. We set the global property here
+# BEFORE add_subdirectory so every GNS target inherits MultiThreaded /MT.
+# (Our own targets ALSO set this property explicitly below for clarity.)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+add_subdirectory(third_party/GameNetworkingSockets EXCLUDE_FROM_ALL)
+
 add_library(votv-coop SHARED
     src/bootstrap/dllmain.cpp
+    src/coop/net/gns_smoke.cpp
     src/ue_wrap/log.cpp
     src/ue_wrap/sig_scan.cpp
     src/ue_wrap/reflection.cpp
@@ -58,6 +100,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/engine_widget.cpp
     src/ue_wrap/reflected_offset.cpp
     src/ue_wrap/call.cpp
+    src/ue_wrap/fname_utils.cpp
     src/ue_wrap/puppet.cpp
     src/ue_wrap/hud_feed.cpp
     src/ue_wrap/prop.cpp
@@ -73,6 +116,7 @@ add_library(votv-coop SHARED
     src/coop/npc_sync.cpp
     src/coop/prop_lifecycle.cpp
     src/coop/prop_snapshot.cpp
+    src/coop/garbage_sync.cpp
     src/coop/weather_sync.cpp
     src/coop/net/transport.cpp
     src/coop/net/session.cpp
@@ -96,7 +140,30 @@ set_target_properties(votv-coop PROPERTIES OUTPUT_NAME "votv-coop")
 # version.lib: read the running exe's file version in the health check.
 # minhook: our inline-hook substrate (game-thread dispatcher).
 # ws2_32: Winsock for the UDP coop transport (src/coop/net).
-target_link_libraries(votv-coop PRIVATE version minhook gdiplus ws2_32)
+target_link_libraries(votv-coop PRIVATE
+    version
+    minhook
+    gdiplus
+    ws2_32
+    # PR-1 GNS link (vendored static lib, BSD-3). bcrypt: Windows SDK provides
+    # AES+SHA backend referenced by USE_CRYPTO=BCrypt. crypt32: needed for
+    # cert/PKI symbols some GNS modules reference (transitive).
+    GameNetworkingSockets::static
+    bcrypt
+    crypt32
+)
+target_include_directories(votv-coop PRIVATE
+    third_party/GameNetworkingSockets/include)
+
+# PR-1 link smoke: /WHOLEARCHIVE forces the linker to consume every object
+# in the GNS static lib, regardless of whether our code references it. This
+# is what makes PR-1 actually verify binary growth + symbol collisions
+# (without it, /OPT:REF drops the entire lib because PR-1 has no real
+# callers yet). PR-2 removes this and lets ordinary linking trim GNS to
+# only the code paths Session uses (~700 KB GNS code per the plan estimate).
+if (MSVC)
+    target_link_options(votv-coop PRIVATE /WHOLEARCHIVE:GameNetworkingSockets_s)
+endif()
 
 # Standalone shipping loader: a xinput1_3.dll proxy that auto-loads the payload
 # (votv-coop.dll) on game start, replacing the dev-only inject.ps1. VOTV imports

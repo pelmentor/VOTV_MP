@@ -93,13 +93,6 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 inline constexpr uint64_t kNoSendYet = 0xFFFFFFFFFFFFFFFFULL;
 std::atomic<uint64_t> g_lastSentSig{kNoSendYet};
 
-// Pending connect-edge broadcast (mirrors item_activate::g_pendingBroadcast).
-// On the connect rising-edge the harness calls QueueConnectBroadcast which
-// snapshots state into this slot; TickConnect retries SendReliable each tick
-// until the reliable channel accepts.
-bool g_pendingBroadcast = false;
-coop::net::WeatherStatePayload g_pendingBroadcastPayload{};
-
 // Pending receiver-side apply (mirrors item_activate::g_pendingApplyValid).
 // A WeatherState packet can arrive on the client BEFORE Install resolves
 // all UFunctions (e.g. the cycle is still loading) OR before the local
@@ -232,25 +225,8 @@ void OnSchedulerPost(void* self, void* function, void* /*params*/) {
         return;
     }
 
-    const bool sent = s->SendReliable(
-        coop::net::ReliableKind::WeatherState, &p, sizeof(p));
-    if (!sent) {
-        // Channel busy. Stash the LATEST payload into the pending-broadcast
-        // slot so TickConnect's per-tick retry will ship it whenever the
-        // reliable channel frees. Mirrors the connect-replay shape (we
-        // reuse the same slot since both are "host wants to publish current
-        // state" -- the only difference is the entry point). Without this,
-        // a transient channel-busy at a critical transition (rain OFF) is
-        // lost: the next observer fire would dedup-skip it because lastSent
-        // still reflects the OLDER state, but the OFF state never made it
-        // to the client. RULE 1: don't drop state transitions silently.
-        g_pendingBroadcastPayload = p;
-        g_pendingBroadcast = true;
-        if (sLog) UE_LOGW("weather: OnSchedulerPost SendReliable failed "
-                          "(channel busy; sig=%llX queued for TickConnect retry)",
-                          static_cast<unsigned long long>(storeSig));
-        return;
-    }
+    // 2026-05-27: reliable channel buffers internally; Send always succeeds.
+    s->SendReliable(coop::net::ReliableKind::WeatherState, &p, sizeof(p));
     g_lastSentSig.store(storeSig, std::memory_order_release);
     UE_LOGI("weather: host broadcast flags=0x%02X rain=%.2f lc=%.2f dc=%.2f ws=%.2f (sig=%llX)",
             p.flags, p.rainStrength, p.rainLightningChance,
@@ -995,37 +971,21 @@ void QueueConnectBroadcast() {
     }
     coop::net::WeatherStatePayload p{};
     if (!ReadCycleState(cycle, p)) return;
-    g_pendingBroadcastPayload = p;
-    g_pendingBroadcast = true;
-    UE_LOGI("weather: QueueConnectBroadcast queued flags=0x%02X rain=%.2f "
-            "lc=%.2f dc=%.2f ws=%.2f (retry SendReliable each tick)",
+    // 2026-05-27: reliable channel buffers internally; Send always accepted.
+    s->SendReliable(coop::net::ReliableKind::WeatherState, &p, sizeof(p));
+    const uint64_t sig = SignaturePayload(p);
+    const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
+    g_lastSentSig.store(storeSig, std::memory_order_release);
+    UE_LOGI("weather: connect-broadcast sent flags=0x%02X rain=%.2f lc=%.2f dc=%.2f ws=%.2f",
             p.flags, p.rainStrength, p.rainLightningChance,
             p.rainDeactivateChance, p.rainWindSpeed);
 }
 
 void TickConnect() {
-    // (a) Host: drain pending broadcast (retry SendReliable on busy channel).
-    if (g_pendingBroadcast) {
-        auto* s = g_session.load(std::memory_order_acquire);
-        if (!s || !s->connected()) {
-            g_pendingBroadcast = false;
-        } else if (s->SendReliable(coop::net::ReliableKind::WeatherState,
-                                   &g_pendingBroadcastPayload,
-                                   sizeof(g_pendingBroadcastPayload))) {
-            const uint64_t sig = SignaturePayload(g_pendingBroadcastPayload);
-            const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
-            g_lastSentSig.store(storeSig, std::memory_order_release);
-            UE_LOGI("weather: connect-replay broadcast sent (flags=0x%02X rain=%.2f)",
-                    g_pendingBroadcastPayload.flags,
-                    g_pendingBroadcastPayload.rainStrength);
-            g_pendingBroadcast = false;
-        }
-        // else: silent retry next tick.
-    }
-
-    // (b) Client: drain pending receiver-side apply once Install completes
-    // + the local cycle becomes live. The stashed payload was set by
-    // ApplyFromHost when a WeatherState arrived before Install was ready.
+    // 2026-05-27: host-side pending-broadcast retry retired (channel queues
+    // internally). Kept the receiver-side g_pendingApply -- that's a STATE
+    // defer (waiting for local cycle UClass to resolve), NOT a channel-busy
+    // retry, so it remains relevant.
     if (g_pendingApply && g_installed) {
         void* cycle = ResolveCycle();
         if (cycle && R::IsLive(cycle)) {
@@ -1040,16 +1000,10 @@ void TickConnect() {
 }
 
 void OnDisconnect() {
-    if (g_pendingBroadcast) {
-        UE_LOGI("weather: OnDisconnect clearing pending broadcast (flags=0x%02X)",
-                g_pendingBroadcastPayload.flags);
-    }
     if (g_pendingApply) {
         UE_LOGI("weather: OnDisconnect clearing pending apply (flags=0x%02X)",
                 g_pendingApplyPayload.flags);
     }
-    g_pendingBroadcast = false;
-    g_pendingBroadcastPayload = {};
     g_pendingApply = false;
     g_pendingApplyPayload = {};
     g_lastSentSig.store(kNoSendYet, std::memory_order_release);

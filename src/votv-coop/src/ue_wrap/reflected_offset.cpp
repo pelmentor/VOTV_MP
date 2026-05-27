@@ -95,6 +95,7 @@ VC_DEFINE_OFFSET(MainPlayer_grabbing_component,   L"mainPlayer_C", L"grabbing_co
 VC_DEFINE_OFFSET(MainPlayer_grabsHeavy,           L"mainPlayer_C", L"grabsHeavy")
 VC_DEFINE_OFFSET(MainPlayer_grabLen,              L"mainPlayer_C", L"grabLen")
 VC_DEFINE_OFFSET(MainPlayer_Heavy,                L"mainPlayer_C", L"Heavy")
+VC_DEFINE_OFFSET(MainPlayer_holding_actor,        L"mainPlayer_C", L"holding_actor")
 
 VC_DEFINE_OFFSET(AnimBP_kerfur_walkSpeed,           P::name::AnimBPKerfurRegularClass, L"walkSpeed")
 VC_DEFINE_OFFSET(AnimBP_kerfur_Pawn,                P::name::AnimBPKerfurRegularClass, L"Pawn")

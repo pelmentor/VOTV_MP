@@ -32,9 +32,9 @@ void SetSession(coop::net::Session* session);
 void Trigger();
 
 // Phase 2: drain up to chunkSize candidates per call (read transform,
-// build payload, enqueue via prop_lifecycle::EnqueuePropSpawnForRetry).
-// No-op when enumeration not in progress. Called from NetPumpTick each
-// frame while connected.
+// build payload, call session.SendPropSpawn -- channel queues internally
+// since 2026-05-27). No-op when enumeration not in progress. Called from
+// NetPumpTick each frame while connected.
 void DrainChunk();
 
 // Reset internal state on disconnect. Returns count of candidates that

@@ -109,7 +109,17 @@ void Write(Level level, const char* fmt, ...) {
     va_end(args);
 
     std::fprintf(g_file, "\n");
-    std::fflush(g_file);
+    // Audit 2026-05-27 (post-v2 anim ship): per-INFO fflush was eating
+    // game-thread time -- a spam burst of ~2000 dedup INFO lines / ~40 s
+    // (host re-broadcasting known props) translated to ~50 synchronous
+    // disk syncs per second on the client, visibly tanking FPS. Flush
+    // only on WARN/ERROR (critical messages stay visible immediately);
+    // INFO lines ride the CRT stdio buffer (~4 KB) and land on disk in
+    // bursts. Live-tailing INFO is slightly delayed but the perf cost
+    // disappears entirely on the hot path.
+    if (level != Level::Info) {
+        std::fflush(g_file);
+    }
 
     ::LeaveCriticalSection(&g_lock);
 }

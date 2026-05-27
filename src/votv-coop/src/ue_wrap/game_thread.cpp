@@ -69,6 +69,61 @@ void ClearAllInterceptors() {
     }
 }
 
+// SEH-wrapped single-callback dispatch. MSVC disallows mixing C++ unwind
+// (std::wstring destructor) with __try/__except in the same function, so
+// the __try wrapper does ONLY the raw call + an int-returning "did it
+// crash?" sentinel; the C++ logging path lives in a separate function.
+//
+// 2026-05-27 (post-anim-ship crash diagnostic): introduced because the user
+// reported "client crashed picking up a pile of garbage" with the AV deep in
+// our DLL but no symbol-mapped frames. Routing each observer dispatch through
+// here surfaces the function name in the log next time, so we know exactly
+// which callback to inspect. KEEP this wrapper -- it doubles as a crash
+// firewall against future observer regressions.
+void LogObserverAv(void* function, void* self, const char* phase) {
+    const auto fname = reflection::NameOf(function);
+    const std::wstring nameStr = reflection::ToString(fname);
+    UE_LOGE("game_thread: PE %s-callback AV caught -- function='%ls' (%p) self=%p; absorbing, process continues",
+            phase, nameStr.c_str(), function, self);
+}
+
+// Returns 0 on clean completion, 1 if SEH caught an exception. cb returns
+// its own bool via *outIntercept (only meaningful if return value is 0).
+// __try / __except is the ONLY thing in this function -- no C++ destructors.
+int RunInterceptorSEH(UFunctionInterceptor cb, void* self, void* params, bool* outIntercept) {
+    __try {
+        *outIntercept = cb(self, params);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 1;
+    }
+}
+
+int RunObserverSEH(ProcessEventObserverFn cb, void* self, void* function, void* params) {
+    __try {
+        cb(self, function, params);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 1;
+    }
+}
+
+bool SafeCallInterceptor(UFunctionInterceptor cb, void* self, void* params, void* function) {
+    bool intercept = false;
+    if (RunInterceptorSEH(cb, self, params, &intercept) != 0) {
+        LogObserverAv(function, self, "interceptor");
+        return false;  // treat as "no interception" so original PE still runs
+    }
+    return intercept;
+}
+
+void SafeCallObserver(ProcessEventObserverFn cb, void* self, void* function, void* params,
+                      const char* phase /* "PRE" or "POST" */) {
+    if (RunObserverSEH(cb, self, function, params) != 0) {
+        LogObserverAv(function, self, phase);
+    }
+}
+
 // Returns true if any interceptor for `function` returns true. Acquire load
 // on the function pointer pairs with the release store in SetInterceptorSlot
 // (no torn target+cb pair on weakly-ordered ISAs; on x86-64 TSO acquire is
@@ -78,7 +133,7 @@ inline bool FireInterceptors(void* self, void* function, void* params) {
         void* tgt = g_interceptors[i].targetFn.load(std::memory_order_acquire);
         if (!tgt || tgt != function) continue;
         UFunctionInterceptor cb = g_interceptors[i].cb.load(std::memory_order_relaxed);
-        if (cb && cb(self, params)) return true;
+        if (cb && SafeCallInterceptor(cb, self, params, function)) return true;
     }
     return false;
 }
@@ -132,13 +187,16 @@ void ClearObserverSlot(ObserverSlot table[], void* targetFn) {
     }
 }
 
-// Fire all observers in `table` whose target matches `function`.
-inline void FireObservers(const ObserverSlot table[], void* self, void* function, void* params) {
+// Fire all observers in `table` whose target matches `function`. Each call
+// runs through SafeCallObserver (SEH wrapper) so an AV in any single
+// callback is logged + absorbed instead of taking down the engine.
+inline void FireObservers(const ObserverSlot table[], void* self, void* function, void* params,
+                          const char* phase) {
     for (int i = 0; i < kMaxObservers; ++i) {
         void* tgt = table[i].targetFn.load(std::memory_order_acquire);
         if (tgt && tgt == function) {
             ProcessEventObserverFn cb = table[i].cb.load(std::memory_order_relaxed);
-            if (cb) cb(self, function, params);
+            if (cb) SafeCallObserver(cb, self, function, params, phase);
         }
     }
 }
@@ -215,7 +273,13 @@ void Pump() {
     }
 }
 
-void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
+// Inner detour body. Contains all the C++ destructor unwinds (lock_guard,
+// std::wstring, etc.) -- MSVC disallows mixing SEH __try/__except with C++
+// unwind in the same function. Called via SEH-only outer ProcessEventDetour
+// below so any AV anywhere in the detour body (observer callbacks, Pump'd
+// tasks, FireNameDiagnostics, ToString allocations, etc.) is caught + logged
+// instead of crashing the engine.
+void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params) {
     // Record the game thread id the first time we run here. CAS so that if two
     // threads race the very first dispatch, exactly one wins (a plain load+store
     // could let a worker thread overwrite the real game thread id).
@@ -257,7 +321,7 @@ void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
     // The walk is kMaxObservers (16) pointer compares -- same cost class as the
     // single interceptor compare above. NO observers registered = NO cost
     // beyond the 16 null loads.
-    FireObservers(g_preObservers, self, function, params);
+    FireObservers(g_preObservers, self, function, params, "PRE");
 
     // Diagnostic name-prefix sniffer (zero cost when no slot is set).
     FireNameDiagnostics(self, function, params);
@@ -279,7 +343,41 @@ void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
     // wrote (e.g. PHC.GrabComponentAtLocation POST reads handle+176 to see
     // what was just grabbed; PHC.SetTargetLocation POST sees the per-tick
     // drive target).
-    FireObservers(g_postObservers, self, function, params);
+    FireObservers(g_postObservers, self, function, params, "POST");
+}
+
+// SEH-only outer detour. No C++ destructors here so __try/__except is
+// legal. Catches ANY AV / illegal instruction / int divide / etc. that
+// propagates out of ProcessEventDetourImpl -- including AVs in posted
+// task lambdas drained by Pump(), in FireNameDiagnostics's ToString
+// allocation, in the call-trace log path, in observer callbacks (the
+// inner SafeCallObserver/SafeCallInterceptor wrappers already catch
+// these, but if a future code path bypasses them this outer catch is
+// the backstop), or in the original ProcessEvent's BP-VM dispatch when
+// BP code derefs a stale UObject*.
+//
+// On catch we log "PE detour AV caught" and return normally; the engine
+// continues. The function name + dispatched self are logged so the next
+// run pinpoints which UFunction's call chain crashed. KEEP this outer
+// SEH frame -- it is the load-bearing crash firewall for all of
+// ProcessEventDetour's downstream paths.
+int RunDetourSEH(void* self, void* function, void* params) {
+    __try {
+        ProcessEventDetourImpl(self, function, params);
+        return 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 1;
+    }
+}
+
+void __fastcall ProcessEventDetour(void* self, void* function, void* params) {
+    if (RunDetourSEH(self, function, params) != 0) {
+        // The Impl crashed somewhere -- recover by logging + returning
+        // without forwarding to the original PE (the engine's caller frame
+        // expects PE to return; we honor that contract). LogObserverAv
+        // already resolves the function name + logs at ERROR level.
+        LogObserverAv(function, self, "detour-outer");
+    }
 }
 
 }  // namespace

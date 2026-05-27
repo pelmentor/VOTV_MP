@@ -42,6 +42,17 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 //     re-enables SimulatePhysics + SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
 //   - WireKey carries the FName string (cross-peer stable, idx is NOT --
 //     see research/findings/votv-physics-interaction-deep-re-2026-05-23.md)
+// v9 (2026-05-27 Phase 5G Inc 2): NonPropEntityState/Destroy packets shipped
+// then retired the same day -- chipPile/clump/trashBitsPile families ride
+// the existing Aprop_C pipeline via the IsKeyedInteractable extension
+// instead. ReliableKind slots 16 and 17 are dormant (see comment near the
+// enum). The version stays at 9 because peers with v9 may still receive
+// stale packets at those slots from old hosts; the dispatch ignores them.
+// v8 (2026-05-27): PoseSnapshot grew 28 -> 32 bytes -- added `stateBits`
+// (bit 0 = isInAir, derived from source CMC MovementMode == MOVE_Falling).
+// Receiver drives the puppet AnimBP's useLegIK/rise off this bit so the foot
+// IK trace doesn't plant feet during jumps. Same expansion shape leaves
+// bits 1..7 reserved for future per-pose flags (crouched, KO, etc.).
 // v7 (2026-05-26 NIGHT): Phase 5W weather sync. Adds
 //   ReliableKind::WeatherState = 13 (continuous rain/snow/fog/wind state)
 //   ReliableKind::LightningStrike = 14 (discrete strike events)
@@ -53,9 +64,9 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // mirror the sender's EXACT cone shape (Phase 5F user feedback: puppet's
 // flashlight was too bright AND focused-vs-spread mode wasn't synced).
 // v3 (2026-05-23 PM): PoseSnapshot grew from 24 -> 28 bytes (added headYawDelta).
-// Both peers must run v7; older packets are rejected at the header check. No
+// Both peers must run v9; older packets are rejected at the header check. No
 // back-compat layer (RULE 2 -- mod is pre-ship; bump cleanly).
-inline constexpr uint16_t kProtocolVersion = 7;
+inline constexpr uint16_t kProtocolVersion = 9;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -204,6 +215,14 @@ enum class ReliableKind : uint8_t {
                        //     Phase 5D DoorState/LightState/LockState (RE doc
                        //     landed earlier; impl pending).
                        //     Payload: ItemActivatePayload (24 bytes -- v6).
+    // Slots 16/17 (NonPropEntityState/Destroy) retired 2026-05-27 -- the
+    // chipPile/clump/trashBitsPile families now ride the existing Aprop_C
+    // pipeline (PropSpawn / PropDestroy / PropPose / PropRelease) via the
+    // IsKeyedInteractable extension in ue_wrap::prop. RULE-2 cleanup: do
+    // not reassign these IDs to a different packet without bumping the
+    // protocol version (peer with older protocol may still send them; the
+    // current server-side dispatch ignores unknown ReliableKind values, so
+    // forward-compat is intact, but future use should pick fresh IDs).
 };
 
 #pragma pack(push, 1)
@@ -243,20 +262,33 @@ static_assert(sizeof(PacketHeader) == 20, "PacketHeader must be 20 bytes");
 //                   player computation.
 //   speed        -- horizontal velocity magnitude (cm/s) -> remote AnimBP
 //                   locomotion blend.
+//   stateBits    -- per-pose flags. v8 layout:
+//                     bit 0 = isInAir (source CMC.MovementMode == MOVE_Falling).
+//                             Drives the puppet's BUA-POST observer to clear
+//                             useLegIK/rise so the foot-IK trace doesn't plant
+//                             the puppet's feet to the satellite's grounded
+//                             position while the source is airborne (jump
+//                             stretching fix, 2026-05-27).
+//                     bits 1..7 reserved (crouched, KO, ragdoll, ...).
 struct PoseSnapshot {
-    float x, y, z;
-    float yaw;
-    float pitch;
-    float headYawDelta;
-    float speed;
+    float   x, y, z;
+    float   yaw;
+    float   pitch;
+    float   headYawDelta;
+    float   speed;
+    uint8_t stateBits;
+    uint8_t _pad[3];   // keep 4-byte alignment for future floats
 };
-static_assert(sizeof(PoseSnapshot) == 28, "PoseSnapshot must be 28 bytes");
+static_assert(sizeof(PoseSnapshot) == 32, "PoseSnapshot must be 32 bytes");
+
+// PoseSnapshot.stateBits flags. Single-byte field; flags assigned bit-by-bit.
+inline constexpr uint8_t kStateBitInAir = 0x01;
 
 struct PosePacket {
     PacketHeader header;
     PoseSnapshot pose;
 };
-static_assert(sizeof(PosePacket) == 48, "PosePacket must be 48 bytes");
+static_assert(sizeof(PosePacket) == 52, "PosePacket must be 52 bytes");
 
 // Ping/Pong: header + a single uint32_t payload (the sender's local steady-clock
 // milliseconds, truncated to 32 bits -- ~49 days of monotonic range, far more
@@ -450,6 +482,15 @@ static_assert(sizeof(EntityDestroyPayload) == 8, "EntityDestroyPayload must be 8
 // guard; absence breaks the established consistency.
 static_assert(sizeof(EntityDestroyPayload) <= 256 - 20 - 8,
               "EntityDestroyPayload must fit in one reliable datagram (kMaxReliablePayload)");
+
+// Phase 5G Inc 2 (NonPropEntity* packets) retired 2026-05-27 -- chipPile /
+// clump / trashBitsPile families now ride the existing Aprop_C pipeline
+// (PropSpawn / PropDestroy / PropPose / PropRelease) via the
+// IsKeyedInteractable extension in ue_wrap::prop. The separate non-prop
+// entity sync infrastructure was a misread of the BP class layout: even
+// though those classes don't derive from Aprop_C in C++, they expose the
+// same BP interaction protocol (GetKey, canBeUsedHold, playerTryToHold,
+// ...) and the existing wire layer covers them with minor extensions.
 
 // 2026-05-25 LATE +5h dev feature F4: teleport client to host's pose.
 // Host snapshots its own mainPlayer Location + Rotation and sends; client

@@ -39,6 +39,12 @@ int32_t MainPlayer_grabbing_component();
 int32_t MainPlayer_grabsHeavy();
 int32_t MainPlayer_grabLen();
 int32_t MainPlayer_Heavy();
+// holding_actor is the non-PhysicsHandle "held" pointer used by chipPile/
+// clump morph (toClump() writes the spawned clump address here, NOT
+// grabbing_actor; their pickup path doesn't go through UPhysicsHandle).
+// Probe-confirmed 2026-05-27; the PropPose-emit branch reads this as a
+// fallback when grabbing_actor is null.
+int32_t MainPlayer_holding_actor();
 
 // AnimBlueprint_kerfurOmega_regular_C field accessors (VOTV BP).
 int32_t AnimBP_kerfur_walkSpeed();

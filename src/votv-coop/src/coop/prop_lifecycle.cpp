@@ -7,7 +7,9 @@
 
 #include "coop/net/session.h"
 #include "coop/remote_prop.h"
+#include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
+#include "ue_wrap/fname_utils.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -17,9 +19,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -69,42 +73,121 @@ std::atomic<bool> g_takeObjInFlight{false};
 // calls super (BP "Parent" node), BOTH observers fire for the same actor.
 // Cap at 256, clear on overflow (stale-skip is harmless; by then the
 // stale actors have either been destroyed or stably broadcast).
+//
+// Audit Fix 5 (2026-05-27): the Init POST + K2_DestroyActor PRE observers
+// can dispatch on a parallel-anim worker thread per ue_wrap/game_thread.h
+// :118-120. Concurrent insert/erase/count on the unordered_set is UB
+// (rehash invalidates iterators). Mutex held only for the brief set op;
+// no engine calls under lock.
+std::mutex g_processedInitMutex;
 std::unordered_set<void*> g_processedInitActors;
 constexpr size_t kProcessedInitCap = 256;
 
 void MarkProcessedInit(void* actor) {
     if (!actor) return;
+    std::lock_guard<std::mutex> lk(g_processedInitMutex);
     if (g_processedInitActors.size() >= kProcessedInitCap) g_processedInitActors.clear();
     g_processedInitActors.insert(actor);
 }
 
 bool HasProcessedInit(void* actor) {
-    return actor && g_processedInitActors.count(actor) > 0;
+    if (!actor) return false;
+    std::lock_guard<std::mutex> lk(g_processedInitMutex);
+    return g_processedInitActors.count(actor) > 0;
 }
 
 void UnmarkProcessedInit(void* actor) {
     if (!actor) return;
+    std::lock_guard<std::mutex> lk(g_processedInitMutex);
     g_processedInitActors.erase(actor);
 }
 
-// PropSpawn retry queue. Sized for a snapshot bootstrap: ~2000 Aprop_C
-// derivatives x 160 B per payload = ~320 KB max queue memory. 4096
-// leaves headroom for in-flight drops + new spawns during drain.
-std::mutex g_pendingSpawnsMutex;
-std::deque<coop::net::PropSpawnPayload> g_pendingSpawns;
-constexpr size_t kMaxPendingSpawns = 4096;
-
-// PropDestroy retry queue. Smaller (256) -- destroys are rarer + tiny
-// payloads.
-std::mutex g_pendingDestroysMutex;
-std::deque<coop::net::WireKey> g_pendingDestroys;
-constexpr size_t kMaxPendingDestroys = 256;
+// Per-feature PropSpawn/PropDestroy retry queues retired 2026-05-27:
+// reliable_channel.cpp now buffers internally so Send() always succeeds.
+// The Enqueue*/DrainPending* helpers, the harness per-tick drain calls,
+// and the OnDisconnect "dropped" counters all went with them (RULE 2).
 
 // Forward declarations for observer callbacks.
 void GrabObserver_Aprop_Init_POST(void* self, void* function, void* params);
 void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* function, void* params);
 void GrabObserver_PropInventory_TakeObj_PRE(void* self, void* function, void* params);
 void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* params);
+
+// ---- Synthesize Key for non-Aprop_C interactables -----------------------
+//
+// Aprop_C BP UCS auto-mints a NewGuid Key when ResetKey==true || Key==None.
+// chipPile / clump / trashBitsPile BPs DO NOT (probe confirmed 2026-05-27:
+// fresh-spawned clump.GetKey returns FName(NAME_None)). We bridge by calling
+// the class's own `setKey(FName)` UFunction with a process-unique synthetic
+// before the Init POST broadcast path checks for "None". Without this,
+// chipPile/clump never broadcast at all -- the "None" guard skips them.
+//
+// Synthetic format: `cs_<process-low32>_<monotonic-counter>` (peer-namespace
+// safe -- different peers mint different counters / process IDs; no
+// collision in identity lookup).
+
+std::atomic<uint64_t> g_synthKeyCounter{0};
+
+// Per-class setKey UFunction cache. setKey is a BP UFunction on each
+// keyed-interactable class; FindFunction is O(GUObjectArray) so cache
+// after first resolve.
+std::mutex g_setKeyFnMutex;
+std::unordered_map<void*, void*> g_setKeyFnByClass;
+
+void* ResolveSetKeyFn(void* cls) {
+    if (!cls) return nullptr;
+    std::lock_guard<std::mutex> lk(g_setKeyFnMutex);
+    auto it = g_setKeyFnByClass.find(cls);
+    if (it != g_setKeyFnByClass.end()) return it->second;
+    void* fn = R::FindFunction(cls, P::name::PropSetKeyFn);  // "setKey"
+    g_setKeyFnByClass[cls] = fn;  // cache null too (don't re-walk)
+    return fn;
+}
+
+// Returns the (possibly-newly-minted) Key string. If actor's GetKey is
+// already non-None, returns it unchanged. Otherwise, for non-Aprop_C
+// keyed-interactables, mints a synthetic + calls setKey + returns the
+// minted string. For Aprop_C-derived actors with None Key, returns
+// "None" (caller skips -- BP UCS will mint on its own pass).
+std::wstring EnsureKeyForBroadcast(void* self, const std::wstring& currentKey) {
+    if (!currentKey.empty() && currentKey != L"None") return currentKey;
+    if (ue_wrap::prop::IsDescendantOfProp(self)) {
+        // Aprop_C: trust the BP's own UCS to mint. Skip.
+        return currentKey;
+    }
+    if (!ue_wrap::prop::IsKeyedInteractable(self)) return currentKey;
+    void* cls = R::ClassOf(self);
+    void* setKeyFn = ResolveSetKeyFn(cls);
+    if (!setKeyFn) {
+        UE_LOGW("synth-key: setKey UFunction not found on '%ls' -- cannot mint",
+                R::ClassNameOf(self).c_str());
+        return currentKey;
+    }
+    const uint64_t n = g_synthKeyCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+    const uint32_t ptrLow32 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(self));
+    wchar_t buf[64];
+    swprintf(buf, 64, L"cs_%08x_%llu", ptrLow32, static_cast<unsigned long long>(n));
+    const R::FName keyFName = ue_wrap::fname_utils::StringToFName(buf);
+    if (keyFName.ComparisonIndex == 0) {
+        UE_LOGW("synth-key: StringToFName('%ls') -> NAME_None; cannot mint", buf);
+        return currentKey;
+    }
+    ue_wrap::ParamFrame sk(setKeyFn);
+    if (!sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
+        UE_LOGW("synth-key: setKey 'Key' param not found on '%ls'",
+                R::ClassNameOf(self).c_str());
+        return currentKey;
+    }
+    if (!ue_wrap::Call(self, sk)) {
+        UE_LOGW("synth-key: setKey ProcessEvent call failed on '%ls'",
+                R::ClassNameOf(self).c_str());
+        return currentKey;
+    }
+    UE_LOGI("synth-key: minted '%ls' for actor %p class='%ls'",
+            buf, self, R::ClassNameOf(self).c_str());
+    // Re-read via GetInteractableKey to confirm the field actually changed.
+    return ue_wrap::prop::GetInteractableKeyString(self);
+}
 
 // Destroy a wire-suppressed intermediate-variant prop via K2_DestroyActor.
 // When called from inside Aprop_C::Init POST, the engine is still
@@ -142,7 +225,26 @@ void DestroyLocalProp(void* actor, bool deferred) {
     }
 }
 
+// Forward declaration so the GT-thread-defer wrapper can refer to the body.
+void GrabObserver_Aprop_Init_POST_Body(void* self);
+
 void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params*/) {
+    auto* s = LoadSession();
+    if (!self || !s) return;
+    // Audit Fix 3 (2026-05-27): the observer body invokes UFunctions
+    // (GetActorLocation/Rotation, GetKey on chipPile/clump). ProcessEvent
+    // is game-thread-only per project invariant. The observer can fire on
+    // a parallel-anim task-graph worker per ue_wrap/game_thread.h:118-120.
+    // Defer the body to GT when off-thread; the actor pointer is captured
+    // and re-validated via R::IsLive inside the deferred body.
+    if (!GT::IsGameThread()) {
+        GT::Post([self] { GrabObserver_Aprop_Init_POST_Body(self); });
+        return;
+    }
+    GrabObserver_Aprop_Init_POST_Body(self);
+}
+
+void GrabObserver_Aprop_Init_POST_Body(void* self) {
     auto* s = LoadSession();
     if (!self || !s) return;
     // Gate order (audit L-1 2026-05-24): cheapest checks FIRST so the hot path
@@ -154,7 +256,7 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
         return;
     }
     if (!R::IsLive(self)) return;
-    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;
+    if (!ue_wrap::prop::IsKeyedInteractable(self)) return;
     if (HasProcessedInit(self)) {
         UE_LOGI("grab_hook[Aprop.Init POST]: actor %p already processed -- skip (super-call dedupe)",
                 self);
@@ -182,11 +284,20 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
             DestroyLocalProp(self, /*deferred=*/true);
             return;
         }
-        // Client doesn't broadcast world spawns (host-authoritative).
-        return;
+        // Aprop_C lineage stays host-authoritative (save-persisted; client's
+        // local save-load is its OWN copy, doesn't write to host). For non-
+        // Aprop_C interactables (chipPile/clump/trashBitsPile -- "transient
+        // world litter" per RE, no save lineage), client interactions
+        // (toClump morph spawn) MUST propagate to host so the peer sees
+        // what the player just made. Fall through to broadcast in that
+        // case; otherwise return.
+        if (ue_wrap::prop::IsDescendantOfProp(self)) {
+            return;  // Aprop_C: host-authoritative world spawn, skip client broadcast
+        }
+        // Non-Aprop_C interactable: fall through to broadcast.
     }
 
-    // From here on: role == Host.
+    // Host (always) + Client (for non-Aprop_C only) reach here.
     if (IsWireSuppressedPropClass(cls)) {
         UE_LOGI("spawner-suppress[host.Init]: skipping broadcast for intermediate-variant '%ls' actor=%p (host-authoritative; will broadcast mature variant on transform)",
                 cls.c_str(), self);
@@ -198,10 +309,20 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
     for (size_t i = 0; i < cls.size() && i < 63; ++i) {
         p.className.data[p.className.len++] = static_cast<char>(cls[i]);
     }
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
-    if (keyStr.empty()) {
-        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p (class '%ls') has empty key -- skip (unkeyed = non-syncable)",
-                self, cls.c_str());
+    std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(self);
+    // 2026-05-27: for non-Aprop_C interactables (chipPile/clump/trashBits)
+    // whose BP doesn't auto-mint a NewGuid Key, synthesize one before the
+    // None-skip guard. Probe confirmed clump.GetKey returns NAME_None on
+    // fresh-spawn -- the None-skip would otherwise drop every chipPile
+    // morph silently.
+    keyStr = EnsureKeyForBroadcast(self, keyStr);
+    // UE4 FName(NAME_None) stringifies to "None" -- treat it as unkeyed.
+    // For Aprop_C this still defers (BP UCS will mint on a subsequent
+    // Init pass after loadData / setKey). For non-Aprop_C we just minted
+    // above; if STILL None here something went wrong with setKey.
+    if (keyStr.empty() || keyStr == L"None") {
+        UE_LOGI("grab_hook[Aprop.Init POST]: actor %p (class '%ls') has unset key '%ls' -- skip (unkeyed = non-syncable)",
+                self, cls.c_str(), keyStr.c_str());
         return;
     }
     p.key.len = 0;
@@ -224,9 +345,10 @@ void GrabObserver_Aprop_Init_POST(void* self, void* /*function*/, void* /*params
             cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
             (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
             (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
-    if (!s->SendPropSpawn(p)) {
-        EnqueuePropSpawnForRetry(p);
-    }
+    // 2026-05-27 reliable-channel rewrite: Send always succeeds (FIFO queue
+    // internal to the channel). The previous EnqueuePropSpawnForRetry fallback
+    // path retired as RULE 2 baggage.
+    s->SendPropSpawn(p);
 }
 
 // K2_DestroyActor PRE -- bidirectional destroy broadcast (host + client),
@@ -244,9 +366,11 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
                 self);
         return;
     }
-    if (!ue_wrap::prop::IsDescendantOfProp(self)) return;
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(self);
-    if (keyStr.empty()) return;
+    if (!ue_wrap::prop::IsKeyedInteractable(self)) return;
+    const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(self);
+    // FName(NAME_None) stringifies to "None" -- symmetric with Init POST
+    // (unkeyed props are non-syncable; don't broadcast a destroy for one).
+    if (keyStr.empty() || keyStr == L"None") return;
     coop::net::WireKey wk{};
     wk.len = 0;
     for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
@@ -256,9 +380,7 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
         s->role() == coop::net::Role::Host ? "HOST" : "CLIENT";
     UE_LOGI("grab_hook[K2_DestroyActor PRE]: %s broadcasting DESTROY actor=%p key='%ls'",
             roleStr, self, keyStr.c_str());
-    if (!s->SendPropDestroy(wk)) {
-        EnqueuePropDestroyForRetry(wk);
-    }
+    s->SendPropDestroy(wk);  // channel queues internally; always accepted
 }
 
 // PRE observer for propInventory_C::takeObj -- sets g_takeObjInFlight so
@@ -298,8 +420,8 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
                 spawnedActor);
         return;
     }
-    if (!ue_wrap::prop::IsDescendantOfProp(spawnedActor)) {
-        UE_LOGW("grab_hook[takeObj POST]: spawned actor %p is NOT a prop_C derivative -- skipping",
+    if (!ue_wrap::prop::IsKeyedInteractable(spawnedActor)) {
+        UE_LOGW("grab_hook[takeObj POST]: spawned actor %p is NOT a keyed-interactable -- skipping",
                 spawnedActor);
         return;
     }
@@ -310,7 +432,7 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     for (size_t i = 0; i < cls.size() && i < 63; ++i) {
         p.className.data[p.className.len++] = static_cast<char>(cls[i]);
     }
-    const std::wstring keyStr = ue_wrap::prop::GetKeyString(spawnedActor);
+    const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(spawnedActor);
     p.key.len = 0;
     for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
         p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
@@ -332,9 +454,7 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
             cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
             (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
             (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
-    if (!s->SendPropSpawn(p)) {
-        EnqueuePropSpawnForRetry(p);
-    }
+    s->SendPropSpawn(p);  // channel queues internally
 }
 
 }  // namespace
@@ -349,55 +469,20 @@ bool IsWireSuppressedPropClass(const std::wstring& cls) {
     return cls == P::name::PropMushroomGrowingClass;
 }
 
-void EnqueuePropSpawnForRetry(const coop::net::PropSpawnPayload& payload) {
-    std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-    if (g_pendingSpawns.size() >= kMaxPendingSpawns) {
-        UE_LOGW("net: PropSpawn retry queue full (depth %zu / max %zu) -- dropping OLDEST so newer spawns aren't lost",
-                g_pendingSpawns.size(), kMaxPendingSpawns);
-        g_pendingSpawns.pop_front();
-    }
-    g_pendingSpawns.push_back(payload);
-    UE_LOGI("net: PropSpawn enqueued for retry (depth now %zu)", g_pendingSpawns.size());
-}
-
-void EnqueuePropDestroyForRetry(const coop::net::WireKey& key) {
-    std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-    if (g_pendingDestroys.size() >= kMaxPendingDestroys) {
-        UE_LOGW("net: PropDestroy retry queue full (depth %zu / max %zu) -- dropping OLDEST",
-                g_pendingDestroys.size(), kMaxPendingDestroys);
-        g_pendingDestroys.pop_front();
-    }
-    g_pendingDestroys.push_back(key);
-}
-
-void DrainPendingPropSpawns() {
-    auto* s = LoadSession();
-    if (!s) return;
-    std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-    while (!g_pendingSpawns.empty()) {
-        const coop::net::PropSpawnPayload& payload = g_pendingSpawns.front();
-        if (!s->SendPropSpawn(payload)) {
-            break;  // channel busy; retry next tick. preserves order.
-        }
-        UE_LOGI("net: PropSpawn dequeued + sent (remaining=%zu)",
-                g_pendingSpawns.size() - 1);
-        g_pendingSpawns.pop_front();
-    }
-}
-
-void DrainPendingPropDestroys() {
-    auto* s = LoadSession();
-    if (!s) return;
-    std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-    while (!g_pendingDestroys.empty()) {
-        const coop::net::WireKey& key = g_pendingDestroys.front();
-        if (!s->SendPropDestroy(key)) break;
-        g_pendingDestroys.pop_front();
-    }
-}
+// Enqueue*/DrainPending* functions retired 2026-05-27 -- the reliable
+// channel buffers internally now (see reliable_channel.cpp). Callers just
+// call Send* and always get true (unless payload-too-large / queue full
+// at 4096 backlog).
 
 void Install(coop::net::Session* session) {
     g_session_ptr.store(session, std::memory_order_release);
+    // Audit Fix 1 (2026-05-27): composite atomic latch. InstallGrabObservers
+    // runs at 125 Hz; until ALL inner flags resolve, every tick was calling
+    // R::FindClass (a full GUObjectArray walk with std::wstring alloc per
+    // entry -- the exact bomb that hit the retired non_prop_entity_sync
+    // path. Same fix pattern.
+    static std::atomic<bool> g_allInstalled{false};
+    if (g_allInstalled.load(std::memory_order_acquire)) return;
     if (!g_propInitScanDone) {
         // Gate: wait for prop_C base class to load.
         void* propBase = R::FindClass(P::name::PropClass);
@@ -412,7 +497,11 @@ void Install(coop::net::Session* session) {
                 if (R::ClassNameOf(obj) != L"Function") continue;
                 if (R::ToString(R::NameOf(obj)) != kInitName) continue;
                 void* owningCls = R::OuterOf(obj);
-                if (!ue_wrap::prop::IsClassDescendantOfProp(owningCls)) continue;
+                // Cover Aprop_C lineage AND the non-Aprop "prop-shaped"
+                // garbage/trash bases (chipPile/clump/trashBitsPile) via the
+                // 2026-05-27 IsKeyedInteractable extension. Same Init UFunction
+                // protocol on all of them.
+                if (!ue_wrap::prop::IsClassKeyedInteractable(owningCls)) continue;
                 bool already = false;
                 for (void* fn : g_registeredPropInitFns) {
                     if (fn == obj) { already = true; break; }
@@ -452,11 +541,27 @@ void Install(coop::net::Session* session) {
             }
         }
     }
+    // InstallInventory has its own atomic guard + early-out; not gated here.
+    if (g_propInitScanDone && g_propDestroyObserverInstalled) {
+        g_allInstalled.store(true, std::memory_order_release);
+        UE_LOGI("prop_lifecycle: Install() complete -- subsequent calls are O(1) no-ops");
+    }
 }
 
 void InstallInventory(coop::net::Session* session) {
     g_session_ptr.store(session, std::memory_order_release);
-    if (g_inventoryObserverInstalled) return;
+    // Audit Fix 2 (2026-05-27): atomic latch matches Install()'s. Without
+    // this, the 125 Hz pump's InstallGrabObservers call runs R::FindClass
+    // (a full GUObjectArray walk with std::wstring alloc per entry) on
+    // every tick until propInventory_C loads. The plain-bool guard below
+    // is read/written only from the GT, but it doesn't short-circuit the
+    // GUObjectArray walk if propInventory_C is slow to load.
+    static std::atomic<bool> s_done{false};
+    if (s_done.load(std::memory_order_acquire)) return;
+    if (g_inventoryObserverInstalled) {
+        s_done.store(true, std::memory_order_release);
+        return;
+    }
     void* invCls = R::FindClass(P::name::PropInventoryClass);
     if (!invCls) return;  // not loaded yet -- retry next tick
     void* fn = R::FindFunction(invCls, P::name::PropInventoryTakeObjFn);
@@ -464,6 +569,7 @@ void InstallInventory(coop::net::Session* session) {
         UE_LOGW("grab_hook: %ls.%ls UFunction not found -- Bug C disabled permanently this session",
                 P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn);
         g_inventoryObserverInstalled = true;  // stop the retry loop
+        s_done.store(true, std::memory_order_release);
         return;
     }
     if (!GT::RegisterPostObserver(fn, GrabObserver_PropInventory_TakeObj_POST)) {
@@ -479,22 +585,16 @@ void InstallInventory(coop::net::Session* session) {
     UE_LOGI("grab_hook: registered POST observer for %ls.%ls @ %p (Bug C inventory drop ready)",
             P::name::PropInventoryClass, P::name::PropInventoryTakeObjFn, fn);
     g_inventoryObserverInstalled = true;
+    s_done.store(true, std::memory_order_release);
 }
 
 DisconnectStats OnDisconnect() {
     DisconnectStats s;
     {
-        std::lock_guard<std::mutex> lk(g_pendingSpawnsMutex);
-        s.droppedSpawns = g_pendingSpawns.size();
-        g_pendingSpawns.clear();
+        std::lock_guard<std::mutex> lk(g_processedInitMutex);
+        s.initProcessedDropped = g_processedInitActors.size();
+        g_processedInitActors.clear();
     }
-    {
-        std::lock_guard<std::mutex> lk(g_pendingDestroysMutex);
-        s.droppedDestroys = g_pendingDestroys.size();
-        g_pendingDestroys.clear();
-    }
-    s.initProcessedDropped = g_processedInitActors.size();
-    g_processedInitActors.clear();
     g_takeObjInFlight.store(false, std::memory_order_relaxed);
     return s;
 }

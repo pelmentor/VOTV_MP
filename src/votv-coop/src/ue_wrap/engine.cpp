@@ -293,6 +293,60 @@ void* SpawnActor(void* actorClass, const FVector& location, bool inertPawn) {
     return finished ? finished : actor;
 }
 
+namespace {
+// Build a transform with rotation from FRotator (degrees -> quaternion). UE4
+// uses Pitch=Y, Yaw=Z, Roll=X ordering for FRotator::Quaternion().
+FTransform MakeTransform(const FVector& location, const FRotator& rotation) {
+    FTransform t = MakeTransform(location);
+    const float pitch = rotation.Pitch * 0.00872664625f;  // deg -> rad / 2
+    const float yaw   = rotation.Yaw   * 0.00872664625f;
+    const float roll  = rotation.Roll  * 0.00872664625f;
+    const float sp = std::sin(pitch), cp = std::cos(pitch);
+    const float sy = std::sin(yaw),   cy = std::cos(yaw);
+    const float sr = std::sin(roll),  cr = std::cos(roll);
+    t.RotX =  cr * sp * sy - sr * cp * cy;
+    t.RotY = -cr * sp * cy - sr * cp * sy;
+    t.RotZ =  cr * cp * sy - sr * sp * cy;
+    t.RotW =  cr * cp * cy + sr * sp * sy;
+    return t;
+}
+}  // namespace
+
+void* BeginDeferredSpawn(void* actorClass, const FVector& location, const FRotator& rotation) {
+    if (!actorClass) return nullptr;
+    if (!ResolveSpawn()) {
+        UE_LOGE("engine: BeginDeferredSpawn unresolved (cdo=%p begin=%p)",
+                g_gsCdo, g_beginSpawnFn);
+        return nullptr;
+    }
+    if (!g_worldContext) g_worldContext = ResolveWorldContext();
+    const FTransform xform = MakeTransform(location, rotation);
+    ParamFrame begin(g_beginSpawnFn);
+    begin.Set<void*>(L"WorldContextObject", g_worldContext);
+    begin.Set<void*>(L"ActorClass", actorClass);
+    begin.SetRaw(L"SpawnTransform", &xform, sizeof(xform));
+    begin.Set<uint8_t>(L"CollisionHandlingOverride", kAlwaysSpawn);
+    begin.Set<void*>(L"Owner", nullptr);
+    if (!Call(g_gsCdo, begin)) {
+        UE_LOGE("engine: BeginDeferredSpawn call failed");
+        return nullptr;
+    }
+    return begin.Get<void*>(L"ReturnValue");
+}
+
+bool FinishDeferredSpawn(void* actor, const FVector& location, const FRotator& rotation) {
+    if (!actor || !ResolveSpawn()) return false;
+    const FTransform xform = MakeTransform(location, rotation);
+    ParamFrame finish(g_finishSpawnFn);
+    finish.Set<void*>(L"Actor", actor);
+    finish.SetRaw(L"SpawnTransform", &xform, sizeof(xform));
+    if (!Call(g_gsCdo, finish)) {
+        UE_LOGE("engine: FinishDeferredSpawn call failed");
+        return false;
+    }
+    return true;
+}
+
 FVector GetActorLocation(void* actor) {
     FVector loc;
     if (!actor || !ResolveActorFns()) return loc;
@@ -410,40 +464,6 @@ bool TeleportTo(void* actor, const FVector& location, const FRotator& rotation) 
     f.SetRaw(L"DestRotation", &rotation, sizeof(rotation));
     if (!Call(actor, f)) return false;
     return f.Get<bool>(L"ReturnValue");
-}
-
-
-
-// ---- Bug 2 / Plan B2: AnimBP satellite ----------------------------------------
-// The puppet's AnimInstance fields (Movement, spd, IK targets, ...) are populated
-// by BUA reading Pawn->GetMovementComponent()->Velocity. On a SkeletalMeshActor
-// puppet, Pawn=NULL -> BUA early-outs -> the AnimInstance is vastly under-
-// populated (confirmed empirically via the full-region dump 2026-05-23: 8 set
-// fields on puppet vs ~26 on local). The state machine transition reads one or
-// more of those fields and stays in idle.
-//
-// Fix: spawn a hidden satellite ACharacter, point puppet AnimInstance.Pawn at
-// it, drive its Movement.Velocity from the network-streamed pose. BUA runs
-// naturally, populates everything from the satellite. State machine sees
-// valid Movement + correct velocity -> transitions on the same conditions
-// the local mainPlayer's AnimInstance does.
-
-void* SpawnSatelliteCharacter(const FVector& location) {
-    void* characterClass = R::FindClass(L"Character");
-    if (!characterClass) {
-        UE_LOGE("engine: SpawnSatelliteCharacter -- Character class not found");
-        return nullptr;
-    }
-    // inertPawn=true: clears AutoPossessPlayer/AI + sets bBlockInput in the
-    // deferred window -> no PlayerController acquisition, no input theft.
-    void* sat = SpawnActor(characterClass, location, /*inertPawn=*/true);
-    if (!sat) {
-        UE_LOGE("engine: SpawnSatelliteCharacter -- SpawnActor failed");
-        return nullptr;
-    }
-    UE_LOGI("engine: SpawnSatelliteCharacter -> %p at (%.0f,%.0f,%.0f)",
-            sat, location.X, location.Y, location.Z);
-    return sat;
 }
 
 
