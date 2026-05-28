@@ -16,7 +16,6 @@
 
 namespace coop {
 
-class RemotePlayer;
 namespace net { class Session; }
 
 namespace event_feed {
@@ -26,12 +25,15 @@ void SetLocalNickname(const std::wstring& nick);
 
 // Per-tick pump (game thread): on connect, announce ourselves (reliable Join with our
 // nickname); on disconnect, post the peer's departure; drain delivered reliable
-// messages (a peer Join -> "<nick> joined" + label the remote player). `remote` may be
-// null before the puppet spawns. `localPlayer` is the local mainPlayer_C ptr,
-// passed through to remote_prop::OnRelease so the `Aprop_C.thrown(Player)`
-// dispatch has a non-null player arg (BP graph may null-check).
-// On disconnect it resets the announce flag so a reconnect re-announces.
-void Update(net::Session& session, RemotePlayer* remote, void* localPlayer);
+// messages (a peer Join -> "<nick> joined" + label the remote player).
+// `localPlayer` is the local mainPlayer_C ptr, passed through to remote_prop::OnRelease
+// so the `Aprop_C.thrown(Player)` dispatch has a non-null player arg (BP graph may
+// null-check). On disconnect it resets the announce flag so a reconnect re-announces.
+//
+// PR-4.4: puppets are looked up per-slot via coop::players::Registry::Puppet(slot)
+// (was: single `RemotePlayer* remote` parameter). Ping update fans across all live
+// puppets; per-slot Join nickname tracking + per-slot "left the game" message.
+void Update(net::Session& session, void* localPlayer);
 
 }  // namespace event_feed
 }  // namespace coop

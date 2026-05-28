@@ -37,6 +37,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -195,9 +196,22 @@ void Report(const char* label) {
     UE_LOGI("harness report [%s]: NumObjects=%d, world=%ls", label, n, worldName.c_str());
 }
 
-// The C++ orphan (replaces the Lua harness's SpawnOrphan/DriveOrphan): a
-// coop::RemotePlayer spawned + pose-driven via our own CallFunction path.
-coop::RemotePlayer g_orphan;
+// Puppets (replaces the Lua harness's SpawnOrphan/DriveOrphan): one
+// coop::RemotePlayer per peer slot. Indexed by the coop::players::Registry
+// slot convention: slot 0 = host (only used on CLIENT processes to hold the
+// host's puppet); slots 1..kMaxPeers-1 = clients (used on HOST processes to
+// hold each connected client's puppet). On HOST, slot 0 is unused
+// (representing host self); on CLIENT, slots 1..kMaxPeers-1 are unused.
+// Each entry's actor / spawn-retry / Tick state is independent.
+//
+// PR-4.4 (2026-05-28): replaced the singleton `coop::RemotePlayer g_orphan`
+// with this array, closing audit finding #14 (0-arg TryGetRemotePose
+// shadows slots >= 2) + code-explorer Findings A, F. The 1v1 backward-
+// compat alias `g_orphan = g_puppets[1]` lets non-net branches (drive
+// scenario, autotest visuals, show puppet) keep their single-puppet
+// semantics on slot 1 (the canonical "the remote" slot on HOST).
+std::array<coop::RemotePlayer, coop::players::kMaxPeers> g_puppets{};
+auto& g_orphan = g_puppets[1];
 
 // Cached local mainPlayer_C for the net pump. coop::players::Registry::Get().Local()
 // already caches + filters puppets via the controller discriminator
@@ -213,7 +227,17 @@ void* g_netLocalController = nullptr;
 // File-scope (NOT a static-local in NetPumpTick) so a future session restart can
 // reset it explicitly via ResetNetState below -- otherwise the local-static would
 // hold the prior session's value across the new Start (audit fix).
+//
+// AGGREGATE flag (`g_wasConnected`) tracks "any peer connected" -- used to gate
+// global OnDisconnect calls (prop_lifecycle, npc_sync, etc) that today have
+// session-wide state. PR-4.5 will scope those per-slot too.
+//
+// PER-SLOT flags (`g_wasConnectedBySlot`) track per-peer connection edges --
+// used to destroy the corresponding puppet on per-peer disconnect WITHOUT
+// wiping all subsystem state (matters when peer-1 drops while peer-2 stays).
+// PR-4.4 (closes audit-explorer Finding B partial + G partial).
 bool g_wasConnected = false;
+std::array<bool, coop::players::kMaxPeers> g_wasConnectedBySlot{};
 
 // v4 held-prop edge detector: file-scope for the same reason as g_wasConnected.
 // A static-local would carry a stale prop pointer + key across a session stop/
@@ -329,25 +353,27 @@ void NetPumpTick(float displayOffsetX) {
     // and clutters the world. event_feed will also have posted "X left the game"
     // (a chat-feed line that now expires via hud_feed::Tick). If the peer ever
     // reconnects, NetPumpTick auto-spawns a fresh puppet on the first new pose.
+    //
+    // PR-4.4: per-slot puppet teardown. Each slot's disconnect edge destroys
+    // ONLY that slot's puppet (a partial disconnect of one client should not
+    // affect another's puppet). The AGGREGATE disconnect path below still
+    // fires the global OnDisconnect calls for subsystems that have session-
+    // wide state -- per-slot scoping for those subsystems lands in PR-4.5.
     const bool isConnected = (g_session.state() == coop::net::ConnState::Connected);
-    if (g_wasConnected && !isConnected) {
-        // Peer-gone: drop the puppet AND restore physics on any prop the
-        // receiver was kinematically driving (without this, a remote prop
-        // mid-grab at disconnect would stay frozen in air forever -- the
-        // 500 ms stream-stop timeout fires from inside remote_prop::Tick
-        // but only if Tick keeps running; relying on it solely is fragile.
-        // Audit fix 2026-05-24).
-        if (g_orphan.valid()) {
-            // Unregister from the central players::Registry BEFORE destroying
-            // the actor -- anyone doing a lookup mid-disconnect should get a
-            // clean nullptr, not a dangling pointer to a half-destroyed puppet.
-            const uint8_t puppetPeerId =
-                (g_session.role() == coop::net::Role::Host)
-                ? coop::players::kPeerIdHost + 1u
-                : coop::players::kPeerIdHost;
-            coop::players::Registry::Get().UnregisterPuppet(puppetPeerId);
-            g_orphan.Destroy();
+    for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
+        const bool slotConnected = g_session.IsSlotConnected(slot);
+        if (g_wasConnectedBySlot[slot] && !slotConnected) {
+            if (g_puppets[slot].valid()) {
+                coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
+                g_puppets[slot].Destroy();
+                UE_LOGI("net: peer slot %d disconnected -- puppet destroyed", slot);
+            }
         }
+        g_wasConnectedBySlot[slot] = slotConnected;
+    }
+    if (g_wasConnected && !isConnected) {
+        // Aggregate disconnect (all peers gone). Fire the global OnDisconnect
+        // calls. PR-4.5 will scope these per-slot.
         coop::remote_prop::ForceRelease();
         // Audit C-1 (2026-05-24): clear the pending-spawn queue + any
         // half-drained snapshot enumeration. Their contents belong to the
@@ -368,7 +394,7 @@ void NetPumpTick(float displayOffsetX) {
         // Phase 5W Inc1 (2026-05-26): clear any pending weather broadcast +
         // reset the dedup signature so a fresh connect re-snapshots state.
         coop::weather_sync::OnDisconnect();
-        UE_LOGI("net: disconnected -- cleared %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
+        UE_LOGI("net: all peers gone -- cleared %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 snapPending, propStats.initProcessedDropped);
     }
     // Phase 5S0 (snapshot bootstrap): on every false->true transition of
@@ -531,58 +557,67 @@ void NetPumpTick(float displayOffsetX) {
         }
     }
 
-    coop::net::PoseSnapshot remote;
-    bool isNew = false;
-    const bool havePose = g_session.TryGetRemotePose(remote, &isNew);
-    if (havePose) {
-        if (!g_orphan.valid()) {
-            // Spawn-retry backoff: BeginDeferredActorSpawnFromClass refuses if the world
-            // is mid-transition (the OMEGA->story transition under 2-instance CPU
-            // contention can take many seconds; refused spawns reach hundreds/sec at
-            // 60 Hz pump rate -- pure log noise + wasted reflection calls). Only retry
-            // once per second after a failure (RULE 1: don't crutch the engine, just
-            // wait for it).
-            using namespace std::chrono;
-            static steady_clock::time_point sNextSpawnAttempt{};
-            const auto now = steady_clock::now();
-            if (now < sNextSpawnAttempt) return;
-            UE_LOGI("net: first remote pose -> auto-spawning remote puppet");
-            if (!g_orphan.Spawn()) {
-                UE_LOGW("net: remote puppet spawn failed; will retry in 1 s");
-                sNextSpawnAttempt = now + seconds(1);
-                return;
-            }
-            // Register with the players::Registry so any subsystem can look
-            // up the puppet by peerId (instead of scattered &g_orphan
-            // references). 1v1 transitional mapping: the OTHER peer's id is
-            // the opposite of our role -- if we're host (id 0), the puppet
-            // represents the client (id 1); vice versa. N-peer (4-player
-            // target) will switch this to a session-assigned id table.
-            const uint8_t puppetPeerId =
-                (g_session.role() == coop::net::Role::Host)
-                ? coop::players::kPeerIdHost + 1u  // client #1 == 1
-                : coop::players::kPeerIdHost;       // the host == 0
-            coop::players::Registry::Get().RegisterPuppet(puppetPeerId, &g_orphan);
-            // PR-4.2 (closes audit finding #9): host self-assigns slot 0.
-            // Client LocalPeerId is established by the wire-layer AssignPeerSlot
-            // message handled in event_feed.cpp -- the prior client hardcode
-            // (`kPeerIdHost + 1u`) was a 1v1 baked-in fiction that broke in
-            // N-peer (two clients both stamping 1 silently self-echoed each
-            // other's ItemActivate). Retired per RULE 2.
-            if (g_session.role() == coop::net::Role::Host) {
-                coop::players::Registry::Get().SetLocalPeerId(coop::players::kPeerIdHost);
-            }
+    // PR-4.4: per-slot pose drive. On HOST, iterate slots 1..kMaxPeers-1
+    // (clients). On CLIENT, iterate slot 0 only (the host). Each slot has
+    // its own RemotePlayer puppet + spawn-retry backoff. Closes audit
+    // finding #14 (0-arg TryGetRemotePose shadows slots >= 2).
+    {
+        using namespace std::chrono;
+        // Per-slot spawn retry timer (static-local: harmless across session
+        // restarts because the timer is monotonic and a stale "wait until X"
+        // either lets us spawn immediately if X is in the past, or makes us
+        // wait the (bounded) remaining time -- no risk of carrying state
+        // that affects correctness).
+        static std::array<steady_clock::time_point, coop::players::kMaxPeers> sNextSpawnAttempt{};
+        const auto now = steady_clock::now();
+        const bool isHost = (g_session.role() == coop::net::Role::Host);
+        const int firstSlot = isHost ? 1 : 0;
+        const int lastSlot  = isHost ? coop::players::kMaxPeers : 1;
+        // Host self-assigns slot 0 in the registry. Idempotent setter so it's
+        // fine to run every tick. Client LocalPeerId is set asynchronously by
+        // the wire-layer AssignPeerSlot handler (event_feed.cpp).
+        if (isHost) {
+            coop::players::Registry::Get().SetLocalPeerId(coop::players::kPeerIdHost);
         }
-        // Only RE-BASE the interpolation on a NEW packet; re-pushing the latest
-        // every frame would zero `errorPos_` mid-window and freeze motion. The
-        // per-frame advance happens in Tick() below.
-        if (isNew) {
-            coop::net::PoseSnapshot withOffset = remote;
-            withOffset.x += displayOffsetX;  // loopback mirror shift (0 for real coop)
-            g_orphan.SetTargetPose(withOffset);
+        for (int slot = firstSlot; slot < lastSlot; ++slot) {
+            coop::net::PoseSnapshot remote;
+            bool isNew = false;
+            if (!g_session.TryGetRemotePose(slot, remote, &isNew)) continue;
+            if (!g_puppets[slot].valid()) {
+                // Spawn-retry backoff: BeginDeferredActorSpawnFromClass refuses if
+                // the world is mid-transition (the OMEGA->story transition under
+                // multi-instance CPU contention can take many seconds; refused
+                // spawns reach hundreds/sec at 60 Hz pump rate -- pure log noise +
+                // wasted reflection calls). Only retry once per second after a
+                // failure (RULE 1: don't crutch the engine, just wait for it).
+                if (now < sNextSpawnAttempt[slot]) continue;
+                UE_LOGI("net: first remote pose on slot %d -> auto-spawning puppet", slot);
+                if (!g_puppets[slot].Spawn()) {
+                    UE_LOGW("net: slot %d puppet spawn failed; will retry in 1 s", slot);
+                    sNextSpawnAttempt[slot] = now + seconds(1);
+                    continue;
+                }
+                // Register with the central Registry. peerId == slot directly
+                // (no 1v1 hardcode anymore).
+                coop::players::Registry::Get().RegisterPuppet(
+                    static_cast<uint8_t>(slot), &g_puppets[slot]);
+            }
+            // Only RE-BASE the interpolation on a NEW packet; re-pushing the latest
+            // every frame would zero `errorPos_` mid-window and freeze motion. The
+            // per-frame advance happens in Tick() below.
+            if (isNew) {
+                coop::net::PoseSnapshot withOffset = remote;
+                withOffset.x += displayOffsetX;  // loopback mirror shift (0 for real coop)
+                g_puppets[slot].SetTargetPose(withOffset);
+            }
         }
     }
-    if (g_orphan.valid()) g_orphan.Tick();
+    // Tick every live puppet (independent of which slot received pose data
+    // this frame -- the per-puppet interpolation needs Tick every frame even
+    // when no fresh pose arrived).
+    for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
+        if (g_puppets[slot].valid()) g_puppets[slot].Tick();
+    }
 
     // v4: receiver-side held-prop driver. Drains the latest PropPose from the
     // session and applies it (lookup-by-Key on first arrival, transform writes
@@ -593,7 +628,11 @@ void NetPumpTick(float displayOffsetX) {
     // Pass g_netLocal so remote_prop::OnRelease can call Aprop_C.thrown(player)
     // for the natural throw-sound dispatch (Path B in
     // research/findings/votv-throw-sound-path-2026-05-24.md).
-    coop::event_feed::Update(g_session, &g_orphan, g_netLocal);
+    //
+    // PR-4.4: dropped the RemotePlayer* parameter -- event_feed now looks up
+    // puppets per-slot via Registry::Puppet(slot) so it can fan ping updates
+    // across all live puppets (was: only updated slot 1's puppet).
+    coop::event_feed::Update(g_session, g_netLocal);
 
     // Expire old chat-feed lines (10 s TTL) so a "X joined the game" line
     // doesn't linger forever like the early version did.

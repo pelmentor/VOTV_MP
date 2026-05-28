@@ -452,23 +452,6 @@ bool Session::TryGetRemotePose(int peerSlot, PoseSnapshot& out, bool* outIsNew) 
     return true;
 }
 
-bool Session::TryGetRemotePose(PoseSnapshot& out, bool* outIsNew) {
-    // Backward-compat: return the first slot with a remote pose. Existing
-    // harness drives ONE puppet so this picks the canonical "the remote"
-    // peer (slot 1 on host, slot 0 on client).
-    if (state_.load() != ConnState::Connected) return false;
-    std::lock_guard<std::mutex> lk(remoteMutex_);
-    for (int i = 0; i < kMaxPeers; ++i) {
-        if (hasRemote_[i]) {
-            out = remotePoses_[i];
-            if (outIsNew) *outIsNew = (remoteStamp_[i] != lastReadStamp_[i]);
-            lastReadStamp_[i] = remoteStamp_[i];
-            return true;
-        }
-    }
-    return false;
-}
-
 bool Session::TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* outIsNew) {
     if (state_.load() != ConnState::Connected) return false;
     if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
@@ -478,20 +461,6 @@ bool Session::TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* ou
     if (outIsNew) *outIsNew = (remotePropStamp_[peerSlot] != lastReadPropStamp_[peerSlot]);
     lastReadPropStamp_[peerSlot] = remotePropStamp_[peerSlot];
     return true;
-}
-
-bool Session::TryGetRemotePropPose(PropPoseSnapshot& out, bool* outIsNew) {
-    if (state_.load() != ConnState::Connected) return false;
-    std::lock_guard<std::mutex> lk(remoteMutex_);
-    for (int i = 0; i < kMaxPeers; ++i) {
-        if (hasRemoteProp_[i]) {
-            out = remotePropPoses_[i];
-            if (outIsNew) *outIsNew = (remotePropStamp_[i] != lastReadPropStamp_[i]);
-            lastReadPropStamp_[i] = remotePropStamp_[i];
-            return true;
-        }
-    }
-    return false;
 }
 
 bool Session::TryGetReliable(ReliableMessage& out) {

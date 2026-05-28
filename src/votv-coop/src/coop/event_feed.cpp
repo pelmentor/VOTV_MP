@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -25,11 +26,20 @@ namespace coop::event_feed {
 namespace {
 
 std::wstring g_localNick = L"Player";
-// Placeholder shown ONLY in the unusual case the peer drops before its Join
-// reliable message lands (Bye before Join completes). Once Join is delivered
-// this becomes the real peer nickname.
-std::wstring g_remoteNick = L"Remote player";
-bool g_lastConnected = false;
+// PR-4.4: per-slot nickname + per-slot connection edge. Pre-fix all three
+// were single-peer scalars -- two clients' Joins would overwrite each
+// other's nick (Finding I); the "X left the game" message would fire on
+// the AGGREGATE session disconnect with whoever's nick happened to be in
+// `g_remoteNick` at the time, not the specific departing peer.
+// Placeholder ("Remote player") is shown ONLY in the unusual case where the
+// peer drops before its Join reliable message lands.
+std::array<std::wstring, net::kMaxPeers> g_remoteNickBySlot{
+    L"Remote player", L"Remote player", L"Remote player", L"Remote player"
+};
+std::array<bool, net::kMaxPeers> g_lastConnectedBySlot{};
+// g_joinSent is per-process (whether THIS process has announced its Join
+// over the reliable channel). The Join fans out from one SendReliable to
+// all connected peers, so a single bool here is correct.
 bool g_joinSent = false;
 
 std::vector<uint8_t> ToUtf8(const std::wstring& w) {
@@ -128,15 +138,23 @@ void SetLocalNickname(const std::wstring& nick) {
     if (!nick.empty()) g_localNick = SanitizeNickname(nick);
 }
 
-void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
+void Update(net::Session& session, void* localPlayer) {
     const bool connected = session.connected();
 
-    // Forward the latest RTT into the remote player so the nameplate can show
-    // "<nick> (<ping>ms)". Cheap (atomic load + an int store; no allocation).
-    if (remote) remote->SetPing(session.lastRttMs());
+    // Fan the latest RTT across every live puppet so each nameplate shows
+    // "<nick> (<ping>ms)". The Session today exposes only an aggregate
+    // lastRttMs() (first-connected-peer's RTT) -- per-slot RTT can land in
+    // a later PR; this still beats only updating slot 1 (the pre-fix bug).
+    const int rtt = session.lastRttMs();
+    for (int slot = 0; slot < net::kMaxPeers; ++slot) {
+        RemotePlayer* p = coop::players::Registry::Get().Puppet(static_cast<uint8_t>(slot));
+        if (p) p->SetPing(rtt);
+    }
 
-    // On (re)connect: announce ourselves once via the reliable channel. Join payload
-    // is [uint8 len][len bytes UTF-8 nickname]; the nickname is clamped to fit.
+    // On (re)connect: announce ourselves once via the reliable channel. Join
+    // fan-outs to all currently-connected peers in a single SendReliable;
+    // late-joiners get our nick via the connect-edge replay queued by the
+    // harness (PR-4.5).
     if (connected && !g_joinSent) {
         std::vector<uint8_t> nickUtf8 = ToUtf8(g_localNick);
         if (nickUtf8.size() > 200) nickUtf8.resize(200);
@@ -148,21 +166,40 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             g_joinSent = true;  // stop-and-wait: retries automatically until acked
     }
 
-    // On disconnect (peer Bye -> session drops to Handshaking): post the departure.
-    // Reason is generated locally (MTA pattern); only graceful "left" is detectable
-    // for now (timeout/error reasons are a future enhancement).
-    if (!connected && g_lastConnected) {
-        ue_wrap::hud_feed::Push(g_remoteNick + L" left the game");
-        g_joinSent = false;  // re-announce on the next connect
+    // Per-slot disconnect edge: when a specific peer slot transitions
+    // connected -> disconnected, post the departing peer's nick (not the
+    // last-seen nick on the aggregate session). Was a bug pre-PR-4.4:
+    // "X left the game" used g_remoteNick which got overwritten by the
+    // most recent Join, so the message was wrong when client 2 left while
+    // client 1 was still connected.
+    for (int slot = 0; slot < net::kMaxPeers; ++slot) {
+        const bool slotConnected = session.IsSlotConnected(slot);
+        if (g_lastConnectedBySlot[slot] && !slotConnected) {
+            ue_wrap::hud_feed::Push(g_remoteNickBySlot[slot] + L" left the game");
+        }
+        g_lastConnectedBySlot[slot] = slotConnected;
     }
-    g_lastConnected = connected;
+    // Re-announce on aggregate disconnect so the next connect re-sends Join.
+    if (!connected) {
+        g_joinSent = false;
+    }
 
     // Drain delivered reliable messages.
     net::Session::ReliableMessage msg;
     while (session.TryGetReliable(msg)) {
         switch (msg.kind) {
         case net::ReliableKind::Join: {
-            std::wstring nick = g_remoteNick;
+            // PR-4.4: Join now writes the per-slot nickname keyed on the
+            // sender's peer slot. Pre-fix g_remoteNick was a single scalar
+            // overwritten by every Join (Finding I) -- two clients on host
+            // would each clobber the other's nick.
+            const int senderSlot = msg.senderPeerSlot;
+            if (senderSlot < 0 || senderSlot >= net::kMaxPeers) {
+                UE_LOGW("event_feed: Join has invalid senderPeerSlot=%d -- dropping",
+                        senderSlot);
+                break;
+            }
+            std::wstring nick = g_remoteNickBySlot[senderSlot];
             if (msg.payloadLen > 0) {
                 const int len = msg.payload[0];
                 if (1 + len <= static_cast<int>(msg.payloadLen) && len > 0)
@@ -177,8 +214,12 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // the rest of the nameplate. Length-cap to 20 wchars caps
             // the worst-case widget overflow.
             nick = SanitizeNickname(nick);
-            g_remoteNick = nick;
-            if (remote) remote->SetNickname(nick);  // label the nameplate too
+            g_remoteNickBySlot[senderSlot] = nick;
+            // Label the nameplate of THIS sender's puppet (not all puppets).
+            if (RemotePlayer* p = coop::players::Registry::Get().Puppet(
+                    static_cast<uint8_t>(senderSlot))) {
+                p->SetNickname(nick);
+            }
             // Role-aware phrasing (2026-05-27, user feedback): on the CLIENT
             // the Join packet arrives FROM the host -- saying "<host> joined
             // the game" reads backwards (the client is the one who joined).

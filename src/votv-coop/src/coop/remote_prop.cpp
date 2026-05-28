@@ -255,9 +255,18 @@ void Tick(coop::net::Session& session) {
         if (g_drive.actor) ForceRelease();
         return;
     }
+    // PR-4.4: switch to the slot-aware overload (unblocks deletion of the
+    // 0-arg backward-compat overload per RULE 2). Today g_drive is a single
+    // ActiveDrive instance -- only ONE prop can be kinematically driven on
+    // this receiver at a time. We pick the canonical "the remote" slot
+    // (host case: client #1 at slot 1; client case: host at slot 0) to
+    // match pre-PR-4.4 1v1 behavior. The full per-slot DriveState[kMaxPeers]
+    // (audit-explorer Finding E) where multiple clients can concurrently
+    // hold props is a follow-up PR after PR-4.4 lands.
+    const int canonicalSlot = (session.role() == coop::net::Role::Host) ? 1 : 0;
     coop::net::PropPoseSnapshot pose{};
     bool isNew = false;
-    const bool have = session.TryGetRemotePropPose(pose, &isNew);
+    const bool have = session.TryGetRemotePropPose(canonicalSlot, pose, &isNew);
     const uint64_t nowMs = NowMs();
     if (have && isNew) {
         // First snapshot OR key changed -> resolve + SetSimulatePhysics(false).

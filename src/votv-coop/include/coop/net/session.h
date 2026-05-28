@@ -89,17 +89,14 @@ public:
     void SetLocalPose(const PoseSnapshot& pose);
     void SetLocalPropPose(bool set, const PropPoseSnapshot& pose);
 
-    // Backward-compat (1v1): returns the first connected peer's pose. On host,
-    // that is the first client (lowest occupied slot 1..3); on client, slot 0
-    // (the host). Existing harness uses this -- callers driving multiple
-    // puppets should switch to the per-peerSlot overloads below.
-    bool TryGetRemotePose(PoseSnapshot& out, bool* outIsNew = nullptr);
-    bool TryGetRemotePropPose(PropPoseSnapshot& out, bool* outIsNew = nullptr);
-
-    // PR-4: per-peer accessors. peerSlot is the coop::players::Registry slot
+    // Per-peer accessors. peerSlot is the coop::players::Registry slot
     // (0 = host, 1..kMaxPeers-1 = clients). Returns false if peerSlot is out
     // of range, that slot has no remote pose yet, or aggregate state is not
     // Connected.
+    //
+    // PR-4.4: the 0-arg backward-compat overloads were retired per RULE 2
+    // (they shadowed slots >= 2 -- the original audit-flagged finding #14).
+    // All callers now pass an explicit peerSlot.
     bool TryGetRemotePose(int peerSlot, PoseSnapshot& out, bool* outIsNew = nullptr);
     bool TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* outIsNew = nullptr);
 
@@ -136,6 +133,14 @@ public:
     int lastRttMs() const { return lastRttMs_.load(); }
     // Count of currently-connected peers (0..kMaxPeers-1).
     int connectedPeerCount() const;
+    // PR-4.4: true if the given slot has an active GNS connection. Used by
+    // the harness for per-slot connect/disconnect edge detection (replaces
+    // the aggregate g_wasConnected flag that fired global broadcasts on
+    // FIRST connect only).
+    bool IsSlotConnected(int peerSlot) const {
+        if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+        return peerConns_[peerSlot].load() != 0;
+    }
 
     // GNS C-callback adapter -- public so the file-local trampoline in
     // session.cpp can forward to it.
