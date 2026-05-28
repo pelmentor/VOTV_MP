@@ -24,11 +24,13 @@ TO RUN YOU MUST MAKE A BAT AND PUT IT PROJECTS ROOT").
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +52,79 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 def log(msg: str) -> None:
     sys.stdout.write(f"[mp] {msg}\n")
     sys.stdout.flush()
+
+
+# --- Monitor enumeration (Win32 EnumDisplayMonitors via ctypes) ---
+# Used to place client windows on the second monitor by default, so the user's
+# primary monitor (host window) stays visually separate from the client(s) in
+# multi-peer tests. Returns a list of dicts with 'primary', 'rect', 'work'.
+
+class _RECT(ctypes.Structure):
+    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', _RECT),
+                ('rcWork', _RECT), ('dwFlags', wintypes.DWORD)]
+
+
+_MONITORINFOF_PRIMARY = 0x00000001
+
+
+def enumerate_monitors() -> list[dict]:
+    """Returns a list of monitors ordered: primary first, then secondaries
+    in EnumDisplayMonitors order (top-left to bottom-right typically).
+
+    Each entry: {'primary': bool, 'x': int, 'y': int, 'w': int, 'h': int}
+    where x/y/w/h come from rcMonitor (full bounds, including taskbar).
+    """
+    user32 = ctypes.windll.user32
+    # Without argtypes, ctypes defaults to c_int for pointer-typed args; HMONITOR
+    # on x64 is 64-bit and that mismatch raises OverflowError when the C callback
+    # tries to forward the handle. Set the signatures explicitly.
+    user32.GetMonitorInfoW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)
+    ]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    user32.EnumDisplayMonitors.restype = wintypes.BOOL
+    found: list[dict] = []
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.POINTER(_RECT), ctypes.c_void_p)
+
+    def cb(hmonitor, hdc, lprc, lparam):
+        # Must return 1 even on internal failure: returning 0 (or None via an
+        # exception) tells EnumDisplayMonitors to STOP enumerating, which would
+        # silently drop secondary monitors.
+        try:
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(_MONITORINFO)
+            if user32.GetMonitorInfoW(hmonitor, ctypes.byref(mi)):
+                found.append({
+                    'primary': bool(mi.dwFlags & _MONITORINFOF_PRIMARY),
+                    'x': mi.rcMonitor.left,
+                    'y': mi.rcMonitor.top,
+                    'w': mi.rcMonitor.right - mi.rcMonitor.left,
+                    'h': mi.rcMonitor.bottom - mi.rcMonitor.top,
+                })
+        except Exception:
+            pass
+        return 1
+
+    user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(cb), 0)
+    # Sort: primary first, then by (y, x) for stable left-to-right ordering.
+    found.sort(key=lambda m: (not m['primary'], m['y'], m['x']))
+    return found
+
+
+def pick_monitor(index_1based: int) -> dict | None:
+    """index 1 -> primary, 2 -> first secondary, etc. Returns None if N/A."""
+    mons = enumerate_monitors()
+    if index_1based < 1 or index_1based > len(mons):
+        return None
+    return mons[index_1based - 1]
 
 
 def run_ps(script: str) -> tuple[int, str, str]:
@@ -125,8 +200,36 @@ def host_owns_udp(pid: int, port: int) -> bool:
     return str(port) in out
 
 
+def tile_offset(tile_index: int, mon: dict | None,
+                res_x: int, res_y: int) -> tuple[int, int]:
+    """Compute non-overlapping (offset_x, offset_y) within `mon` for the
+    Nth (0-indexed) tile of a `res_x` x `res_y` window. Tries side-by-side
+    first (if the monitor is wide enough for two windows), then stacked
+    vertically (if tall enough), then a 40-px cascade fallback.
+
+    Monitor shape examples:
+      2560x1440 landscape secondary: cols=2 (2560//1280=2), rows=2 -> tile 0
+        lands at (0,0), tile 1 at (1280,0).
+      1440x2560 portrait secondary: cols=1, rows=3 -> tile 0 at (0,0),
+        tile 1 at (0,720), tile 2 at (0,1440).
+      1280x720 single monitor: cols=1, rows=1 -> falls back to cascade.
+    """
+    if mon is None:
+        return (tile_index * 40, tile_index * 40)
+    cols = max(1, mon['w'] // res_x)
+    rows = max(1, mon['h'] // res_y)
+    if cols >= 2:
+        col = tile_index % cols
+        row = (tile_index // cols) % max(1, rows)
+        return (col * res_x, row * res_y)
+    if rows >= 2:
+        return (0, (tile_index % rows) * res_y)
+    return (tile_index * 40, tile_index * 40)
+
+
 def launch_peer(role: str, port: int, nick: str, peer: str | None,
-                res_x: int, res_y: int, peer_slot: int = 1) -> int:
+                res_x: int, res_y: int, peer_slot: int = 1,
+                monitor: int = 1, tile_index: int = 0) -> int:
     # role is the WIRE role (host / client). peer_slot is which CLIENT folder
     # to launch from when role==client: 1 -> Game_0.9.0n_copy, 2 ->
     # Game_0.9.0n_copy2. Host always uses Game_0.9.0n.
@@ -140,7 +243,19 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
     if not exe.exists():
         log(f"FATAL: missing exe {exe}")
         sys.exit(1)
+    # Pick target monitor + compute window placement. UE4 accepts -WinX / -WinY
+    # for windowed-mode placement (in virtual-screen coords). 0,0 = primary
+    # monitor top-left; secondary monitor coords come from EnumDisplayMonitors.
+    mon = pick_monitor(monitor)
+    if mon is None:
+        # Requested monitor doesn't exist (e.g. user said --monitor 2 but only
+        # has one screen). Silently fall back to the primary monitor.
+        mon = pick_monitor(1)
+    ox, oy = tile_offset(tile_index, mon, res_x, res_y)
+    win_x = (mon['x'] if mon else 0) + ox
+    win_y = (mon['y'] if mon else 0) + oy
     log(f"role={role} dir={game_dir.parent.parent.parent.name} port={port} nick={nick}"
+        f" monitor={monitor} win=({win_x},{win_y}) res={res_x}x{res_y}"
         + (f" peer={peer}" if peer else ""))
     (game_dir / "scenario.txt").write_text("play")
     log_file = game_dir / "votv-coop.log"
@@ -157,7 +272,9 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
     if role == "client" and peer:
         env["VOTVCOOP_NET_PEER"] = peer
     proc = subprocess.Popen(
-        [str(exe), "-windowed", f"-ResX={res_x}", f"-ResY={res_y}"],
+        [str(exe), "-windowed",
+         f"-ResX={res_x}", f"-ResY={res_y}",
+         f"-WinX={win_x}", f"-WinY={win_y}"],
         cwd=str(game_dir),
         env=env,
         stdin=subprocess.DEVNULL,
@@ -173,23 +290,27 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
 def cmd_host(args) -> None:
     deploy_all()
     pid = launch_peer("host", args.port, args.nick or "Host",
-                      peer=None, res_x=args.res_x, res_y=args.res_y)
+                      peer=None, res_x=args.res_x, res_y=args.res_y,
+                      monitor=args.monitor)
     log(f"host running PID={pid}")
 
 
 def cmd_client(args) -> None:
     deploy_all()
+    # Client #1: tile index 0 (top-left of the target monitor).
     pid = launch_peer("client", args.port, args.nick or "Client",
                       peer=args.peer, res_x=args.res_x, res_y=args.res_y,
-                      peer_slot=1)
+                      peer_slot=1, monitor=args.monitor, tile_index=0)
     log(f"client running PID={pid}")
 
 
 def cmd_client2(args) -> None:
     deploy_all()
+    # Client #2: tile index 1. tile_offset() picks side-by-side / stacked /
+    # cascade automatically based on the chosen monitor's dimensions.
     pid = launch_peer("client", args.port, args.nick or "Client2",
                       peer=args.peer, res_x=args.res_x, res_y=args.res_y,
-                      peer_slot=2)
+                      peer_slot=2, monitor=args.monitor, tile_index=1)
     log(f"client2 running PID={pid}")
 
 
@@ -321,20 +442,30 @@ def main() -> None:
         ("--port", {"type": int, "default": DEFAULT_PORT}),
     ]
 
+    # --monitor: 1 = primary, 2 = first secondary, etc. Host stays on the
+    # primary monitor; clients default to monitor 2 so the user's main screen
+    # isn't crowded by 2+ client windows during multi-peer tests. If only one
+    # monitor is connected the code silently falls back to monitor 1.
     p_host = sub.add_parser("host", help="launch HOST peer")
     p_host.add_argument("--nick", default=None)
+    p_host.add_argument("--monitor", type=int, default=1,
+                        help="1-based monitor index; primary=1, secondary=2")
     for flag, kw in host_res: p_host.add_argument(flag, **kw)
     p_host.set_defaults(func=cmd_host)
 
     p_client = sub.add_parser("client", help="launch CLIENT #1 peer")
     p_client.add_argument("--peer", default="127.0.0.1")
     p_client.add_argument("--nick", default=None)
+    p_client.add_argument("--monitor", type=int, default=2,
+                          help="1-based monitor index; defaults to secondary")
     for flag, kw in client_res: p_client.add_argument(flag, **kw)
     p_client.set_defaults(func=cmd_client)
 
     p_client2 = sub.add_parser("client2", help="launch CLIENT #2 peer (3-peer LAN)")
     p_client2.add_argument("--peer", default="127.0.0.1")
     p_client2.add_argument("--nick", default=None)
+    p_client2.add_argument("--monitor", type=int, default=2,
+                           help="1-based monitor index; defaults to secondary")
     for flag, kw in client_res: p_client2.add_argument(flag, **kw)
     p_client2.set_defaults(func=cmd_client2)
 
