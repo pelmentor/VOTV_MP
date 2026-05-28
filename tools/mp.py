@@ -229,7 +229,8 @@ def tile_offset(tile_index: int, mon: dict | None,
 
 def launch_peer(role: str, port: int, nick: str, peer: str | None,
                 res_x: int, res_y: int, peer_slot: int = 1,
-                monitor: int = 1, tile_index: int = 0) -> int:
+                monitor: int = 1, tile_index: int = 0,
+                center: bool = False) -> int:
     # role is the WIRE role (host / client). peer_slot is which CLIENT folder
     # to launch from when role==client: 1 -> Game_0.9.0n_copy, 2 ->
     # Game_0.9.0n_copy2. Host always uses Game_0.9.0n.
@@ -251,7 +252,16 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
         # Requested monitor doesn't exist (e.g. user said --monitor 2 but only
         # has one screen). Silently fall back to the primary monitor.
         mon = pick_monitor(1)
-    ox, oy = tile_offset(tile_index, mon, res_x, res_y)
+    if center and mon is not None:
+        # Center the window on the chosen monitor. Used by the host launcher
+        # so the single big host window lands in the middle of the primary
+        # screen instead of the top-left corner. max(0, ...) guards against
+        # window bigger than monitor (shouldn't happen at 1920x1080 on
+        # modern monitors, but no negative offsets either).
+        ox = max(0, (mon['w'] - res_x) // 2)
+        oy = max(0, (mon['h'] - res_y) // 2)
+    else:
+        ox, oy = tile_offset(tile_index, mon, res_x, res_y)
     win_x = (mon['x'] if mon else 0) + ox
     win_y = (mon['y'] if mon else 0) + oy
     log(f"role={role} dir={game_dir.parent.parent.parent.name} port={port} nick={nick}"
@@ -289,9 +299,11 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
 
 def cmd_host(args) -> None:
     deploy_all()
+    # Host: single big window, centered on the chosen monitor (primary by
+    # default). Not tiled -- the client launchers handle multi-window tiling.
     pid = launch_peer("host", args.port, args.nick or "Host",
                       peer=None, res_x=args.res_x, res_y=args.res_y,
-                      monitor=args.monitor)
+                      monitor=args.monitor, center=True)
     log(f"host running PID={pid}")
 
 
