@@ -33,7 +33,6 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 namespace coop::net {
 
@@ -60,9 +59,15 @@ struct Config {
 
 class Session {
 public:
+    // Fixed-size inline payload (no heap alloc on net thread per receive).
+    // senderPeerSlot is the coop::players::Registry slot of the peer that
+    // originated this message (-1 if unknown). Drainers route per-sender
+    // (e.g. respond TeleportClient back to the requester) via this field.
     struct ReliableMessage {
         ReliableKind kind;
-        std::vector<uint8_t> payload;
+        int senderPeerSlot = -1;
+        uint16_t payloadLen = 0;
+        uint8_t payload[kMaxReliablePayload];
     };
 
     Session() = default;

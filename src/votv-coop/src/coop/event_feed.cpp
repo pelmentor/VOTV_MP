@@ -163,10 +163,10 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
         switch (msg.kind) {
         case net::ReliableKind::Join: {
             std::wstring nick = g_remoteNick;
-            if (!msg.payload.empty()) {
+            if (msg.payloadLen > 0) {
                 const int len = msg.payload[0];
-                if (1 + len <= static_cast<int>(msg.payload.size()) && len > 0)
-                    nick = FromUtf8(msg.payload.data() + 1, len);
+                if (1 + len <= static_cast<int>(msg.payloadLen) && len > 0)
+                    nick = FromUtf8(msg.payload + 1, len);
             }
             // VT-inspired nickname sanitizer (2026-05-25, see
             // SanitizeNickname doc above). Trust-boundary defense: this
@@ -194,13 +194,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // v5: peer released a held prop. Dispatch to remote_prop which
             // re-enables SimulatePhysics + sets linear/angular velocity, and
             // fires Aprop_C.thrown if the launch crosses the throw threshold.
-            if (msg.payload.size() < sizeof(net::PropReleasePayload)) {
+            if (msg.payloadLen < sizeof(net::PropReleasePayload)) {
                 UE_LOGW("event_feed: PropRelease payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::PropReleasePayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::PropReleasePayload));
                 break;
             }
             net::PropReleasePayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             // Trust-boundary validation: a NaN/Inf or absurd-magnitude velocity
             // reaches UPrimitiveComponent::SetPhysicsLinearVelocity ->
             // SetPhysicsAngularVelocityInDegrees -> PhysX UB. Reject before
@@ -239,13 +239,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
         case net::ReliableKind::PropSpawn: {
             // v5 Bug C: peer dropped an inventory item -- spawn a matching
             // Aprop_X_C locally so subsequent PropPose updates resolve.
-            if (msg.payload.size() < sizeof(net::PropSpawnPayload)) {
+            if (msg.payloadLen < sizeof(net::PropSpawnPayload)) {
                 UE_LOGW("event_feed: PropSpawn payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::PropSpawnPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::PropSpawnPayload));
                 break;
             }
             net::PropSpawnPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             // Trust-boundary validation: any of the 18 floats (loc/rot/scale +
             // 2 vel vectors) NaN/Inf or out-of-bound -> SpawnActor +
             // SetPhysics* could crash PhysX. Reject before dispatch.
@@ -326,13 +326,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // crafted Keys to destroy host's quest items. Mitigation if
             // needed: authority model (host validates destroy requests
             // against current world state / quest progress).
-            if (msg.payload.size() < sizeof(net::PropDestroyPayload)) {
+            if (msg.payloadLen < sizeof(net::PropDestroyPayload)) {
                 UE_LOGW("event_feed: PropDestroy payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::PropDestroyPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::PropDestroyPayload));
                 break;
             }
             net::PropDestroyPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             if (p.key.len > 31) {
                 UE_LOGW("event_feed: PropDestroy key.len=%u > 31 -- dropping", p.key.len);
                 break;
@@ -348,13 +348,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
         case net::ReliableKind::EntitySpawn: {
             // Phase 5N1 Inc2 NPC spawn dispatch from host. Receiver currently
             // logs only -- materialization lands in a future Inc.
-            if (msg.payload.size() < sizeof(net::EntitySpawnPayload)) {
+            if (msg.payloadLen < sizeof(net::EntitySpawnPayload)) {
                 UE_LOGW("event_feed: EntitySpawn payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::EntitySpawnPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::EntitySpawnPayload));
                 break;
             }
             net::EntitySpawnPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             if (p.className.len > 63) {
                 UE_LOGW("event_feed: EntitySpawn className.len=%u > 63 -- dropping",
                         p.className.len);
@@ -369,13 +369,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             break;
         }
         case net::ReliableKind::EntityDestroy: {
-            if (msg.payload.size() < sizeof(net::EntityDestroyPayload)) {
+            if (msg.payloadLen < sizeof(net::EntityDestroyPayload)) {
                 UE_LOGW("event_feed: EntityDestroy payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::EntityDestroyPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::EntityDestroyPayload));
                 break;
             }
             net::EntityDestroyPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             UE_LOGI("event_feed: received EntityDestroy sessionId=%u (no local mirror teardown yet)",
                     p.sessionId);
             break;
@@ -391,13 +391,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // 2026-05-25 LATE +5h (F4 dev key): host snapshotted its pose and
             // sent it; client applies to local mainPlayer. Host echo is
             // a no-op below.
-            if (msg.payload.size() < sizeof(net::TeleportClientPayload)) {
+            if (msg.payloadLen < sizeof(net::TeleportClientPayload)) {
                 UE_LOGW("event_feed: TeleportClient payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::TeleportClientPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::TeleportClientPayload));
                 break;
             }
             net::TeleportClientPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             // Trust-boundary validation (same defensive pattern as
             // PropRelease velocity check at line 196 above): reject NaN/Inf
             // before the engine call. UE's K2_TeleportTo with a NaN
@@ -446,13 +446,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // must see. For Case (b) flashlight: apply to the puppet's
             // light_R. RE doc: research/findings/votv-flashlight-RE-
             // 2026-05-25.md.
-            if (msg.payload.size() < sizeof(net::ItemActivatePayload)) {
+            if (msg.payloadLen < sizeof(net::ItemActivatePayload)) {
                 UE_LOGW("event_feed: ItemActivate payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::ItemActivatePayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::ItemActivatePayload));
                 break;
             }
             net::ItemActivatePayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             // Trust-boundary: state is a uint8 but only 0/1 are valid.
             if (p.state != 0 && p.state != 1) {
                 UE_LOGW("event_feed: ItemActivate state=%u out of range -- dropping",
@@ -499,13 +499,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // story-event sync. Host's POST observer on spawnRedSky +
             // redSky.set caught the change; broadcast it. Receiver
             // invokes the same chain on its local gamemode.
-            if (msg.payload.size() < sizeof(net::RedSkyPayload)) {
+            if (msg.payloadLen < sizeof(net::RedSkyPayload)) {
                 UE_LOGW("event_feed: RedSky payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::RedSkyPayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::RedSkyPayload));
                 break;
             }
             net::RedSkyPayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             if (session.role() == net::Role::Host) {
                 UE_LOGI("event_feed: RedSky received on host -- dropping");
                 break;
@@ -529,13 +529,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // strike's world location. Client suppressed its own
             // timerLightning via Inc1's interceptor so no local strike
             // happened; this packet drives the visual.
-            if (msg.payload.size() < sizeof(net::LightningStrikePayload)) {
+            if (msg.payloadLen < sizeof(net::LightningStrikePayload)) {
                 UE_LOGW("event_feed: LightningStrike payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::LightningStrikePayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::LightningStrikePayload));
                 break;
             }
             net::LightningStrikePayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             if (session.role() == net::Role::Host) {
                 UE_LOGI("event_feed: LightningStrike received on host -- dropping");
                 break;
@@ -561,13 +561,13 @@ void Update(net::Session& session, RemotePlayer* remote, void* localPlayer) {
             // invokes the cycle's mutator UFunctions to apply each delta.
             // See coop/weather_sync.cpp::ApplyFromHost for the full apply
             // logic + research/findings/votv-weather-DESIGN-2026-05-26.md.
-            if (msg.payload.size() < sizeof(net::WeatherStatePayload)) {
+            if (msg.payloadLen < sizeof(net::WeatherStatePayload)) {
                 UE_LOGW("event_feed: WeatherState payload too short (%zu < %zu)",
-                        msg.payload.size(), sizeof(net::WeatherStatePayload));
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::WeatherStatePayload));
                 break;
             }
             net::WeatherStatePayload p{};
-            std::memcpy(&p, msg.payload.data(), sizeof(p));
+            std::memcpy(&p, msg.payload, sizeof(p));
             // Self-echo guard: weather is host->client only; if our role
             // says we ARE the host, a WeatherState packet must be a loopback
             // bounce (we'd never send to ourselves but defensive). Drop.
