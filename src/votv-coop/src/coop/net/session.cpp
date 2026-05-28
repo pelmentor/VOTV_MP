@@ -550,7 +550,13 @@ bool Session::SendReliable(ReliableKind kind, const void* payload, int len) {
         std::memset(rh, 0, sizeof(*rh));
         rh->kind = static_cast<uint8_t>(kind);
         rh->payloadLen = static_cast<uint16_t>(len);
-        std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader), payload, len);
+        // Symmetric with SendReliableToSlot: caller may legitimately pass
+        // len=0 (control packet, payload-less kind) with payload=nullptr.
+        // memcpy of a null source is UB pre-C++20; the guard makes both
+        // entry points safe under the same contract.
+        if (len > 0 && payload) {
+            std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader), payload, len);
+        }
 
         msg->m_conn = hConn;
         msg->m_nFlags = k_nSteamNetworkingSend_Reliable;

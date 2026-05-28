@@ -71,22 +71,35 @@ std::atomic<bool> g_takeObjInFlight{false};
 // Init-processed dedupe set: subclass-aware Init scan registers observers
 // on multiple Init UFunctions in the prop_C lineage. If a subclass Init
 // calls super (BP "Parent" node), BOTH observers fire for the same actor.
-// Cap at 256, clear on overflow (stale-skip is harmless; by then the
-// stale actors have either been destroyed or stably broadcast).
 //
-// Audit Fix 5 (2026-05-27): the Init POST + K2_DestroyActor PRE observers
-// can dispatch on a parallel-anim worker thread per ue_wrap/game_thread.h
-// :118-120. Concurrent insert/erase/count on the unordered_set is UB
-// (rehash invalidates iterators). Mutex held only for the brief set op;
-// no engine calls under lock.
+// Steady-state size = number of live keyed-interactable actors (entries
+// added on Init POST, removed on K2_DestroyActor PRE via
+// UnmarkProcessedInit). VOTV worlds have ~2000 live keyed-interactables
+// on load. Cap at 16384 is a safety backstop against unbounded growth
+// from a future bug; on overflow we LOG and stop inserting (do NOT
+// clear -- clearing would un-dedupe the next super-call for every
+// already-tracked actor and silently double-broadcast PropSpawn).
+//
+// The Init POST + K2_DestroyActor PRE observers can dispatch on a
+// parallel-anim worker thread per ue_wrap/game_thread.h :118-120.
+// Concurrent insert/erase/count on the unordered_set is UB (rehash
+// invalidates iterators). Mutex held only for the brief set op; no
+// engine calls under lock.
 std::mutex g_processedInitMutex;
 std::unordered_set<void*> g_processedInitActors;
-constexpr size_t kProcessedInitCap = 256;
+constexpr size_t kProcessedInitCap = 16384;
+std::atomic<bool> g_processedInitOverflowLogged{false};
 
 void MarkProcessedInit(void* actor) {
     if (!actor) return;
     std::lock_guard<std::mutex> lk(g_processedInitMutex);
-    if (g_processedInitActors.size() >= kProcessedInitCap) g_processedInitActors.clear();
+    if (g_processedInitActors.size() >= kProcessedInitCap) {
+        if (!g_processedInitOverflowLogged.exchange(true)) {
+            UE_LOGW("prop_lifecycle: g_processedInitActors hit %zu cap; stopping inserts (Destroy-pruned in steady state -- if this fires we have an Init/Destroy imbalance)",
+                    kProcessedInitCap);
+        }
+        return;
+    }
     g_processedInitActors.insert(actor);
 }
 

@@ -279,6 +279,12 @@ void ResolveAndStartDrive(int slot, const coop::net::WireKey& k) {
     g_drives[slot].actor = prop;
     g_drives[slot].mesh  = mesh;
     g_drives[slot].lastKey.assign(k.data, k.len);
+    // Seed the timeout clock with NOW. Without this, lastApplyMs stays at
+    // zero (struct default); the stream-stop timeout at Tick() compares
+    // (NowMs() - lastApplyMs > 500) and fires immediately, releasing the
+    // grab on the very first packet drop / late-arrival after a fresh
+    // grab. See research/findings/votv-coop-audit-post-pr4-7-2026-05-28.md.
+    g_drives[slot].lastApplyMs = NowMs();
 }
 
 }  // namespace

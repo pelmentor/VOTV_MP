@@ -7,10 +7,13 @@
 
 #include "coop/flashlight_click_sound.h"
 
+#include "coop/players_registry.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
+
+#include <array>
 
 namespace coop::flashlight_click_sound {
 namespace {
@@ -19,15 +22,19 @@ namespace P = ue_wrap::profile;
 namespace R = ue_wrap::reflection;
 
 // Per-peer last-applied state. Keyed on peerSessionId NOT raw puppet
-// pointer (audit-fix 2026-05-26: pointer would dangle after disconnect +
-// respawn for the same peer slot). Fixed-size 4 entries (kMaxPeers);
-// no allocation, no cleanup needed. -1 = no apply yet (first packet's
-// state always differs -> click plays).
+// pointer (the pointer would dangle after disconnect + respawn for the
+// same peer slot). Sized to coop::players::kMaxPeers so a future bump
+// of the central constant propagates here automatically (the prior
+// local `kMaxPeers = 4` hardcode silently capped at 4 regardless).
+// -1 = no apply yet (first packet's state always differs -> click plays).
 //
 // ApplyToPuppet (the only caller) runs on the game thread via GT::Post
 // so plain int is safe -- no atomic needed.
-constexpr uint8_t kMaxPeers = 4;
-int g_lastAppliedStateByPeer[kMaxPeers] = {-1, -1, -1, -1};
+std::array<int, coop::players::kMaxPeers> g_lastAppliedStateByPeer = []{
+    std::array<int, coop::players::kMaxPeers> a{};
+    a.fill(-1);
+    return a;
+}();
 
 }  // namespace
 
@@ -39,13 +46,14 @@ void PlayIfStateChanged(void* puppetActor, uint8_t peerSessionId, bool newState)
     //    MUST NOT click. Press-F toggles always pass.
     const int curState = newState ? 1 : 0;
     bool stateChanged = false;
-    if (peerSessionId < kMaxPeers) {
+    if (peerSessionId < coop::players::kMaxPeers) {
         stateChanged = (g_lastAppliedStateByPeer[peerSessionId] != curState);
         g_lastAppliedStateByPeer[peerSessionId] = curState;
     } else {
-        // Out-of-range peer id (shouldn't happen with kMaxPeers=4 but be
-        // safe). Treat every apply as a state change so we still click;
-        // a future scaling beyond 4 peers needs the array widened.
+        // Out-of-range peer id (defensive). Treat every apply as a state
+        // change so we still click; the array is sized to the central
+        // coop::players::kMaxPeers so this branch only fires on a
+        // legitimately invalid peerSessionId.
         stateChanged = true;
     }
     if (!stateChanged) return;
