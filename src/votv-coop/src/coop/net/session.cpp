@@ -1,29 +1,54 @@
-// coop/net/session.cpp -- PR-2 GNS implementation.
+// coop/net/session.cpp -- PR-4 multi-peer GNS implementation.
 //
-// Lifecycle:
-//   Start():  Init GNS lib (once, refcounted) + register status callback +
-//             host CreateListenSocketIP or client ConnectByIPAddress +
-//             spin NetThread.
-//   NetThread: loop { RunCallbacks (drives the status callback inline);
-//             ReceiveMessagesOnConnection -> HandleMessage; emit pose +
-//             prop pose at sendHz if Connected; sleep(5ms) }
-//   Status callback (called by GNS from RunCallbacks): host accepts
-//             incoming connection, both sides transition state_, both sides
-//             reset their remote tracking on disconnect.
-//   Stop():   close connection + join thread. GNS lib stays inited across
-//             Start/Stop cycles for fast reconnect; killed in OnDllUnload.
+// Lifecycle (host):
+//   Start():    Init GNS (refcounted) -> register status callback ->
+//               CreateListenSocketIP -> CreatePollGroup -> spin NetThread.
+//   On Connecting (None->Connecting status callback): find lowest free
+//               client slot in [1..kMaxPeers-1], AcceptConnection,
+//               SetConnectionUserData(slot), SetConnectionPollGroup ->
+//               wait for Connected.
+//   On Connected: ConfigureConnectionLanes per connection. Aggregate
+//               state_=Connected if it isn't already.
+//   On Closed:  free the slot; if any peers remain, stay Connected;
+//               otherwise downgrade aggregate state_=Handshaking, reset
+//               all remote state.
+//   Stop():     CloseConnection on every active peer, DestroyPollGroup,
+//               CloseListenSocket, join NetThread.
 //
-// Wire format inside each GNS message: the pre-PR-2 protocol.h packet
-// structs are sent raw via SendMessageToConnection. The header's `token`
-// field is now always 0 (GNS auth replaces it); `seq` is still used for
-// stale-drop on the unreliable pose streams.
+// Lifecycle (client):
+//   Start():    Init GNS -> register status callback ->
+//               ConnectByIPAddress -> store hConn at peerConns_[0] ->
+//               spin NetThread.
+//   On Connected: ConfigureConnectionLanes, aggregate state_=Connected.
+//   On Closed:  clear peerConns_[0], state_=Handshaking, reset remote.
+//   Stop():     CloseConnection(peerConns_[0]), join.
+//
+// Receive (net thread):
+//   Host:   ReceiveMessagesOnPollGroup(hPollGroup_, ...).
+//           Per-msg peerSlot = msg->m_nConnUserData (set at AcceptConnection).
+//   Client: ReceiveMessagesOnConnection(peerConns_[0], ...).
+//           peerSlot = 0.
+//   Dispatch through HandleMessage(peerSlot, data, len).
+//
+// Send (net thread, pose stream @ sendHz):
+//   Host:   iterate peerConns_[1..kMaxPeers-1], SendMessageToConnection for
+//           each (UnreliableNoDelay; per-peer m_idxLane=0 implicit).
+//   Client: SendMessageToConnection(peerConns_[0], ...).
+//
+// Send (game thread, SendReliable):
+//   Host:   allocate one SteamNetworkingMessage_t PER connected client
+//           (GNS owns each), set m_idxLane=LaneForKind(kind), SendMessages.
+//   Client: single message to peerConns_[0].
+//
+// Wire format inside each GNS message is unchanged from PR-2/PR-3:
+// PacketHeader (20 B) + the per-MsgType body (PoseSnapshot / PropPosePacket /
+// ReliableHeader+payload). The header's token field is always 0 (GNS auth
+// replaces it).
 
 #include "coop/net/session.h"
 
 #include "ue_wrap/log.h"
 
-// GNS headers warn at /W4 (audit-prompt-perf-template item: localize the
-// suppression to this TU, don't whitelist the warnings at project level).
 #pragma warning(push)
 #pragma warning(disable: 4100 4127 4191 4244 4245 4267 4310 4324 4458)
 #include <steam/steamnetworkingsockets.h>
@@ -32,39 +57,26 @@
 
 #include <cstring>
 #include <chrono>
-#include <random>
 
 namespace coop::net {
 
 namespace {
 
-// One Session per process (PR-4 plans 4 peers but still one Session). The C
-// GNS callback finds the live instance via this pointer.
 std::atomic<Session*> g_session{nullptr};
 
-// PR-3 (2026-05-28): 3-lane priority routing per the integration plan §5.4.
-// Lanes are configured via ConfigureConnectionLanes once a connection reaches
-// Connected; per-message routing uses SendMessages with m_idxLane set.
-//
-// Choice of priorities + weights:
-//   HIGH    (lane 0, weight 4): interactive events where user expects
-//                               instant response -- TeleportClient (F4),
-//                               RestoreVitals (F3), ItemActivate (flashlight
-//                               click). These dominate latency UX.
-//   NORMAL  (lane 1, weight 2): default. Join, PropRelease, PropDestroy,
-//                               EntityDestroy, WeatherState, LightningStrike,
-//                               RedSky -- discrete events that should arrive
-//                               soon but don't carry sub-second latency
-//                               budgets.
-//   BULK    (lane 2, weight 1): snapshot fan-out. PropSpawn + EntitySpawn
-//                               are hundreds of messages during connect-edge
-//                               replay. Without lanes they head-of-line
-//                               block HIGH events -- the exact mode lanes
-//                               exist to solve.
-//
-// PoseSnapshot + PropPose remain on lane 0 implicitly (SendMessageToConnection
-// is lane-0; their per-frame cadence is tiny -- ~7 KB/s combined -- so they
-// don't starve HIGH events even sharing the lane).
+std::mutex g_initMutex;
+bool g_inited = false;
+
+uint64_t NowMs() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+constexpr int kSendStaging = kMaxPacketBytes;
+
+// PR-3 priority lanes (carried over). See session.cpp commentary in PR-3 commit
+// or research/findings/votv-gns-integration-plan-2026-05-27.md §5.4.
 enum class Lane : int {
     High = 0,
     Normal = 1,
@@ -83,25 +95,6 @@ Lane LaneForKind(ReliableKind k) {
     }
 }
 
-// GNS lib refcount. GameNetworkingSockets_Init spawns a background thread;
-// per plan-doc §11.2, we MUST NOT call it from DllMain. We init lazily on
-// first Start() and leave it inited so a Stop()+Start() reconnect is fast.
-// Kill is queued for OnDllUnload (TODO once shutdown.cpp catches the
-// DLL_PROCESS_DETACH for this).
-std::mutex g_initMutex;
-bool g_inited = false;
-
-uint64_t NowMs() {
-    using namespace std::chrono;
-    return static_cast<uint64_t>(
-        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
-}
-
-// MTU-sized scratch buffer for the host's outbound packets. PR-2 ships with
-// 256 B max (matches our pre-PR-2 protocol constant); GNS itself supports
-// ~1200 B per message, which PR-4 will exploit for batched reliable bursts.
-constexpr int kSendStaging = kMaxPacketBytes;
-
 bool EnsureGnsInit() {
     std::lock_guard<std::mutex> lk(g_initMutex);
     if (g_inited) return true;
@@ -115,14 +108,23 @@ bool EnsureGnsInit() {
     return true;
 }
 
+// PR-3 lane plumbing applied to a freshly-connected peer (called from the
+// Connected status callback). On failure, reliable sends collapse to lane 0
+// (still functional, just no priority routing).
+void ConfigureLanesForPeer(HSteamNetConnection hConn) {
+    constexpr int kLaneCount = static_cast<int>(Lane::Count);
+    const int priorities[kLaneCount] = { 0, 1, 2 };
+    const uint16 weights[kLaneCount] = { 4, 2, 1 };
+    const EResult rc = SteamNetworkingSockets()->ConfigureConnectionLanes(
+        hConn, kLaneCount, priorities, weights);
+    if (rc != k_EResultOK) {
+        UE_LOGW("net: ConfigureConnectionLanes(h=0x%08x) rc=%d",
+                static_cast<unsigned>(hConn), static_cast<int>(rc));
+    }
+}
+
 }  // namespace
 
-// === C callback adapter (GNS calls this from RunCallbacks on our net thread).
-//
-// Session::OnConnStatusChanged keeps a void* signature in the header so the
-// public API doesn't pull in GNS types; the file-local trampoline below has
-// the exact FnSteamNetConnectionStatusChanged signature GNS expects, casts
-// to void*, and forwards.
 void Session::OnConnStatusChanged(void* info) {
     auto* self = g_session.load(std::memory_order_acquire);
     if (self) self->HandleConnStatusChanged(info);
@@ -134,6 +136,43 @@ void ConnStatusTrampoline(SteamNetConnectionStatusChangedCallback_t* cb) {
 }
 }  // namespace
 
+int Session::FindFreePeerSlotForClient() {
+    // Host: scan client slots [1..kMaxPeers-1] for the lowest unoccupied one.
+    // Slot 0 reserved for "host self" -- never holds a remote connection here.
+    for (int i = 1; i < kMaxPeers; ++i) {
+        if (peerConns_[i].load() == 0) return i;
+    }
+    return -1;
+}
+
+int Session::FindPeerSlotForConn(uint32_t hConn) {
+    for (int i = 0; i < kMaxPeers; ++i) {
+        if (peerConns_[i].load() == hConn) return i;
+    }
+    return -1;
+}
+
+void Session::ResetPeerRemoteState(int peerSlot) {
+    // remoteMutex_ held by caller.
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return;
+    hasRemote_[peerSlot] = false;
+    lastRemoteSeq_[peerSlot] = 0;
+    remoteStamp_[peerSlot] = 0;
+    lastReadStamp_[peerSlot] = 0;
+    hasRemoteProp_[peerSlot] = false;
+    lastRemotePropSeq_[peerSlot] = 0;
+    remotePropStamp_[peerSlot] = 0;
+    lastReadPropStamp_[peerSlot] = 0;
+}
+
+int Session::connectedPeerCount() const {
+    int n = 0;
+    for (int i = 0; i < kMaxPeers; ++i) {
+        if (peerConns_[i].load() != 0) ++n;
+    }
+    return n;
+}
+
 void Session::HandleConnStatusChanged(void* info) {
     auto* cb = static_cast<SteamNetConnectionStatusChangedCallback_t*>(info);
     const HSteamNetConnection hConn = cb->m_hConn;
@@ -141,79 +180,78 @@ void Session::HandleConnStatusChanged(void* info) {
     const auto newState = cb->m_info.m_eState;
     auto* sockets = SteamNetworkingSockets();
 
-    // --- Host: accept incoming connection requests (one at a time for PR-2;
-    // PR-3 lifts to kMaxPeers=4 with a PollGroup).
+    // --- Host: accept incoming clients up to kMaxPeers-1 of them.
     if (cfg_.role == Role::Host &&
         oldState == k_ESteamNetworkingConnectionState_None &&
         newState == k_ESteamNetworkingConnectionState_Connecting) {
-        if (hConn_.load() != 0) {
-            UE_LOGW("net: host rejecting extra connection (already have one peer)");
-            sockets->CloseConnection(hConn, 0, "host already has a peer", false);
+        const int slot = FindFreePeerSlotForClient();
+        if (slot < 0) {
+            UE_LOGW("net: host full (%d/%d slots) -- rejecting incoming connection",
+                    kMaxPeers - 1, kMaxPeers - 1);
+            sockets->CloseConnection(hConn, 0, "host full", false);
             return;
         }
         const EResult rc = sockets->AcceptConnection(hConn);
         if (rc != k_EResultOK) {
-            UE_LOGW("net: AcceptConnection failed rc=%d", static_cast<int>(rc));
+            UE_LOGW("net: AcceptConnection rc=%d", static_cast<int>(rc));
             sockets->CloseConnection(hConn, 0, "accept failed", false);
             return;
         }
-        hConn_.store(hConn);
+        // Tag the connection with its peer slot so ReceiveMessagesOnPollGroup
+        // can recover the sender in O(1) via msg->m_nConnUserData.
+        sockets->SetConnectionUserData(hConn, slot);
+        // Add to the host's PollGroup so we drain all clients with one call.
+        const uint32_t hPoll = hPollGroup_.load();
+        if (hPoll != 0) {
+            sockets->SetConnectionPollGroup(hConn, static_cast<HSteamNetPollGroup>(hPoll));
+        }
+        peerConns_[slot].store(hConn);
         state_.store(ConnState::Handshaking);
-        UE_LOGI("net: host accepted incoming connection (h=0x%08x)",
-                static_cast<unsigned>(hConn));
-        return;  // wait for Connecting -> Connected on a later callback
+        UE_LOGI("net: host accepted client at slot %d (h=0x%08x, %d/%d connected)",
+                slot, static_cast<unsigned>(hConn),
+                connectedPeerCount(), kMaxPeers - 1);
+        return;
     }
 
-    // --- Both roles: client got here via ConnectByIPAddress (state was None on
-    // the Session side but Connecting on the GNS side already). The handle
-    // was stored in Start(); just track state transitions below.
+    // --- Both roles: state transitions on an existing connection.
 
     if (newState == k_ESteamNetworkingConnectionState_Connected) {
+        const int slot = FindPeerSlotForConn(hConn);
+        ConfigureLanesForPeer(hConn);
         if (state_.load() != ConnState::Connected) {
             state_.store(ConnState::Connected);
-            UE_LOGI("net: CONNECTED (%s, h=0x%08x)",
-                    cfg_.role == Role::Host ? "host" : "client",
-                    static_cast<unsigned>(hConn));
-
-            // PR-3: enable 3-lane priority routing on this connection. The
-            // priority arg is lane->priority (0=highest); weights are weighted-
-            // fair-queue ratios when lanes of equal priority compete (we have
-            // distinct priorities so weights act as soft starvation guards
-            // for low-priority lanes). MUST happen AFTER Connected because
-            // ConfigureConnectionLanes returns k_EResultInvalidState on
-            // pre-handshake handles.
-            constexpr int kLaneCount = static_cast<int>(Lane::Count);
-            const int priorities[kLaneCount] = { 0, 1, 2 };
-            const uint16 weights[kLaneCount] = { 4, 2, 1 };
-            const EResult rc = sockets->ConfigureConnectionLanes(
-                hConn, kLaneCount, priorities, weights);
-            if (rc != k_EResultOK) {
-                UE_LOGW("net: ConfigureConnectionLanes rc=%d -- reliable sends will collapse to lane 0",
-                        static_cast<int>(rc));
-            } else {
-                UE_LOGI("net: lanes configured (HIGH/NORMAL/BULK, weights 4/2/1)");
-            }
         }
+        UE_LOGI("net: peer slot %d CONNECTED (%s, h=0x%08x)",
+                slot, cfg_.role == Role::Host ? "host" : "client",
+                static_cast<unsigned>(hConn));
         return;
     }
 
     if (newState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
         newState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
-        UE_LOGW("net: connection closed (oldState=%d reason='%s')",
-                static_cast<int>(oldState), cb->m_info.m_szEndDebug);
-        if (hConn_.load() == hConn) hConn_.store(0);
-        // GNS requires us to release the handle ourselves on these terminal
-        // states (per header doc on SteamNetConnectionStatusChangedCallback_t).
+        const int slot = FindPeerSlotForConn(hConn);
+        UE_LOGW("net: peer slot %d closed (oldState=%d reason='%s')",
+                slot, static_cast<int>(oldState), cb->m_info.m_szEndDebug);
+        if (slot >= 0) peerConns_[slot].store(0);
+        // Per the GNS header doc on the status callback, terminal states
+        // require us to CloseConnection to release the handle.
         sockets->CloseConnection(hConn, 0, nullptr, false);
-        state_.store(ConnState::Handshaking);
-        // Reset remote tracking so a reconnecting peer's seq=0 isn't stale-
-        // dropped for the rest of the session (audit fix carried from pre-PR-2).
+
+        // Per-slot reset so a reconnecting peer (whose seq restarts at 0) is
+        // not stale-dropped.
         { std::lock_guard<std::mutex> lk(remoteMutex_);
-          hasRemote_ = false; lastRemoteSeq_ = 0; remoteStamp_ = 0; lastReadStamp_ = 0;
-          hasRemoteProp_ = false; lastRemotePropSeq_ = 0;
-          remotePropStamp_ = 0; lastReadPropStamp_ = 0; }
-        { std::lock_guard<std::mutex> lk(reliableInboxMutex_); reliableInbox_.clear(); }
-        lastRttMs_.store(0);
+          if (slot >= 0) ResetPeerRemoteState(slot); }
+
+        // Aggregate state: stay Connected if any peer still up; otherwise
+        // downgrade and clear everything.
+        if (connectedPeerCount() == 0) {
+            state_.store(ConnState::Handshaking);
+            { std::lock_guard<std::mutex> lk(remoteMutex_);
+              for (int i = 0; i < kMaxPeers; ++i) ResetPeerRemoteState(i); }
+            { std::lock_guard<std::mutex> lk(reliableInboxMutex_); reliableInbox_.clear(); }
+            lastRttMs_.store(0);
+            UE_LOGI("net: all peers gone -- session back to Handshaking");
+        }
     }
 }
 
@@ -228,8 +266,6 @@ bool Session::Start(const Config& cfg) {
 
     if (!EnsureGnsInit()) return false;
 
-    // Register the status callback (global, picked up by every connection).
-    // Idempotent: GNS overwrites the existing pointer.
     g_session.store(this, std::memory_order_release);
     SteamNetworkingUtils()->SetGlobalCallback_SteamNetConnectionStatusChanged(
         &ConnStatusTrampoline);
@@ -239,8 +275,6 @@ bool Session::Start(const Config& cfg) {
         SteamNetworkingIPAddr addr{};
         addr.Clear();
         addr.m_port = cfg_.port;
-        // Listen on all interfaces (IPv4 + IPv6); GNS treats AnyIP as
-        // dual-stack. (addr.m_port==0 with everything else zero == AnyIP.)
         const HSteamListenSocket hListen = sockets->CreateListenSocketIP(addr, 0, nullptr);
         if (hListen == k_HSteamListenSocket_Invalid) {
             UE_LOGE("net: CreateListenSocketIP(port=%u) failed", cfg_.port);
@@ -248,8 +282,22 @@ bool Session::Start(const Config& cfg) {
             return false;
         }
         hListen_.store(hListen);
-        UE_LOGI("net: host listening on port %u (hListen=0x%08x)",
-                cfg_.port, static_cast<unsigned>(hListen));
+
+        // PR-4: a PollGroup lets the net thread drain messages from ALL
+        // accepted client connections in one call. AcceptConnection adds the
+        // new client to this group via SetConnectionPollGroup.
+        const HSteamNetPollGroup hPoll = sockets->CreatePollGroup();
+        if (hPoll == k_HSteamNetPollGroup_Invalid) {
+            UE_LOGE("net: CreatePollGroup failed");
+            sockets->CloseListenSocket(hListen);
+            hListen_.store(0);
+            g_session.store(nullptr, std::memory_order_release);
+            return false;
+        }
+        hPollGroup_.store(hPoll);
+        UE_LOGI("net: host listening on port %u (hListen=0x%08x hPoll=0x%08x), capacity=%d clients",
+                cfg_.port, static_cast<unsigned>(hListen),
+                static_cast<unsigned>(hPoll), kMaxPeers - 1);
     } else {  // Client
         SteamNetworkingIPAddr addr{};
         if (!addr.ParseString(cfg_.peerIp.c_str())) {
@@ -264,8 +312,10 @@ bool Session::Start(const Config& cfg) {
             g_session.store(nullptr, std::memory_order_release);
             return false;
         }
-        hConn_.store(hConn);
-        UE_LOGI("net: client dialed %s:%u (hConn=0x%08x)",
+        // Slot 0 = host (per the players::Registry indexing -- on a client,
+        // the host occupies slot 0).
+        peerConns_[0].store(hConn);
+        UE_LOGI("net: client dialed %s:%u (hConn=0x%08x slot=0)",
                 cfg_.peerIp.c_str(), cfg_.port, static_cast<unsigned>(hConn));
     }
 
@@ -285,13 +335,17 @@ void Session::Stop() {
 
     auto* sockets = SteamNetworkingSockets();
     if (sockets) {
-        const uint32_t hConn = hConn_.exchange(0);
-        if (hConn != 0) {
-            // Linger 200 ms so any queued reliable packets get out.
-            sockets->CloseConnection(hConn, 0, "session stop", true);
+        for (int i = 0; i < kMaxPeers; ++i) {
+            const uint32_t hConn = peerConns_[i].exchange(0);
+            if (hConn != 0) {
+                // Linger 200 ms so queued reliable packets get out.
+                sockets->CloseConnection(hConn, 0, "session stop", true);
+            }
         }
+        const uint32_t hPoll = hPollGroup_.exchange(0);
+        if (hPoll != 0) sockets->DestroyPollGroup(static_cast<HSteamNetPollGroup>(hPoll));
         const uint32_t hListen = hListen_.exchange(0);
-        if (hListen != 0) sockets->CloseListenSocket(hListen);
+        if (hListen != 0) sockets->CloseListenSocket(static_cast<HSteamListenSocket>(hListen));
     }
 
     state_.store(ConnState::Disconnected);
@@ -313,24 +367,57 @@ void Session::SetLocalPropPose(bool set, const PropPoseSnapshot& pose) {
     if (set) localPropPose_ = pose;
 }
 
+bool Session::TryGetRemotePose(int peerSlot, PoseSnapshot& out, bool* outIsNew) {
+    if (state_.load() != ConnState::Connected) return false;
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+    std::lock_guard<std::mutex> lk(remoteMutex_);
+    if (!hasRemote_[peerSlot]) return false;
+    out = remotePoses_[peerSlot];
+    if (outIsNew) *outIsNew = (remoteStamp_[peerSlot] != lastReadStamp_[peerSlot]);
+    lastReadStamp_[peerSlot] = remoteStamp_[peerSlot];
+    return true;
+}
+
 bool Session::TryGetRemotePose(PoseSnapshot& out, bool* outIsNew) {
+    // Backward-compat: return the first slot with a remote pose. Existing
+    // harness drives ONE puppet so this picks the canonical "the remote"
+    // peer (slot 1 on host, slot 0 on client).
     if (state_.load() != ConnState::Connected) return false;
     std::lock_guard<std::mutex> lk(remoteMutex_);
-    if (!hasRemote_) return false;
-    out = remotePose_;
-    if (outIsNew) *outIsNew = (remoteStamp_ != lastReadStamp_);
-    lastReadStamp_ = remoteStamp_;
+    for (int i = 0; i < kMaxPeers; ++i) {
+        if (hasRemote_[i]) {
+            out = remotePoses_[i];
+            if (outIsNew) *outIsNew = (remoteStamp_[i] != lastReadStamp_[i]);
+            lastReadStamp_[i] = remoteStamp_[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Session::TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* outIsNew) {
+    if (state_.load() != ConnState::Connected) return false;
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+    std::lock_guard<std::mutex> lk(remoteMutex_);
+    if (!hasRemoteProp_[peerSlot]) return false;
+    out = remotePropPoses_[peerSlot];
+    if (outIsNew) *outIsNew = (remotePropStamp_[peerSlot] != lastReadPropStamp_[peerSlot]);
+    lastReadPropStamp_[peerSlot] = remotePropStamp_[peerSlot];
     return true;
 }
 
 bool Session::TryGetRemotePropPose(PropPoseSnapshot& out, bool* outIsNew) {
     if (state_.load() != ConnState::Connected) return false;
     std::lock_guard<std::mutex> lk(remoteMutex_);
-    if (!hasRemoteProp_) return false;
-    out = remotePropPose_;
-    if (outIsNew) *outIsNew = (remotePropStamp_ != lastReadPropStamp_);
-    lastReadPropStamp_ = remotePropStamp_;
-    return true;
+    for (int i = 0; i < kMaxPeers; ++i) {
+        if (hasRemoteProp_[i]) {
+            out = remotePropPoses_[i];
+            if (outIsNew) *outIsNew = (remotePropStamp_[i] != lastReadPropStamp_[i]);
+            lastReadPropStamp_[i] = remotePropStamp_[i];
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Session::TryGetReliable(ReliableMessage& out) {
@@ -346,51 +433,49 @@ bool Session::SendReliable(ReliableKind kind, const void* payload, int len) {
         UE_LOGW("net: SendReliable rejected (len=%d > %d)", len, kMaxReliablePayload);
         return false;
     }
-    const uint32_t hConn = hConn_.load();
-    if (hConn == 0) return false;  // not connected yet; caller decides whether to retry
-
     const int total = static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader)) + len;
+    const uint32_t seq = sendSeq_.fetch_add(1);
+    const int laneIdx = static_cast<int>(LaneForKind(kind));
 
-    // PR-3: allocate a GNS message so we can set m_idxLane per-message.
-    // SendMessageToConnection always uses lane 0; SendMessages with an
-    // AllocateMessage'd message allows the lane index. The allocated buffer
-    // is GNS-owned -- we fill m_pData with our framed bytes and hand it
-    // back via SendMessages (which takes ownership; with
-    // bDeleteFailedMessages=true GNS releases on failure).
+    auto* sockets = SteamNetworkingSockets();
     auto* utils = SteamNetworkingUtils();
-    SteamNetworkingMessage_t* msg = utils->AllocateMessage(total);
-    if (!msg) {
-        UE_LOGW("net: AllocateMessage(%d) returned null", total);
-        return false;
+
+    // Fan-out: allocate one GNS message per connected peer (GNS takes ownership
+    // of each; we cannot share a single message across SendMessages calls).
+    bool anySuccess = false;
+    for (int i = 0; i < kMaxPeers; ++i) {
+        const uint32_t hConn = peerConns_[i].load();
+        if (hConn == 0) continue;
+
+        SteamNetworkingMessage_t* msg = utils->AllocateMessage(total);
+        if (!msg) {
+            UE_LOGW("net: AllocateMessage(%d) returned null", total);
+            continue;
+        }
+        auto* buf = static_cast<uint8_t*>(msg->m_pData);
+        auto* hdr = reinterpret_cast<PacketHeader*>(buf);
+        WriteHeader(*hdr, MsgType::Reliable, seq, /*token*/0);
+        auto* rh = reinterpret_cast<ReliableHeader*>(buf + sizeof(PacketHeader));
+        std::memset(rh, 0, sizeof(*rh));
+        rh->kind = static_cast<uint8_t>(kind);
+        rh->payloadLen = static_cast<uint16_t>(len);
+        std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader), payload, len);
+
+        msg->m_conn = hConn;
+        msg->m_nFlags = k_nSteamNetworkingSend_Reliable;
+        msg->m_idxLane = static_cast<uint16>(laneIdx);
+
+        int64 outMsgNum = 0;
+        sockets->SendMessages(1, &msg, &outMsgNum, /*bDeleteFailedMessages*/true);
+        if (outMsgNum < 0) {
+            UE_LOGW("net: SendMessages(slot=%d) rc=%lld kind=%u",
+                    i, static_cast<long long>(outMsgNum), static_cast<unsigned>(kind));
+            continue;
+        }
+        sent_.fetch_add(1);
+        anySuccess = true;
     }
-
-    // Frame inside the GNS-owned buffer: PacketHeader + ReliableHeader +
-    // payload (same layout as PR-2; receiver's HandleMessage is unchanged).
-    auto* buf = static_cast<uint8_t*>(msg->m_pData);
-    auto* hdr = reinterpret_cast<PacketHeader*>(buf);
-    WriteHeader(*hdr, MsgType::Reliable, sendSeq_.fetch_add(1), /*token*/0);
-    auto* rh = reinterpret_cast<ReliableHeader*>(buf + sizeof(PacketHeader));
-    std::memset(rh, 0, sizeof(*rh));
-    rh->kind = static_cast<uint8_t>(kind);
-    rh->payloadLen = static_cast<uint16_t>(len);
-    std::memcpy(buf + sizeof(PacketHeader) + sizeof(ReliableHeader), payload, len);
-
-    msg->m_conn = hConn;
-    msg->m_nFlags = k_nSteamNetworkingSend_Reliable;
-    msg->m_idxLane = static_cast<uint16>(LaneForKind(kind));
-
-    int64 outMsgNum = 0;
-    SteamNetworkingSockets()->SendMessages(1, &msg, &outMsgNum, /*bDeleteFailedMessages*/true);
-    // outMsgNum > 0 == message number assigned (success). < 0 == -EResult code
-    // (failure; GNS already released the message via bDeleteFailedMessages).
-    if (outMsgNum < 0) {
-        UE_LOGW("net: SendMessages rc=%lld kind=%u lane=%d",
-                static_cast<long long>(outMsgNum), static_cast<unsigned>(kind),
-                static_cast<int>(LaneForKind(kind)));
-        return false;
-    }
-    sent_.fetch_add(1);
-    return true;
+    return anySuccess;
 }
 
 bool Session::SendPropRelease(const WireKey& key,
@@ -423,11 +508,12 @@ bool Session::SendEntityDestroy(uint32_t sessionId) {
     return SendReliable(ReliableKind::EntityDestroy, &p, sizeof(p));
 }
 
-void Session::HandleMessage(const void* data, int len) {
+void Session::HandleMessage(int peerSlot, const void* data, int len) {
     MsgType type;
     uint32_t seq;
     uint64_t tokenUnused;
     if (!ParseHeader(data, len, type, seq, tokenUnused)) return;
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return;
     recv_.fetch_add(1);
 
     switch (type) {
@@ -437,20 +523,18 @@ void Session::HandleMessage(const void* data, int len) {
         std::memcpy(&pkt, data, sizeof(pkt));
         if (!ValidatePose(pkt.pose)) return;
         std::lock_guard<std::mutex> lk(remoteMutex_);
-        if (hasRemote_ && static_cast<int32_t>(seq - lastRemoteSeq_) <= 0) return;
-        remotePose_ = pkt.pose;
-        lastRemoteSeq_ = seq;
-        hasRemote_ = true;
-        ++remoteStamp_;
+        if (hasRemote_[peerSlot] &&
+            static_cast<int32_t>(seq - lastRemoteSeq_[peerSlot]) <= 0) return;
+        remotePoses_[peerSlot] = pkt.pose;
+        lastRemoteSeq_[peerSlot] = seq;
+        hasRemote_[peerSlot] = true;
+        ++remoteStamp_[peerSlot];
         break;
     }
     case MsgType::PropPose: {
         if (len < static_cast<int>(sizeof(PropPosePacket))) return;
         PropPosePacket pkt;
         std::memcpy(&pkt, data, sizeof(pkt));
-        // Trust-boundary: finite floats + position AABB + rotation canonical +
-        // key length. Carried verbatim from pre-PR-2; without these a hostile
-        // or buggy sender's NaN/Inf reaches SetActorRotation -> PhysX UB.
         const float vals[6] = {pkt.pose.x, pkt.pose.y, pkt.pose.z,
                                pkt.pose.pitch, pkt.pose.yaw, pkt.pose.roll};
         for (float v : vals) if (!std::isfinite(v)) return;
@@ -462,16 +546,15 @@ void Session::HandleMessage(const void* data, int len) {
             std::fabs(pkt.pose.roll)  > 180.f) return;
         if (pkt.pose.key.len > 31) return;
         std::lock_guard<std::mutex> lk(remoteMutex_);
-        if (hasRemoteProp_ && static_cast<int32_t>(seq - lastRemotePropSeq_) <= 0) return;
-        remotePropPose_ = pkt.pose;
-        lastRemotePropSeq_ = seq;
-        hasRemoteProp_ = true;
-        ++remotePropStamp_;
+        if (hasRemoteProp_[peerSlot] &&
+            static_cast<int32_t>(seq - lastRemotePropSeq_[peerSlot]) <= 0) return;
+        remotePropPoses_[peerSlot] = pkt.pose;
+        lastRemotePropSeq_[peerSlot] = seq;
+        hasRemoteProp_[peerSlot] = true;
+        ++remotePropStamp_[peerSlot];
         break;
     }
     case MsgType::Reliable: {
-        // GNS gave us in-order delivery already; we just unwrap the
-        // ReliableHeader and queue for the game thread.
         if (len < static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader))) return;
         ReliableHeader rh;
         std::memcpy(&rh, static_cast<const uint8_t*>(data) + sizeof(PacketHeader), sizeof(rh));
@@ -488,8 +571,6 @@ void Session::HandleMessage(const void* data, int len) {
         break;
     }
     default:
-        // PR-2 dropped Hello / Bye / Ping / Pong / ReliableAck (GNS owns
-        // handshake + RTT + acks). Unknown / dead MsgTypes ignored.
         break;
     }
 }
@@ -504,24 +585,43 @@ void Session::NetThread() {
 
     while (running_.load()) {
         // 1) Pump GNS internal timers + dispatch any pending status callbacks
-        // (which run inline on THIS thread).
+        // (the trampoline runs inline on THIS thread).
         sockets->RunCallbacks();
 
-        // 2) Drain inbound messages on our connection (if any).
-        const uint32_t hConn = hConn_.load();
-        if (hConn != 0) {
-            SteamNetworkingMessage_t* msgs[16]{};
-            const int n = sockets->ReceiveMessagesOnConnection(
-                hConn, msgs, static_cast<int>(std::size(msgs)));
-            for (int i = 0; i < n; ++i) {
-                HandleMessage(msgs[i]->m_pData, static_cast<int>(msgs[i]->m_cbSize));
-                msgs[i]->Release();  // critical: GNS owns the buffer
+        // 2) Drain inbound messages.
+        SteamNetworkingMessage_t* msgs[16]{};
+        int n = 0;
+        if (cfg_.role == Role::Host) {
+            const uint32_t hPoll = hPollGroup_.load();
+            if (hPoll != 0) {
+                n = sockets->ReceiveMessagesOnPollGroup(
+                    static_cast<HSteamNetPollGroup>(hPoll), msgs,
+                    static_cast<int>(std::size(msgs)));
+            }
+        } else {
+            const uint32_t hConn = peerConns_[0].load();
+            if (hConn != 0) {
+                n = sockets->ReceiveMessagesOnConnection(
+                    hConn, msgs, static_cast<int>(std::size(msgs)));
             }
         }
+        for (int i = 0; i < n; ++i) {
+            // Host: peerSlot was stashed via SetConnectionUserData at accept
+            // time; PollGroup messages carry it forward as m_nConnUserData.
+            // Client: only ever receives from peerConns_[0] (host).
+            int peerSlot;
+            if (cfg_.role == Role::Host) {
+                peerSlot = static_cast<int>(msgs[i]->m_nConnUserData);
+            } else {
+                peerSlot = 0;
+            }
+            HandleMessage(peerSlot, msgs[i]->m_pData, static_cast<int>(msgs[i]->m_cbSize));
+            msgs[i]->Release();
+        }
 
-        // 3) Connected: stream the local pose at sendHz.
+        // 3) Connected: stream the local pose at sendHz, fan out to all peers.
         const auto now = std::chrono::steady_clock::now();
-        if (state_.load() == ConnState::Connected && now >= nextSend && hConn != 0) {
+        if (state_.load() == ConnState::Connected && now >= nextSend) {
             PoseSnapshot local;
             bool have;
             PropPoseSnapshot localProp;
@@ -529,42 +629,54 @@ void Session::NetThread() {
             { std::lock_guard<std::mutex> lk(localMutex_);
               local = localPose_; have = hasLocal_;
               localProp = localPropPose_; haveProp = hasLocalProp_; }
-            if (have) {
-                PosePacket pkt{};
-                WriteHeader(pkt.header, MsgType::PoseSnapshot,
-                            sendSeq_.fetch_add(1), /*token*/0);
-                pkt.pose = local;
-                const EResult rc = sockets->SendMessageToConnection(
-                    hConn, &pkt, sizeof(pkt),
-                    k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
-                if (rc == k_EResultOK) sent_.fetch_add(1);
-            }
-            if (haveProp) {
-                PropPosePacket pkt{};
-                WriteHeader(pkt.header, MsgType::PropPose,
-                            sendSeq_.fetch_add(1), /*token*/0);
-                pkt.pose = localProp;
-                const EResult rc = sockets->SendMessageToConnection(
-                    hConn, &pkt, sizeof(pkt),
-                    k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
-                if (rc == k_EResultOK) sent_.fetch_add(1);
+            if (have || haveProp) {
+                for (int i = 0; i < kMaxPeers; ++i) {
+                    const uint32_t hConn = peerConns_[i].load();
+                    if (hConn == 0) continue;
+                    if (have) {
+                        PosePacket pkt{};
+                        WriteHeader(pkt.header, MsgType::PoseSnapshot,
+                                    sendSeq_.fetch_add(1), /*token*/0);
+                        pkt.pose = local;
+                        const EResult rc = sockets->SendMessageToConnection(
+                            hConn, &pkt, sizeof(pkt),
+                            k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
+                        if (rc == k_EResultOK) sent_.fetch_add(1);
+                    }
+                    if (haveProp) {
+                        PropPosePacket pkt{};
+                        WriteHeader(pkt.header, MsgType::PropPose,
+                                    sendSeq_.fetch_add(1), /*token*/0);
+                        pkt.pose = localProp;
+                        const EResult rc = sockets->SendMessageToConnection(
+                            hConn, &pkt, sizeof(pkt),
+                            k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
+                        if (rc == k_EResultOK) sent_.fetch_add(1);
+                    }
+                }
             }
             nextSend = now + sendInterval;
         }
 
-        // 4) Sample RTT every second from GNS (replaces our Ping/Pong).
-        if (state_.load() == ConnState::Connected && hConn != 0 && now >= nextRttSample) {
-            SteamNetConnectionRealTimeStatus_t st{};
-            if (sockets->GetConnectionRealTimeStatus(hConn, &st, 0, nullptr) == k_EResultOK) {
-                if (st.m_nPing >= 0 && st.m_nPing < 60000) {
-                    lastRttMs_.store(st.m_nPing);
+        // 4) Sample RTT every second from GNS (carried from PR-2). Picks the
+        // first connected peer's RTT -- good enough for HUD; per-peer RTT is
+        // available via GetConnectionRealTimeStatus(peerConns_[i],...) if a
+        // future HUD wants it.
+        if (state_.load() == ConnState::Connected && now >= nextRttSample) {
+            for (int i = 0; i < kMaxPeers; ++i) {
+                const uint32_t hConn = peerConns_[i].load();
+                if (hConn == 0) continue;
+                SteamNetConnectionRealTimeStatus_t st{};
+                if (sockets->GetConnectionRealTimeStatus(hConn, &st, 0, nullptr) == k_EResultOK) {
+                    if (st.m_nPing >= 0 && st.m_nPing < 60000) {
+                        lastRttMs_.store(st.m_nPing);
+                    }
                 }
+                break;  // first connected peer wins for the HUD-level RTT
             }
             nextRttSample = now + std::chrono::milliseconds(1000);
         }
 
-        // 5) Idle. ~5 ms keeps recv latency low while letting the 60 Hz send
-        // cadence be paced by the timer above.
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
