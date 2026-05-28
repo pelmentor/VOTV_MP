@@ -53,14 +53,18 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& p);
 void ApplyToPuppetOrDefer(uint8_t peerSessionId, void* puppetActor,
                           const coop::net::ItemActivatePayload& p);
 
-// Phase 5F Inc5 (connect-time replay) sender entry: snapshot the LOCAL
-// mainPlayer's current flashlight state/cone shape and stash it for a
-// retried broadcast on subsequent TickConnect() calls. Called from the
-// harness's !wasConnected->isConnected edge so a newly-joined peer sees
-// our current flashlight state without us having to press F. No-op if
-// the local flashlight is OFF (saves a redundant packet -- the puppet
-// default on receiver side is already OFF). Game thread only.
-void QueueConnectBroadcast();
+// PR-4.5: per-slot connect-time flashlight replay. Snapshots the LOCAL
+// mainPlayer's current flashlight state and SENDS IT TO ONE SPECIFIC
+// PEER via Session::SendReliableToSlot. Called from the harness's per-
+// slot connect-edge (was: single global QueueConnectBroadcast that fired
+// once on aggregate first-connect and fan-out to all peers; late-joiners
+// after that never saw the local flashlight state, audit finding #8).
+//
+// `peerSlot` is the coop::players::Registry slot of the newly-joined
+// peer (1..kMaxPeers-1 on host; 0 on client). No-op + log if the local
+// flashlight is OFF (puppet default on the receiver is already OFF,
+// saves a redundant packet). Game thread only.
+void QueueConnectBroadcastForSlot(int peerSlot);
 
 // Phase 5F Inc5 per-tick worker. Drains:
 //   (a) pending broadcast queued by QueueConnectBroadcast() -- retries

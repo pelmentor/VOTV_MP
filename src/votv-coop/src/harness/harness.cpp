@@ -354,12 +354,14 @@ void NetPumpTick(float displayOffsetX) {
     // (a chat-feed line that now expires via hud_feed::Tick). If the peer ever
     // reconnects, NetPumpTick auto-spawns a fresh puppet on the first new pose.
     //
-    // PR-4.4: per-slot puppet teardown. Each slot's disconnect edge destroys
-    // ONLY that slot's puppet (a partial disconnect of one client should not
-    // affect another's puppet). The AGGREGATE disconnect path below still
-    // fires the global OnDisconnect calls for subsystems that have session-
-    // wide state -- per-slot scoping for those subsystems lands in PR-4.5.
+    // PR-4.4 + PR-4.5: per-slot edge tracking. Each slot's disconnect edge
+    // destroys ONLY that slot's puppet (+ cancels its in-progress snapshot
+    // drain); each slot's connect edge replays snapshot + flashlight +
+    // weather to ONLY that slot via Session::SendReliableToSlot. Late-
+    // joiners now get caught up; existing peers see zero redundant traffic
+    // (audit findings #7 + #8).
     const bool isConnected = (g_session.state() == coop::net::ConnState::Connected);
+    const bool isHost = (g_session.role() == coop::net::Role::Host);
     for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
         const bool slotConnected = g_session.IsSlotConnected(slot);
         if (g_wasConnectedBySlot[slot] && !slotConnected) {
@@ -367,6 +369,27 @@ void NetPumpTick(float displayOffsetX) {
                 coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
                 g_puppets[slot].Destroy();
                 UE_LOGI("net: peer slot %d disconnected -- puppet destroyed", slot);
+            }
+            // PR-4.5: abort any pending/in-progress snapshot drain to this
+            // slot so we don't iterate ~1700 candidates calling
+            // SendReliableToSlot into a dead connection.
+            coop::prop_snapshot::CancelForSlot(slot);
+        }
+        if (!g_wasConnectedBySlot[slot] && slotConnected) {
+            // PR-4.5: per-slot connect-edge replay.
+            // - HOST -> NEW CLIENT (slot 1..3): full snapshot + flashlight +
+            //   weather replay so the new client converges to host state.
+            // - CLIENT -> HOST (slot 0): announce LOCAL flashlight state so
+            //   the host can show it on our puppet. (Weather is host-
+            //   authoritative; snapshot is host->client only.)
+            if (isHost && slot >= 1) {
+                UE_LOGI("net: peer slot %d connect edge -- replaying snapshot + flashlight + weather", slot);
+                coop::prop_snapshot::TriggerForSlot(slot);
+                coop::item_activate::QueueConnectBroadcastForSlot(slot);
+                coop::weather_sync::QueueConnectBroadcastForSlot(slot);
+            } else if (!isHost && slot == 0) {
+                UE_LOGI("net: host (slot 0) connect edge -- replaying local flashlight");
+                coop::item_activate::QueueConnectBroadcastForSlot(slot);
             }
         }
         g_wasConnectedBySlot[slot] = slotConnected;
@@ -397,30 +420,10 @@ void NetPumpTick(float displayOffsetX) {
         UE_LOGI("net: all peers gone -- cleared %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 snapPending, propStats.initProcessedDropped);
     }
-    // Phase 5S0 (snapshot bootstrap): on every false->true transition of
-    // Connected, the host enumerates Aprop_C derivatives and broadcasts
-    // each as a PropSpawn. Client receives + de-dupes (skip if local Key
-    // already resolves, update transform to converge). Naturally re-fires
-    // on every reconnect since g_wasConnected resets in the disconnect
-    // branch above. NO trigger from client side (asymmetric: host pushes,
-    // client receives).
-    if (!g_wasConnected && isConnected) {
-        UE_LOGI("net: connected edge -- triggering Phase 5S0 snapshot");
-        coop::prop_snapshot::Trigger();
-        // Phase 5F Inc5 (2026-05-26): queue our LOCAL flashlight state for
-        // the newly-joined peer. Both peers run this on each connect edge
-        // -- symmetric: host sends host's state to client puppet, client
-        // sends client's state to host puppet. Skipped internally if the
-        // local light is OFF (puppet default already matches). The send
-        // itself happens in TickConnect() below (reliable channel may be
-        // mid-burst from the PropSpawn enumeration; per-tick retry).
-        coop::item_activate::QueueConnectBroadcast();
-        // Phase 5W Inc1 (2026-05-26): queue our LOCAL weather state for the
-        // newly-joined peer. HOST-only sender (no-op on client). Sends
-        // current rain/snow/fog/wind state so a client joining mid-storm
-        // doesn't see clear weather. Send itself retries per tick.
-        coop::weather_sync::QueueConnectBroadcast();
-    }
+    // PR-4.5: the aggregate `!g_wasConnected && isConnected` connect-edge
+    // block has been retired (RULE 2). The per-slot connect-edge in the
+    // loop above now fires the snapshot + connect broadcasts targeted at
+    // each newly-joined slot, which is correct for late-joiners too.
     g_wasConnected = isConnected;
 
     // Per-tick snapshot work (Phase 5S0 audit I-2): process up to ~100
@@ -570,7 +573,7 @@ void NetPumpTick(float displayOffsetX) {
         // that affects correctness).
         static std::array<steady_clock::time_point, coop::players::kMaxPeers> sNextSpawnAttempt{};
         const auto now = steady_clock::now();
-        const bool isHost = (g_session.role() == coop::net::Role::Host);
+        // isHost defined in the outer scope (per-slot edge tracking). Reuse it.
         const int firstSlot = isHost ? 1 : 0;
         const int lastSlot  = isHost ? coop::players::kMaxPeers : 1;
         // Host self-assigns slot 0 in the registry. Idempotent setter so it's

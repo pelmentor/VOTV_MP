@@ -26,19 +26,34 @@ namespace coop::prop_snapshot {
 // at startup from harness.cpp.
 void SetSession(coop::net::Session* session);
 
-// Phase 1: host-only enumeration of live Aprop_C candidates into the
-// internal vector. Reset the per-chunk drain index. No-op + log if not
-// host or not connected. Called from the NetPumpTick connect-edge.
-void Trigger();
+// PR-4.5 (closes audit findings #7 + Finding D): per-slot snapshot replay.
+// `peerSlot` is a coop::players::Registry slot index (1..kMaxPeers-1 for
+// clients on host). The function:
+//   - if no drain is currently in progress, enumerates live keyed-
+//     interactable Aprop_C derivatives into the internal candidate vector
+//     and sets the drain target to `peerSlot`;
+//   - if a drain to a DIFFERENT slot is already in progress, queues
+//     `peerSlot` for after the current drain completes.
+// Host-only sender (no-op + log if called on client). The drain is then
+// pumped one chunk per NetPumpTick frame via DrainChunk().
+void TriggerForSlot(int peerSlot);
 
 // Phase 2: drain up to chunkSize candidates per call (read transform,
-// build payload, call session.SendPropSpawn -- channel queues internally
-// since 2026-05-27). No-op when enumeration not in progress. Called from
-// NetPumpTick each frame while connected.
+// build payload, call session.SendReliableToSlot for the current target
+// slot). No-op when no drain is in progress. Called from NetPumpTick
+// each frame while connected.
 void DrainChunk();
 
-// Reset internal state on disconnect. Returns count of candidates that
-// were enumerated but not yet drained (for the disconnect log line).
+// PR-4.5: abort any pending or in-progress drain for `peerSlot`. Called
+// from the harness's per-slot disconnect edge so a peer drop mid-drain
+// doesn't waste ~1700 SendReliableToSlot calls into a dead connection
+// (Session silently no-ops these but still iterates all candidates).
+// If the in-progress drain target is `peerSlot`, dequeues the next
+// pending slot if any.
+void CancelForSlot(int peerSlot);
+
+// Reset internal state on AGGREGATE disconnect (all peers gone). Returns
+// count of candidates that were enumerated but not yet drained.
 size_t OnDisconnect();
 
 }  // namespace coop::prop_snapshot

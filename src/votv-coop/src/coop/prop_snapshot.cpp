@@ -1,12 +1,19 @@
 // coop/prop_snapshot.cpp -- Phase 5S0 save snapshot bootstrap.
 //
 // Extracted from harness/harness.cpp (2026-05-25 modular refactor).
+// PR-4.5 (2026-05-28): per-slot drain. Snapshot now replays to ONE peer
+// slot at a time via Session::SendReliableToSlot, closing audit finding
+// #7 (late-joiner gets a full snapshot) + agent-mapped Finding D
+// (concurrent late-joiners don't race on a shared candidate index).
+// Serial drains: if a second peer connects mid-drain, it queues and
+// drains after the first completes.
 // See coop/prop_snapshot.h for the public interface.
 
 #include "coop/prop_snapshot.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
+#include "coop/players_registry.h"
 #include "coop/prop_lifecycle.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
@@ -26,11 +33,16 @@ namespace R = ue_wrap::reflection;
 
 coop::net::Session* g_session_ptr = nullptr;
 
-// Enumeration state: vector of live Aprop_C* collected by Trigger(); index
-// of the next candidate DrainChunk() will process. Game-thread access only;
-// no lock needed.
+// Enumeration state for the currently-running drain. Game-thread access
+// only; no lock needed.
 std::vector<void*> g_snapshotCandidates;
 size_t g_snapshotCandidateIdx = 0;
+
+// PR-4.5: which peer slot is being served by the current drain
+// (-1 = no drain in progress). Plus the queue of slots waiting their turn
+// (e.g. peer 2 connecting while peer 1's drain is still in flight).
+int g_currentTargetSlot = -1;
+std::vector<int> g_pendingSlots;
 
 // Per-tick drain size -- 100 candidates per frame keeps the per-tick cost
 // (~5-15 ms for GetActorLocation/Rotation x100) well under the 16.6 ms
@@ -38,22 +50,12 @@ size_t g_snapshotCandidateIdx = 0;
 // wall-clock spread across frames, no single-frame stall).
 constexpr size_t kSnapshotChunkSize = 100;
 
-}  // namespace
-
-void SetSession(coop::net::Session* session) {
-    g_session_ptr = session;
-}
-
-void Trigger() {
-    if (!g_session_ptr) return;
-    if (g_session_ptr->role() != coop::net::Role::Host) {
-        UE_LOGI("snapshot: not host -- skipping (client receives, doesn't broadcast)");
-        return;
-    }
-    if (!g_session_ptr->connected()) {
-        UE_LOGW("snapshot: not connected -- skipping");
-        return;
-    }
+// Walk GUObjectArray + populate g_snapshotCandidates with live keyed-
+// interactable Aprop_C derivatives. Reset the per-chunk drain index.
+// Sets g_currentTargetSlot = peerSlot. Caller (TriggerForSlot or
+// post-completion dequeue) ensures no drain is already in progress.
+void StartEnumerationFor(int peerSlot) {
+    g_currentTargetSlot = peerSlot;
     g_snapshotCandidates.clear();
     g_snapshotCandidateIdx = 0;
     int skippedCDO = 0, skippedDying = 0;
@@ -67,12 +69,66 @@ void Trigger() {
         if (!R::IsLive(obj)) { ++skippedDying; continue; }
         g_snapshotCandidates.push_back(obj);
     }
-    UE_LOGI("snapshot: enumerated %zu keyed-interactable live candidates (skipped %d CDOs, %d dying); will drain %zu per tick",
-            g_snapshotCandidates.size(), skippedCDO, skippedDying, kSnapshotChunkSize);
+    UE_LOGI("snapshot: enumerated %zu live candidates for slot %d (skipped %d CDOs, %d dying); will drain %zu/tick",
+            g_snapshotCandidates.size(), peerSlot, skippedCDO, skippedDying, kSnapshotChunkSize);
+}
+
+}  // namespace
+
+void SetSession(coop::net::Session* session) {
+    g_session_ptr = session;
+}
+
+void TriggerForSlot(int peerSlot) {
+    if (!g_session_ptr) return;
+    if (g_session_ptr->role() != coop::net::Role::Host) {
+        UE_LOGI("snapshot: not host -- skipping TriggerForSlot(slot=%d)", peerSlot);
+        return;
+    }
+    if (peerSlot < 1 || peerSlot >= coop::players::kMaxPeers) {
+        UE_LOGW("snapshot: TriggerForSlot peerSlot=%d out of [1..%u)",
+                peerSlot, static_cast<unsigned>(coop::players::kMaxPeers));
+        return;
+    }
+    // PR-4.5: check the PER-SLOT connection state, not the aggregate
+    // session.connected(). The harness's per-slot connect edge fires the
+    // moment IsSlotConnected(slot) flips to true (peerConns_[slot] set at
+    // AcceptConnection / late-register time), which can be a few ms BEFORE
+    // the aggregate state_ transitions to Connected (the Connected status
+    // callback hasn't fired yet). The aggregate gate was incorrectly
+    // dropping legitimate snapshot triggers in that window.
+    if (!g_session_ptr->IsSlotConnected(peerSlot)) {
+        UE_LOGW("snapshot: slot %d not connected -- skipping TriggerForSlot", peerSlot);
+        return;
+    }
+    if (g_currentTargetSlot != -1) {
+        // Another drain is in flight. Queue this slot for after it
+        // completes. Avoid duplicate queue entries (a slot reconnecting
+        // multiple times in rapid succession).
+        if (std::find(g_pendingSlots.begin(), g_pendingSlots.end(), peerSlot) ==
+                g_pendingSlots.end()) {
+            g_pendingSlots.push_back(peerSlot);
+            UE_LOGI("snapshot: drain busy on slot %d -- queueing slot %d (depth=%zu)",
+                    g_currentTargetSlot, peerSlot, g_pendingSlots.size());
+        }
+        return;
+    }
+    StartEnumerationFor(peerSlot);
 }
 
 void DrainChunk() {
+    if (g_currentTargetSlot == -1) return;
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) return;
+    // Bail out early if the target peer disconnected mid-drain. Without
+    // this we'd iterate all remaining candidates calling SendReliableToSlot
+    // into a closed connection (Session silently no-ops but the GetActor
+    // Location/Rotation reflection calls add up to wasted ms/frame).
+    if (!g_session_ptr->IsSlotConnected(g_currentTargetSlot)) {
+        UE_LOGI("snapshot: target slot %d disconnected mid-drain -- aborting (sent %zu/%zu)",
+                g_currentTargetSlot, g_snapshotCandidateIdx, g_snapshotCandidates.size());
+        CancelForSlot(g_currentTargetSlot);
+        return;
+    }
     // (std::min) parenthesized to defeat windows.h's `min` macro.
     const size_t limit = (std::min)(g_snapshotCandidateIdx + kSnapshotChunkSize,
                                     g_snapshotCandidates.size());
@@ -117,21 +173,57 @@ void DrainChunk() {
         if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
         p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
         p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-        // 2026-05-27: channel internal queue replaces per-feature retry.
-        // SendPropSpawn always succeeds (returns false only on payload-too-
-        // large / queue overflow at 4096 backlog).
-        g_session_ptr->SendPropSpawn(p);
+        // PR-4.5: send to ONE slot only. Other peers (already-connected)
+        // already have these props from their own connect-edge drain.
+        g_session_ptr->SendReliableToSlot(g_currentTargetSlot,
+                                          coop::net::ReliableKind::PropSpawn,
+                                          &p, sizeof(p));
         ++sent;
     }
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) {
-        UE_LOGI("snapshot: enumeration drain complete (%zu candidates processed); freeing candidate list",
-                g_snapshotCandidates.size());
+        UE_LOGI("snapshot: drain complete for slot %d (%zu candidates processed)",
+                g_currentTargetSlot, g_snapshotCandidates.size());
         g_snapshotCandidates.clear();
         g_snapshotCandidates.shrink_to_fit();
         g_snapshotCandidateIdx = 0;
+        g_currentTargetSlot = -1;
+        // Dequeue next pending slot if any. This kicks off a fresh
+        // enumeration (the world may have changed since the prior drain
+        // started -- props spawned/destroyed/moved).
+        if (!g_pendingSlots.empty()) {
+            const int nextSlot = g_pendingSlots.front();
+            g_pendingSlots.erase(g_pendingSlots.begin());
+            if (g_session_ptr->IsSlotConnected(nextSlot)) {
+                StartEnumerationFor(nextSlot);
+            } else {
+                UE_LOGI("snapshot: dequeued slot %d already disconnected -- skipping",
+                        nextSlot);
+            }
+        }
     } else {
-        UE_LOGI("snapshot: drained chunk -- this tick=%d, processed %zu/%zu",
-                sent, g_snapshotCandidateIdx, g_snapshotCandidates.size());
+        UE_LOGI("snapshot: drained chunk for slot %d -- this tick=%d, processed %zu/%zu",
+                g_currentTargetSlot, sent, g_snapshotCandidateIdx, g_snapshotCandidates.size());
+    }
+}
+
+void CancelForSlot(int peerSlot) {
+    // Remove `peerSlot` from the pending queue (may have queued + then
+    // disconnected before its turn came up).
+    g_pendingSlots.erase(
+        std::remove(g_pendingSlots.begin(), g_pendingSlots.end(), peerSlot),
+        g_pendingSlots.end());
+    // If `peerSlot` was the in-progress drain target, abort + dequeue next.
+    if (g_currentTargetSlot != peerSlot) return;
+    g_snapshotCandidates.clear();
+    g_snapshotCandidates.shrink_to_fit();
+    g_snapshotCandidateIdx = 0;
+    g_currentTargetSlot = -1;
+    if (!g_pendingSlots.empty()) {
+        const int nextSlot = g_pendingSlots.front();
+        g_pendingSlots.erase(g_pendingSlots.begin());
+        if (g_session_ptr && g_session_ptr->IsSlotConnected(nextSlot)) {
+            StartEnumerationFor(nextSlot);
+        }
     }
 }
 
@@ -139,10 +231,13 @@ size_t OnDisconnect() {
     size_t pending = 0;
     if (!g_snapshotCandidates.empty()) {
         pending = g_snapshotCandidates.size() - g_snapshotCandidateIdx;
-        g_snapshotCandidates.clear();
-        g_snapshotCandidates.shrink_to_fit();
-        g_snapshotCandidateIdx = 0;
     }
+    g_snapshotCandidates.clear();
+    g_snapshotCandidates.shrink_to_fit();
+    g_snapshotCandidateIdx = 0;
+    g_currentTargetSlot = -1;
+    g_pendingSlots.clear();
+    g_pendingSlots.shrink_to_fit();
     return pending;
 }
 

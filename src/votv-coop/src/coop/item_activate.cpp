@@ -680,10 +680,14 @@ void ApplyToPuppetOrDefer(uint8_t peerSessionId, void* puppetActor,
             static_cast<unsigned>(peerSessionId), p.state, p.intensity);
 }
 
-void QueueConnectBroadcast() {
+void QueueConnectBroadcastForSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s) {
-        UE_LOGW("flashlight: QueueConnectBroadcast called with no session");
+        UE_LOGW("flashlight: QueueConnectBroadcastForSlot called with no session");
+        return;
+    }
+    if (peerSlot < 0 || peerSlot >= static_cast<int>(coop::players::kMaxPeers)) {
+        UE_LOGW("flashlight: QueueConnectBroadcastForSlot peerSlot=%d out of range", peerSlot);
         return;
     }
     void* mp = coop::players::Registry::Get().Local();
@@ -693,12 +697,14 @@ void QueueConnectBroadcast() {
         // reconnect; this connect-edge case (connected before mp loads)
         // is rare in practice (mp spawns in the loading splash before
         // session.Connected). Drop silently.
-        UE_LOGI("flashlight: QueueConnectBroadcast no local mp yet -- no broadcast");
+        UE_LOGI("flashlight: QueueConnectBroadcastForSlot(slot=%d) no local mp yet -- no broadcast",
+                peerSlot);
         return;
     }
     coop::net::ItemActivatePayload p{};
     if (!BuildPayloadFromLocal(mp, p, s)) {
-        UE_LOGW("flashlight: QueueConnectBroadcast BuildPayloadFromLocal failed");
+        UE_LOGW("flashlight: QueueConnectBroadcastForSlot(slot=%d) BuildPayloadFromLocal failed",
+                peerSlot);
         return;
     }
     // Skip broadcast if LOCAL flashlight is OFF -- the receiver's puppet
@@ -706,18 +712,20 @@ void QueueConnectBroadcast() {
     // (When the local user toggles to ON later, the normal POST observer
     // path ships it.)
     if (p.state == 0) {
-        UE_LOGI("flashlight: QueueConnectBroadcast local state is OFF -- "
-                "skipping (puppet default is OFF; no replay needed)");
+        UE_LOGI("flashlight: QueueConnectBroadcastForSlot(slot=%d) local state is OFF -- "
+                "skipping (puppet default is OFF; no replay needed)", peerSlot);
         return;
     }
-    // 2026-05-27: reliable channel buffers internally; Send always accepted.
-    s->SendReliable(coop::net::ReliableKind::ItemActivate, &p, sizeof(p));
+    // PR-4.5: send to ONE slot only. Existing peers (already-connected)
+    // already received our state via the original POST-observer broadcast
+    // on toggle; re-sending to them would be redundant.
+    s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::ItemActivate, &p, sizeof(p));
     const uint64_t sig = SignaturePayload(p);
     const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
     g_lastSentSig.store(storeSig, std::memory_order_release);
-    UE_LOGI("flashlight: connect-broadcast sent state=%d Intensity=%.2f "
+    UE_LOGI("flashlight: connect-broadcast slot=%d sent state=%d Intensity=%.2f "
             "outerCone=%.1f mode=%u peer=%u",
-            p.state, p.intensity, p.outerConeAngle, p.mode, p.peerSessionId);
+            peerSlot, p.state, p.intensity, p.outerConeAngle, p.mode, p.peerSessionId);
 }
 
 void TickConnect() {

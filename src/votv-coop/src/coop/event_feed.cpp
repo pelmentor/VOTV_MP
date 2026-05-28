@@ -37,10 +37,14 @@ std::array<std::wstring, net::kMaxPeers> g_remoteNickBySlot{
     L"Remote player", L"Remote player", L"Remote player", L"Remote player"
 };
 std::array<bool, net::kMaxPeers> g_lastConnectedBySlot{};
-// g_joinSent is per-process (whether THIS process has announced its Join
-// over the reliable channel). The Join fans out from one SendReliable to
-// all connected peers, so a single bool here is correct.
-bool g_joinSent = false;
+// PR-4.5: per-slot Join tracking. Pre-fix the Join announcement was sent
+// ONCE via SendReliable (fan-out to whichever peers were connected at the
+// time). Late-joining peers got no Join from us; their event_feed::Update
+// drain saw no Join from this peer and used the placeholder "Remote player"
+// nick forever (no "X joined" line either). Closes audit finding #8 for
+// the Join announcement specifically. Each slot's bit is reset to false
+// on per-slot disconnect so a re-connect re-announces.
+std::array<bool, net::kMaxPeers> g_joinSentBySlot{};
 
 std::vector<uint8_t> ToUtf8(const std::wstring& w) {
     if (w.empty()) return {};
@@ -139,7 +143,9 @@ void SetLocalNickname(const std::wstring& nick) {
 }
 
 void Update(net::Session& session, void* localPlayer) {
-    const bool connected = session.connected();
+    // PR-4.5: aggregate `connected` was used by the pre-fix global Join
+    // send (g_joinSent). Per-slot Join below makes the aggregate bool
+    // unnecessary -- per-slot session.IsSlotConnected handles each peer.
 
     // Fan the latest RTT across every live puppet so each nameplate shows
     // "<nick> (<ping>ms)". The Session today exposes only an aggregate
@@ -151,37 +157,40 @@ void Update(net::Session& session, void* localPlayer) {
         if (p) p->SetPing(rtt);
     }
 
-    // On (re)connect: announce ourselves once via the reliable channel. Join
-    // fan-outs to all currently-connected peers in a single SendReliable;
-    // late-joiners get our nick via the connect-edge replay queued by the
-    // harness (PR-4.5).
-    if (connected && !g_joinSent) {
+    // PR-4.5: per-slot Join announcement. For each slot that we haven't
+    // yet sent our Join to AND is currently connected, send Join via
+    // SendReliableToSlot. Pre-fix the single g_joinSent bit meant a
+    // late-joiner never received our nick.
+    //
+    // Build the Join payload once (it's the same for every recipient).
+    std::vector<uint8_t> joinPayload;
+    {
         std::vector<uint8_t> nickUtf8 = ToUtf8(g_localNick);
         if (nickUtf8.size() > 200) nickUtf8.resize(200);
-        std::vector<uint8_t> payload;
-        payload.push_back(static_cast<uint8_t>(nickUtf8.size()));
-        payload.insert(payload.end(), nickUtf8.begin(), nickUtf8.end());
-        if (session.SendReliable(net::ReliableKind::Join, payload.data(),
-                                 static_cast<int>(payload.size())))
-            g_joinSent = true;  // stop-and-wait: retries automatically until acked
+        joinPayload.push_back(static_cast<uint8_t>(nickUtf8.size()));
+        joinPayload.insert(joinPayload.end(), nickUtf8.begin(), nickUtf8.end());
     }
-
-    // Per-slot disconnect edge: when a specific peer slot transitions
-    // connected -> disconnected, post the departing peer's nick (not the
-    // last-seen nick on the aggregate session). Was a bug pre-PR-4.4:
-    // "X left the game" used g_remoteNick which got overwritten by the
-    // most recent Join, so the message was wrong when client 2 left while
-    // client 1 was still connected.
     for (int slot = 0; slot < net::kMaxPeers; ++slot) {
         const bool slotConnected = session.IsSlotConnected(slot);
+        // Per-slot disconnect edge: when a specific slot transitions
+        // connected -> disconnected, post the departing peer's nick.
+        // Pre-PR-4.4 "X left the game" used g_remoteNick (single scalar)
+        // which got overwritten by the most recent Join.
         if (g_lastConnectedBySlot[slot] && !slotConnected) {
             ue_wrap::hud_feed::Push(g_remoteNickBySlot[slot] + L" left the game");
+            // Reset Join-sent so the next reconnect re-announces.
+            g_joinSentBySlot[slot] = false;
+        }
+        // Per-slot connect edge: send our Join to this slot.
+        if (slotConnected && !g_joinSentBySlot[slot]) {
+            if (session.SendReliableToSlot(slot, net::ReliableKind::Join,
+                                           joinPayload.data(),
+                                           static_cast<int>(joinPayload.size()))) {
+                g_joinSentBySlot[slot] = true;
+            }
+            // If send fails (transient), we'll retry next tick.
         }
         g_lastConnectedBySlot[slot] = slotConnected;
-    }
-    // Re-announce on aggregate disconnect so the next connect re-sends Join.
-    if (!connected) {
-        g_joinSent = false;
     }
 
     // Drain delivered reliable messages.

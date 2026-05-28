@@ -47,10 +47,14 @@ namespace coop::weather_sync {
 // host observer can SendReliable; nullptr disables broadcasting.
 void Install(coop::net::Session* session);
 
-// Connect-edge sender: snapshot the LOCAL cycle's current state and stash
-// it for a retried broadcast on subsequent TickConnect calls. HOST ONLY --
-// no-op on client. Mirrors coop::item_activate::QueueConnectBroadcast.
-void QueueConnectBroadcast();
+// PR-4.5: per-slot connect-edge sender. Snapshots the LOCAL cycle's
+// current weather state and sends it to ONE peer slot via
+// Session::SendReliableToSlot. HOST ONLY -- no-op + log on client.
+// `peerSlot` is the newly-joined peer's coop::players::Registry slot
+// (1..kMaxPeers-1). Closes audit finding #8 (the prior aggregate
+// QueueConnectBroadcast fired ONCE on first-peer-connect; late-joiners
+// got a default-weather world).
+void QueueConnectBroadcastForSlot(int peerSlot);
 
 // Per-tick worker. Drains the pending broadcast queue (retries SendReliable
 // each tick until the reliable channel accepts). Cheap when no pending

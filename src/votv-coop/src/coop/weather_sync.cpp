@@ -958,26 +958,33 @@ void ApplyLightningStrike(const coop::net::LightningStrikePayload& payload) {
             "(%.0f, %.0f, %.0f)", actor, payload.locX, payload.locY, payload.locZ);
 }
 
-void QueueConnectBroadcast() {
+void QueueConnectBroadcastForSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s) return;
     if (s->role() != coop::net::Role::Host) return;  // host-only sender
+    if (peerSlot < 1 || peerSlot >= static_cast<int>(coop::players::kMaxPeers)) {
+        UE_LOGW("weather: QueueConnectBroadcastForSlot peerSlot=%d out of [1..%u)",
+                peerSlot, static_cast<unsigned>(coop::players::kMaxPeers));
+        return;
+    }
     void* cycle = ResolveCycle();
     if (!cycle) {
-        UE_LOGI("weather: QueueConnectBroadcast no daynightCycle_C live -- "
-                "skipping (client receives default; observer-driven path "
-                "will catch the next state change)");
+        UE_LOGI("weather: QueueConnectBroadcastForSlot(slot=%d) no daynightCycle_C "
+                "live -- skipping (client receives default; observer-driven path "
+                "will catch the next state change)", peerSlot);
         return;
     }
     coop::net::WeatherStatePayload p{};
     if (!ReadCycleState(cycle, p)) return;
-    // 2026-05-27: reliable channel buffers internally; Send always accepted.
-    s->SendReliable(coop::net::ReliableKind::WeatherState, &p, sizeof(p));
+    // PR-4.5: send to ONE slot only. Pre-fix this was SendReliable (fan-out)
+    // which meant late-joiners after the first peer connected never got the
+    // weather state -- they saw a default-weather world even mid-storm.
+    s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::WeatherState, &p, sizeof(p));
     const uint64_t sig = SignaturePayload(p);
     const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
     g_lastSentSig.store(storeSig, std::memory_order_release);
-    UE_LOGI("weather: connect-broadcast sent flags=0x%02X rain=%.2f lc=%.2f dc=%.2f ws=%.2f",
-            p.flags, p.rainStrength, p.rainLightningChance,
+    UE_LOGI("weather: connect-broadcast slot=%d sent flags=0x%02X rain=%.2f lc=%.2f dc=%.2f ws=%.2f",
+            peerSlot, p.flags, p.rainStrength, p.rainLightningChance,
             p.rainDeactivateChance, p.rainWindSpeed);
 }
 
