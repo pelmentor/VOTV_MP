@@ -127,6 +127,104 @@ def pick_monitor(index_1based: int) -> dict | None:
     return mons[index_1based - 1]
 
 
+# --- Per-process commit limit via Win32 Job Objects ---
+# Safety net for the kind of UE4 runaway-allocation pathology we hit on
+# 2026-05-28 (host launched with -WinX=0 -WinY=0 on a multi-monitor virtual
+# desktop ate 18 GB before the user could kill it). A Job Object with
+# JOB_OBJECT_LIMIT_PROCESS_MEMORY caps the per-process commit. The kernel
+# fails further VirtualAlloc once the limit is hit -- UE4 either retries
+# at a smaller size, logs an OOM, or crashes. Either way the process stops
+# growing past the cap. Critically: the limit is a property of the job
+# object, NOT of our handle, so it stays in effect after mp.py exits and
+# VotV is left running standalone.
+#
+# References:
+# - https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information
+# - JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+# - JobObjectExtendedLimitInformation = 9
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ('PerProcessUserTimeLimit', ctypes.c_int64),
+        ('PerJobUserTimeLimit',     ctypes.c_int64),
+        ('LimitFlags',              wintypes.DWORD),
+        ('MinimumWorkingSetSize',   ctypes.c_size_t),
+        ('MaximumWorkingSetSize',   ctypes.c_size_t),
+        ('ActiveProcessLimit',      wintypes.DWORD),
+        ('Affinity',                ctypes.c_void_p),
+        ('PriorityClass',           wintypes.DWORD),
+        ('SchedulingClass',         wintypes.DWORD),
+    ]
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ('ReadOperationCount',  ctypes.c_uint64),
+        ('WriteOperationCount', ctypes.c_uint64),
+        ('OtherOperationCount', ctypes.c_uint64),
+        ('ReadTransferCount',   ctypes.c_uint64),
+        ('WriteTransferCount',  ctypes.c_uint64),
+        ('OtherTransferCount',  ctypes.c_uint64),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ('BasicLimitInformation', _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ('IoInfo',                _IO_COUNTERS),
+        ('ProcessMemoryLimit',    ctypes.c_size_t),
+        ('JobMemoryLimit',        ctypes.c_size_t),
+        ('PeakProcessMemoryUsed', ctypes.c_size_t),
+        ('PeakJobMemoryUsed',     ctypes.c_size_t),
+    ]
+
+
+_JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+_JobObjectExtendedLimitInformation = 9
+
+
+def apply_process_memory_limit(pid: int, limit_bytes: int) -> bool:
+    """Wrap `pid` in a Job Object with a per-process commit limit of
+    `limit_bytes`. Returns True on success. The job persists as long as
+    `pid` is alive even after this Python process exits."""
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_SET_QUOTA = 0x0100
+    PROCESS_TERMINATE = 0x0001
+    proc = kernel32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+                                False, pid)
+    if not proc:
+        log(f"  memory-limit: OpenProcess({pid}) failed err={kernel32.GetLastError()}")
+        return False
+    try:
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            log(f"  memory-limit: CreateJobObjectW failed err={kernel32.GetLastError()}")
+            return False
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        info.ProcessMemoryLimit = limit_bytes
+        if not kernel32.SetInformationJobObject(
+                job, _JobObjectExtendedLimitInformation,
+                ctypes.byref(info), ctypes.sizeof(info)):
+            log(f"  memory-limit: SetInformationJobObject failed err={kernel32.GetLastError()}")
+            kernel32.CloseHandle(job)
+            return False
+        if not kernel32.AssignProcessToJobObject(job, proc):
+            err = kernel32.GetLastError()
+            log(f"  memory-limit: AssignProcessToJobObject failed err={err}")
+            kernel32.CloseHandle(job)
+            return False
+        # NOTE: we deliberately DO NOT CloseHandle(job) here. The job
+        # object lives in the kernel; closing our handle is fine because
+        # the limit applies to the assigned process as long as the process
+        # is alive (the job is GC'd when its last process exits). We don't
+        # set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so closing won't kill VotV.
+        kernel32.CloseHandle(job)
+        return True
+    finally:
+        kernel32.CloseHandle(proc)
+
+
 def run_ps(script: str) -> tuple[int, str, str]:
     r = subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -207,30 +305,42 @@ def tile_offset(tile_index: int, mon: dict | None,
     first (if the monitor is wide enough for two windows), then stacked
     vertically (if tall enough), then a 40-px cascade fallback.
 
-    Monitor shape examples:
-      2560x1440 landscape secondary: cols=2 (2560//1280=2), rows=2 -> tile 0
-        lands at (0,0), tile 1 at (1280,0).
-      1440x2560 portrait secondary: cols=1, rows=3 -> tile 0 at (0,0),
-        tile 1 at (0,720), tile 2 at (0,1440).
-      1280x720 single monitor: cols=1, rows=1 -> falls back to cascade.
+    A small top margin is reserved on the first row so the window's title
+    bar lands comfortably below the monitor's top edge. User-observed
+    issue 2026-05-28: client #1 at y=0 on a portrait secondary monitor
+    had its title bar clipped/hidden against the monitor's top edge --
+    fix is to push everything down a touch so the title bar grab area
+    is always visible.
+
+    Monitor shape examples (with TILE_TOP_MARGIN_Y=40):
+      2560x1440 landscape secondary: cols=2 (2560//1280=2) -> tile 0
+        lands at (0, 40), tile 1 at (1280, 40).
+      1440x2560 portrait secondary: cols=1, rows=3 -> tile 0 at (0, 40),
+        tile 1 at (0, 760), tile 2 at (0, 1480). All title bars visible.
+      1280x720 single monitor: cols=1, rows=1 -> cascade with margin.
     """
+    TILE_TOP_MARGIN_Y = 40
     if mon is None:
-        return (tile_index * 40, tile_index * 40)
+        return (tile_index * 40, TILE_TOP_MARGIN_Y + tile_index * 40)
     cols = max(1, mon['w'] // res_x)
-    rows = max(1, mon['h'] // res_y)
+    # Subtract the top margin from available height before deciding rows
+    # so we don't claim more rows than actually fit with the margin in.
+    avail_h = max(res_y, mon['h'] - TILE_TOP_MARGIN_Y)
+    rows = max(1, avail_h // res_y)
     if cols >= 2:
         col = tile_index % cols
         row = (tile_index // cols) % max(1, rows)
-        return (col * res_x, row * res_y)
+        return (col * res_x, TILE_TOP_MARGIN_Y + row * res_y)
     if rows >= 2:
-        return (0, (tile_index % rows) * res_y)
-    return (tile_index * 40, tile_index * 40)
+        return (0, TILE_TOP_MARGIN_Y + (tile_index % rows) * res_y)
+    return (tile_index * 40, TILE_TOP_MARGIN_Y + tile_index * 40)
 
 
 def launch_peer(role: str, port: int, nick: str, peer: str | None,
                 res_x: int, res_y: int, peer_slot: int = 1,
                 monitor: int = 1, tile_index: int = 0,
-                center: bool = False) -> int:
+                center: bool = False,
+                memory_limit_gb: float = 12.0) -> int:
     # role is the WIRE role (host / client). peer_slot is which CLIENT folder
     # to launch from when role==client: 1 -> Game_0.9.0n_copy, 2 ->
     # Game_0.9.0n_copy2. Host always uses Game_0.9.0n.
@@ -294,6 +404,17 @@ def launch_peer(role: str, port: int, nick: str, peer: str | None,
         close_fds=True,
     )
     log(f"launched PID={proc.pid}")
+    # Apply per-process commit limit via Job Object. The OS will fail
+    # further VirtualAlloc once the cap is hit, preventing the runaway
+    # growth we hit 2026-05-28 (host with -WinX=0 -WinY=0 ate 18 GB
+    # before user could kill it). Limit applies for the lifetime of the
+    # process even after this Python orchestrator exits.
+    if memory_limit_gb > 0:
+        limit_bytes = int(memory_limit_gb * 1024 * 1024 * 1024)
+        if apply_process_memory_limit(proc.pid, limit_bytes):
+            log(f"  memory-limit applied: {memory_limit_gb:.1f} GB per-process commit cap")
+        else:
+            log(f"  memory-limit FAILED -- process not protected from runaway alloc")
     return proc.pid
 
 
@@ -303,7 +424,8 @@ def cmd_host(args) -> None:
     # default). Not tiled -- the client launchers handle multi-window tiling.
     pid = launch_peer("host", args.port, args.nick or "Host",
                       peer=None, res_x=args.res_x, res_y=args.res_y,
-                      monitor=args.monitor, center=True)
+                      monitor=args.monitor, center=True,
+                      memory_limit_gb=args.memory_limit_gb)
     log(f"host running PID={pid}")
 
 
@@ -312,7 +434,8 @@ def cmd_client(args) -> None:
     # Client #1: tile index 0 (top-left of the target monitor).
     pid = launch_peer("client", args.port, args.nick or "Client",
                       peer=args.peer, res_x=args.res_x, res_y=args.res_y,
-                      peer_slot=1, monitor=args.monitor, tile_index=0)
+                      peer_slot=1, monitor=args.monitor, tile_index=0,
+                      memory_limit_gb=args.memory_limit_gb)
     log(f"client running PID={pid}")
 
 
@@ -322,7 +445,8 @@ def cmd_client2(args) -> None:
     # cascade automatically based on the chosen monitor's dimensions.
     pid = launch_peer("client", args.port, args.nick or "Client2",
                       peer=args.peer, res_x=args.res_x, res_y=args.res_y,
-                      peer_slot=2, monitor=args.monitor, tile_index=1)
+                      peer_slot=2, monitor=args.monitor, tile_index=1,
+                      memory_limit_gb=args.memory_limit_gb)
     log(f"client2 running PID={pid}")
 
 
@@ -467,10 +591,20 @@ def main() -> None:
     # primary monitor; clients default to monitor 2 so the user's main screen
     # isn't crowded by 2+ client windows during multi-peer tests. If only one
     # monitor is connected the code silently falls back to monitor 1.
+    # --memory-limit-gb: per-process commit cap enforced by Win32 Job Object.
+    # Default 12 GB sits well above legitimate use (host 3.5 GB steady,
+    # client 6.5 GB during snapshot fan-out peak) but well below the 18 GB
+    # the (0,0) UE4 hazard hit, so any future runaway-alloc bug hits the
+    # cap and stops growing instead of locking the machine. 0 disables.
+    def _add_mem_limit(p):
+        p.add_argument("--memory-limit-gb", type=float, default=12.0,
+                       help="per-process commit cap in GB (0 = disabled)")
+
     p_host = sub.add_parser("host", help="launch HOST peer")
     p_host.add_argument("--nick", default=None)
     p_host.add_argument("--monitor", type=int, default=1,
                         help="1-based monitor index; primary=1, secondary=2")
+    _add_mem_limit(p_host)
     for flag, kw in host_res: p_host.add_argument(flag, **kw)
     p_host.set_defaults(func=cmd_host)
 
@@ -479,6 +613,7 @@ def main() -> None:
     p_client.add_argument("--nick", default=None)
     p_client.add_argument("--monitor", type=int, default=2,
                           help="1-based monitor index; defaults to secondary")
+    _add_mem_limit(p_client)
     for flag, kw in client_res: p_client.add_argument(flag, **kw)
     p_client.set_defaults(func=cmd_client)
 
@@ -487,6 +622,7 @@ def main() -> None:
     p_client2.add_argument("--nick", default=None)
     p_client2.add_argument("--monitor", type=int, default=2,
                            help="1-based monitor index; defaults to secondary")
+    _add_mem_limit(p_client2)
     for flag, kw in client_res: p_client2.add_argument(flag, **kw)
     p_client2.set_defaults(func=cmd_client2)
 
