@@ -252,6 +252,13 @@ void Session::HandleConnStatusChanged(void* info) {
             return;
         }
         ConfigureLanesForPeer(hConn);
+        // Order matters: lanes-configured flag flips ONLY after the
+        // ConfigureConnectionLanes call returns, so IsSlotReady() readers
+        // see the slot as ready only when the per-kind lane mapping is
+        // live on the connection. Acquire/release pair below pairs with
+        // the IsSlotReady() relaxed load (any subsequent send through
+        // SendReliable etc. happens-before consumer dispatch).
+        peerLanesConfigured_[slot].store(true, std::memory_order_release);
         if (state_.load() != ConnState::Connected) {
             state_.store(ConnState::Connected);
         }
@@ -279,7 +286,10 @@ void Session::HandleConnStatusChanged(void* info) {
         const int slot = FindPeerSlotForConn(hConn);
         UE_LOGW("net: peer slot %d closed (oldState=%d reason='%s')",
                 slot, static_cast<int>(oldState), cb->m_info.m_szEndDebug);
-        if (slot >= 0) peerConns_[slot].store(0);
+        if (slot >= 0) {
+            peerConns_[slot].store(0);
+            peerLanesConfigured_[slot].store(false, std::memory_order_release);
+        }
         // Per the GNS header doc on the status callback, terminal states
         // require us to CloseConnection to release the handle.
         sockets->CloseConnection(hConn, 0, nullptr, false);
@@ -609,7 +619,33 @@ void Session::HandleMessage(int peerSlot, const void* data, int len) {
     MsgType type;
     uint32_t seq;
     uint64_t tokenUnused;
-    if (!ParseHeader(data, len, type, seq, tokenUnused)) return;
+    if (!ParseHeader(data, len, type, seq, tokenUnused)) {
+        // Distinguish "random garbage / spoofed packet" (silent drop) from
+        // "a peer running an older/newer protocol" (close cleanly with a
+        // human-readable reason so both ends see WHY they got dropped --
+        // pre-fix this was a silent hang: handshake succeeds, every
+        // application packet drops, connection stays "Connected" forever).
+        const uint16_t peerVer = PeekProtocolVersion(data, len);
+        if (peerVer != 0 && peerVer != kProtocolVersion &&
+            peerSlot >= 0 && peerSlot < kMaxPeers) {
+            const uint32_t hConn = peerConns_[peerSlot].load();
+            if (hConn != 0) {
+                char reason[64];
+                std::snprintf(reason, sizeof(reason),
+                              "protocol mismatch: peer=v%u, ours=v%u",
+                              static_cast<unsigned>(peerVer),
+                              static_cast<unsigned>(kProtocolVersion));
+                UE_LOGW("net: %s -- closing peer slot %d", reason, peerSlot);
+                if (auto* sockets = SteamNetworkingSockets()) {
+                    sockets->CloseConnection(hConn,
+                                             k_ESteamNetConnectionEnd_App_Generic,
+                                             reason,
+                                             /*bEnableLinger*/false);
+                }
+            }
+        }
+        return;
+    }
     if (peerSlot < 0 || peerSlot >= kMaxPeers) return;
     recv_.fetch_add(1);
 

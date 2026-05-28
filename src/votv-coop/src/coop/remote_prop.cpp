@@ -359,7 +359,7 @@ void Tick(coop::net::Session& session) {
     }
 }
 
-void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) {
+void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, void* localPlayer) {
     const std::wstring keyW = KeyToWString(payload.key);
     const float linSpeedSq = payload.linVelX * payload.linVelX +
                              payload.linVelY * payload.linVelY +
@@ -369,21 +369,35 @@ void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer) 
             keyW.c_str(),
             payload.linVelX, payload.linVelY, payload.linVelZ, linSpeed,
             payload.angVelX, payload.angVelY, payload.angVelZ);
-    // PR-4.6: find which slot's drive owns this key (peer's release packet
-    // carries the prop key but not their peer slot -- the wire didn't add
-    // sender attribution to the payload itself). Pre-PR-4.6 we only had
-    // one global drive; now we scan all slots.
+    // Identify the releasing peer by sender slot (carried by the
+    // ReliableMessage envelope) rather than by key. FindSlotByKey
+    // linear-scans + returns first-match-wins which would clear the
+    // wrong slot if two slots briefly held a prop with the same
+    // lastKey (e.g., race on duplicated key, or a stale drive whose
+    // owner already disconnected). Sender-attribution is exact.
     void* propActor = nullptr;
     void* meshToActOn = nullptr;
-    const int releasedSlot = FindSlotByKey(payload.key);
-    if (releasedSlot >= 0) {
-        propActor = g_drives[releasedSlot].actor;
-        meshToActOn = g_drives[releasedSlot].mesh;
-    } else if (void* prop = ue_wrap::prop::FindByKeyString(keyW)) {
-        // Release arrived without a preceding PropPose stream (we missed/
-        // dropped them) -- resolve fresh.
-        propActor = prop;
-        meshToActOn = ue_wrap::prop::GetStaticMesh(prop);
+    int releasedSlot = -1;
+    if (senderSlot >= 0 && senderSlot < static_cast<int>(coop::players::kMaxPeers)) {
+        const ActiveDrive& d = g_drives[senderSlot];
+        // Confirm the drive's lastKey matches this release's key. If it
+        // doesn't, the sender's drive cache is stale (e.g., a release
+        // arrived for a key we never saw a PropPose for, or out-of-order
+        // after a disconnect cancel). Fall through to the FindByKeyString
+        // fresh-resolve path below.
+        if (d.actor && KeyMatchesCache(senderSlot, payload.key)) {
+            releasedSlot = senderSlot;
+            propActor = d.actor;
+            meshToActOn = d.mesh;
+        }
+    }
+    if (releasedSlot < 0) {
+        if (void* prop = ue_wrap::prop::FindByKeyString(keyW)) {
+            // Release arrived without a matching drive cache entry --
+            // resolve fresh from the live world.
+            propActor = prop;
+            meshToActOn = ue_wrap::prop::GetStaticMesh(prop);
+        }
     }
     if (meshToActOn) {
         // Order matters: SetSimulate(true) FIRST so the body re-enters

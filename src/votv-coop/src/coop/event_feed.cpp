@@ -142,6 +142,17 @@ void SetLocalNickname(const std::wstring& nick) {
     if (!nick.empty()) g_localNick = SanitizeNickname(nick);
 }
 
+void OnSessionStart() {
+    // File-scope per-slot state persists across Session::Stop()/Start() in
+    // the same process. The harness only resets its own `g_wasConnected`
+    // bit on each Start; we own the corresponding event_feed state and
+    // reset it here so a restart of the session sees clean per-slot
+    // edge-detector input.
+    for (auto& nick : g_remoteNickBySlot) nick = L"Remote player";
+    g_lastConnectedBySlot.fill(false);
+    g_joinSentBySlot.fill(false);
+}
+
 void Update(net::Session& session, void* localPlayer) {
     // PR-4.5: aggregate `connected` was used by the pre-fix global Join
     // send (g_joinSent). Per-slot Join below makes the aggregate bool
@@ -157,25 +168,19 @@ void Update(net::Session& session, void* localPlayer) {
         if (p) p->SetPing(rtt);
     }
 
-    // PR-4.5: per-slot Join announcement. For each slot that we haven't
-    // yet sent our Join to AND is currently connected, send Join via
-    // SendReliableToSlot. Pre-fix the single g_joinSent bit meant a
-    // late-joiner never received our nick.
-    //
-    // Build the Join payload once (it's the same for every recipient).
+    // Per-slot Join announcement. For each slot that we haven't yet sent
+    // our Join to AND is currently connected, send Join via
+    // SendReliableToSlot. The Join payload is built lazily on first
+    // need: in steady state (all peers have received our Join) the
+    // joinPayload vector is never constructed, so we don't pay the
+    // ToUtf8 + WideCharToMultiByte + vector heap-alloc cost every
+    // 8ms at 125Hz NetPumpTick.
     std::vector<uint8_t> joinPayload;
-    {
-        std::vector<uint8_t> nickUtf8 = ToUtf8(g_localNick);
-        if (nickUtf8.size() > 200) nickUtf8.resize(200);
-        joinPayload.push_back(static_cast<uint8_t>(nickUtf8.size()));
-        joinPayload.insert(joinPayload.end(), nickUtf8.begin(), nickUtf8.end());
-    }
+    bool joinPayloadBuilt = false;
     for (int slot = 0; slot < net::kMaxPeers; ++slot) {
         const bool slotConnected = session.IsSlotConnected(slot);
         // Per-slot disconnect edge: when a specific slot transitions
         // connected -> disconnected, post the departing peer's nick.
-        // Pre-PR-4.4 "X left the game" used g_remoteNick (single scalar)
-        // which got overwritten by the most recent Join.
         if (g_lastConnectedBySlot[slot] && !slotConnected) {
             ue_wrap::hud_feed::Push(g_remoteNickBySlot[slot] + L" left the game");
             // Reset Join-sent so the next reconnect re-announces.
@@ -183,6 +188,13 @@ void Update(net::Session& session, void* localPlayer) {
         }
         // Per-slot connect edge: send our Join to this slot.
         if (slotConnected && !g_joinSentBySlot[slot]) {
+            if (!joinPayloadBuilt) {
+                std::vector<uint8_t> nickUtf8 = ToUtf8(g_localNick);
+                if (nickUtf8.size() > 200) nickUtf8.resize(200);
+                joinPayload.push_back(static_cast<uint8_t>(nickUtf8.size()));
+                joinPayload.insert(joinPayload.end(), nickUtf8.begin(), nickUtf8.end());
+                joinPayloadBuilt = true;
+            }
             if (session.SendReliableToSlot(slot, net::ReliableKind::Join,
                                            joinPayload.data(),
                                            static_cast<int>(joinPayload.size()))) {
@@ -283,7 +295,7 @@ void Update(net::Session& session, void* localPlayer) {
                         p.angVelX, p.angVelY, p.angVelZ);
                 break;
             }
-            remote_prop::OnRelease(p, localPlayer);
+            remote_prop::OnRelease(msg.senderPeerSlot, p, localPlayer);
             break;
         }
         case net::ReliableKind::PropSpawn: {

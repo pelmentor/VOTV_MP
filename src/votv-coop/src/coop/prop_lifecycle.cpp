@@ -607,6 +607,7 @@ DisconnectStats OnDisconnect() {
         std::lock_guard<std::mutex> lk(g_processedInitMutex);
         s.initProcessedDropped = g_processedInitActors.size();
         g_processedInitActors.clear();
+        g_processedInitOverflowLogged.store(false);
     }
     g_takeObjInFlight.store(false, std::memory_order_relaxed);
     return s;

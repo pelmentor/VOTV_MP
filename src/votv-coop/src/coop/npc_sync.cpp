@@ -18,7 +18,6 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
-#include <unordered_map>
 
 namespace coop::npc_sync {
 namespace {
@@ -57,13 +56,19 @@ int32_t g_npcSpawnReturnParamOff = -1;
 // interceptor fire that sees the matching class.
 void* g_incomingNpcSpawnClass = nullptr;
 
-// Host-side monotonic sessionId counter (1-based; 0 = invalid). Reset per
-// session if/when we add disconnect cleanup.
-uint32_t g_nextNpcSessionId = 1;
+// Host-side monotonic sessionId counter (1-based; 0 = invalid). The
+// NpcSuppress_Interceptor that increments it runs from a
+// `RegisterInterceptor`-bound callback that can fire on a parallel-anim
+// worker thread (see file header comment block above re. thread safety
+// of interceptors). Non-atomic increments would tear under concurrent
+// NPC spawns. Same pattern as g_synthKeyCounter in prop_lifecycle.cpp.
+std::atomic<uint32_t> g_nextNpcSessionId{1};
 
-// Host-side tracked-NPC set. Populated by the Inc3 K2_DestroyActor PRE
-// hook so EntityDestroy carries the right sessionId.
-std::unordered_map<void*, uint32_t> g_npcSessionByActor;
+// The Inc3 K2_DestroyActor PRE hook (which would have populated a
+// host-side tracked-NPC map so EntityDestroy carries the right
+// sessionId) was never written. The map's prior declaration was RULE 2
+// dead code -- removed. Reintroduce alongside the actual Inc3 PRE hook,
+// with a mutex if accessed from any interceptor-thread path.
 
 // Phase 5N1 Inc2 (2026-05-25): host-side env var gate. Set
 // VOTVCOOP_NPC_SYNC=1 to enable the host-side EntitySpawn broadcast
@@ -182,7 +187,7 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         for (size_t i = 0; i < cls.size() && i < 63; ++i) {
             p.className.data[p.className.len++] = static_cast<char>(cls[i]);
         }
-        p.sessionId = g_nextNpcSessionId++;
+        p.sessionId = g_nextNpcSessionId.fetch_add(1, std::memory_order_relaxed);
         if (s->SendEntitySpawn(p)) {
             UE_LOGI("npc-sync[host]: broadcast EntitySpawn class='%ls' sessionId=%u loc=(%.0f, %.0f, %.0f) rot=(p=%.1f y=%.1f r=%.1f)",
                     cls.c_str(), p.sessionId, p.locX, p.locY, p.locZ,
@@ -251,11 +256,9 @@ void MarkIncomingNpcSpawn(void* npcClass) {
 
 void OnDisconnect() {
     // sessionId must restart at 1 next session (zero is reserved for
-    // "invalid"). The g_npcSessionByActor map holds stale actor pointers
-    // from the previous session -- not safe to keep, and the next
-    // session's allocator wouldn't recognize them anyway.
-    g_npcSessionByActor.clear();
-    g_nextNpcSessionId = 1;
+    // "invalid"). Actor-tracking map deleted with the never-written
+    // Inc3 K2_DestroyActor PRE hook (RULE 2).
+    g_nextNpcSessionId.store(1, std::memory_order_relaxed);
     g_incomingNpcSpawnClass = nullptr;  // any in-flight bypass slot
 }
 

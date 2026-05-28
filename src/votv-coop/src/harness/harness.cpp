@@ -363,7 +363,14 @@ void NetPumpTick(float displayOffsetX) {
     const bool isConnected = (g_session.state() == coop::net::ConnState::Connected);
     const bool isHost = (g_session.role() == coop::net::Role::Host);
     for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-        const bool slotConnected = g_session.IsSlotConnected(slot);
+        // IsSlotReady (lanes configured) not IsSlotConnected (just has a
+        // conn handle): connect-edge replay must wait for ConfigureLanes
+        // to land in the Connected callback. Otherwise the snapshot
+        // PropSpawn fan-out + connect-time broadcasts ship on lane 0
+        // (default) instead of their assigned lane mapping. The
+        // disconnect callback clears both flags atomically so the
+        // disconnect-edge also fires correctly off IsSlotReady.
+        const bool slotConnected = g_session.IsSlotReady(slot);
         if (g_wasConnectedBySlot[slot] && !slotConnected) {
             if (g_puppets[slot].valid()) {
                 coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
@@ -1006,6 +1013,13 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             }
             coop::event_feed::SetLocalNickname(cfg::ReadNickname());
             g_wasConnected = false;  // fresh edge-detector for the disconnect cleanup
+            // Per-slot edge-detector array. Without this reset a future
+            // Session::Stop()/Start() cycle on the same process would see
+            // stale `true` entries from the prior session on the first
+            // pump tick of the new one -- firing a phantom disconnect
+            // edge and suppressing the legitimate connect-edge replay.
+            g_wasConnectedBySlot.fill(false);
+            coop::event_feed::OnSessionStart();
             // v4: reset held-prop edge state so a session restart doesn't
             // carry a stale prop pointer/key from the prior session (audit
             // fix 2026-05-24).
@@ -1191,6 +1205,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         cfg.peerIp = "127.0.0.1";
         coop::event_feed::SetLocalNickname(cfg::ReadNickname());
         g_wasConnected = false;  // fresh edge-detector for the disconnect cleanup
+        g_wasConnectedBySlot.fill(false);
+        coop::event_feed::OnSessionStart();
         // Same reset as the play branch -- audit fe68c03 missed this site.
         g_lastHeldProp = nullptr;
         g_lastHeldKey = {};

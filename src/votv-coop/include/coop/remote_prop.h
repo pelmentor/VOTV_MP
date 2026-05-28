@@ -40,11 +40,18 @@ void Tick(coop::net::Session& session);
 // BP wires (RULE 1 -- same path NPCs and the local player use). Clears
 // the cached pointer so the next PropPose has to re-resolve.
 //
+// `senderSlot` is the Registry slot of the peer that sent the release
+// (from ReliableMessage::senderPeerSlot at the event_feed dispatch).
+// Used to authoritatively identify WHICH slot's drive to clear --
+// pre-fix `FindSlotByKey(payload.key)` linear-scanned by key, returning
+// the first match, which would clear the wrong slot if two slots
+// briefly held a prop with the same lastKey.
+//
 // `localPlayer` is passed so `prop.thrown` has a non-null Player param
 // (the BP may null-check). Caller supplies the LOCAL mainPlayer_C ptr;
 // the BP's "throw stats" attribution will credit local (semantically a
 // minor inaccuracy in exchange for natural sound/effects).
-void OnRelease(const coop::net::PropReleasePayload& payload, void* localPlayer);
+void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, void* localPlayer);
 
 // v5: handle an incoming PropSpawn (peer dropped an inventory item into
 // the world). Resolves the class by leaf name, does a deferred SpawnActor

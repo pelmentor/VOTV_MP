@@ -54,6 +54,16 @@ constexpr size_t kSnapshotChunkSize = 100;
 // interactable Aprop_C derivatives. Reset the per-chunk drain index.
 // Sets g_currentTargetSlot = peerSlot. Caller (TriggerForSlot or
 // post-completion dequeue) ensures no drain is already in progress.
+//
+// NOTE: the audit findings doc proposes maintaining a tracked set in
+// prop_lifecycle to avoid the ~150k GUObjectArray walk per reconnect
+// (reconnect-storm hazard). A first attempt at that (PR-4.9 H2) shipped
+// then was reverted: prop_lifecycle's existing g_processedInitActors
+// set only tracks props whose Init fired AFTER our observer installed,
+// missing every prop that was constructed before Install() resolved
+// Aprop_C. A correct version requires a one-time GUObjectArray seed
+// PLUS observer-driven maintenance -- a design follow-up; not in
+// PR-4.9 scope.
 void StartEnumerationFor(int peerSlot) {
     g_currentTargetSlot = peerSlot;
     g_snapshotCandidates.clear();
@@ -90,15 +100,17 @@ void TriggerForSlot(int peerSlot) {
                 peerSlot, static_cast<unsigned>(coop::players::kMaxPeers));
         return;
     }
-    // PR-4.5: check the PER-SLOT connection state, not the aggregate
-    // session.connected(). The harness's per-slot connect edge fires the
-    // moment IsSlotConnected(slot) flips to true (peerConns_[slot] set at
-    // AcceptConnection / late-register time), which can be a few ms BEFORE
-    // the aggregate state_ transitions to Connected (the Connected status
-    // callback hasn't fired yet). The aggregate gate was incorrectly
-    // dropping legitimate snapshot triggers in that window.
-    if (!g_session_ptr->IsSlotConnected(peerSlot)) {
-        UE_LOGW("snapshot: slot %d not connected -- skipping TriggerForSlot", peerSlot);
+    // Gate on IsSlotReady (lanes configured) rather than IsSlotConnected
+    // (just has a connection handle). The Connecting status callback
+    // sets peerConns_[slot] on host accept; that flips IsSlotConnected
+    // true a few ms BEFORE the Connected callback runs
+    // ConfigureLanesForPeer. Triggering the snapshot drain in that
+    // window queues PropSpawn messages on the default lane 0 (HIGH)
+    // instead of the BULK lane 2 -- defeating PR-3's head-of-line-block
+    // mitigation for the worst case (initial ~1700-msg fan-out).
+    // IsSlotReady fires only after lanes are live on the connection.
+    if (!g_session_ptr->IsSlotReady(peerSlot)) {
+        UE_LOGW("snapshot: slot %d not ready (lanes not yet configured) -- skipping TriggerForSlot", peerSlot);
         return;
     }
     if (g_currentTargetSlot != -1) {

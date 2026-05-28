@@ -719,6 +719,19 @@ inline bool ParseHeader(const void* data, int len, MsgType& outType, uint32_t& o
     return true;
 }
 
+// Peek the protocol version field WITHOUT requiring kProtocolVersion to
+// match. Returns the version (1..65535) if magic matches and the buffer
+// is large enough, 0 otherwise. Lets the receiver distinguish "a peer
+// talking an older/newer protocol" (recognize + close with a reason
+// string) from "random garbage / spoofed packet" (silent drop).
+inline uint16_t PeekProtocolVersion(const void* data, int len) {
+    if (len < static_cast<int>(sizeof(PacketHeader))) return 0;
+    PacketHeader h;
+    std::memcpy(&h, data, sizeof(h));
+    if (h.magic != kMagic) return 0;
+    return h.version;
+}
+
 // Reject a pose that is non-finite (NaN/Inf) or outside sane world bounds, BEFORE
 // it can reach the engine. true == safe to apply.
 inline bool ValidatePose(const PoseSnapshot& p) {

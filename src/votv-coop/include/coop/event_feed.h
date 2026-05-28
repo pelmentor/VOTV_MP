@@ -23,6 +23,15 @@ namespace event_feed {
 // The local player's display name (sent in our Join). From votv-coop.ini "net.nick".
 void SetLocalNickname(const std::wstring& nick);
 
+// Reset per-slot caches before session.Start. File-scope state (Join-sent
+// flags, last-connected flags, per-slot nicknames) is zero-initialized at
+// DLL load but persists across a Session::Stop()/Start() cycle in the
+// same process. Without this hook a restart sees stale "true" entries and
+// would either (a) suppress legitimate connect-edge replay or (b) emit a
+// spurious "X left the game" on the first new-session tick.
+// Called by the harness alongside its own g_wasConnected reset.
+void OnSessionStart();
+
 // Per-tick pump (game thread): on connect, announce ourselves (reliable Join with our
 // nickname); on disconnect, post the peer's departure; drain delivered reliable
 // messages (a peer Join -> "<nick> joined" + label the remote player).

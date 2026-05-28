@@ -142,6 +142,20 @@ public:
         return peerConns_[peerSlot].load() != 0;
     }
 
+    // True only after the slot's GNS Connected callback ran AND
+    // ConfigureLanesForPeer succeeded. IsSlotConnected flips true in
+    // the earlier Connecting callback (peerConns_[slot] is needed there
+    // for host AcceptConnection routing) -- using it as the gate for
+    // app-traffic sends would queue messages on the default lane 0
+    // because the per-kind lane mapping hasn't been applied to the
+    // connection yet. Snapshot drain and connect-edge replay must
+    // gate on IsSlotReady, not IsSlotConnected, so PR-3's HOL-block
+    // mitigation actually applies under reconnect races.
+    bool IsSlotReady(int peerSlot) const {
+        if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+        return peerLanesConfigured_[peerSlot].load(std::memory_order_acquire);
+    }
+
     // GNS C-callback adapter -- public so the file-local trampoline in
     // session.cpp can forward to it.
     static void OnConnStatusChanged(void* info);
@@ -175,6 +189,9 @@ private:
     // by AcceptConnection in FindFreePeerSlotForClient order). On client:
     // peerConns_[0] = the host's connection, rest unused.
     std::array<std::atomic<uint32_t>, kMaxPeers> peerConns_{};
+    // Set in the Connected callback after ConfigureLanesForPeer; cleared
+    // when peerConns_[slot] is zeroed on disconnect. See IsSlotReady().
+    std::array<std::atomic<bool>, kMaxPeers> peerLanesConfigured_{};
 
     // Local pose slot (game thread writes, net thread reads + fan-outs).
     std::mutex localMutex_;
