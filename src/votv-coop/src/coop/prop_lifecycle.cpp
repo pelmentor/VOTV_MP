@@ -6,6 +6,7 @@
 #include "coop/prop_lifecycle.h"
 
 #include "coop/net/session.h"
+#include "coop/prop_echo_suppress.h"
 #include "coop/remote_prop.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
@@ -228,7 +229,7 @@ void DestroyLocalProp(void* actor, bool deferred) {
             return;
         }
         // Mark BEFORE calling destroy so OUR PRE-observer skips broadcast.
-        coop::remote_prop::MarkIncomingDestroy(actor);
+        coop::prop_echo_suppress::MarkIncomingDestroy(actor);
         R::CallFunction(actor, sDestroyFn, nullptr);
     };
     if (deferred) {
@@ -263,7 +264,7 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     // Gate order (audit L-1 2026-05-24): cheapest checks FIRST so the hot path
     // short-circuits with minimal work.
     if (!s->connected()) return;                      // pre-handshake save-load -> skip
-    if (coop::remote_prop::ConsumeIncomingSpawn(self)) {
+    if (coop::prop_echo_suppress::ConsumeIncomingSpawn(self)) {
         UE_LOGI("grab_hook[Aprop.Init POST]: actor %p was wire-received -- skip broadcast (echo suppression)",
                 self);
         return;
@@ -374,7 +375,7 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
     // mushroom7_C) also clear their entries.
     UnmarkProcessedInit(self);
     if (!s->connected()) return;
-    if (coop::remote_prop::ConsumeIncomingDestroy(self)) {
+    if (coop::prop_echo_suppress::ConsumeIncomingDestroy(self)) {
         UE_LOGI("grab_hook[K2_DestroyActor PRE]: actor %p was wire-received destroy -- skip rebroadcast",
                 self);
         return;

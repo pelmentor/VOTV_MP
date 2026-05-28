@@ -22,6 +22,7 @@
 #include "ue_wrap/types.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -31,7 +32,13 @@ namespace {
 
 namespace R = ue_wrap::reflection;
 
-coop::net::Session* g_session_ptr = nullptr;
+// Atomic for symmetry with sibling subsystems (prop_lifecycle, item_activate,
+// weather_sync) per [[feedback-install-idempotent-o1-steady-state]]. SetSession
+// is called from a non-game-thread context at boot (loader thread), and
+// DrainChunk/TriggerForSlot run on the game thread. The current ordering
+// (SetSession before Start) makes the bare pointer accidentally safe, but
+// the design shouldn't depend on the boot sequence.
+std::atomic<coop::net::Session*> g_session_ptr{nullptr};
 
 // Enumeration state for the currently-running drain. Game-thread access
 // only; no lock needed.
@@ -86,12 +93,13 @@ void StartEnumerationFor(int peerSlot) {
 }  // namespace
 
 void SetSession(coop::net::Session* session) {
-    g_session_ptr = session;
+    g_session_ptr.store(session, std::memory_order_release);
 }
 
 void TriggerForSlot(int peerSlot) {
-    if (!g_session_ptr) return;
-    if (g_session_ptr->role() != coop::net::Role::Host) {
+    auto* s = g_session_ptr.load(std::memory_order_acquire);
+    if (!s) return;
+    if (s->role() != coop::net::Role::Host) {
         UE_LOGI("snapshot: not host -- skipping TriggerForSlot(slot=%d)", peerSlot);
         return;
     }
@@ -109,7 +117,7 @@ void TriggerForSlot(int peerSlot) {
     // instead of the BULK lane 2 -- defeating PR-3's head-of-line-block
     // mitigation for the worst case (initial ~1700-msg fan-out).
     // IsSlotReady fires only after lanes are live on the connection.
-    if (!g_session_ptr->IsSlotReady(peerSlot)) {
+    if (!s->IsSlotReady(peerSlot)) {
         UE_LOGW("snapshot: slot %d not ready (lanes not yet configured) -- skipping TriggerForSlot", peerSlot);
         return;
     }
@@ -131,11 +139,13 @@ void TriggerForSlot(int peerSlot) {
 void DrainChunk() {
     if (g_currentTargetSlot == -1) return;
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) return;
+    auto* s = g_session_ptr.load(std::memory_order_acquire);
+    if (!s) return;
     // Bail out early if the target peer disconnected mid-drain. Without
     // this we'd iterate all remaining candidates calling SendReliableToSlot
     // into a closed connection (Session silently no-ops but the GetActor
     // Location/Rotation reflection calls add up to wasted ms/frame).
-    if (!g_session_ptr->IsSlotConnected(g_currentTargetSlot)) {
+    if (!s->IsSlotConnected(g_currentTargetSlot)) {
         UE_LOGI("snapshot: target slot %d disconnected mid-drain -- aborting (sent %zu/%zu)",
                 g_currentTargetSlot, g_snapshotCandidateIdx, g_snapshotCandidates.size());
         CancelForSlot(g_currentTargetSlot);
@@ -185,11 +195,11 @@ void DrainChunk() {
         if (ue_wrap::prop::IsFrozen(obj)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
         p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
         p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-        // PR-4.5: send to ONE slot only. Other peers (already-connected)
-        // already have these props from their own connect-edge drain.
-        g_session_ptr->SendReliableToSlot(g_currentTargetSlot,
-                                          coop::net::ReliableKind::PropSpawn,
-                                          &p, sizeof(p));
+        // Send to ONE slot only. Other peers (already-connected) already
+        // have these props from their own connect-edge drain.
+        s->SendReliableToSlot(g_currentTargetSlot,
+                              coop::net::ReliableKind::PropSpawn,
+                              &p, sizeof(p));
         ++sent;
     }
     if (g_snapshotCandidateIdx >= g_snapshotCandidates.size()) {
@@ -205,7 +215,7 @@ void DrainChunk() {
         if (!g_pendingSlots.empty()) {
             const int nextSlot = g_pendingSlots.front();
             g_pendingSlots.erase(g_pendingSlots.begin());
-            if (g_session_ptr->IsSlotConnected(nextSlot)) {
+            if (s->IsSlotConnected(nextSlot)) {
                 StartEnumerationFor(nextSlot);
             } else {
                 UE_LOGI("snapshot: dequeued slot %d already disconnected -- skipping",
@@ -233,7 +243,8 @@ void CancelForSlot(int peerSlot) {
     if (!g_pendingSlots.empty()) {
         const int nextSlot = g_pendingSlots.front();
         g_pendingSlots.erase(g_pendingSlots.begin());
-        if (g_session_ptr && g_session_ptr->IsSlotConnected(nextSlot)) {
+        auto* s = g_session_ptr.load(std::memory_order_acquire);
+        if (s && s->IsSlotConnected(nextSlot)) {
             StartEnumerationFor(nextSlot);
         }
     }

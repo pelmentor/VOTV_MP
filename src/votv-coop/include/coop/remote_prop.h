@@ -86,26 +86,7 @@ void OnDisconnectForSlot(int peerSlot);
 // for one frame producing a visible teleport-pop (audit I-1 2026-05-24).
 void* GetDriveActor();
 
-// v5 Inc2 echo suppression: when this peer receives a PropSpawn and spawns
-// the actor locally via OnSpawn, FinishSpawningActor triggers Aprop_C::Init
-// which our Init POST observer hooks. Without suppression, that observer
-// would re-broadcast a fresh PropSpawn back to the sender -- echo loop.
-//
-// OnSpawn calls MarkIncomingSpawn(actor) before FinishSpawningActor. The
-// Init POST observer calls ConsumeIncomingSpawn(actor); if it returns true,
-// the spawn came from a wire packet (skip broadcast). One-shot consumption:
-// removed on read so subsequent legitimate Init events (which never happen
-// on the same actor, but defensively) aren't masked.
-//
-// Same pattern for destroys: OnDestroy calls MarkIncomingDestroy(actor)
-// before K2_DestroyActor; the K2_DestroyActor PRE observer calls
-// ConsumeIncomingDestroy.
-void MarkIncomingSpawn(void* actor);
-bool ConsumeIncomingSpawn(void* actor);
-void MarkIncomingDestroy(void* actor);
-bool ConsumeIncomingDestroy(void* actor);
-
-// v5 Inc2: handle an incoming PropDestroy. Resolves the key to a local
+// Handle an incoming PropDestroy. Resolves the key to a local
 // AActor*, marks it as incoming-destroy (so the K2_DestroyActor observer
 // doesn't echo), and calls K2_DestroyActor on it. Returns silently if no
 // local actor with that key exists (the prop never replicated to us, or

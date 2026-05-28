@@ -391,25 +391,16 @@ bool DebugForceToggle(void* mp) {
     while (done->load(std::memory_order_acquire) == 0) ::Sleep(1);
     const bool newState = newStateOut->load(std::memory_order_acquire);
 
-    // The reliable channel is stop-and-wait (max 1 in-flight). The HOST
-    // has continuous PropSpawn / EntitySpawn traffic from Phase 5S0
-    // continuous-spawn observers, so any SendReliable can land while
-    // the channel is busy and return false. The autonomous test can't
-    // tolerate that -- we need the packet to fly. Retry up to 200x
-    // with 25 ms backoff (5 s max wait per toggle) -- on LAN ack RTT
-    // is ~1-2 ms so a free slot opens within a few tries, but if the
-    // host's PropSpawn snapshot is mid-burst we may need longer.
-    //
-    // Bypass the dedup (last-sent-state) for retry purposes: directly
-    // call SendReliable here with the exact same payload shape the
-    // observer would have sent. The receiver path is identical.
+    // SendReliable queues internally via GNS; it returns true unconditionally
+    // unless we hand it a malformed packet (pre-PR-2 a custom stop-and-wait
+    // ARQ here required a 200-retry x 25ms loop, retired with the channel).
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->connected()) {
         UE_LOGW("flashlight: DebugForceToggle session not connected -- skipping wire send");
         return newState;
     }
 
-    // v6: snapshot the local cone shape into the packet. DebugForceToggle
+    // Snapshot the local cone shape into the packet. DebugForceToggle
     // bypasses the BP (directly writes flashlight bool + SetIntensity), so
     // outer/inner cone won't reflect a real mode change -- they'll carry
     // whatever the BP-default values are on the local light_R. That's fine
@@ -421,24 +412,14 @@ bool DebugForceToggle(void* mp) {
         return newState;
     }
 
-    bool sent = false;
-    int attempts = 0;
-    for (; attempts < 200; ++attempts) {
-        sent = s->SendReliable(coop::net::ReliableKind::ItemActivate, &p, sizeof(p));
-        if (sent) break;
-        ::Sleep(25);
-    }
-    if (sent) {
+    if (s->SendReliable(coop::net::ReliableKind::ItemActivate, &p, sizeof(p))) {
         const uint64_t sig = SignaturePayload(p);
         const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
         g_lastSentSig.store(storeSig, std::memory_order_release);
-        UE_LOGI("flashlight: DebugForceToggle sent state=%d mode=%u Intensity=%.2f outerCone=%.1f "
-                "(peer=%u, after %d retr%s)",
-                p.state, p.mode, p.intensity, p.outerConeAngle, p.peerSessionId, attempts,
-                attempts == 1 ? "y" : "ies");
+        UE_LOGI("flashlight: DebugForceToggle sent state=%d mode=%u Intensity=%.2f outerCone=%.1f (peer=%u)",
+                p.state, p.mode, p.intensity, p.outerConeAngle, p.peerSessionId);
     } else {
-        UE_LOGW("flashlight: DebugForceToggle FAILED to send after 200 retries -- "
-                "reliable channel never freed (state=%d)", p.state);
+        UE_LOGW("flashlight: DebugForceToggle SendReliable failed (state=%d)", p.state);
     }
     return newState;
 }

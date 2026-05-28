@@ -4,6 +4,7 @@
 
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
+#include "coop/prop_echo_suppress.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -17,7 +18,6 @@
 #include <cmath>
 #include <cstring>
 #include <string>
-#include <unordered_set>
 
 namespace coop::remote_prop {
 
@@ -779,7 +779,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
     // tripping our Init POST observer in harness.cpp). The observer's call
     // to ConsumeIncomingSpawn will then return true and skip the broadcast
     // back to the sender -> no echo loop.
-    MarkIncomingSpawn(spawned);
+    coop::prop_echo_suppress::MarkIncomingSpawn(spawned);
     // Phase 3: FinishSpawningActor -> runs UserConstructionScript + BeginPlay.
     {
         ParamFrame finish(g_finishSpawnFn);
@@ -829,42 +829,6 @@ void* GetDriveActor() {
     }
     return nullptr;
 }
-
-namespace {
-// v5 Inc2: echo-suppression sets. Populated by OnSpawn / OnDestroy before
-// the engine call (BeginDeferred+Finish / K2_DestroyActor), consumed
-// one-shot by the Aprop_C::Init POST observer + K2_DestroyActor PRE
-// observer. Without this, our own receiver-applied spawn/destroy would
-// re-broadcast to the original sender = packet ping-pong.
-//
-// Game-thread-only access (OnSpawn/OnDestroy and the observers all dispatch
-// on the game thread). Capped at 256 to bound memory across a long session;
-// on overflow we just clear -- a one-shot stale lookup on an entry that
-// was supposed to be consumed but wasn't is harmless (it'd let a wire-induced
-// spawn re-broadcast once, which the OTHER side de-dupes via FindByKeyString).
-std::unordered_set<void*> g_incomingSpawns;
-std::unordered_set<void*> g_incomingDestroys;
-constexpr size_t kIncomingCap = 256;
-
-template <class Set>
-void InsertCapped(Set& s, void* actor) {
-    if (s.size() >= kIncomingCap) s.clear();
-    s.insert(actor);
-}
-
-template <class Set>
-bool TakeOne(Set& s, void* actor) {
-    auto it = s.find(actor);
-    if (it == s.end()) return false;
-    s.erase(it);
-    return true;
-}
-}  // namespace
-
-void MarkIncomingSpawn(void* actor)    { if (actor) InsertCapped(g_incomingSpawns, actor); }
-bool ConsumeIncomingSpawn(void* actor) { return actor ? TakeOne(g_incomingSpawns, actor) : false; }
-void MarkIncomingDestroy(void* actor)  { if (actor) InsertCapped(g_incomingDestroys, actor); }
-bool ConsumeIncomingDestroy(void* actor){ return actor ? TakeOne(g_incomingDestroys, actor) : false; }
 
 namespace {
 // Cached K2_DestroyActor UFunction for receiver-side destroys.
@@ -922,7 +886,7 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
     ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, actor);
     // Mark BEFORE the engine call so our K2_DestroyActor PRE observer sees
     // it and skips the broadcast (echo suppression).
-    MarkIncomingDestroy(actor);
+    coop::prop_echo_suppress::MarkIncomingDestroy(actor);
     R::CallFunction(actor, g_destroyActorFn, nullptr);
 }
 

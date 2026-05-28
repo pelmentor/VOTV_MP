@@ -116,6 +116,7 @@ add_library(votv-coop SHARED
     src/coop/shutdown.cpp
     src/coop/players_registry.cpp
     src/coop/npc_sync.cpp
+    src/coop/prop_echo_suppress.cpp
     src/coop/prop_lifecycle.cpp
     src/coop/prop_snapshot.cpp
     src/coop/garbage_sync.cpp
