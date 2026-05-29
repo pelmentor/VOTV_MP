@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <vector>
 
 namespace ue_wrap::reflection {
@@ -20,6 +21,13 @@ using ProcessEventFn = void(__fastcall*)(void* self, void* function, void* param
 
 uintptr_t g_objArray = 0;
 FNameToStringFn g_fnameToString = nullptr;
+
+// Throttled count of IsLive() calls that faulted reading a freed pointer (see
+// IsLive). File-scope atomic so the SEH-guarded IsLive stays free of any local
+// object that would need stack unwinding (C2712). Surfacing these matters: a
+// fault means a cached UObject* was GC-freed -- expected for a stale cache that
+// then re-resolves, but a high rate flags a deeper lifetime issue to chase.
+std::atomic<uint64_t> g_isLiveFaultCount{0};
 ProcessEventFn g_processEvent = nullptr;
 
 }  // namespace
@@ -117,11 +125,41 @@ bool IsLiveByIndex(void* obj, int32_t internalIdx) {
 }
 
 bool IsLive(void* obj) {
-    // Reads obj->InternalIndex (deref of obj) then validates via the slot. Safe
-    // only when obj is at least mapped; for GC-purge-stale cached pointers use
-    // IsLiveByIndex with an index captured while obj was live (see header).
     if (!obj) return false;
-    return IsLiveByIndex(obj, InternalIndexOf(obj));
+    // SEH-guard the ONE read of obj's OWN memory. IsLive is THE primitive for
+    // checking a cached UObject* that may have been GC-purged (g_netLocal, the
+    // local-player cache in players::Registry::Local, held props, cached
+    // singletons). When the purge has freed+unmapped obj, reading
+    // obj->InternalIndex faults -- catch it and report not-live so the caller's
+    // clear-and-rescan path runs instead of crashing. This makes the header's
+    // documented crash-safe contract real, and (with the /EHa firewall) BREAKS
+    // the per-tick re-fault loop: the bare read used to abort the whole tick
+    // task BEFORE the caller could clear its stale cache, so the same dead
+    // pointer re-faulted every tick (2026-05-30 4-peer smoke: 3779 absorbed AVs
+    // + an 11 GB RSS balloon on one client). Now IsLive returns false, the
+    // cache is cleared + re-resolved, and the loop ends.
+    //
+    // NOT a crutch: IsLive's job IS to answer "is this pointer live?" -- for a
+    // freed pointer the answer is "no", and the SEH makes it return that
+    // instead of crashing. Faults are surfaced (throttled WARN), not hidden.
+    // Recycling caveat: if obj's address was reused by a NEW UObject the read
+    // won't fault, but IsLiveByIndex's slot compare (*item == obj) still
+    // rejects the impostor. For the 2000-prop snapshot, where recycling at
+    // scale matters, callers capture the index up-front and use IsLiveByIndex
+    // directly (see prop_snapshot.cpp).
+    int32_t idx;
+    __try {
+        idx = *reinterpret_cast<int32_t*>(
+            reinterpret_cast<uint8_t*>(obj) + O::UObject_InternalIndex);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        const uint64_t n = g_isLiveFaultCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1 || (n % 1000) == 0) {
+            UE_LOGW("reflection: IsLive caught AV reading freed pointer %p (fault #%llu) -- reporting not-live",
+                    obj, static_cast<unsigned long long>(n));
+        }
+        return false;
+    }
+    return IsLiveByIndex(obj, idx);
 }
 
 const FName& NameOf(void* uobject) {
