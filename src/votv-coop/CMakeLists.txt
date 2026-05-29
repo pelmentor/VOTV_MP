@@ -136,6 +136,7 @@ add_library(votv-coop SHARED
     src/coop/element/element.cpp
     src/coop/element/registry.cpp
     src/coop/net/session.cpp
+    src/coop/net/session_status.cpp
     src/coop/net_pump.cpp
     src/coop/dev/force_weather.cpp
     src/coop/dev/freecam.cpp
