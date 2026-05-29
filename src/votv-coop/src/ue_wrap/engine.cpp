@@ -579,6 +579,95 @@ bool ReadFlashlightSnapshot(void* light, FlashlightSnapshot& out) {
     return true;
 }
 
+bool ReadMainPlayerFlashlightState(void* mainPlayer, MainPlayerFlashlightState& out) {
+    out = {};
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    auto* base = reinterpret_cast<uint8_t*>(mainPlayer);
+    out.flashlight      = *reinterpret_cast<bool*>(base + P::off::AmainPlayer_flashlight);
+    out.hasFlashlight   = *reinterpret_cast<bool*>(base + P::off::AmainPlayer_hasFlashlight);
+    out.crankFlashlight = *reinterpret_cast<bool*>(base + P::off::AmainPlayer_crankFlashlight);
+    out.mode            = *reinterpret_cast<uint8_t*>(base + P::off::AmainPlayer_flashlightMode);
+    return true;
+}
+
+bool WriteMainPlayerFlashlight(void* mainPlayer, bool newState) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    auto* base = reinterpret_cast<uint8_t*>(mainPlayer);
+    *reinterpret_cast<bool*>(base + P::off::AmainPlayer_flashlight) = newState;
+    return true;
+}
+
+namespace {
+// Cached UFunctions for the light/cone setters below. Resolved on first
+// successful call. Pre-A-1 (2026-05-29) these were duplicated across
+// coop/item_activate.cpp's ApplyToPuppet + DebugForceToggle as static
+// locals; Principle-7 wrapper extraction folds the cache here (one
+// resolve per process) and lets gameplay code stay reflection-free.
+void* g_setLightIntensityFn      = nullptr;
+void* g_setSceneVisibilityFn     = nullptr;
+void* g_setSpotOuterConeAngleFn  = nullptr;
+void* g_setSpotInnerConeAngleFn  = nullptr;
+
+void* ResolveLightIntensityFn() {
+    if (g_setLightIntensityFn) return g_setLightIntensityFn;
+    void* cls = R::FindClass(L"LightComponent");
+    if (!cls) return nullptr;
+    g_setLightIntensityFn = R::FindFunction(cls, P::name::SetIntensityFn);
+    return g_setLightIntensityFn;
+}
+void* ResolveSceneVisibilityFn() {
+    if (g_setSceneVisibilityFn) return g_setSceneVisibilityFn;
+    void* cls = R::FindClass(P::name::SceneComponentClass);
+    if (!cls) return nullptr;
+    g_setSceneVisibilityFn = R::FindFunction(cls, P::name::SetVisibilityFn);
+    return g_setSceneVisibilityFn;
+}
+void ResolveSpotConeFns() {
+    if (g_setSpotOuterConeAngleFn && g_setSpotInnerConeAngleFn) return;
+    void* cls = R::FindClass(P::name::SpotLightComponentClass);
+    if (!cls) return;
+    if (!g_setSpotOuterConeAngleFn) g_setSpotOuterConeAngleFn = R::FindFunction(cls, P::name::SetOuterConeAngleFn);
+    if (!g_setSpotInnerConeAngleFn) g_setSpotInnerConeAngleFn = R::FindFunction(cls, P::name::SetInnerConeAngleFn);
+}
+}  // namespace
+
+bool SetLightIntensity(void* light, float newIntensity) {
+    if (!light || !R::IsLive(light)) return false;
+    void* fn = ResolveLightIntensityFn();
+    if (!fn) return false;
+    ParamFrame f(fn);
+    f.Set<float>(L"NewIntensity", newIntensity);
+    return Call(light, f);
+}
+
+bool SetSceneComponentVisibility(void* sceneComponent, bool newVisibility, bool propagateToChildren) {
+    if (!sceneComponent || !R::IsLive(sceneComponent)) return false;
+    void* fn = ResolveSceneVisibilityFn();
+    if (!fn) return false;
+    ParamFrame f(fn);
+    f.Set<bool>(L"bNewVisibility", newVisibility);
+    f.Set<bool>(L"bPropagateToChildren", propagateToChildren);
+    return Call(sceneComponent, f);
+}
+
+bool SetSpotLightOuterConeAngle(void* spotLight, float newAngle) {
+    if (!spotLight || !R::IsLive(spotLight)) return false;
+    ResolveSpotConeFns();
+    if (!g_setSpotOuterConeAngleFn) return false;
+    ParamFrame f(g_setSpotOuterConeAngleFn);
+    f.Set<float>(L"NewOuterConeAngle", newAngle);
+    return Call(spotLight, f);
+}
+
+bool SetSpotLightInnerConeAngle(void* spotLight, float newAngle) {
+    if (!spotLight || !R::IsLive(spotLight)) return false;
+    ResolveSpotConeFns();
+    if (!g_setSpotInnerConeAngleFn) return false;
+    ParamFrame f(g_setSpotInnerConeAngleFn);
+    f.Set<float>(L"NewInnerConeAngle", newAngle);
+    return Call(spotLight, f);
+}
+
 void* GetWorldContext() {
     if (void* gi = R::FindObjectByClass(P::name::GameInstanceClass)) return gi;
     return R::FindObjectByClass(P::name::WorldClass);

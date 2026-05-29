@@ -338,6 +338,51 @@ struct FlashlightSnapshot {
 // engine struct).
 bool ReadFlashlightSnapshot(void* light, FlashlightSnapshot& out);
 
+// AmainPlayer_C bookkeeping bools + mode byte that the flashlight wire
+// payload mirrors. Adjacent fixed offsets on the pawn; one wrapper call
+// replaces 4 raw struct-offset reads in coop/item_activate (Principle 7).
+// Returns false on null/dead pawn; `out` is then zero-initialised.
+// Game thread only.
+struct MainPlayerFlashlightState {
+    bool flashlight;       // AmainPlayer_C::flashlight     (canonical on/off)
+    bool hasFlashlight;    // AmainPlayer_C::hasFlashlight  (equipped guard)
+    bool crankFlashlight;  // AmainPlayer_C::crankFlashlight (_c variant marker)
+    uint8_t mode;          // AmainPlayer_C::flashlightMode (focused/spread enum)
+};
+bool ReadMainPlayerFlashlightState(void* mainPlayer, MainPlayerFlashlightState& out);
+
+// Direct write to AmainPlayer_C::flashlight (on/off bool). The DEV
+// auto-toggle path (coop::item_activate::DebugForceToggle) flips the
+// bool without going through the BP graph (the BP's input-guarded
+// toggle is reflection-untouchable); the SetIntensity wire path drives
+// the visible light separately. Returns false on null/dead pawn.
+// Game thread only.
+bool WriteMainPlayerFlashlight(void* mainPlayer, bool newState);
+
+// ULightComponent::SetIntensity(NewIntensity). Internally marks the
+// render state dirty so CreateSceneProxy refreshes brightness next
+// frame. Cached UFunction resolved on first call. Returns false if
+// `light` is null/dead OR the UFunction is not yet resolvable.
+// Game thread only.
+bool SetLightIntensity(void* light, float newIntensity);
+
+// USceneComponent::SetVisibility(bNewVisibility, bPropagateToChildren).
+// Distinct from SetComponentVisible above -- this is JUST the
+// SetVisibility UFunction (no companion SetHiddenInGame call), which
+// is what the puppet flashlight receive path needs: the SetVisibility
+// virtual on ULightComponent calls MarkRenderStateDirty so the proxy
+// is (re)built without forcing the hidden-in-game state on the whole
+// component. Cached UFunction. Game thread only.
+bool SetSceneComponentVisibility(void* sceneComponent, bool newVisibility, bool propagateToChildren);
+
+// USpotLightComponent::SetOuterConeAngle(NewOuterConeAngle) /
+// SetInnerConeAngle(NewInnerConeAngle). Both UFunctions internally
+// MarkRenderStateDirty so the cone shape refreshes next frame. Used
+// by the puppet flashlight receiver to mirror the sender's hold-F
+// focused/spread mode. Cached UFunctions. Game thread only.
+bool SetSpotLightOuterConeAngle(void* spotLight, float newAngle);
+bool SetSpotLightInnerConeAngle(void* spotLight, float newAngle);
+
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the
 // GameInstance first (lives across map loads) and falls back to the World.

@@ -21,7 +21,6 @@
 #include "coop/players_registry.h"
 #include "coop/remote_player.h"
 #include "coop/ini_config.h"
-#include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
@@ -148,10 +147,8 @@ bool BuildPayloadFromLocal(void* mp, coop::net::ItemActivatePayload& out, coop::
     void* light_R = ue_wrap::engine::GetMainPlayerLightR(mp);
     if (!light_R) return false;
 
-    const bool flashlight = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(mp) + P::off::AmainPlayer_flashlight);
-    const uint8_t mode = *reinterpret_cast<uint8_t*>(
-        reinterpret_cast<uint8_t*>(mp) + P::off::AmainPlayer_flashlightMode);
+    ue_wrap::engine::MainPlayerFlashlightState fl{};
+    if (!ue_wrap::engine::ReadMainPlayerFlashlightState(mp, fl)) return false;
     ue_wrap::engine::FlashlightSnapshot snap{};
     if (!ue_wrap::engine::ReadFlashlightSnapshot(light_R, snap)) return false;
 
@@ -174,9 +171,9 @@ bool BuildPayloadFromLocal(void* mp, coop::net::ItemActivatePayload& out, coop::
                 ? 0u
                 : coop::players::Registry::Get().LocalPlayerSyncContext();
     }
-    out.state           = flashlight ? 1 : 0;
+    out.state           = fl.flashlight ? 1 : 0;
     out.flags           = 0;  // Case (b) -- no actor key
-    out.mode            = mode;
+    out.mode            = fl.mode;
     out.actorKeyHash    = 0;
     out.intensity       = snap.intensity;
     out.outerConeAngle  = snap.outerConeAngle;
@@ -224,13 +221,15 @@ void OnUpdateFlashlightPost(void* self, void* function, void* /*params*/) {
     if (!E::GetController(self)) return;
 
     // Read state AFTER the BP function ran -- the bool now reflects
-    // the new on/off value.
-    const bool flashlight = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(self) + P::off::AmainPlayer_flashlight);
-    const bool hasFlashlight = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(self) + P::off::AmainPlayer_hasFlashlight);
-    const bool crankFlashlight = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(self) + P::off::AmainPlayer_crankFlashlight);
+    // the new on/off value. A-1 (2026-05-29): the 3 bools live at
+    // adjacent fixed offsets on AmainPlayer_C; one wrapper call replaces
+    // 3 raw struct-offset reads (Principle 7 -- gameplay never touches
+    // engine memory directly).
+    ue_wrap::engine::MainPlayerFlashlightState fl{};
+    if (!ue_wrap::engine::ReadMainPlayerFlashlightState(self, fl)) return;
+    const bool flashlight = fl.flashlight;
+    const bool hasFlashlight = fl.hasFlashlight;
+    const bool crankFlashlight = fl.crankFlashlight;
 
     if (ProbeLogEnabled()) {
         // [probe] flashlight_log=1 hands-on verification: see whether
@@ -350,30 +349,27 @@ bool DebugForceToggle(void* mp) {
     auto done = std::make_shared<std::atomic<int>>(0);
     auto newStateOut = std::make_shared<std::atomic<bool>>(false);
     GT::Post([mp, done, newStateOut] {
-        bool* fl = reinterpret_cast<bool*>(
-            reinterpret_cast<uint8_t*>(mp) + P::off::AmainPlayer_flashlight);
-        const bool newState = !(*fl);
-        *fl = newState;
+        // A-1 (2026-05-29): read current + flip via wrappers (Principle 7).
+        ue_wrap::engine::MainPlayerFlashlightState cur{};
+        if (!ue_wrap::engine::ReadMainPlayerFlashlightState(mp, cur)) {
+            done->store(1, std::memory_order_release);
+            return;
+        }
+        const bool newState = !cur.flashlight;
+        ue_wrap::engine::WriteMainPlayerFlashlight(mp, newState);
 
         // Drive the local light_R's Intensity to match the new state.
         // Mirrors the BP's toggle effect so the SENDER also visually
-        // toggles. Use the same SetIntensity reflection path the
-        // puppet receiver uses (MarkRenderStateDirty internally).
+        // toggles. Same SetIntensity path the puppet receiver uses
+        // (MarkRenderStateDirty internally).
         void* light_R = ue_wrap::engine::GetMainPlayerLightR(mp);
         float localTarget = kIntensityOffDefault;
         if (newState) {
             localTarget = g_latchedOnIntensity.load(std::memory_order_acquire);
             if (localTarget == 0.f) localTarget = kIntensityOnFallback;
         }
-        static void* sLocalSetIntensityFn = nullptr;
-        if (!sLocalSetIntensityFn) {
-            void* lightCls = R::FindClass(L"LightComponent");
-            if (lightCls) sLocalSetIntensityFn = R::FindFunction(lightCls, P::name::SetIntensityFn);
-        }
-        if (light_R && sLocalSetIntensityFn) {
-            ue_wrap::ParamFrame f(sLocalSetIntensityFn);
-            f.Set<float>(L"NewIntensity", localTarget);
-            ue_wrap::Call(light_R, f);
+        if (light_R) {
+            ue_wrap::engine::SetLightIntensity(light_R, localTarget);
         }
         // Also latch the on-value so the receiver gets the same intensity
         // we're using locally (instead of falling back to 5.0).
@@ -556,39 +552,17 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& payl
     // produced no visible change.
     g_echoSuppress.store(true, std::memory_order_release);
 
-    static void* sSetVisibilityFn      = nullptr;
-    static void* sSetIntensityFn       = nullptr;
-    static void* sSetOuterConeAngleFn  = nullptr;
-    static void* sSetInnerConeAngleFn  = nullptr;
-    if (!sSetVisibilityFn) {
-        if (void* sceneCls = R::FindClass(P::name::SceneComponentClass)) {
-            sSetVisibilityFn = R::FindFunction(sceneCls, P::name::SetVisibilityFn);
-        }
-    }
-    if (!sSetIntensityFn) {
-        if (void* lightCls = R::FindClass(L"LightComponent")) {
-            sSetIntensityFn = R::FindFunction(lightCls, P::name::SetIntensityFn);
-        }
-    }
-    if (!sSetOuterConeAngleFn) {
-        if (void* spotCls = R::FindClass(P::name::SpotLightComponentClass)) {
-            sSetOuterConeAngleFn = R::FindFunction(spotCls, P::name::SetOuterConeAngleFn);
-            sSetInnerConeAngleFn = R::FindFunction(spotCls, P::name::SetInnerConeAngleFn);
-        }
-    }
+    // A-1 (2026-05-29) Principle-7: all 4 UFunction dispatches below go
+    // through ue_wrap::engine wrappers (cached per-process). No more
+    // raw R::FindClass / R::FindFunction / ParamFrame plumbing here.
 
     // 1) SetVisibility(newState, false) -- triggers MarkRenderStateDirty
     //    on the FIRST transition (false->true or true->false). Required
     //    for proxy creation on the orphan puppet (CreateRenderState_
     //    Concurrent runs on dirty mark; light_R's pre-existing
     //    bRegistered=1 + visByte bit-5 pass the cascade).
-    if (sSetVisibilityFn) {
-        ue_wrap::ParamFrame f(sSetVisibilityFn);
-        f.Set<bool>(L"bNewVisibility", newState);
-        f.Set<bool>(L"bPropagateToChildren", false);
-        ue_wrap::Call(light_R, f);
-    } else {
-        UE_LOGW("flashlight: SceneComponent::SetVisibility UFunction not resolved");
+    if (!ue_wrap::engine::SetSceneComponentVisibility(light_R, newState, false)) {
+        UE_LOGW("flashlight: SetSceneComponentVisibility failed (UFunction unresolved or light_R dead)");
     }
 
     // 2) SetIntensity(packet.intensity) -- mirror sender's exact brightness.
@@ -596,12 +570,8 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& payl
     //    (~0.2 Unitless) which renders as ~no light. No fallback latch
     //    needed -- the sender sends the truth.
     const float targetIntensity = newState ? payload.intensity : 0.f;
-    if (sSetIntensityFn) {
-        ue_wrap::ParamFrame f(sSetIntensityFn);
-        f.Set<float>(L"NewIntensity", targetIntensity);
-        ue_wrap::Call(light_R, f);
-    } else {
-        UE_LOGW("flashlight: LightComponent::SetIntensity UFunction not resolved");
+    if (!ue_wrap::engine::SetLightIntensity(light_R, targetIntensity)) {
+        UE_LOGW("flashlight: SetLightIntensity failed (UFunction unresolved or light_R dead)");
     }
 
     // 3) SetOuterConeAngle + SetInnerConeAngle -- mirror sender's cone
@@ -611,15 +581,11 @@ void ApplyToPuppet(void* puppetActor, const coop::net::ItemActivatePayload& payl
     //    (cone shape on an off light is invisible; saves two UFunction
     //    dispatches per off toggle).
     if (newState) {
-        if (sSetOuterConeAngleFn && payload.outerConeAngle > 0.f) {
-            ue_wrap::ParamFrame f(sSetOuterConeAngleFn);
-            f.Set<float>(L"NewOuterConeAngle", payload.outerConeAngle);
-            ue_wrap::Call(light_R, f);
+        if (payload.outerConeAngle > 0.f) {
+            ue_wrap::engine::SetSpotLightOuterConeAngle(light_R, payload.outerConeAngle);
         }
-        if (sSetInnerConeAngleFn && payload.innerConeAngle >= 0.f) {
-            ue_wrap::ParamFrame f(sSetInnerConeAngleFn);
-            f.Set<float>(L"NewInnerConeAngle", payload.innerConeAngle);
-            ue_wrap::Call(light_R, f);
+        if (payload.innerConeAngle >= 0.f) {
+            ue_wrap::engine::SetSpotLightInnerConeAngle(light_R, payload.innerConeAngle);
         }
     }
 
