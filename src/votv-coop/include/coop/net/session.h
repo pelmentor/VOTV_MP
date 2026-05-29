@@ -182,6 +182,17 @@ private:
     // received datagram (PacketHeader + body).
     void RelayUnreliableToOtherClients(int originSlot, const void* data, int len);
 
+    // Host-relay topology (PR-FOUNDATION Tier 2 T2-3): forward a RELIABLE
+    // datagram the host just received from `originSlot` to every OTHER
+    // connected client, on the reliable channel + the kind's priority lane.
+    // Same header rewrite as the unreliable relay (epoch -> host's,
+    // senderSlot -> originSlot). Caller must have already verified the kind
+    // is client-relayable (peer-originated gameplay) -- handshake +
+    // host-authoritative kinds are NOT relayed. No-op unless role == Host.
+    // Net thread only.
+    void RelayReliableToOtherClients(int originSlot, ReliableKind kind,
+                                     const void* data, int len);
+
     Config cfg_;
     std::thread thread_;
     std::atomic<bool> running_{false};

@@ -49,6 +49,7 @@
 
 #include "coop/element/element.h"
 #include "coop/players_registry.h"
+#include "session_lanes.h"  // co-located private header (src tree, not include/)
 #include "ue_wrap/log.h"
 
 #pragma warning(push)
@@ -78,38 +79,15 @@ uint64_t NowMs() {
 
 constexpr int kSendStaging = kMaxPacketBytes;
 
-// PR-3 priority lanes (carried over). See session.cpp commentary in PR-3 commit
-// or research/findings/votv-gns-integration-plan-2026-05-27.md §5.4.
-enum class Lane : int {
-    High = 0,
-    Normal = 1,
-    Bulk = 2,
-    Count = 3,
-};
-// session_status.cpp's ConfigureLanesForPeer hard-codes kLaneCount=3 because
-// the Lane enum is anon-ns to this TU. Pin the two together at compile time:
-// if a 4th lane lands here, the new value flows through LaneForKind below but
-// ConfigureConnectionLanes in session_status.cpp would still pass 3, silently
-// dropping reliables routed to the new lane index. Catch that at compile time.
+// PR-3 priority lanes + the T2-3 host-relay kind whitelist now live in the
+// shared internal header coop/net/session_lanes.h so session_relay.cpp can
+// reuse LaneForKind without duplicating the switch (T2-3 extraction). Pin
+// Lane::Count to session_status.cpp's hard-coded kLaneCount=3 at compile
+// time: a 4th lane here would flow through LaneForKind but
+// ConfigureConnectionLanes would still pass 3, silently dropping reliables
+// on the new lane.
 static_assert(static_cast<int>(Lane::Count) == 3,
               "Lane::Count changed -- update kLaneCount in session_status.cpp::ConfigureLanesForPeer");
-
-Lane LaneForKind(ReliableKind k) {
-    switch (k) {
-    case ReliableKind::TeleportClient: return Lane::High;
-    case ReliableKind::RestoreVitals:  return Lane::High;
-    case ReliableKind::ItemActivate:   return Lane::High;
-    // Spawn + Destroy must share a lane: GNS guarantees in-order delivery WITHIN
-    // a lane but NOT across lanes. If PropDestroy were on Normal while PropSpawn
-    // were on Bulk, a Destroy could drain to the receiver before its Spawn under
-    // backpressure -> phantom actor never cleaned up.
-    case ReliableKind::PropSpawn:      return Lane::Bulk;
-    case ReliableKind::PropDestroy:    return Lane::Bulk;
-    case ReliableKind::EntitySpawn:    return Lane::Bulk;
-    case ReliableKind::EntityDestroy:  return Lane::Bulk;
-    default:                           return Lane::Normal;
-    }
-}
 
 bool EnsureGnsInit() {
     std::lock_guard<std::mutex> lk(g_initMutex);
@@ -619,16 +597,33 @@ void Session::HandleMessage(int peerSlot, const void* data, int len) {
             }
             // emplace + memcpy avoids the per-receive heap alloc
             // (vector::assign). ReliableMessage now holds an inline 228 B
-            // payload buffer. Stamp senderPeerSlot so drainers can route
-            // per-sender (3-peer correctness).
+            // payload buffer. Stamp senderPeerSlot = routeSlot so drainers
+            // route per-sender: on the host routeSlot is the authenticated
+            // connection slot; on a client it is the host-stamped origin
+            // (a relayed reliable from peer A carries senderSlot=A so B's
+            // event_feed applies it to A's puppet, not the host's).
             reliableInbox_.emplace_back();
             ReliableMessage& m = reliableInbox_.back();
             m.kind = static_cast<ReliableKind>(rh.kind);
-            m.senderPeerSlot = peerSlot;
+            m.senderPeerSlot = routeSlot;
             m.payloadLen = static_cast<uint16_t>(payloadLen);
             std::memcpy(m.payload,
                         static_cast<const uint8_t*>(data) + sizeof(PacketHeader) + sizeof(ReliableHeader),
                         static_cast<size_t>(payloadLen));
+        }
+        // Host relay (T2-3): forward peer-originated gameplay reliables to
+        // every OTHER client so cross-peer item/prop actions are seen by
+        // all. Host-authoritative kinds (Weather/RedSky/Lightning/Entity*)
+        // and handshake kinds (Join/AssignPeerSlot/PlayerJoined) are NOT
+        // relayed -- they either originate on the host (fanned out via
+        // SendReliable already) or are point-to-point handshake. The host
+        // also processes the reliable locally (above) so its own view of
+        // the origin peer's puppet updates too.
+        if (cfg_.role == Role::Host &&
+            IsClientRelayableReliableKind(static_cast<ReliableKind>(rh.kind))) {
+            RelayReliableToOtherClients(peerSlot,
+                                        static_cast<ReliableKind>(rh.kind),
+                                        data, len);
         }
         break;
     }
@@ -637,37 +632,9 @@ void Session::HandleMessage(int peerSlot, const void* data, int len) {
     }
 }
 
-void Session::RelayUnreliableToOtherClients(int originSlot, const void* data, int len) {
-    // Host-relay topology (PR-FOUNDATION Tier 2 T2-2). Forward an unreliable
-    // pose/proppose the host just received from `originSlot` to every OTHER
-    // connected client, so clients see each other (the star has no peer<->peer
-    // path). MTA shape: CGame relays puresync as it arrives.
-    if (cfg_.role != Role::Host) return;
-    if (len < static_cast<int>(sizeof(PacketHeader)) || len > kMaxPacketBytes) return;
-    auto* sockets = SteamNetworkingSockets();
-    if (!sockets) return;
-    // Copy + rewrite ONLY the header's epoch + origin slot. seq + body are
-    // preserved so per-origin-slot seq monotonicity holds on the receiver.
-    // The epoch becomes the HOST's own epoch because, from the receiving
-    // client's POV, this packet rides ITS host connection -- whose epoch it
-    // latched -- so the relayed packet must carry the host epoch to pass the
-    // connection-keyed latch. senderSlot carries the logical origin so the
-    // client routes the pose to originSlot's puppet.
-    uint8_t buf[kMaxPacketBytes];
-    std::memcpy(buf, data, static_cast<size_t>(len));
-    auto* h = reinterpret_cast<PacketHeader*>(buf);
-    h->senderEpoch = ownEpoch_;
-    h->senderSlot = static_cast<uint8_t>(originSlot);
-    h->_reserved2[0] = h->_reserved2[1] = h->_reserved2[2] = 0;
-    for (int i = 1; i < kMaxPeers; ++i) {
-        if (i == originSlot) continue;
-        const uint32_t hConn = peerConns_[i].load();
-        if (hConn == 0) continue;
-        const EResult rc = sockets->SendMessageToConnection(
-            hConn, buf, len, k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
-        if (rc == k_EResultOK) sent_.fetch_add(1);
-    }
-}
+// RelayUnreliableToOtherClients + RelayReliableToOtherClients are defined in
+// session_relay.cpp (the host-relay subsystem TU, extracted at T2-3 when this
+// file crossed the 800-LOC soft cap).
 
 void Session::NetThread() {
     const auto sendInterval = std::chrono::milliseconds(
