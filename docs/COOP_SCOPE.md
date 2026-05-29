@@ -19,8 +19,17 @@ items.
 
 ## Player count
 
-- 2 players (host + one client), LAN-first. To be confirmed against VOTV's
-  single-pawn world assumptions in Phase 2.
+- **4 players** (host + 3 clients), LAN-first. `kMaxPeers = 4` in
+  `coop::players::Registry` and `coop::net::Session` (PollGroup, 3 lanes,
+  per-slot OnDisconnect contract). The transport is multi-peer end-to-end
+  (PR-4 SHIPPED 2026-05-28); gameplay subsystems must follow suit (state
+  push to all puppets, snapshot fan-out, host-relay of client-originated
+  events for 3+ peers — see PR-FOUNDATION-1..3 in
+  `research/findings/votv-architecture-audit-2026-05-29.md`).
+  Decided 2026-05-26 (user verbatim: "It should handle at least 4 players").
+  STATUS 2026-05-29: wire layer 4-peer-ready; some gameplay paths still
+  2-peer-shaped (no host-relay between clients yet); 4-peer autonomous
+  smoke missing — Tier 8 work in the foundation audit.
 
 ## In scope
 
@@ -368,6 +377,15 @@ Design implications (do NOT build yet; record so the architecture serves it):
   NPC-sensor-triggered (NPCs are host-only). RE pass complete
   (`research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md`);
   7-increment implementation queued.
+- 2026-05-26 — **Player count raised to 4** (host + 3 clients); user
+  verbatim "It should handle at least 4 players". Replaces the prior
+  2-player target. `kMaxPeers=4` shipped in `Registry` + `Session`
+  (PR-4 of the GNS migration 2026-05-28).
+- 2026-05-29 — **Foundation audit v2** identified that the network
+  topology is still fundamentally 2-player today (no host-relay between
+  clients for PoseSnapshot/PropPose/ItemActivate; NPC AI per-client).
+  Doc: `research/findings/votv-architecture-audit-2026-05-29.md`.
+  PR-FOUNDATION-1..5 work-list queued.
 - 2026-05-25 — **Voice chat** parked as future (mention only; out of
   current scope). Plasmo-Voice-style proximity positional + push-to-
   talk; would reuse the local player's `UAudioCaptureComponent` for

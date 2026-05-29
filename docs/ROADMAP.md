@@ -6,12 +6,21 @@ gate — don't proceed until met.
 
 Legend: ☐ not started · ◐ in progress · ☑ done.
 
-**Quick status (2026-05-25):** Phases 0-3 done. Phase 4 partial (4.1
+**Quick status (2026-05-29):** Phases 0-3 done. Phase 4 partial (4.1
 input replication is per-pawn pose stream; 4.2-4.6 ongoing). Phase 5
-done (autonomous harness + LAN test framework). Recent work is in the
-5N* / 5S* / 5T / 5D series (NPC sync, save snapshot-on-connect, terminals,
-doors+lights). See the bottom of this file for the "Live workstreams"
-section — that's where iteration actually happens.
+done (autonomous harness + LAN test framework). Phase 4.x transport
+migrated to **GameNetworkingSockets v1.5.1** (Valve, vendored as
+submodule; PR-1..PR-4 SHIPPED 2026-05-28) with 3 priority lanes
+(High / Normal / Bulk) and `kMaxPeers=4` via PollGroup. Recent work is in
+the 5N* / 5S* / 5T / 5D series (NPC sync, save snapshot-on-connect,
+terminals, doors+lights), plus the Tier-3 MTA Element/Registry/Mirror
+migration shipped 2026-05-28. See the bottom of this file for the "Live
+workstreams" section — that's where iteration actually happens.
+
+**Foundation audit v2 (2026-05-29):** see
+`research/findings/votv-architecture-audit-2026-05-29.md` for the full
+14-dimension audit + PR-FOUNDATION-1..5 priorities. Key gap: cross-peer
+relay topology is still 2-player-shaped; 4-peer LAN smoke missing.
 
 ---
 
@@ -80,9 +89,18 @@ context proven, RemotePlayer puppet visible + driven on LAN.
 **Gate met:** both players see each other's pawn moving in real time on
 LAN (two-machine + same-box-two-instance both confirmed).
 
-- ☑ 3.1 UDP, host-authoritative, LAN-first. `coop/net/transport.cpp`.
-- ☑ 3.2 Sessions, not connections. Session-token + peer-lock + bounded
-       drain + NaN/AABB validate + RFC1982 sequence numbering.
+- ☑ 3.1 **GameNetworkingSockets (Valve, MIT, v1.5.1)** vendored as a
+       submodule + `/WHOLEARCHIVE` linked into `votv-coop.dll`.
+       host-authoritative, LAN-first. `coop/net/session.{h,cpp}` drives
+       GNS end-to-end (CreateListenSocketIP / ConnectByIPAddress /
+       SendMessageToConnection / ReceiveMessagesOnConnection /
+       SteamNetConnectionStatusChangedCallback). The hand-rolled Winsock
+       UDP + Hello/HelloAck + stop-and-wait ARQ + Ping/Pong RTT layer was
+       fully RETIRED in PR-2 (2026-05-28).
+- ☑ 3.2 Sessions, not connections. `kMaxPeers=4` via GNS PollGroup
+       (PR-4); per-slot OnDisconnect contract (PR-4.7); senderPeerSlot
+       narrow-cast guarded; bounded drain; NaN/AABB validate; RFC1982
+       sequence numbering.
 - ☑ 3.3 Pure I/O at bottom; 3-layer split (transport ↔ serialization ↔
        application). Principle 7 applied to network.
 - ☑ 3.4 Position-only pose sync at 60 Hz + receiver-side interpolation
@@ -91,12 +109,28 @@ LAN (two-machine + same-box-two-instance both confirmed).
        `research/findings/mta-pose-interpolation-2026-05-23.md`.
 - ☑ 3.5 Auto-spawn the remote on first packet.
 
+### Priority lanes ☑
+
+- ☑ **Three GNS lanes** wired via `ConfigureConnectionLanes(3, [0,1,2],
+       weights=[4,2,1])` (PR-3, 2026-05-28). Lane assignment:
+  - **High** — TeleportClient, RestoreVitals, ItemActivate, Join.
+  - **Normal** — PoseSnapshot, PropPose, Chat, default-unspecified events.
+  - **Bulk** — PropSpawn, PropDestroy, EntityDestroy, EntitySpawn,
+    snapshot fan-out.
+  Snapshot fan-out no longer head-of-line-blocks interactive events.
+  **GNS guarantees order WITHIN a lane, not across** — receivers that
+  need to compare a Bulk event against Normal state (e.g. PropSpawn vs
+  Join) must gate on identity establishment, not lane order. See
+  E-2 / C-1 finding in
+  `research/findings/votv-architecture-audit-2026-05-29.md`.
+
 ### Reliable channel ☑
 
-- ☑ Stop-and-wait ARQ over the same socket, distinct sequence space,
-       250 ms RTO. Carries Join / Bye / Chat / RestoreVitals /
-       TeleportClient / PropSpawn / PropDestroy / EntityDestroy.
-       See `coop/net/reliable_channel.cpp`.
+- ☑ GNS reliable messages (per-lane). Carries Join / Bye / Chat /
+       RestoreVitals / TeleportClient / PropSpawn / PropDestroy /
+       EntityDestroy / EntitySpawn / ItemActivate / WeatherState /
+       LightningStrike. The internal FIFO queue + per-feature retry
+       crutches were RETIRED 2026-05-27.
 - ☑ Coop chat + session event log (joins / leaves / errors) — DONE
        2026-05-23. Top-right UMG feed; reliable.
 
@@ -164,7 +198,14 @@ Each item below is a feature increment series. Cross-referenced in
 - ☑ Phase 5N1 Inc1: NPC suppressor (host-only mandatory).
 - ☑ Phase 5N1 Inc2: wire layer detection-only (gated on
        `VOTVCOOP_NPC_SYNC=1`).
-- ☐ Phase 5N1 Inc3: NPC client-mirror + EntityDestroy + EntityPoseBatch.
+- ◐ Phase 5N1 Inc3: NPC client-mirror + EntitySpawn + EntityDestroy
+       PARTIALLY SHIPPED. A1 receiver (NPC client mirror via
+       `MirrorManager<Npc>`) + EntitySpawn / EntityDestroy reliable
+       packets landed 2026-05-28 (Tier-3 MTA Element migration). Still
+       OUT OF SCOPE today: continuous NPC pose stream (EntityPoseBatch
+       reliable kind) and NPC vitals replication — NPC AI currently runs
+       independently on every client (per-client desync). See S-1..S-5
+       in the foundation audit.
 
 ### 5S — Save + world-state sync ◐
 - ☑ Phase 5S0 Inc1: snapshot-on-connect, host enumerates `Aprop_C` +
@@ -207,7 +248,10 @@ Each item below is a feature increment series. Cross-referenced in
        autonomous scenarios only.
 
 ### Open / future
-- ☐ Phase 5N1 Inc3 — NPC client-mirror + EntityPoseBatch stream.
+- ☐ Phase 5N1 Inc3 cont. — EntityPoseBatch stream for NPC pose
+       replication (currently NPC AI runs per-client; combat / horror
+       loop incoherent without it). See S-1 in
+       `research/findings/votv-architecture-audit-2026-05-29.md`.
 - ☐ Phase 5D Inc1+ — doors + light switches sync implementation.
 - ☐ Phase 5T Inc1+ — terminals interactive sync.
 - ☐ Multiplayer menu in VOTV's main menu (currently env-var .bat
@@ -216,8 +260,29 @@ Each item below is a feature increment series. Cross-referenced in
        Out of current scope; mic capture component (`UAudioCaptureComponent`)
        already on the puppet to destroy.
 - ☐ Master server + opt-in public server browser (WAN concern, Phase 7+).
+       PR-5 design seed landed: MTA `CServerBrowser` shape adapted
+       (`research/findings/votv-master-server-mta-adaptation-2026-05-28.md`).
+- ☐ P2P + ICE / NAT punch (WAN). Design seed:
+       `research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md`.
+       `ENABLE_ICE=OFF` today.
 - ☐ Ragdoll sync (non-trivial — VOTV ragdoll renders on a SEPARATE
        invisible body; we'd be inventing visible ragdoll on the puppet).
+
+### PR-FOUNDATION queue (foundation audit v2, 2026-05-29)
+Strategic priorities derived from the 14-dimension audit. Read
+`research/findings/votv-architecture-audit-2026-05-29.md` for the full
+TL;DR + tier-list.
+- ☐ PR-FOUNDATION-1 — Identity epoch + range enforcement
+       (`IsAllowedSenderEid` helper across 7+ wire sites; closes E-1 +
+       3 PropSpawn/Destroy/Join gaps + host-migration eid collision).
+- ☐ PR-FOUNDATION-2 — Save-game safety contract (PreSaveScrub /
+       PostSaveRestore hooks, atomic-rename, backup).
+- ☐ PR-FOUNDATION-3 — Manager pattern collapse (one canonical mirror
+       table; `ScopedElementRef<T>` RAII handles). Do BEFORE NPC 5N
+       expansion or Door/Vehicle/Switch.
+- ☐ PR-FOUNDATION-4 — Host policy layer (kick/ban/ratelimit).
+- ☐ PR-FOUNDATION-5 — Per-peer observability HUD + structured event
+       stream.
 
 ---
 
