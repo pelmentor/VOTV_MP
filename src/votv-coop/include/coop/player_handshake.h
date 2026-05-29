@@ -1,0 +1,93 @@
+// coop/player_handshake.h -- Player-Element mirror exchange (Join + AssignPeerSlot).
+//
+// Gameplay/network layer (principle 7). Extracted from event_feed.cpp on
+// 2026-05-29 (C5) to keep event_feed below the 800 LOC soft cap after the
+// A4 v13 wire migration pushed it to 841 LOC. The handshake is its own
+// subsystem: it owns the local + per-slot nickname state, the per-slot
+// Join-sent latch, and the two reliable kinds (Join, AssignPeerSlot) that
+// carry the mirror Element ids between peers.
+//
+// Mirror exchange model (A4 / v13):
+//   - Host -> Client (AssignPeerSlot): host stamps its local Player
+//     Element id (hostElementId) when issuing the slot assignment.
+//     Client EstablishMirrorForSlot(0, hostElementId).
+//   - Peer -> Peer (Join): each peer's Join payload prepends its own
+//     senderElementId (uint32). Receiver EstablishMirrorForSlot(
+//     senderPeerSlot, senderElementId).
+//   - Result: both peers' element::Registry agree on the same id for
+//     each Player Element.
+//
+// State ownership split with event_feed:
+//   - player_handshake owns: g_localNick, g_remoteNickBySlot, g_joinSentBySlot.
+//   - event_feed owns: g_lastConnectedBySlot (connect/disconnect edge
+//     detector for the "<X> left the game" feed message).
+//   - On a per-slot disconnect, event_feed calls NicknameForSlot for the
+//     hud message and OnSlotDisconnected to reset our Join-sent latch so
+//     a reconnect re-announces.
+//
+// Game thread only (it reads/writes UE engine objects via Puppet().SetNickname,
+// hud_feed::Push, players::Registry, and reads our process-local cfg).
+
+#pragma once
+
+#include "coop/net/session.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace coop::player_handshake {
+
+// Set the local player's display name. Sanitized on the way in (see
+// SanitizeNickname inside the .cpp -- the same sanitizer that runs on
+// inbound peer nicknames, so both ends agree on the displayable form).
+void SetLocalNickname(const std::wstring& nick);
+
+// Reset per-slot caches. Called from event_feed::OnSessionStart so a
+// Session::Stop()/Start() in the same process sees clean state.
+void Reset();
+
+// Per-tick connect-edge Join sender for one slot. event_feed iterates
+// over slots, detects the connect edge, and calls this. joinPayload +
+// joinPayloadBuilt are lazy-build state shared across the loop so we
+// don't pay the UTF-8 conversion + heap alloc every 8 ms once Join has
+// already been sent to every slot.
+//
+// Sender holds off (returns without sending and without latching) when
+// the local Player Element id isn't allocated yet (boot/seed race
+// window after AssignPeerSlot, before EnsurePlayerElement_ runs). The
+// guard is bounded (~1 net pump tick = ~8 ms at 125 Hz). Send is also
+// no-op if the slot has already received our Join.
+void MaybeSendJoinToSlot(coop::net::Session& session, int slot,
+                          std::vector<uint8_t>& joinPayload,
+                          bool& joinPayloadBuilt);
+
+// Per-slot disconnect edge: clear the Join-sent latch so a reconnect
+// re-announces. Called from event_feed once it has consumed the
+// nickname for the "<X> left the game" hud message.
+void OnSlotDisconnected(int slot);
+
+// Read-only access to the nickname cached for a peer slot. Returns
+// "Remote player" placeholder when no Join has landed for that slot
+// yet. Used by event_feed::Update to build the per-slot disconnect
+// hud message ("<X> left the game").
+const std::wstring& NicknameForSlot(int slot);
+
+// Handle a delivered reliable Join message. Parses the v13 prefix
+// (senderElementId), then the nickname (UTF-8 length-prefixed),
+// sanitizes the nickname, sets the puppet's nameplate, and posts the
+// hud_feed entry. Returns true if the message was a recognized Join
+// (regardless of validation outcome); returns false if payloadLen is
+// too short for the header (caller may log).
+bool HandleJoinMessage(coop::net::Session& session,
+                       const coop::net::Session::ReliableMessage& msg);
+
+// Handle a delivered reliable AssignPeerSlot message. Stamps the
+// client's LocalPeerId and (v13) installs the host's mirror Player
+// Element via EstablishMirrorForSlot when hostElementId is present
+// and valid. Drops on host side (host self-assigns). Returns true if
+// the message was recognized; false on payload-too-short.
+bool HandleAssignPeerSlot(coop::net::Session& session,
+                          const coop::net::Session::ReliableMessage& msg);
+
+}  // namespace coop::player_handshake

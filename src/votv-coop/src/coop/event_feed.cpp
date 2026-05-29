@@ -6,6 +6,7 @@
 #include "coop/item_activate.h"
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"
+#include "coop/player_handshake.h"
 #include "coop/players_registry.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop.h"
@@ -17,129 +18,25 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/sdk_profile.h"
 
-#include <windows.h>
-
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <string>
 #include <vector>
 
 namespace coop::event_feed {
 
 namespace {
 
-std::wstring g_localNick = L"Player";
-// Per-slot nickname + per-slot connection edge. Single-peer scalars
-// would let two clients' Joins overwrite each other and the "X left"
-// message would fire on the aggregate-disconnect with whoever's nick
-// happened to be cached at the time (NOT the actually-departing peer).
-// Placeholder ("Remote player") is shown ONLY in the rare case where
-// the peer drops before its Join reliable message lands.
-std::array<std::wstring, net::kMaxPeers> g_remoteNickBySlot{
-    L"Remote player", L"Remote player", L"Remote player", L"Remote player"
-};
+// Per-slot connect/disconnect edge detector. The Join-sent latch and
+// per-slot nicknames live in coop::player_handshake (C5 extraction
+// 2026-05-29); event_feed only needs the prior-connected bit to fire
+// the "<X> left the game" hud message on the disconnect transition.
 std::array<bool, net::kMaxPeers> g_lastConnectedBySlot{};
-// Per-slot Join tracking: a single global Join-sent bit fan-out gives
-// late-joining peers no Join packet (their event_feed sees nothing from
-// us + sticks with the "Remote player" placeholder forever). Per-slot
-// + reset-on-disconnect means a reconnect re-announces.
-std::array<bool, net::kMaxPeers> g_joinSentBySlot{};
-
-std::vector<uint8_t> ToUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
-    const int n = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
-                                        nullptr, 0, nullptr, nullptr);
-    std::vector<uint8_t> out(n > 0 ? n : 0);
-    if (n > 0)
-        ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
-                              reinterpret_cast<char*>(out.data()), n, nullptr, nullptr);
-    return out;
-}
-
-std::wstring FromUtf8(const uint8_t* p, int len) {
-    if (len <= 0) return {};
-    const int n = ::MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(p), len, nullptr, 0);
-    std::wstring out(n > 0 ? n : 0, L'\0');
-    if (n > 0) ::MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(p), len, out.data(), n);
-    return out;
-}
-
-// Nickname sanitizer (2026-05-25, VT-inspired): trust-boundary defense at
-// the nameplate / hud-feed display surface. Borrowed from VoidTogether-
-// Server's utilityModule.js SimplifyName (regex /^-+|-+$|[^A-Za-z0-9 ]+/g
-// + truncate to 20) -- adjusted for our wchar_t pipeline and to ALLOW
-// internal spaces (single-space runs collapsed; leading/trailing trimmed).
-//
-// Why: a peer's Join reliable payload carries an arbitrary UTF-8 byte
-// string of arbitrary length. Without sanitization, a malicious or buggy
-// peer could inject:
-//   - Control chars (newline / null / ANSI escape) that corrupt our
-//     hud_feed widget text and could in theory escape out of UMG bindings.
-//   - Right-to-left override unicode (U+202E) that visually inverts the
-//     subsequent text in the nameplate.
-//   - Combining diacritics that render glyphs taller than the widget bg.
-//   - Very long strings that overflow the floating nameplate beyond the
-//     screen and waste reliable-channel bandwidth on join.
-//
-// Pattern: keep ASCII alphanumerics + space + the safe punctuation set
-// `[-_.]`. Strip everything else. Collapse multi-space runs to single.
-// Trim leading/trailing whitespace + dashes. Truncate to 20 wchars max.
-// Empty result falls back to "Player" so the nameplate isn't blank.
-//
-// This applies SYMMETRICALLY to both the inbound Join receive (defense
-// against peer-side garbage) AND to our own outbound SetLocalNickname
-// (defense against env-var typos / Windows path leakage / our own
-// future bugs).
-//
-// NOT a profanity filter -- VoidTogether uses obscenity.js for that
-// (450 KB of regexes + transformers). Out of scope for the standalone
-// C++ mod; a strict-character sanitizer + length cap is the trust-
-// boundary fix, profanity moderation is a separate moderation feature
-// pending Phase 6+ (per the VT adoption findings ranked shortlist).
-constexpr size_t kMaxNickLen = 20;
-std::wstring SanitizeNickname(const std::wstring& raw) {
-    std::wstring out;
-    out.reserve(raw.size());
-    bool lastWasSpace = true;  // primes the leading-space trim
-    for (wchar_t c : raw) {
-        const bool isAlnum = (c >= L'0' && c <= L'9') ||
-                             (c >= L'A' && c <= L'Z') ||
-                             (c >= L'a' && c <= L'z');
-        const bool isSafePunct = (c == L'-' || c == L'_' || c == L'.');
-        const bool isSpace = (c == L' ');
-        if (isAlnum || isSafePunct) {
-            out.push_back(c);
-            lastWasSpace = false;
-        } else if (isSpace && !lastWasSpace) {
-            out.push_back(L' ');
-            lastWasSpace = true;
-        }
-        // else: strip silently (control chars, unicode, punctuation, etc.)
-        if (out.size() >= kMaxNickLen) break;
-    }
-    // Trim trailing space.
-    while (!out.empty() && (out.back() == L' ' || out.back() == L'-'))
-        out.pop_back();
-    // Trim leading dashes (the SimplifyName regex's ^-+ rule -- VT
-    // didn't trim leading space because their regex stripped all space
-    // implicitly; we kept internal spaces so leading-space is already
-    // gone via the `lastWasSpace=true` prime).
-    size_t start = 0;
-    while (start < out.size() && out[start] == L'-') ++start;
-    if (start > 0) out.erase(0, start);
-    return out.empty() ? std::wstring(L"Player") : out;
-}
 
 }  // namespace
 
 void SetLocalNickname(const std::wstring& nick) {
-    // VT-inspired sanitize-on-input (2026-05-25): symmetric defense.
-    // Sanitizing here too means our env-var setup (VOTVCOOP_NET_NICK)
-    // can't accidentally send garbage over the wire that we then
-    // sanitize on the OTHER end -- net is cleaner if both ends agree
-    // on the displayable form.
-    if (!nick.empty()) g_localNick = SanitizeNickname(nick);
+    coop::player_handshake::SetLocalNickname(nick);
 }
 
 void OnSessionStart() {
@@ -148,9 +45,8 @@ void OnSessionStart() {
     // bit on each Start; we own the corresponding event_feed state and
     // reset it here so a restart of the session sees clean per-slot
     // edge-detector input.
-    for (auto& nick : g_remoteNickBySlot) nick = L"Remote player";
     g_lastConnectedBySlot.fill(false);
-    g_joinSentBySlot.fill(false);
+    coop::player_handshake::Reset();
 }
 
 void Update(net::Session& session, void* localPlayer) {
@@ -164,62 +60,23 @@ void Update(net::Session& session, void* localPlayer) {
         if (p) p->SetPing(rtt);
     }
 
-    // Per-slot Join announcement. For each slot that we haven't yet sent
-    // our Join to AND is currently connected, send Join via
-    // SendReliableToSlot. The Join payload is built lazily on first
-    // need: in steady state (all peers have received our Join) the
-    // joinPayload vector is never constructed, so we don't pay the
-    // ToUtf8 + WideCharToMultiByte + vector heap-alloc cost every
-    // 8ms at 125Hz NetPumpTick.
+    // Per-slot Join announcement + per-slot "left the game" hud. The
+    // Join payload is built lazily on first need: in steady state
+    // (all peers have received our Join) the joinPayload vector is
+    // never constructed, so we don't pay the ToUtf8 + heap-alloc cost
+    // every 8 ms at 125 Hz NetPumpTick.
     std::vector<uint8_t> joinPayload;
     bool joinPayloadBuilt = false;
     for (int slot = 0; slot < net::kMaxPeers; ++slot) {
         const bool slotConnected = session.IsSlotConnected(slot);
-        // Per-slot disconnect edge: when a specific slot transitions
-        // connected -> disconnected, post the departing peer's nick.
         if (g_lastConnectedBySlot[slot] && !slotConnected) {
-            ue_wrap::hud_feed::Push(g_remoteNickBySlot[slot] + L" left the game");
-            // Reset Join-sent so the next reconnect re-announces.
-            g_joinSentBySlot[slot] = false;
+            ue_wrap::hud_feed::Push(
+                coop::player_handshake::NicknameForSlot(slot) + L" left the game");
+            coop::player_handshake::OnSlotDisconnected(slot);
         }
-        // Per-slot connect edge: send our Join to this slot.
-        if (slotConnected && !g_joinSentBySlot[slot]) {
-            // v13 (A4 2026-05-29): hold off on the FIRST Join until our
-            // own Player Element is allocated. Otherwise the Join goes
-            // out with senderElementId=0 and the receiver can't install
-            // a mirror, leaving cross-peer Registry::Get(senderElementId)
-            // unable to resolve for the lifetime of the session (only
-            // disconnect+reconnect would re-fire the Join). The wait is
-            // bounded: client side allocates after AssignPeerSlot lands
-            // (~one extra net pump tick at 125 Hz, ~8 ms). Host side has
-            // its Element allocated at net pump startup so this guard
-            // only briefly skips at boot.
-            const coop::element::ElementId selfEidProbe =
-                coop::players::Registry::Get().LocalPlayerElementId();
-            if (selfEidProbe == coop::element::kInvalidId) {
-                continue;  // retry next tick
-            }
-            if (!joinPayloadBuilt) {
-                // v13 prefix: [uint32 senderElementId] then the existing
-                // [uint8 nicklen][nick UTF-8]. Receiver RegisterMirrors
-                // senderElementId into the sender's peer slot so wire
-                // packets bearing senderElementId resolve via
-                // Registry::Get on the receiver.
-                const uint32_t selfEidWire = selfEidProbe;
-                joinPayload.resize(4);
-                std::memcpy(joinPayload.data(), &selfEidWire, 4);
-                std::vector<uint8_t> nickUtf8 = ToUtf8(g_localNick);
-                if (nickUtf8.size() > 200) nickUtf8.resize(200);
-                joinPayload.push_back(static_cast<uint8_t>(nickUtf8.size()));
-                joinPayload.insert(joinPayload.end(), nickUtf8.begin(), nickUtf8.end());
-                joinPayloadBuilt = true;
-            }
-            if (session.SendReliableToSlot(slot, net::ReliableKind::Join,
-                                           joinPayload.data(),
-                                           static_cast<int>(joinPayload.size()))) {
-                g_joinSentBySlot[slot] = true;
-            }
-            // If send fails (transient), we'll retry next tick.
+        if (slotConnected) {
+            coop::player_handshake::MaybeSendJoinToSlot(
+                session, slot, joinPayload, joinPayloadBuilt);
         }
         g_lastConnectedBySlot[slot] = slotConnected;
     }
@@ -229,73 +86,7 @@ void Update(net::Session& session, void* localPlayer) {
     while (session.TryGetReliable(msg)) {
         switch (msg.kind) {
         case net::ReliableKind::Join: {
-            // Per-slot nickname keyed on the sender's peer slot. A single
-            // global scalar would let two clients on host clobber each
-            // other's nick on every Join.
-            const int senderSlot = msg.senderPeerSlot;
-            if (senderSlot < 0 || senderSlot >= net::kMaxPeers) {
-                UE_LOGW("event_feed: Join has invalid senderPeerSlot=%d -- dropping",
-                        senderSlot);
-                break;
-            }
-            // v13 (A4 2026-05-29): parse [uint32 senderElementId] prefix
-            // then the existing [uint8 nicklen][nick UTF-8]. The protocol
-            // version bump (12->13) at ParseHeader guarantees v12 senders
-            // can't misalign through here -- their packets are rejected
-            // upstream so we never see a pre-A4 [uint8 nicklen]-first
-            // payload here.
-            uint32_t senderElementId = 0;
-            const uint8_t* nickStart = msg.payload;
-            size_t nickRemaining = msg.payloadLen;
-            if (msg.payloadLen >= 4) {
-                std::memcpy(&senderElementId, msg.payload, 4);
-                nickStart += 4;
-                nickRemaining -= 4;
-            } else {
-                UE_LOGW("event_feed: Join payload %zu B too short for v13 "
-                        "senderElementId prefix -- routing fallback",
-                        static_cast<size_t>(msg.payloadLen));
-            }
-            std::wstring nick = g_remoteNickBySlot[senderSlot];
-            if (nickRemaining > 0) {
-                const int len = nickStart[0];
-                if (1 + len <= static_cast<int>(nickRemaining) && len > 0)
-                    nick = FromUtf8(nickStart + 1, len);
-            }
-            // Install mirror Player Element for this sender so future
-            // ItemActivate/Weather/etc. packets bearing senderElementId
-            // resolve via Registry::Get on this peer. 0 means "no Element
-            // yet"; skip mirror install and fall back to senderPeerSlot
-            // routing per the field's contract.
-            if (senderElementId != 0u &&
-                senderElementId != coop::element::kInvalidId) {
-                coop::players::Registry::Get().EstablishMirrorForSlot(
-                    static_cast<uint8_t>(senderSlot), senderElementId);
-            }
-            // VT-inspired nickname sanitizer (2026-05-25, see
-            // SanitizeNickname doc above). Trust-boundary defense: this
-            // string CAME FROM A PEER over UDP and is going to land in
-            // our floating UMG nameplate + the hud_feed widget. Without
-            // sanitization a hostile peer could newline-inject our
-            // widget text or insert a RLO unicode override to mirror
-            // the rest of the nameplate. Length-cap to 20 wchars caps
-            // the worst-case widget overflow.
-            nick = SanitizeNickname(nick);
-            g_remoteNickBySlot[senderSlot] = nick;
-            // Label the nameplate of THIS sender's puppet (not all puppets).
-            if (RemotePlayer* p = coop::players::Registry::Get().Puppet(
-                    static_cast<uint8_t>(senderSlot))) {
-                p->SetNickname(nick);
-            }
-            // Role-aware phrasing (2026-05-27, user feedback): on the CLIENT
-            // the Join packet arrives FROM the host -- saying "<host> joined
-            // the game" reads backwards (the client is the one who joined).
-            // Phrase from the receiver's POV.
-            if (session.role() == net::Role::Client) {
-                ue_wrap::hud_feed::Push(L"Successfully joined " + nick + L"'s game");
-            } else {
-                ue_wrap::hud_feed::Push(nick + L" joined the game");
-            }
+            coop::player_handshake::HandleJoinMessage(session, msg);
             break;
         }
         case net::ReliableKind::PropRelease: {
@@ -783,55 +574,7 @@ void Update(net::Session& session, void* localPlayer) {
             break;
         }
         case net::ReliableKind::AssignPeerSlot: {
-            // Host tells us which peer slot we were assigned. Without
-            // this the client would self-stamp LocalPeerId=1 from a
-            // hardcoded 1v1 mapping, and a second client with the same
-            // local ID would silently self-echo-drop the first's
-            // ItemActivate as a "loopback bounce" (see Update Join/echo
-            // guard above).
-            if (msg.payloadLen < sizeof(net::AssignPeerSlotPayload)) {
-                UE_LOGW("event_feed: AssignPeerSlot payload too short (%zu < %zu)",
-                        static_cast<size_t>(msg.payloadLen), sizeof(net::AssignPeerSlotPayload));
-                break;
-            }
-            net::AssignPeerSlotPayload p{};
-            std::memcpy(&p, msg.payload, sizeof(p));
-            // Trust boundary: only the host sends this; reject on host.
-            if (session.role() == net::Role::Host) {
-                UE_LOGW("event_feed: AssignPeerSlot received on host -- dropping "
-                        "(host self-assigns slot 0; no inbound from client)");
-                break;
-            }
-            // Slot must be a valid CLIENT slot (1..kMaxPeers-1). Slot 0 is
-            // the host's reserved local-self slot.
-            if (p.slot < 1 || p.slot >= net::kMaxPeers) {
-                UE_LOGW("event_feed: AssignPeerSlot slot=%u out of range [1..%u) -- dropping",
-                        p.slot, static_cast<unsigned>(net::kMaxPeers));
-                break;
-            }
-            coop::players::Registry::Get().SetLocalPeerId(p.slot);
-            UE_LOGI("event_feed: host assigned us peer slot %u (Registry::LocalPeerId now %u)",
-                    p.slot, coop::players::Registry::Get().LocalPeerId());
-            // v13 (A4 2026-05-29): if the host included its Player Element
-            // id, install a mirror in slot 0 so subsequent wire packets
-            // carrying host's senderElementId resolve via Registry::Get on
-            // this client. hostElementId == 0 or kInvalidId means the host
-            // hadn't allocated its Element yet -- skip mirror install; the
-            // receivers will fall back to senderPeerSlot routing.
-            if (p.hostElementId != 0u &&
-                p.hostElementId != coop::element::kInvalidId) {
-                if (!coop::element::Registry::IsHostId(p.hostElementId)) {
-                    UE_LOGW("event_feed: AssignPeerSlot hostElementId=0x%08x is "
-                            "not in host range -- dropping mirror install",
-                            p.hostElementId);
-                } else {
-                    coop::players::Registry::Get().EstablishMirrorForSlot(
-                        coop::players::kPeerIdHost, p.hostElementId);
-                }
-            } else {
-                UE_LOGI("event_feed: AssignPeerSlot host had no Element id yet "
-                        "(boot/seed race) -- routing will use senderPeerSlot");
-            }
+            coop::player_handshake::HandleAssignPeerSlot(session, msg);
             break;
         }
         default: {
