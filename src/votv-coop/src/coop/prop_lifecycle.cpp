@@ -10,6 +10,7 @@
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/prop_echo_suppress.h"
+#include "coop/prop_synth_key.h"
 #include "coop/remote_prop.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
@@ -124,10 +125,10 @@ void UnmarkProcessedInit(void* actor) {
 // H2-redux 2026-05-28: maintained set of live keyed-interactable actors.
 // Seeded ONCE at Install() via a single GUObjectArray walk; thereafter
 // maintained by Init POST (insert) + K2_DestroyActor PRE (evict).
-// Snapshot-copied via SnapshotKnownKeyedProps for prop_snapshot's
-// per-reconnect enumeration -- the per-reconnect GUObjectArray walk is
-// gone. Engine-state tracking, NOT session-state: not cleared on
-// OnDisconnect (actors persist across coop session boundaries).
+// Engine-state tracking, NOT session-state: not cleared on OnDisconnect
+// (actors persist across coop session boundaries). Public snapshot
+// accessor (SnapshotKnownKeyedProps) retired 2026-05-29 -- prop_snapshot
+// migrated to element::Registry::SnapshotByType<Prop>.
 //
 // MTA precedent: MTA's per-type managers (CClientPedManager etc) keep
 // a live std::list maintained by ctor/dtor. We approximate with a
@@ -352,81 +353,8 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* function, void* par
 void GrabObserver_PropInventory_TakeObj_PRE(void* self, void* function, void* params);
 void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* params);
 
-// ---- Synthesize Key for non-Aprop_C interactables -----------------------
-//
-// Aprop_C BP UCS auto-mints a NewGuid Key when ResetKey==true || Key==None.
-// chipPile / clump / trashBitsPile BPs DO NOT (probe confirmed 2026-05-27:
-// fresh-spawned clump.GetKey returns FName(NAME_None)). We bridge by calling
-// the class's own `setKey(FName)` UFunction with a process-unique synthetic
-// before the Init POST broadcast path checks for "None". Without this,
-// chipPile/clump never broadcast at all -- the "None" guard skips them.
-//
-// Synthetic format: `cs_<process-low32>_<monotonic-counter>` (peer-namespace
-// safe -- different peers mint different counters / process IDs; no
-// collision in identity lookup).
-
-std::atomic<uint64_t> g_synthKeyCounter{0};
-
-// Per-class setKey UFunction cache. setKey is a BP UFunction on each
-// keyed-interactable class; FindFunction is O(GUObjectArray) so cache
-// after first resolve.
-std::mutex g_setKeyFnMutex;
-std::unordered_map<void*, void*> g_setKeyFnByClass;
-
-void* ResolveSetKeyFn(void* cls) {
-    if (!cls) return nullptr;
-    std::lock_guard<std::mutex> lk(g_setKeyFnMutex);
-    auto it = g_setKeyFnByClass.find(cls);
-    if (it != g_setKeyFnByClass.end()) return it->second;
-    void* fn = R::FindFunction(cls, P::name::PropSetKeyFn);  // "setKey"
-    g_setKeyFnByClass[cls] = fn;  // cache null too (don't re-walk)
-    return fn;
-}
-
-// Returns the (possibly-newly-minted) Key string. If actor's GetKey is
-// already non-None, returns it unchanged. Otherwise, for non-Aprop_C
-// keyed-interactables, mints a synthetic + calls setKey + returns the
-// minted string. For Aprop_C-derived actors with None Key, returns
-// "None" (caller skips -- BP UCS will mint on its own pass).
-std::wstring EnsureKeyForBroadcast(void* self, const std::wstring& currentKey) {
-    if (!currentKey.empty() && currentKey != L"None") return currentKey;
-    if (ue_wrap::prop::IsDescendantOfProp(self)) {
-        // Aprop_C: trust the BP's own UCS to mint. Skip.
-        return currentKey;
-    }
-    if (!ue_wrap::prop::IsKeyedInteractable(self)) return currentKey;
-    void* cls = R::ClassOf(self);
-    void* setKeyFn = ResolveSetKeyFn(cls);
-    if (!setKeyFn) {
-        UE_LOGW("synth-key: setKey UFunction not found on '%ls' -- cannot mint",
-                R::ClassNameOf(self).c_str());
-        return currentKey;
-    }
-    const uint64_t n = g_synthKeyCounter.fetch_add(1, std::memory_order_relaxed) + 1;
-    const uint32_t ptrLow32 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(self));
-    wchar_t buf[64];
-    swprintf(buf, 64, L"cs_%08x_%llu", ptrLow32, static_cast<unsigned long long>(n));
-    const R::FName keyFName = ue_wrap::fname_utils::StringToFName(buf);
-    if (keyFName.ComparisonIndex == 0) {
-        UE_LOGW("synth-key: StringToFName('%ls') -> NAME_None; cannot mint", buf);
-        return currentKey;
-    }
-    ue_wrap::ParamFrame sk(setKeyFn);
-    if (!sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
-        UE_LOGW("synth-key: setKey 'Key' param not found on '%ls'",
-                R::ClassNameOf(self).c_str());
-        return currentKey;
-    }
-    if (!ue_wrap::Call(self, sk)) {
-        UE_LOGW("synth-key: setKey ProcessEvent call failed on '%ls'",
-                R::ClassNameOf(self).c_str());
-        return currentKey;
-    }
-    UE_LOGI("synth-key: minted '%ls' for actor %p class='%ls'",
-            buf, self, R::ClassNameOf(self).c_str());
-    // Re-read via GetInteractableKey to confirm the field actually changed.
-    return ue_wrap::prop::GetInteractableKeyString(self);
-}
+// Synth-key minting for non-Aprop_C keyed-interactables (chipPile/clump/
+// trashBits) extracted to coop/prop_synth_key.{h,cpp} (M-1, 2026-05-29).
 
 // Destroy a wire-suppressed intermediate-variant prop via K2_DestroyActor.
 // When called from inside Aprop_C::Init POST, the engine is still
@@ -575,7 +503,7 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     // None-skip guard. Probe confirmed clump.GetKey returns NAME_None on
     // fresh-spawn -- the None-skip would otherwise drop every chipPile
     // morph silently.
-    keyStr = EnsureKeyForBroadcast(self, keyStr);
+    keyStr = coop::prop_synth_key::EnsureKeyForBroadcast(self, keyStr);
     // UE4 FName(NAME_None) stringifies to "None" -- treat it as unkeyed.
     // For Aprop_C this still defers (BP UCS will mint on a subsequent
     // Init pass after loadData / setKey). For non-Aprop_C we just minted
@@ -745,7 +673,14 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     for (size_t i = 0; i < cls.size() && i < 63; ++i) {
         p.className.data[p.className.len++] = static_cast<char>(cls[i]);
     }
-    const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(spawnedActor);
+    // Audit defensive close 2026-05-29 (M-1 extraction post-ship): mirror
+    // the Init POST EnsureKeyForBroadcast call here so a non-Aprop_C
+    // keyed-interactable extracted from an inventory container also gets
+    // a synthetic Key (no-op for Aprop_C lineage whose Key is already set
+    // via loadData; just returns currentKey unchanged). Symmetric with
+    // the Init POST path; zero cost in the typical Aprop_C inventory drop.
+    std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(spawnedActor);
+    keyStr = coop::prop_synth_key::EnsureKeyForBroadcast(spawnedActor, keyStr);
     p.key.len = 0;
     for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
         p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
@@ -806,13 +741,12 @@ coop::element::ElementId GetPropElementIdForActor(void* actor) {
     return it->second;
 }
 
-size_t SnapshotKnownKeyedProps(std::vector<void*>& out) {
-    out.clear();
-    std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
-    out.reserve(g_knownKeyedProps.size());
-    for (void* p : g_knownKeyedProps) out.push_back(p);
-    return out.size();
-}
+// SnapshotKnownKeyedProps retired 2026-05-29 (M-1): had zero callers since
+// prop_snapshot was migrated to coop::element::Registry::SnapshotByType<Prop>
+// in the Tier 3 Props migration. The maintained g_knownKeyedProps set is
+// still useful internally (Init POST insert / K2_DestroyActor PRE evict
+// gate the steady-state lifecycle), but its public snapshot accessor is
+// dead. RULE 2 cleanup.
 
 // Enqueue*/DrainPending* functions retired 2026-05-27 -- the reliable
 // channel buffers internally now (see reliable_channel.cpp). Callers just

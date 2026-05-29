@@ -124,6 +124,7 @@ add_library(votv-coop SHARED
     src/coop/prop_echo_suppress.cpp
     src/coop/prop_lifecycle.cpp
     src/coop/prop_snapshot.cpp
+    src/coop/prop_synth_key.cpp
     src/coop/garbage_sync.cpp
     src/coop/weather_sync.cpp
     src/coop/weather_lightning.cpp
