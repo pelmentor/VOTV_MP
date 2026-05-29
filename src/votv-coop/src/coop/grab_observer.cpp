@@ -13,7 +13,6 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
-#include "ue_wrap/reflected_offset.h"
 #include "ue_wrap/types.h"
 
 #include <atomic>
@@ -77,14 +76,15 @@ void GrabObserver_PHC_SetTargetWithRotation(void* self, void* /*function*/, void
 }
 
 void GrabObserver_PHC_Release_PRE(void* self, void* /*function*/, void* /*params*/) {
-    // Pre-dispatch: read GrabbedComponent BEFORE PhysX clears it (offset +176
-    // confirmed by IDA decompile of ReleaseComponent_Impl @0x142D7C670).
+    // Pre-dispatch: read GrabbedComponent BEFORE PhysX clears it. The offset
+    // (+176, IDA-confirmed against ReleaseComponent_Impl @0x142D7C670) is
+    // encapsulated by ue_wrap::engine::ReadPhysicsHandleGrabbedComponent
+    // (A-4 2026-05-29 Principle 7).
     if (!self) {
         UE_LOGI("grab_hook[PHC.Release PRE]: handle=null");
         return;
     }
-    void* comp = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(self) + P::off::UPhysicsHandleComponent_GrabbedComponent);
+    void* comp = ue_wrap::engine::ReadPhysicsHandleGrabbedComponent(self);
     UE_LOGI("grab_hook[PHC.Release PRE]: handle=%p released_component=%p", self, comp);
 }
 
@@ -169,10 +169,11 @@ void GrabObserver_InpActEvt_use(void* self, void* /*function*/, void* /*params*/
     // Reading grabbing_actor here = state AT press time (post-observer fires
     // AFTER the BP graph, so it'll show NEW state). For PRE-state we'd need
     // a pre-observer; skipping for Stage 1 -- not actionable yet.
-    if (!self) return;
-    void* grabbing = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_grabbing_actor());
-    UE_LOGI("grab_hook[InpActEvt.use]: self=%p grabbing_actor(after)=%p", self, grabbing);
+    // A-4 (2026-05-29) Principle 7: state read goes through the ue_wrap
+    // wrapper; we only need .grabbingActor in this observer.
+    ue_wrap::engine::MainPlayerGrabState gs{};
+    if (!ue_wrap::engine::ReadMainPlayerGrabState(self, gs)) return;
+    UE_LOGI("grab_hook[InpActEvt.use]: self=%p grabbing_actor(after)=%p", self, gs.grabbingActor);
 }
 
 void GrabObserver_grab_Update(void* self, void* /*function*/, void* /*params*/) {
@@ -183,25 +184,20 @@ void GrabObserver_grab_Update(void* self, void* /*function*/, void* /*params*/) 
     static std::atomic<uint64_t> sCount{0};
     const uint64_t n = sCount.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n > 3 && (n % 30) != 0) return;
-    void* grabbing = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_grabbing_actor());
-    bool grabsHeavy = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_grabsHeavy());
-    bool heavy = *reinterpret_cast<bool*>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_Heavy());
-    float grabLen = *reinterpret_cast<float*>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_grabLen());
+    // A-4 (2026-05-29) Principle 7: all 4 state reads in one wrapper call.
+    ue_wrap::engine::MainPlayerGrabState gs{};
+    if (!ue_wrap::engine::ReadMainPlayerGrabState(self, gs)) return;
     UE_LOGI("grab_hook[grab.Update]: holding=%p grabsHeavy=%d Heavy=%d grabLen=%.1f (call #%llu)",
-            grabbing, grabsHeavy ? 1 : 0, heavy ? 1 : 0, grabLen,
+            gs.grabbingActor, gs.grabsHeavy ? 1 : 0, gs.heavy ? 1 : 0, gs.grabLen,
             static_cast<unsigned long long>(n));
 }
 
 void GrabObserver_grab_Finished_PRE(void* self, void* /*function*/, void* /*params*/) {
     // Pre-dispatch: read held prop BEFORE FinishedFunc clears it.
-    if (!self) return;
-    void* grabbing = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(self) + ue_wrap::reflected_offset::MainPlayer_grabbing_actor());
-    UE_LOGI("grab_hook[grab.Finished PRE]: was holding=%p", grabbing);
+    // A-4 (2026-05-29) Principle 7: state read goes through wrapper.
+    ue_wrap::engine::MainPlayerGrabState gs{};
+    if (!ue_wrap::engine::ReadMainPlayerGrabState(self, gs)) return;
+    UE_LOGI("grab_hook[grab.Finished PRE]: was holding=%p", gs.grabbingActor);
 }
 
 }  // namespace

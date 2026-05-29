@@ -538,6 +538,24 @@ bool ReleaseMainPlayerGrabIfHolding(void* localPlayer, void* actor) {
     return true;
 }
 
+void* ReadPhysicsHandleGrabbedComponent(void* phc) {
+    if (!phc || !R::IsLive(phc)) return nullptr;
+    void* comp = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(phc) + P::off::UPhysicsHandleComponent_GrabbedComponent);
+    return comp;  // may be nullptr if the PHC has no current grabbed component
+}
+
+bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out) {
+    out = {};
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    auto* base = reinterpret_cast<uint8_t*>(mainPlayer);
+    out.grabbingActor = *reinterpret_cast<void**>(base + ue_wrap::reflected_offset::MainPlayer_grabbing_actor());
+    out.grabsHeavy    = *reinterpret_cast<bool*>(base + ue_wrap::reflected_offset::MainPlayer_grabsHeavy());
+    out.heavy         = *reinterpret_cast<bool*>(base + ue_wrap::reflected_offset::MainPlayer_Heavy());
+    out.grabLen       = *reinterpret_cast<float*>(base + ue_wrap::reflected_offset::MainPlayer_grabLen());
+    return true;
+}
+
 void LogClassProperties(const wchar_t* className) {
     void* cls = R::FindClass(className);
     if (!cls) {

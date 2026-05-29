@@ -194,6 +194,32 @@ bool ReleaseMainPlayerGrabIfHolding(void* localPlayer, void* actor);
 // iff the cache is populated after the call. Game thread only.
 bool WarmupPhcReleaseCache();
 
+// UPhysicsHandleComponent::GrabbedComponent (the held UPrimitiveComponent*
+// at the fixed offset documented in sdk_profile.h, IDA-confirmed against
+// ReleaseComponent_Impl @0x142D7C670). Read once in PHC.ReleaseComponent
+// PRE-observers (diagnostic logging of what's about to be released).
+// Returns the component pointer, or nullptr if `phc` is null/dead or the
+// slot is empty.
+//
+// Principle 7 (A-4, 2026-05-29): replaces the inline raw struct-offset
+// deref in coop::grab_observer::GrabObserver_PHC_Release_PRE.
+// Game thread only.
+void* ReadPhysicsHandleGrabbedComponent(void* phc);
+
+// Snapshot of AmainPlayer_C grab-state UPROPERTIES read in a single
+// dispatch from adjacent reflected offsets. The 4 fields drive the
+// pickup/drop diagnostic logs in coop::grab_observer's E-press / grab
+// Timeline observers; gameplay/coop code never touches these offsets
+// directly (Principle 7). Returns false on null/dead pawn; `out` is
+// then zero-initialised. Game thread only.
+struct MainPlayerGrabState {
+    void*  grabbingActor;  // AmainPlayer_C::grabbing_actor (held prop, or null)
+    bool   grabsHeavy;     // AmainPlayer_C::grabsHeavy     (PCC heavy-grab BP flag)
+    bool   heavy;          // AmainPlayer_C::Heavy          (BP-side heavy state mirror)
+    float  grabLen;        // AmainPlayer_C::grabLen        (Timeline current grab length)
+};
+bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out);
+
 // Diagnostic: log every FProperty on a UClass (name, offset, size). Used to
 // verify a property offset we resolved via reflection (e.g. confirm we got
 // the real UMovementComponent::Velocity offset and not a sibling property
