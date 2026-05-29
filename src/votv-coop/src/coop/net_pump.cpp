@@ -373,9 +373,14 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         }
     }
 
-    // Per-slot pose drive. On HOST, iterate slots 1..kMaxPeers-1 (clients).
-    // On CLIENT, iterate slot 0 only (the host). Each slot has its own
-    // RemotePlayer puppet + spawn-retry backoff.
+    // Per-slot pose drive. Iterate ALL peer slots [0, kMaxPeers) and skip
+    // our OWN slot -- so each peer drives a puppet for every OTHER peer.
+    // (PR-FOUNDATION Tier 2 host-relay: a client now sees not just the host
+    // at slot 0 but also peer-clients at slots 2/3 once the host relays
+    // their poses (T2-2) + identities (T2-1, PlayerJoined). Before relay
+    // exists, TryGetRemotePose returns false for peer-client slots, so this
+    // is a harmless no-op at those slots.) Each slot has its own RemotePlayer
+    // puppet + spawn-retry backoff.
     {
         using namespace std::chrono;
         // Per-slot spawn retry timer (static-local: harmless across session
@@ -385,15 +390,19 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         // affects correctness).
         static std::array<steady_clock::time_point, coop::players::kMaxPeers> sNextSpawnAttempt{};
         const auto now = steady_clock::now();
-        const int firstSlot = isHost ? 1 : 0;
-        const int lastSlot  = isHost ? coop::players::kMaxPeers : 1;
         // Host self-assigns slot 0 in the registry. Idempotent setter so it's
         // fine to run every tick. Client LocalPeerId is set asynchronously by
         // the wire-layer AssignPeerSlot handler (event_feed.cpp).
         if (isHost) {
             coop::players::Registry::Get().SetLocalPeerId(coop::players::kPeerIdHost);
         }
-        for (int slot = firstSlot; slot < lastSlot; ++slot) {
+        const uint8_t localSlot = coop::players::Registry::Get().LocalPeerId();
+        for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
+            // Never drive a puppet for our own slot. On the host localSlot==0;
+            // on a client localSlot is its assigned slot (kPeerIdUnknown=0xFF
+            // until AssignPeerSlot lands, which matches no slot -> all slots
+            // eligible, but TryGetRemotePose gates spawning anyway).
+            if (static_cast<uint8_t>(slot) == localSlot) continue;
             coop::net::PoseSnapshot remote;
             bool isNew = false;
             if (!session.TryGetRemotePose(slot, remote, &isNew)) continue;

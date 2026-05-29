@@ -196,7 +196,14 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // context byte. Pad bytes coalesced back; LightningStrikePayload
 // shrinks 20->16 (it had no existing pad pre-v14 -- per the v14 comment
 // block above -- so the byte goes with no trailing pad).
-inline constexpr uint16_t kProtocolVersion = 16;
+//
+// v17 (2026-05-29) -- PR-FOUNDATION Tier 2 (host-relay topology) T2-1:
+// adds ReliableKind::PlayerJoined (=19), the host's cross-peer identity
+// broadcast so clients learn about EACH OTHER (not just the host). New
+// wire vocabulary only -- no struct changes. The version bump makes a
+// v16 peer's silent ignore of PlayerJoined (which would leave cross-peer
+// puppets unidentified) a visible ParseHeader mismatch instead.
+inline constexpr uint16_t kProtocolVersion = 17;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -377,6 +384,34 @@ enum class ReliableKind : uint8_t {
                        //     dropped it (stale-gen defense moved to
                        //     header senderEpoch). Payload:
                        //     AssignPeerSlotPayload (8 bytes, v16).
+    PlayerJoined = 19, // v17 (PR-FOUNDATION Tier 2, host-relay topology):
+                       //     HOST-only send. Carries a THIRD peer's identity
+                       //     to a client so clients learn about each other
+                       //     (not just about the host). MTA shape: mirrors
+                       //     CGame::InitialDataStream's two-way broadcast --
+                       //     reference/mtasa-blue/Server/.../CGame.cpp:1422
+                       //     (BroadcastOnlyJoined) + :1435 (per-existing-peer
+                       //     send to the joiner). When the host processes
+                       //     client B's Join it (1) sends PlayerJoined{B} to
+                       //     every OTHER connected client, and (2) sends
+                       //     PlayerJoined{X} to B for every already-known
+                       //     client X. Receiver calls EstablishMirrorForSlot
+                       //     (slot, eid) + stores the nick, so when B's
+                       //     relayed pose arrives (T2-2) the puppet spawns
+                       //     into an already-identified slot. Distinct from
+                       //     Join (Join = "I, the sender, am here"; PlayerJoined
+                       //     = "this OTHER peer exists"), so it carries an
+                       //     explicit `slot` field. Variable-length payload
+                       //     (parsed field-by-field, no fixed struct -- same
+                       //     approach as Join):
+                       //       [uint8 slot][uint32 eid][uint8 nicklen][nick UTF-8]
+                       //     slot is the described peer's coop::players slot
+                       //     (1..kMaxPeers-1; never 0 -- the host is delivered
+                       //     via AssignPeerSlot, not PlayerJoined). eid is that
+                       //     peer's local Player Element id (peer range,
+                       //     validated via IsAllowedPeerAllocatedEid on
+                       //     receipt). Stale-gen defense rides the header
+                       //     senderEpoch (v16) like every packet.
     // Slots 16/17 (NonPropEntityState/Destroy) retired 2026-05-27 -- the
     // chipPile/clump/trashBitsPile families now ride the existing Aprop_C
     // pipeline (PropSpawn / PropDestroy / PropPose / PropRelease) via the

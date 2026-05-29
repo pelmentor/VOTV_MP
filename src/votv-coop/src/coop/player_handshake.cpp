@@ -281,6 +281,160 @@ bool HandleJoinMessage(net::Session& session,
     } else {
         ue_wrap::hud_feed::Push(nick + L" joined the game");
     }
+    // PR-FOUNDATION Tier 2 T2-1 (host-relay): if WE are the host, this Join
+    // came from a client. Run the MTA InitialDataStream two-way cross-peer
+    // identity broadcast so every client learns about this joiner AND the
+    // joiner learns about every existing client. No-op on the client (it
+    // never relays). Pass the validated eid + sanitized nick we just
+    // resolved. Skipped when senderElementId is the 0 sentinel (the joiner
+    // had no Element yet -- its retry Join will carry a real eid and
+    // re-trigger this).
+    if (session.role() == net::Role::Host &&
+        senderElementId != 0u &&
+        senderElementId != coop::element::kInvalidId) {
+        BroadcastPlayerJoinedFromHost(session, senderSlot, senderElementId, nick);
+    }
+    return true;
+}
+
+namespace {
+
+// Build a PlayerJoined reliable payload describing peer `slot` (its eid +
+// nick). Wire layout (parsed field-by-field, same as Join):
+//   [uint8 slot][uint32 eid][uint8 nicklen][nick UTF-8]
+std::vector<uint8_t> BuildPlayerJoinedPayload(uint8_t slot, uint32_t eid,
+                                              const std::wstring& nick) {
+    std::vector<uint8_t> out;
+    out.resize(5);
+    out[0] = slot;
+    std::memcpy(out.data() + 1, &eid, 4);
+    std::vector<uint8_t> nickUtf8 = ToUtf8(nick);
+    if (nickUtf8.size() > 200) nickUtf8.resize(200);
+    out.push_back(static_cast<uint8_t>(nickUtf8.size()));
+    out.insert(out.end(), nickUtf8.begin(), nickUtf8.end());
+    return out;
+}
+
+}  // namespace
+
+void BroadcastPlayerJoinedFromHost(net::Session& session, int joinerSlot,
+                                   uint32_t joinerEid,
+                                   const std::wstring& joinerNick) {
+    if (session.role() != net::Role::Host) return;
+    if (joinerSlot < 1 || joinerSlot >= net::kMaxPeers) return;
+
+    auto& reg = coop::players::Registry::Get();
+
+    // (1) Announce the joiner to every OTHER connected client. MTA:
+    // CGame.cpp:1422-1426 BroadcastOnlyJoined(PlayerNotice, &Player).
+    {
+        const std::vector<uint8_t> p =
+            BuildPlayerJoinedPayload(static_cast<uint8_t>(joinerSlot),
+                                     joinerEid, joinerNick);
+        for (int x = 1; x < net::kMaxPeers; ++x) {
+            if (x == joinerSlot) continue;
+            if (!session.IsSlotReady(x)) continue;
+            session.SendReliableToSlot(x, net::ReliableKind::PlayerJoined,
+                                       p.data(), static_cast<int>(p.size()));
+        }
+    }
+
+    // (2) Tell the joiner about every already-known client. MTA:
+    // CGame.cpp:1435-1455 (build a PlayerList of all existing peers, send
+    // to the joiner). "Known" = the host has installed that peer's MIRROR
+    // Player Element (its Join was processed, so the cross-peer eid the
+    // peer minted is authoritative). A connected-but-not-yet-joined peer
+    // is skipped here; when ITS Join lands, step (1) of that Join announces
+    // it to this joiner. Order-independent + symmetric.
+    for (int x = 1; x < net::kMaxPeers; ++x) {
+        if (x == joinerSlot) continue;
+        if (!session.IsSlotReady(x)) continue;
+        coop::element::Player* el = reg.GetPlayerElement(static_cast<uint8_t>(x));
+        if (!el || !el->IsMirror()) continue;  // identity not yet known
+        const std::vector<uint8_t> p =
+            BuildPlayerJoinedPayload(static_cast<uint8_t>(x), el->GetId(),
+                                     NicknameForSlot(x));
+        session.SendReliableToSlot(joinerSlot, net::ReliableKind::PlayerJoined,
+                                   p.data(), static_cast<int>(p.size()));
+    }
+    UE_LOGI("player_handshake: host relayed PlayerJoined cross-peer identity "
+            "for joiner slot %d (eid=0x%08x)", joinerSlot, joinerEid);
+}
+
+bool HandlePlayerJoined(net::Session& session,
+                        const net::Session::ReliableMessage& msg) {
+    // Host originates PlayerJoined; it must never receive one. Reject on
+    // host + require the sender to be the host (senderPeerSlot==0) on the
+    // client -- a client peer crafting PlayerJoined could otherwise inject
+    // a forged peer identity.
+    if (session.role() == net::Role::Host) {
+        UE_LOGW("player_handshake: PlayerJoined received on host -- dropping");
+        return true;
+    }
+    if (msg.senderPeerSlot != 0) {
+        UE_LOGW("player_handshake: PlayerJoined from non-host senderPeerSlot=%d "
+                "-- dropping", msg.senderPeerSlot);
+        return true;
+    }
+    // Layout: [uint8 slot][uint32 eid][uint8 nicklen][nick UTF-8]. Minimum
+    // is 6 bytes (slot + eid + nicklen, empty nick).
+    if (msg.payloadLen < 6) {
+        UE_LOGW("player_handshake: PlayerJoined payload %zu B too short -- dropping",
+                static_cast<size_t>(msg.payloadLen));
+        return true;
+    }
+    const uint8_t describedSlot = msg.payload[0];
+    uint32_t describedEid = 0;
+    std::memcpy(&describedEid, msg.payload + 1, 4);
+    const uint8_t* nickStart = msg.payload + 5;
+    const size_t nickRemaining = msg.payloadLen - 5;
+
+    // The described peer must be a real client slot, and never OUR own slot
+    // (the host should never describe us to ourselves) nor the host slot 0
+    // (the host is delivered via AssignPeerSlot, not PlayerJoined).
+    if (describedSlot < 1 || describedSlot >= net::kMaxPeers) {
+        UE_LOGW("player_handshake: PlayerJoined slot=%u out of range -- dropping",
+                static_cast<unsigned>(describedSlot));
+        return true;
+    }
+    if (describedSlot == coop::players::Registry::Get().LocalPeerId()) {
+        UE_LOGW("player_handshake: PlayerJoined describes our own slot %u "
+                "-- dropping", static_cast<unsigned>(describedSlot));
+        return true;
+    }
+
+    // The described peer is a CLIENT, so its eid must be in the peer range.
+    // (Cross-peer eids are unique per slot thanks to the T2-0 banding.)
+    if (!coop::element::Registry::IsAllowedPeerAllocatedEid(describedEid)) {
+        UE_LOGW("player_handshake: PlayerJoined slot=%u eid=0x%08x not in peer "
+                "range -- dropping mirror install", static_cast<unsigned>(describedSlot),
+                describedEid);
+        return true;
+    }
+
+    // Install the peer's mirror Player Element so a subsequently-relayed
+    // pose/ItemActivate bearing describedEid resolves via Registry::Get.
+    coop::players::Registry::Get().EstablishMirrorForSlot(describedSlot, describedEid);
+
+    // Cache + sanitize the nick. If the puppet for this slot is already
+    // spawned (a relayed pose beat the relayed identity), label it now;
+    // otherwise SetNickname runs when the puppet spawns + the cached nick
+    // is read. Mirrors HandleJoinMessage's nickname handling.
+    std::wstring nick = g_remoteNickBySlot[describedSlot];
+    if (nickRemaining > 0) {
+        const int len = nickStart[0];
+        if (1 + len <= static_cast<int>(nickRemaining) && len > 0)
+            nick = FromUtf8(nickStart + 1, len);
+    }
+    nick = SanitizeNickname(nick);
+    g_remoteNickBySlot[describedSlot] = nick;
+    if (RemotePlayer* p = coop::players::Registry::Get().Puppet(describedSlot)) {
+        p->SetNickname(nick);
+    }
+    ue_wrap::hud_feed::Push(nick + L" joined the game");
+    UE_LOGI("player_handshake: client installed cross-peer identity slot=%u "
+            "eid=0x%08x nick='%ls'", static_cast<unsigned>(describedSlot),
+            describedEid, nick.c_str());
     return true;
 }
 

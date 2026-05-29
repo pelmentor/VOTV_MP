@@ -775,6 +775,11 @@ void Update(net::Session& session, void* localPlayer) {
             coop::player_handshake::HandleAssignPeerSlot(session, msg);
             break;
         }
+        case net::ReliableKind::PlayerJoined: {
+            // PR-FOUNDATION Tier 2 T2-1: host-relayed cross-peer identity.
+            coop::player_handshake::HandlePlayerJoined(session, msg);
+            break;
+        }
         default: {
             // Audit-fix 2026-05-25 LATE +5h: log-and-drop unknown ReliableKind
             // values instead of silently discarding. A peer running a newer

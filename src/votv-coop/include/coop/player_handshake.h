@@ -90,4 +90,29 @@ bool HandleJoinMessage(coop::net::Session& session,
 bool HandleAssignPeerSlot(coop::net::Session& session,
                           const coop::net::Session::ReliableMessage& msg);
 
+// HOST-side: cross-peer identity broadcast for the host-relay topology
+// (PR-FOUNDATION Tier 2 T2-1). Called from HandleJoinMessage once the
+// host has established the joiner's mirror + stored its nick. Performs
+// the MTA InitialDataStream two-way exchange:
+//   (1) sends PlayerJoined{joiner} to every OTHER connected client, and
+//   (2) sends PlayerJoined{X} to the joiner for every already-known
+//       client X (X != joiner, X != host).
+// No-op unless this peer is the host. `joinerSlot` is the slot whose
+// Join just arrived; `joinerEid` its Player Element id; `joinerNick`
+// its (already-sanitized) nickname.
+void BroadcastPlayerJoinedFromHost(coop::net::Session& session,
+                                   int joinerSlot,
+                                   uint32_t joinerEid,
+                                   const std::wstring& joinerNick);
+
+// CLIENT-side: handle a delivered reliable PlayerJoined message
+// describing a THIRD peer (another client). Range-validates the eid,
+// installs the peer's mirror Player Element via EstablishMirrorForSlot,
+// and caches its nickname so the puppet (spawned later on the first
+// relayed pose) is born identified. Drops on host side (host originates
+// these; never receives them). Returns true if recognized; false on
+// payload-too-short.
+bool HandlePlayerJoined(coop::net::Session& session,
+                        const coop::net::Session::ReliableMessage& msg);
+
 }  // namespace coop::player_handshake
