@@ -47,15 +47,27 @@ public:
         return value;
     }
 
+    // Internal metadata cache entry shared across every ParamFrame for the
+    // same UFunction*. Built lazily on first construction for a given fn,
+    // then reused as a read-only pointer by subsequent ParamFrames -- so
+    // steady-state ParamFrame construction allocates ONLY buf_ (the
+    // per-call zeroed frame), not the offsets vector or per-param wstrings.
+    // Audit fix 2026-05-29 D4-1: prior ctor allocated 2 vectors + per-param
+    // wstrings on every call, churning malloc/free on the per-snapshot
+    // Drive() / per-tick observer dispatch paths.
+    struct Metadata {
+        int32_t frameSize = -1;  // < 0 => malformed UFunction; ParamFrame stays invalid
+        std::vector<std::pair<std::wstring, int32_t>> offsets;
+    };
+
 private:
     // Param name -> frame offset, walked from the UFunction's FProperty chain ONCE
-    // in the ctor (not per Set/Get -- that re-walked the chain + heap-allocated a
-    // vector on every argument, churning on the per-snapshot Drive() path).
+    // (cached process-wide; see ParamFrame::Metadata above).
     int32_t OffsetOf(const wchar_t* name) const;
 
     void* fn_ = nullptr;
+    const Metadata* meta_ = nullptr;
     std::vector<uint8_t> buf_;
-    std::vector<std::pair<std::wstring, int32_t>> offsets_;
 };
 
 // Invoke `frame` on `object` (reflection::CallFunction under the hood). OUT
