@@ -118,6 +118,25 @@ public:
     // could carry kInvalidId, which the caller skips anyway).
     coop::element::ElementId LocalPlayerElementId() const;
 
+    // v14 (B1, 2026-05-29): the LOCAL peer's Player Element syncContext
+    // byte, or 0 if not yet allocated. Lock-free atomic read (published
+    // from the game thread on each EnsurePlayerElement_ / mirror swap).
+    // Use this to stamp `senderContext` on outbound wire packets that
+    // already carry `senderElementId`; receivers compare against their
+    // mirror's stored context for stale-generation detection.
+    uint8_t LocalPlayerSyncContext() const;
+
+    // v14 (B1 v2, 2026-05-29 audit fix): atomic-paired accessor for
+    // (eid, ctx). Use this from CROSS-THREAD senders (notably the GNS
+    // net-thread AssignPeerSlot stamp in session.cpp) where two
+    // separate atomic loads could yield a torn pair if the game
+    // thread runs DropPlayerElement_ between them. Game-thread-only
+    // senders (item_activate, weather_*, player_handshake Join) can
+    // safely use the two single accessors because they ARE the
+    // publisher thread.
+    void LocalPlayerIdentity(coop::element::ElementId& outEid,
+                              uint8_t& outCtx) const;
+
     // ---- A4 (2026-05-29) mirror exchange for wire-side ElementId ----
 
     // Wire-driven mirror creation. Called by receivers of the connect-edge
@@ -138,7 +157,14 @@ public:
     // wireEid is kInvalidId / 0 / out of range, or if Registry::RegisterMirror
     // failed (slot collision -- duplicate handshake or wire-id reuse bug
     // upstream). Game thread only.
-    bool EstablishMirrorForSlot(uint8_t peerSlot, coop::element::ElementId wireEid);
+    //
+    // v14 (B1, 2026-05-29): `wireContext` is the sender's `Element::
+    // GetSyncContext()` byte carried in the handshake (AssignPeerSlot.
+    // hostContext or Join.senderContext). The mirror is stamped with
+    // this byte so subsequent wire packets bearing the sender's
+    // senderContext pass the receiver-side context match.
+    bool EstablishMirrorForSlot(uint8_t peerSlot, coop::element::ElementId wireEid,
+                                uint8_t wireContext);
 
 private:
     // Element shadow lifetime helpers (file-local; see .cpp).

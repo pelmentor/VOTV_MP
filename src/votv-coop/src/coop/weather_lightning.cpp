@@ -65,11 +65,16 @@ void OnSpawnPostLightning(void* /*self*/, void* /*function*/, void* params) {
     const uint8_t* xform = reinterpret_cast<const uint8_t*>(params) + g_spawnTransformParamOff;
     coop::net::LightningStrikePayload p{};
     // v13 (A4 2026-05-29): host stamps its own local Player Element id.
+    // v14 (B1): + paired senderContext.
     {
         const coop::element::ElementId selfEid =
             coop::players::Registry::Get().LocalPlayerElementId();
         p.senderElementId =
             (selfEid == coop::element::kInvalidId) ? 0u : selfEid;
+        p.senderContext =
+            (selfEid == coop::element::kInvalidId)
+                ? 0u
+                : coop::players::Registry::Get().LocalPlayerSyncContext();
     }
     p.locX = *reinterpret_cast<const float*>(xform + 0x10);
     p.locY = *reinterpret_cast<const float*>(xform + 0x14);

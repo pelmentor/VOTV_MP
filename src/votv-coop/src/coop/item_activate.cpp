@@ -168,6 +168,11 @@ bool BuildPayloadFromLocal(void* mp, coop::net::ItemActivatePayload& out, coop::
             coop::players::Registry::Get().LocalPlayerElementId();
         out.senderElementId =
             (selfEid == coop::element::kInvalidId) ? 0u : selfEid;
+        // v14 (B1): paired senderContext byte. 0 when no Element yet.
+        out.senderContext =
+            (selfEid == coop::element::kInvalidId)
+                ? 0u
+                : coop::players::Registry::Get().LocalPlayerSyncContext();
     }
     out.state           = flashlight ? 1 : 0;
     out.flags           = 0;  // Case (b) -- no actor key

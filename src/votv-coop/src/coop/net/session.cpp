@@ -286,13 +286,17 @@ void Session::HandleConnStatusChanged(void* info) {
             // in which case the read returns kInvalidId, and the client
             // receiver falls back to non-mirror routing (the field's
             // contract documents 0/kInvalidId as "sender had no Element").
-            p.hostElementId =
-                coop::players::Registry::Get().LocalPlayerElementId();
+            // v14 (B1 v2 audit fix #1): use the atomic-paired accessor so
+            // a game-thread DropPlayerElement_ can't tear (eid, ctx) into
+            // a coherent eid + stale ctx pair on this net-thread read.
+            coop::players::Registry::Get().LocalPlayerIdentity(
+                p.hostElementId, p.hostContext);
             if (!SendReliableToSlot(slot, ReliableKind::AssignPeerSlot, &p, sizeof(p))) {
                 UE_LOGW("net: SendReliableToSlot(AssignPeerSlot=%d) failed", slot);
             } else {
-                UE_LOGI("net: sent AssignPeerSlot slot=%d hostElementId=0x%08x to client",
-                        slot, p.hostElementId);
+                UE_LOGI("net: sent AssignPeerSlot slot=%d hostElementId=0x%08x "
+                        "hostContext=0x%02x to client",
+                        slot, p.hostElementId, static_cast<unsigned>(p.hostContext));
             }
         }
         return;

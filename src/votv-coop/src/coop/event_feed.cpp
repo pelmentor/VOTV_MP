@@ -33,6 +33,41 @@ namespace {
 // the "<X> left the game" hud message on the disconnect transition.
 std::array<bool, net::kMaxPeers> g_lastConnectedBySlot{};
 
+// v14 (B1, 2026-05-29): check the wire-stamped senderContext against the
+// mirror Element's currently-stored syncContext byte. Returns true when
+// no compare is possible (no senderElementId, or no mirror) so the
+// receiver falls back to existing routing without stale-generation
+// defense. Returns true when the bytes match. Logs + returns false on
+// mismatch -- caller should drop the packet. Centralized here so every
+// eid-carrying reliable kind uses the same shape.
+bool VerifySenderContext(uint32_t senderElementId, uint8_t senderContext,
+                          const char* kind) {
+    if (senderElementId == 0u ||
+        senderElementId == coop::element::kInvalidId) {
+        return true;  // 0 sentinel; no compare. peer-slot fallback applies.
+    }
+    auto* el = coop::element::Registry::Get().Get(senderElementId);
+    if (!el) return true;  // mirror not yet installed (boot/seed race)
+    const uint8_t mirrorCtx = el->GetSyncContext();
+    // B1 v2 audit fix (Finding #2): treat 0 on EITHER side as "no
+    // context known yet" -- pass through without compare. The sender-
+    // side guard already short-circuits to 0 when the local Element
+    // hasn't been allocated; the mirror may also have been seeded with
+    // 0 if the handshake stamp happened to land in the boot window
+    // (host's first AssignPeerSlot sent before its own
+    // EnsurePlayerElement_ ran -- now atomic-paired, but defense in
+    // depth on the receiver side). Without this short-circuit, a
+    // 0-vs-non-0 compare would drop legitimate first-after-boot
+    // packets when sender's local Element finishes allocation.
+    if (senderContext == 0u || mirrorCtx == 0u) return true;
+    if (mirrorCtx == senderContext) return true;
+    UE_LOGW("event_feed: %s senderContext mismatch (wire=0x%02x mirror=0x%02x "
+            "senderElementId=0x%08x) -- dropping stale-generation packet",
+            kind, static_cast<unsigned>(senderContext),
+            static_cast<unsigned>(mirrorCtx), senderElementId);
+    return false;
+}
+
 }  // namespace
 
 void SetLocalNickname(const std::wstring& nick) {
@@ -397,6 +432,14 @@ void Update(net::Session& session, void* localPlayer) {
                         selfEchoByEid ? "eid" : "peerSlot-fallback");
                 break;
             }
+            // v14 (B1): stale-generation defense. If the sender's wire
+            // context doesn't match the mirror Element's context, this
+            // packet was minted by a now-disconnected incarnation of the
+            // sender and a fresh Element took its id; drop.
+            if (!VerifySenderContext(p.senderElementId, p.senderContext,
+                                      "ItemActivate")) {
+                break;
+            }
             // Resolve senderElementId -> peer slot via Registry::Get. Falls
             // back to msg.senderPeerSlot when the mirror hasn't been
             // established yet (early boot before Join/AssignPeerSlot landed).
@@ -466,6 +509,11 @@ void Update(net::Session& session, void* localPlayer) {
                         msg.senderPeerSlot, p.senderElementId);
                 break;
             }
+            // v14 (B1): stale-generation defense.
+            if (!VerifySenderContext(p.senderElementId, p.senderContext,
+                                      "RedSky")) {
+                break;
+            }
             if (p.state != 0 && p.state != 1) {
                 UE_LOGW("event_feed: RedSky state=%u out of range -- dropping",
                         static_cast<unsigned>(p.state));
@@ -502,6 +550,11 @@ void Update(net::Session& session, void* localPlayer) {
                 UE_LOGW("event_feed: LightningStrike from non-host "
                         "senderPeerSlot=%d (senderElementId=0x%08x) -- dropping",
                         msg.senderPeerSlot, p.senderElementId);
+                break;
+            }
+            // v14 (B1): stale-generation defense.
+            if (!VerifySenderContext(p.senderElementId, p.senderContext,
+                                      "LightningStrike")) {
                 break;
             }
             // Trust boundary: validate loc finite + within sane bounds.
@@ -546,6 +599,11 @@ void Update(net::Session& session, void* localPlayer) {
                 UE_LOGW("event_feed: WeatherState from non-host "
                         "senderPeerSlot=%d (senderElementId=0x%08x) -- dropping",
                         msg.senderPeerSlot, p.senderElementId);
+                break;
+            }
+            // v14 (B1): stale-generation defense.
+            if (!VerifySenderContext(p.senderElementId, p.senderContext,
+                                      "WeatherState")) {
                 break;
             }
             // Trust-boundary: validate floats finite + within sane range.

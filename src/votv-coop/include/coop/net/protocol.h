@@ -109,7 +109,28 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 //     boundary. Element mirror creation handshake lives in AssignPeerSlot
 //     + Join above. ItemActivatePayload grows 24->28B; WeatherStatePayload
 //     20->24B; RedSky + LightningStrike stay the same total size.
-inline constexpr uint16_t kProtocolVersion = 13;
+//
+// v14 (2026-05-29) -- B1 syncContext on wire (MTA m_ucSyncTimeContext
+// adoption). Each packet that already carries `senderElementId` (or
+// `hostElementId` for AssignPeerSlot) now also carries a `senderContext`
+// uint8 (or `hostContext` for AssignPeerSlot) -- the 8-bit generation
+// counter from the SENDER's local Player Element (Element::GetSyncContext).
+// Receiver compares the wire byte against its mirror's local context (set
+// at RegisterMirror via EstablishMirrorForSlot from the handshake byte)
+// and drops the packet on mismatch. Defends against ElementId reuse:
+// when a peer disconnects and reconnects on the same slot, their NEW
+// Player Element gets a fresh per-process-monotonic context, so stale
+// pre-disconnect packets stamped with the OLD context are visibly
+// distinguishable from the new generation's packets. Without this byte
+// an in-flight ItemActivate from the previous incarnation could be
+// routed to the new puppet and toggle its flashlight at the wrong moment.
+// Layout: 5 of 6 packets reuse existing `_pad` bytes (no size change);
+// LightningStrikePayload grows 16->20B (no existing pad to steal).
+// Sender stamps `senderContext = Registry::Get(selfEid)->GetSyncContext()`
+// (via the lock-free `players::Registry::LocalPlayerSyncContext()`
+// accessor that mirrors LocalPlayerElementId). Receivers fall through
+// (no compare) when senderElementId is the 0 sentinel (boot/seed race).
+inline constexpr uint16_t kProtocolVersion = 14;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -132,15 +153,19 @@ enum class MsgType : uint8_t {
 // Join announces a player (its nickname) so the peer can post "<nick> joined" and
 // label the remote player. (Chat text is a future ReliableKind.)
 enum class ReliableKind : uint8_t {
-    Join = 1,         // v13 payload: [uint32 senderElementId][uint8 nicklen][nick UTF-8].
-                      //     senderElementId is the SENDER's local Player Element id
-                      //     (host range from host; peer range from client). Receiver
-                      //     RegisterMirrors that id in the sender's puppet slot via
-                      //     players::Registry::EstablishMirrorForSlot, then SetNickname
-                      //     on the puppet. Pre-v13 layout was [uint8 nicklen][nick];
-                      //     the protocol bump enforces v13-only at ParseHeader so a
-                      //     stale pre-v13 Join can't slip through with a misaligned
-                      //     nicklen interpreted as the high byte of a senderElementId.
+    Join = 1,         // v14 payload: [uint32 senderElementId][uint8 senderContext]
+                      //     [uint8 nicklen][nick UTF-8]. senderElementId is the
+                      //     SENDER's local Player Element id (host range from host;
+                      //     peer range from client). senderContext is the SENDER's
+                      //     local Element::GetSyncContext() byte. Receiver calls
+                      //     players::Registry::EstablishMirrorForSlot(senderSlot,
+                      //     senderElementId, senderContext) so the new mirror is
+                      //     stamped with the sender's current generation, then
+                      //     SetNickname on the puppet. Pre-v14 layout was
+                      //     [uint32 senderElementId][uint8 nicklen][nick]; the
+                      //     protocol bump enforces v14-only at ParseHeader so a
+                      //     stale pre-v14 Join can't slip through with the
+                      //     nicklen byte interpreted as a context.
     PropRelease = 2,  // v5: host released a held prop. Payload: PropReleasePayload
                       //     (WireKey + FVector linVel cm/s + FVector angVel deg/s).
                       //     Receiver: SetSimulatePhysics(true) +
@@ -646,14 +671,16 @@ struct ItemActivatePayload {
     uint8_t  state;           // 0 = off / inactive, 1 = on / active
     uint8_t  flags;           // bit0: has_actor_key (1 = use actorKeyHash)
     uint8_t  mode;            // v6: mp.flashlightMode (0=default spread, 1=focused, ...)
-    uint8_t  _pad;            // v13: alignment for actorKeyHash
+    uint8_t  senderContext;   // v14 (B1): SENDER's local Player Element::GetSyncContext.
+                              //     Receiver compares vs mirror's stored context;
+                              //     drop on mismatch. Was `_pad` in v13.
     uint32_t actorKeyHash;    // CRC32(Aprop_C::Key string) when flags.has_actor_key=1; 0 otherwise
     float    intensity;       // v6: light_R.Intensity AFTER BP ran (Unitless scale ~0..10)
     float    outerConeAngle;  // v6: light_R.OuterConeAngle (degrees; ~40 default, ~12 focused)
     float    innerConeAngle;  // v6: light_R.InnerConeAngle (degrees; ~0 default, varies)
 };
 static_assert(sizeof(ItemActivatePayload) == 28,
-              "ItemActivatePayload must be exactly 28 bytes (v13 wire-format)");
+              "ItemActivatePayload must be exactly 28 bytes (v14 wire-format)");
 static_assert(sizeof(ItemActivatePayload) <= 256 - 20 - 8,
               "ItemActivatePayload must fit in one reliable datagram");
 
@@ -678,11 +705,15 @@ inline constexpr uint8_t kItemActivateFlag_HasActorKey = 0x01;
 // can then be routed and trust-validated symmetrically on both peers.
 struct AssignPeerSlotPayload {
     uint8_t  slot;            // 1..kMaxPeers-1
-    uint8_t  _pad[3];
+    uint8_t  hostContext;     // v14 (B1): host's Player Element::GetSyncContext.
+                              //     Client stamps this onto the mirror it
+                              //     creates so subsequent host-stamped packets
+                              //     pass the senderContext compare.
+    uint8_t  _pad[2];
     uint32_t hostElementId;   // v13: host's local Player Element id
 };
 static_assert(sizeof(AssignPeerSlotPayload) == 8,
-              "AssignPeerSlotPayload must be exactly 8 bytes (v13)");
+              "AssignPeerSlotPayload must be exactly 8 bytes (v14)");
 
 // Phase 5W Inc1 (2026-05-26): host-authoritative weather state push. The host
 // reads these fields off the live AdaynightCycle_C after its own scheduler
@@ -724,13 +755,15 @@ struct WeatherStatePayload {
     // host trust-boundary; drops if mirror missing OR PeerSlot != 0.
     uint32_t senderElementId;
     uint8_t  flags;              // see bit layout above
-    uint8_t  _pad[3];            // 4-byte align the float block
+    uint8_t  senderContext;      // v14 (B1): host's Element::GetSyncContext.
+                                 //     Receiver compares vs mirror context.
+    uint8_t  _pad[2];            // 4-byte align the float block
     float    rainStrength;        // AdaynightCycle_C::rainStrength @0x0404
     float    rainLightningChance; // AdaynightCycle_C::rainLightningChance @0x0408
     float    rainDeactivateChance;// AdaynightCycle_C::rainDeactivateChance @0x040C
     float    rainWindSpeed;       // AdaynightCycle_C::rainWindSpeed @0x041C
 };
-static_assert(sizeof(WeatherStatePayload) == 24, "WeatherStatePayload must be 24 bytes (v13)");
+static_assert(sizeof(WeatherStatePayload) == 24, "WeatherStatePayload must be 24 bytes (v14)");
 static_assert(sizeof(WeatherStatePayload) <= 256 - 20 - 8,
               "WeatherStatePayload must fit in one reliable datagram");
 
@@ -756,9 +789,10 @@ struct RedSkyPayload {
     // local Player Element id; receiver validates PeerSlot()==0.
     uint32_t senderElementId;
     uint8_t  state;          // 0 = revert color curves, 1 = red
-    uint8_t  _pad[3];
+    uint8_t  senderContext;  // v14 (B1): host's Element::GetSyncContext
+    uint8_t  _pad[2];
 };
-static_assert(sizeof(RedSkyPayload) == 8, "RedSkyPayload must be 8 bytes (v13)");
+static_assert(sizeof(RedSkyPayload) == 8, "RedSkyPayload must be 8 bytes (v14)");
 static_assert(sizeof(RedSkyPayload) <= 256 - 20 - 8,
               "RedSkyPayload must fit in one reliable datagram");
 
@@ -774,9 +808,11 @@ struct LightningStrikePayload {
     // v13 (A4 2026-05-29): was uint8_t peerSessionId + 3B pad. Now
     // sender's local Player Element id; receiver validates PeerSlot()==0.
     uint32_t senderElementId;
+    uint8_t  senderContext;    // v14 (B1): host's Element::GetSyncContext
+    uint8_t  _pad[3];          // 4-byte align the float block (v14: was no pad)
     float    locX, locY, locZ; // world cm
 };
-static_assert(sizeof(LightningStrikePayload) == 16, "LightningStrikePayload must be 16 bytes (v13)");
+static_assert(sizeof(LightningStrikePayload) == 20, "LightningStrikePayload must be 20 bytes (v14)");
 static_assert(sizeof(LightningStrikePayload) <= 256 - 20 - 8,
               "LightningStrikePayload must fit in one reliable datagram");
 

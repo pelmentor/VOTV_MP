@@ -133,12 +133,23 @@ public:
     // which makes id-reuse safe (an id reused after destroy gets a fresh
     // context, so packets meant for the OLD generation are visibly stale).
     //
-    // Not yet consumed by any wire packet in the PoC -- the field is reserved
-    // for the v12 protocol bump that retires `peerSessionId`/`WireKey` from
-    // runtime packets in favor of (ElementId, context). Mirrors MTA's wire
-    // convention: send the context with every packet that names the element.
-    uint8_t GetSyncContext() const { return m_syncContext; }
-    void    BumpSyncContext()      { ++m_syncContext; }
+    // v14 (B1, 2026-05-29) -- wire-side adoption: every reliable packet
+    // carrying a senderElementId (or hostElementId for AssignPeerSlot)
+    // also carries the sender's GetSyncContext byte. Receivers compare
+    // against the local mirror's context (set at RegisterMirror via
+    // players::Registry::EstablishMirrorForSlot using the handshake's
+    // context byte). Mismatch -> drop. Fresh local Player Elements get
+    // a per-process-monotonic context via Registry's allocation path so
+    // a disconnect/reconnect on the same eid gets a distinguishable
+    // generation. See coop/net/protocol.h's v14 block for the full
+    // wire-format derivation.
+    uint8_t GetSyncContext() const     { return m_syncContext; }
+    void    BumpSyncContext()          { ++m_syncContext; }
+    // Overwrite the context byte directly. Called by the owning subsystem
+    // at construction (fresh Element: from per-process monotonic counter;
+    // mirror: from the handshake byte). BumpSyncContext is the steady-
+    // state mutator; this is the "stamp at creation" mutator.
+    void SetSyncContext(uint8_t ctx)   { m_syncContext = ctx; }
 
     // True if this Element was created as a CLIENT-SIDE MIRROR of a host-
     // allocated ElementId (registered via Registry::RegisterMirror). The

@@ -14,17 +14,56 @@
 #include <string>
 
 namespace {
-// A4 audit finding 2026-05-29 (CRITICAL #1): the AssignPeerSlot stamp in
-// coop/net/session.cpp::HandleConnStatusChanged runs on the GNS net thread,
-// not the game thread. Reading through the non-atomic
-// `unique_ptr<Player>` in `playerBySlot_[localPeerId_]` from that thread
-// is data-race UB even though the underlying ElementId is naturally
-// uint32-atomic on x86-64. Fix: mirror the local Element id into an
-// atomic latch, written from the game thread on alloc/free and read
-// lock-free from any thread by `Registry::LocalPlayerElementId()`.
-std::atomic<coop::element::ElementId> g_localPlayerEidAtomic{
-    coop::element::kInvalidId
-};
+// A4 audit finding 2026-05-29 (CRITICAL #1) + B1 audit finding (Issue #1):
+// the AssignPeerSlot stamp in coop/net/session.cpp::HandleConnStatusChanged
+// runs on the GNS net thread, not the game thread. Reading through the non-
+// atomic `unique_ptr<Player>` in `playerBySlot_[localPeerId_]` from that
+// thread is data-race UB. Original A4 fix used two separate atomics for
+// (eid, context); B1's audit (2026-05-29 Finding #1) flagged that a
+// game-thread DropPlayerElement_ between the net-thread's TWO loads
+// would stamp a coherent eid with a stale (cleared) context byte.
+// B1 v2 fix: pack (eid:32, ctx:8) into ONE uint64 atomic so a single
+// load returns a coherent pair, eliminating the inter-load race.
+// Layout: (uint64_t(eid) << 32) | uint64_t(ctx).
+inline constexpr uint64_t kInvalidIdCtxPair =
+    (uint64_t(coop::element::kInvalidId) << 32);
+std::atomic<uint64_t> g_localPlayerIdentityAtomic{kInvalidIdCtxPair};
+
+inline uint64_t PackIdentity_(coop::element::ElementId eid, uint8_t ctx) {
+    return (uint64_t(eid) << 32) | uint64_t(ctx);
+}
+inline coop::element::ElementId UnpackEid_(uint64_t v) {
+    return static_cast<coop::element::ElementId>(v >> 32);
+}
+inline uint8_t UnpackCtx_(uint64_t v) {
+    return static_cast<uint8_t>(v & 0xFFu);
+}
+
+// v14 (B1): per-process monotonic generation counter for fresh Player
+// Element syncContexts. Each fresh local Player Element gets the
+// post-increment value (skipping 0 so 0 unambiguously means "no
+// Element yet" on the wire). Persists across Session::Stop/Start in
+// the same process so rapid disconnect+reconnect on the same eid gets
+// a distinguishable generation byte.
+//
+// Wrap: low-8-bit cycle is 255 (0 is skipped). After 255 reconnects
+// within ONE process lifetime an old context COULD alias the current
+// one and a stale in-flight packet from that ancient generation could
+// pass the receiver-side compare. Harmless in practice (LAN coop +
+// reconnect storms of that magnitude are pathological); not a problem
+// to engineer around for v1.
+std::atomic<uint32_t> g_localContextGen{0};
+
+uint8_t NextLocalContext_() {
+    // Increment-and-take; skip 0 because 0 is the "no Element" sentinel
+    // on the wire (paired with senderElementId == 0).
+    for (;;) {
+        const uint32_t v = g_localContextGen.fetch_add(1,
+                                std::memory_order_relaxed) + 1;
+        const uint8_t ctx = static_cast<uint8_t>(v & 0xFF);
+        if (ctx != 0) return ctx;
+    }
+}
 }  // namespace
 
 namespace coop::players {
@@ -155,12 +194,38 @@ coop::element::ElementId Registry::LocalPlayerElementId() const {
     // GNS net-thread AssignPeerSlot stamp in session.cpp) get a well-
     // defined value. The atomic is published from EnsurePlayerElement_ /
     // DropPlayerElement_ under the game-thread invariant. See namespace
-    // comment at top of file for the audit context.
-    return g_localPlayerEidAtomic.load(std::memory_order_acquire);
+    // comment at top of file for the audit context. B1 v2: backed by
+    // the combined (eid, ctx) uint64 atomic; extracts the eid half.
+    return UnpackEid_(
+        g_localPlayerIdentityAtomic.load(std::memory_order_acquire));
+}
+
+uint8_t Registry::LocalPlayerSyncContext() const {
+    // Companion to LocalPlayerElementId; lock-free read of the local
+    // Player Element's syncContext byte. Stays 0 when no local Element
+    // exists (boot/seed window) -- matches the wire convention that a
+    // 0 byte alongside a 0 senderElementId means "no element yet".
+    // B1 v2: extracts the ctx half of the combined identity atomic.
+    return UnpackCtx_(
+        g_localPlayerIdentityAtomic.load(std::memory_order_acquire));
+}
+
+void Registry::LocalPlayerIdentity(coop::element::ElementId& outEid,
+                                    uint8_t& outCtx) const {
+    // B1 v2 (audit fix #1): atomic-paired accessor. Use this when both
+    // eid AND context are needed at the same instant -- e.g. the AssignPeerSlot
+    // stamp on the GNS net thread, where a game-thread DropPlayerElement_
+    // between two separate loads could yield an eid/ctx tuple from
+    // different generations.
+    const uint64_t v =
+        g_localPlayerIdentityAtomic.load(std::memory_order_acquire);
+    outEid = UnpackEid_(v);
+    outCtx = UnpackCtx_(v);
 }
 
 bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
-                                       coop::element::ElementId wireEid) {
+                                       coop::element::ElementId wireEid,
+                                       uint8_t wireContext) {
     if (peerSlot >= kMaxPeers) {
         UE_LOGW("players::Registry: EstablishMirrorForSlot peerSlot=%u out of range "
                 "(max=%u) -- dropping",
@@ -175,9 +240,18 @@ bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
     }
     // Idempotent: if the slot already carries an Element whose id matches
     // wireEid, nothing to do. AssignPeerSlot is sent once but a reconnect
-    // edge could legitimately re-fire; treat duplicates as no-ops.
+    // edge could legitimately re-fire; treat duplicates as no-ops. If the
+    // wireContext changed between handshakes (sender reset its Element),
+    // update the existing mirror's context in place rather than rebuild.
     if (auto* existing = playerBySlot_[peerSlot].get()) {
         if (existing->GetId() == wireEid && existing->IsMirror()) {
+            if (existing->GetSyncContext() != wireContext) {
+                existing->SetSyncContext(wireContext);
+                UE_LOGI("players::Registry: refreshed MIRROR Player Element "
+                        "eid=0x%08x peerSlot=%u context=0x%02x",
+                        wireEid, static_cast<unsigned>(peerSlot),
+                        static_cast<unsigned>(wireContext));
+            }
             return true;
         }
     }
@@ -197,6 +271,10 @@ bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
     // the slot map FIRST, then RegisterMirror; on failure drain the slot
     // outside the lock so ~Element early-returns (m_id stayed kInvalidId).
     auto mirror = std::make_unique<coop::element::Player>(peerSlot, puppet);
+    // v14 (B1): stamp the wire-carried context BEFORE RegisterMirror so a
+    // subsequent senderContext compare against this mirror succeeds even
+    // if a packet arrives between RegisterMirror and the log line below.
+    mirror->SetSyncContext(wireContext);
     coop::element::Player* raw = mirror.get();
     playerBySlot_[peerSlot] = std::move(mirror);
     auto& reg = coop::element::Registry::Get();
@@ -212,14 +290,16 @@ bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
     }
     // Defensive: if the local slot ever gets mirrored (not done today --
     // EstablishMirrorForSlot is called for remote slots only), publish
-    // the mirror's wireEid into the cross-thread atomic snapshot for
-    // consistency with EnsurePlayerElement_'s publish.
+    // the mirror's wireEid + context into the cross-thread atomic
+    // snapshot for consistency with EnsurePlayerElement_'s publish.
     if (peerSlot == localPeerId_) {
-        g_localPlayerEidAtomic.store(wireEid, std::memory_order_release);
+        g_localPlayerIdentityAtomic.store(PackIdentity_(wireEid, wireContext),
+                                          std::memory_order_release);
     }
     UE_LOGI("players::Registry: established MIRROR Player Element eid=0x%08x "
-            "for peerSlot=%u (puppet=%p; isHostRange=%s)",
-            wireEid, static_cast<unsigned>(peerSlot), puppet,
+            "for peerSlot=%u context=0x%02x (puppet=%p; isHostRange=%s)",
+            wireEid, static_cast<unsigned>(peerSlot),
+            static_cast<unsigned>(wireContext), puppet,
             coop::element::Registry::IsHostId(wireEid) ? "yes" : "no");
     return true;
 }
@@ -251,6 +331,12 @@ void Registry::EnsurePlayerElement_(uint8_t peerSlot, coop::RemotePlayer* puppet
         DropPlayerElement_(peerSlot);
     }
     auto el = std::make_unique<coop::element::Player>(peerSlot, puppet);
+    // v14 (B1, 2026-05-29): stamp a fresh per-process-monotonic syncContext
+    // on the new Element. Receivers compare against this byte after the
+    // handshake propagates it; a fresh generation distinguishes a
+    // post-reconnect Element from a same-id pre-disconnect Element.
+    const uint8_t ctx = NextLocalContext_();
+    el->SetSyncContext(ctx);
     // Role-aware allocation (audit fix 2026-05-28): host range is reserved
     // for the authoritative side; client processes must allocate from the
     // peer range so client-local Player Elements don't collide with host-
@@ -273,15 +359,17 @@ void Registry::EnsurePlayerElement_(uint8_t peerSlot, coop::RemotePlayer* puppet
         return;
     }
     playerBySlot_[peerSlot] = std::move(el);
-    // Publish the local-slot eid to the cross-thread atomic snapshot so
-    // net-thread readers (AssignPeerSlot stamp) see it lock-free.
+    // Publish the local-slot (eid, ctx) pair to the cross-thread atomic
+    // snapshot so net-thread readers (AssignPeerSlot stamp + any
+    // senderContext stamper) see them lock-free as a coherent pair.
     if (peerSlot == localPeerId_) {
-        g_localPlayerEidAtomic.store(eid, std::memory_order_release);
+        g_localPlayerIdentityAtomic.store(PackIdentity_(eid, ctx),
+                                          std::memory_order_release);
     }
-    UE_LOGI("players::Registry: allocated Player Element eid=%u for peerSlot=%u "
-            "(puppet=%p; local=%s; role=%s)",
-            eid, peerSlot, puppet, puppet ? "no" : "yes",
-            isHost ? "host" : "client");
+    UE_LOGI("players::Registry: allocated Player Element eid=%u context=0x%02x "
+            "for peerSlot=%u (puppet=%p; local=%s; role=%s)",
+            eid, static_cast<unsigned>(ctx), peerSlot, puppet,
+            puppet ? "no" : "yes", isHost ? "host" : "client");
 }
 
 void Registry::DropPlayerElement_(uint8_t peerSlot) {
@@ -291,10 +379,11 @@ void Registry::DropPlayerElement_(uint8_t peerSlot) {
     // Clear the cross-thread atomic snapshot BEFORE the dtor fires so a
     // concurrent net-thread reader can't observe an eid that's about to
     // be freed. Only the local slot is published; other slots aren't
-    // mirrored into the atomic.
+    // mirrored into the atomic. Single-store clears the (eid,ctx) pair
+    // atomically.
     if (peerSlot == localPeerId_) {
-        g_localPlayerEidAtomic.store(coop::element::kInvalidId,
-                                     std::memory_order_release);
+        g_localPlayerIdentityAtomic.store(kInvalidIdCtxPair,
+                                          std::memory_order_release);
     }
     // unique_ptr reset -> destructor -> element::Registry::FreeId.
     // No shared lock with element::Registry; the destructor will acquire

@@ -131,6 +131,11 @@ bool ReadCycleState(void* cycle, coop::net::WeatherStatePayload& out) {
             coop::players::Registry::Get().LocalPlayerElementId();
         out.senderElementId =
             (selfEid == coop::element::kInvalidId) ? 0u : selfEid;
+        // v14 (B1): paired senderContext byte.
+        out.senderContext =
+            (selfEid == coop::element::kInvalidId)
+                ? 0u
+                : coop::players::Registry::Get().LocalPlayerSyncContext();
     }
 
     const uint8_t* base = reinterpret_cast<uint8_t*>(cycle);
