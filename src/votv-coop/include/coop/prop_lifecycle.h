@@ -59,12 +59,8 @@ void InstallInventory(coop::net::Session* session);
 // share it.
 bool IsWireSuppressedPropClass(const std::wstring& cls);
 
-// Tier 3 Props migration 2026-05-28: look up the host-allocated ElementId
-// for a live AActor* tracked in the Prop Element shadow. Returns kInvalidId
-// if the actor isn't tracked (e.g. unkeyed prop, or before the seed scan
-// runs). Used by senders to populate `PropSpawnPayload.elementId` and
-// `PropDestroyPayload.elementId` (v12 protocol).
-coop::element::ElementId GetPropElementIdForActor(void* actor);
+// GetPropElementIdForActor moved to coop::prop_element_tracker (M-1
+// 2026-05-29 follow-up). #include "coop/prop_element_tracker.h" instead.
 
 // Per-session state cleanup on disconnect. Returns counters for the
 // log line. Clears: takeObj-in-flight flag, processed-Init dedupe set.

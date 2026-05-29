@@ -5,11 +5,11 @@
 
 #include "coop/prop_lifecycle.h"
 
-#include "coop/element/prop.h"
-#include "coop/element/registry.h"
+#include "coop/element/element.h"
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/prop_echo_suppress.h"
+#include "coop/prop_element_tracker.h"
 #include "coop/prop_synth_key.h"
 #include "coop/remote_prop.h"
 #include "ue_wrap/call.h"
@@ -22,16 +22,9 @@
 #include "ue_wrap/sdk_profile.h"
 #include "ue_wrap/types.h"
 
-#include <memory>
-
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
-#include <deque>
-#include <mutex>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace coop::prop_lifecycle {
@@ -40,6 +33,7 @@ namespace {
 namespace P = ue_wrap::profile;
 namespace R = ue_wrap::reflection;
 namespace GT = ue_wrap::game_thread;
+namespace PT = coop::prop_element_tracker;
 
 // Cached session pointer (set on Install/InstallInventory). Observers read
 // role()/connected()/SendProp*() through this. nullptr until first Install.
@@ -75,272 +69,10 @@ std::vector<void*> g_registeredPropInitFns;
 // (no other state depends on the bool's visibility ordering).
 std::atomic<bool> g_takeObjInFlight{false};
 
-// Init-processed dedupe set: subclass-aware Init scan registers observers
-// on multiple Init UFunctions in the prop_C lineage. If a subclass Init
-// calls super (BP "Parent" node), BOTH observers fire for the same actor.
-//
-// Steady-state size = number of live keyed-interactable actors (entries
-// added on Init POST, removed on K2_DestroyActor PRE via
-// UnmarkProcessedInit). VOTV worlds have ~2000 live keyed-interactables
-// on load. Cap at 16384 is a safety backstop against unbounded growth
-// from a future bug; on overflow we LOG and stop inserting (do NOT
-// clear -- clearing would un-dedupe the next super-call for every
-// already-tracked actor and silently double-broadcast PropSpawn).
-//
-// The Init POST + K2_DestroyActor PRE observers can dispatch on a
-// parallel-anim worker thread per ue_wrap/game_thread.h :118-120.
-// Concurrent insert/erase/count on the unordered_set is UB (rehash
-// invalidates iterators). Mutex held only for the brief set op; no
-// engine calls under lock.
-std::mutex g_processedInitMutex;
-std::unordered_set<void*> g_processedInitActors;
-constexpr size_t kProcessedInitCap = 16384;
-std::atomic<bool> g_processedInitOverflowLogged{false};
-
-void MarkProcessedInit(void* actor) {
-    if (!actor) return;
-    std::lock_guard<std::mutex> lk(g_processedInitMutex);
-    if (g_processedInitActors.size() >= kProcessedInitCap) {
-        if (!g_processedInitOverflowLogged.exchange(true)) {
-            UE_LOGW("prop_lifecycle: g_processedInitActors hit %zu cap; stopping inserts (Destroy-pruned in steady state -- if this fires we have an Init/Destroy imbalance)",
-                    kProcessedInitCap);
-        }
-        return;
-    }
-    g_processedInitActors.insert(actor);
-}
-
-bool HasProcessedInit(void* actor) {
-    if (!actor) return false;
-    std::lock_guard<std::mutex> lk(g_processedInitMutex);
-    return g_processedInitActors.count(actor) > 0;
-}
-
-void UnmarkProcessedInit(void* actor) {
-    if (!actor) return;
-    std::lock_guard<std::mutex> lk(g_processedInitMutex);
-    g_processedInitActors.erase(actor);
-}
-
-// H2-redux 2026-05-28: maintained set of live keyed-interactable actors.
-// Seeded ONCE at Install() via a single GUObjectArray walk; thereafter
-// maintained by Init POST (insert) + K2_DestroyActor PRE (evict).
-// Engine-state tracking, NOT session-state: not cleared on OnDisconnect
-// (actors persist across coop session boundaries). Public snapshot
-// accessor (SnapshotKnownKeyedProps) retired 2026-05-29 -- prop_snapshot
-// migrated to element::Registry::SnapshotByType<Prop>.
-//
-// MTA precedent: MTA's per-type managers (CClientPedManager etc) keep
-// a live std::list maintained by ctor/dtor. We approximate with a
-// global set keyed by actor pointer until we adopt the broader
-// CClientElement shape (queued per [[follow-mta-architecture-when-possible]]).
-//
-// Cap mirrors g_processedInitActors (16384). VOTV worlds carry ~2000
-// keyed interactables; the cap is a backstop against unbounded growth
-// from a future bug.
-std::mutex g_knownKeyedPropsMutex;
-std::unordered_set<void*> g_knownKeyedProps;
-constexpr size_t kKnownKeyedPropsCap = 16384;
-std::atomic<bool> g_knownKeyedPropsOverflowLogged{false};
-
-// Prop Element shadows (Tier 3 Props migration 2026-05-28). Each entry in
-// g_knownKeyedProps has a parallel Prop Element owned here. Two maps for
-// O(1) lookup in both directions: by ElementId (g_propElementsById, owns
-// the unique_ptr) and by actor* (g_actorToPropElementId, raw id for the
-// K2_DestroyActor PRE gate). Lifetime mirrors the npc_sync pattern:
-//   - MarkKnownKeyedProp creates the Prop Element + populates both maps.
-//   - UnmarkKnownKeyedProp drains both maps under the lock, releases the
-//     lock, then lets the destructor run (FreeId acquires element::Registry
-//     mutex; ABBA-safe via drain-then-destruct).
-//
-// We DON'T preserve a thread_local PRE→POST handoff because, unlike NPCs,
-// the Prop Element is created at Init POST time (engine already has the
-// actor) and the actor pointer is bound directly inside MarkKnownKeyedProp.
-// No params-correlation gymnastics needed.
-std::mutex g_propElementsMutex;
-std::unordered_map<coop::element::ElementId, std::unique_ptr<coop::element::Prop>> g_propElementsById;
-std::unordered_map<void*, coop::element::ElementId> g_actorToPropElementId;
-
-void MarkKnownKeyedProp(void* actor) {
-    if (!actor) return;
-    std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
-    if (g_knownKeyedProps.size() >= kKnownKeyedPropsCap) {
-        if (!g_knownKeyedPropsOverflowLogged.exchange(true)) {
-            UE_LOGW("prop_lifecycle: g_knownKeyedProps hit %zu cap; stopping inserts (snapshot will under-report -- Init/Destroy imbalance bug?)",
-                    kKnownKeyedPropsCap);
-        }
-        return;
-    }
-    g_knownKeyedProps.insert(actor);
-}
-
-// Create a Prop Element shadow for `actor`. Optionally populates m_name
-// (the Aprop_C.Key save-stable id) + m_typeName (the BP class name).
-// Idempotent: if a Prop Element already exists for this actor, no-op.
-//
-// A2 (2026-05-29): role-aware allocation. HOST uses AllocHostId (host range
-// [1, kHostRangeSize) -- authoritative side). CLIENT uses AllocLocalId
-// (peer range [kHostRangeSize, kMaxElements) -- client-local elements).
-// Without this split, both peers were popping from their independent host-
-// range stacks for unrelated actors -- a Registry::Get(host_eid) on the
-// client would resolve to the CLIENT's locally-allocated Prop, not the
-// host's wire-broadcast intent. The mirror Elements created by the wire
-// receivers (remote_prop::OnSpawn) now have a non-conflicting host-range
-// slot to land in.
-//
-// Default-to-peer-range when no session pointer is set (boot/seed window):
-// peer range is the safer default because the local peer's eventual role
-// becomes irrelevant for these early elements -- if we later become host
-// and broadcast PropSpawn for these seed elements, their elementId will be
-// in peer range (clients route them as MIRROR entries which is correct).
-//
-// TOCTOU safety (audit fix 2026-05-28): we hold g_propElementsMutex across
-// the entire check-allocate-commit sequence except for the AllocHostId /
-// AllocLocalId call (which takes Registry::m_mutex -- nested-lock concern).
-// The double-check pattern on re-acquire handles the race: if a concurrent
-// thread allocated for the same actor while we were inside the Registry,
-// we drop our element (its destructor frees our just-allocated eid).
-void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& cls) {
-    if (!actor) return;
-    // Audit fix 2026-05-29: capture role INSIDE the same locked block as the
-    // idempotency check. Reading role after the lock release would race
-    // SetSession / role-change between the two reads -- a seed-time
-    // MarkPropElement could observe role=Client at the check, allocate
-    // peer-range, then become Host by the time the broadcast fires, and
-    // ship a peer-range eid as a host-authoritative broadcast (slot-
-    // collision risk on receivers). g_propElementsMutex is the synchronization
-    // point that owns this commit decision.
-    bool isHost = false;
-    {
-        std::lock_guard<std::mutex> lk(g_propElementsMutex);
-        if (g_actorToPropElementId.count(actor) > 0) return;  // idempotent
-        auto* s = LoadSession();
-        isHost = (s != nullptr && s->role() == coop::net::Role::Host);
-    }
-    auto el = std::make_unique<coop::element::Prop>();
-    auto toStr = [](const std::wstring& w) {
-        std::string s; s.reserve(w.size());
-        for (wchar_t c : w) s.push_back(static_cast<char>(c & 0xFF));
-        return s;
-    };
-    if (!key.empty()) el->SetName(toStr(key));
-    if (!cls.empty()) el->SetTypeName(toStr(cls));
-    el->SetActor(actor);
-    const coop::element::ElementId eid = isHost
-        ? coop::element::Registry::Get().AllocHostId(el.get())
-        : coop::element::Registry::Get().AllocLocalId(el.get());
-    if (eid == coop::element::kInvalidId) {
-        UE_LOGW("prop_lifecycle: element::Registry::Alloc%sId returned kInvalidId for "
-                "actor=%p key='%ls' -- Prop Element not registered",
-                isHost ? "Host" : "Local", actor, key.c_str());
-        return;
-    }
-    std::unique_lock<std::mutex> lk(g_propElementsMutex);
-    // Re-check after the lock-release/Registry-call/lock-reacquire window:
-    // another thread may have inserted concurrently. If yes, drop ours --
-    // the unique_ptr destructor frees `eid` back to its origin stack
-    // (host or peer per `isHost`) and erases m_byId[eid], so no leak.
-    if (g_actorToPropElementId.count(actor) > 0) {
-        // Move ownership of the losing element out, RELEASE the lock, then
-        // let the destructor run. The destructor calls Registry::FreeId
-        // which acquires Registry::m_mutex; with g_propElementsMutex still
-        // held, that's lock-A→lock-B while Alloc{Host,Local}Id above was
-        // B→A (ABBA). Drain-pattern: release g_propElementsMutex first.
-        std::unique_ptr<coop::element::Prop> losing = std::move(el);
-        lk.unlock();
-        // `losing` destructs here, FreeId acquires Registry::m_mutex
-        // without g_propElementsMutex held -- safe.
-        return;
-    }
-    g_actorToPropElementId[actor] = eid;
-    g_propElementsById[eid] = std::move(el);
-}
-
-void UnmarkKnownKeyedProp(void* actor) {
-    if (!actor) return;
-    {
-        std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
-        g_knownKeyedProps.erase(actor);
-    }
-    // Drain the Prop Element shadow (ABBA-safe: extract under lock, release
-    // lock, let destructor run -- FreeId acquires element::Registry mutex
-    // without g_propElementsMutex held).
-    std::unique_ptr<coop::element::Prop> drained;
-    {
-        std::lock_guard<std::mutex> lk(g_propElementsMutex);
-        auto it = g_actorToPropElementId.find(actor);
-        if (it == g_actorToPropElementId.end()) return;
-        const coop::element::ElementId eid = it->second;
-        g_actorToPropElementId.erase(it);
-        auto eit = g_propElementsById.find(eid);
-        if (eit != g_propElementsById.end()) {
-            drained = std::move(eit->second);
-            g_propElementsById.erase(eit);
-        }
-    }
-    // drained destructor fires here, OUTSIDE g_propElementsMutex.
-}
-
-// One-shot GUObjectArray seed of g_knownKeyedProps. Latched internally;
-// safe to call multiple times. Run from Install() once the Init POST
-// observer has been registered (so any spawns that race the seed scan
-// are also captured by the observer -- duplicate inserts are no-ops).
-//
-// Two-phase to avoid holding the mutex for the full ~150k GUObjectArray
-// walk: phase 1 builds a local vector of live keyed-interactable pointers
-// without any lock (reflection probes are thread-safe in our setup);
-// phase 2 takes the mutex once and bulk-inserts. This unblocks parallel
-// K2_DestroyActor PRE workers contending on UnmarkKnownKeyedProp during
-// a cold level load. (Audited 2026-05-28 as part of H2-redux.)
-void SeedKnownKeyedProps() {
-    static std::atomic<bool> done{false};
-    if (done.load(std::memory_order_acquire)) return;
-    const int32_t n = R::NumObjects();
-    int cdo = 0, dying = 0;
-    std::vector<void*> live;
-    live.reserve(4096);
-    for (int32_t i = 0; i < n; ++i) {
-        void* obj = R::ObjectAt(i);
-        if (!obj) continue;
-        if (!ue_wrap::prop::IsKeyedInteractable(obj)) continue;
-        const std::wstring nm = R::ToString(R::NameOf(obj));
-        if (nm.rfind(L"Default__", 0) == 0) { ++cdo; continue; }
-        if (!R::IsLive(obj)) { ++dying; continue; }
-        live.push_back(obj);
-    }
-    int seeded = 0;
-    {
-        std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
-        for (void* obj : live) {
-            if (g_knownKeyedProps.size() >= kKnownKeyedPropsCap) break;
-            g_knownKeyedProps.insert(obj);
-            ++seeded;
-        }
-    }
-    // Tier 3 Props migration 2026-05-28: also create Prop Element shadows
-    // for each seeded actor so Registry::SnapshotByType<Prop> works as the
-    // unified late-joiner snapshot path. Class + key resolved per-actor;
-    // skip MarkPropElement on actors whose key is empty/None (matches the
-    // snapshot DrainChunk's None-key skip).
-    //
-    // Audit fix 2026-05-29: re-check IsLive at the start of phase 2. Phase 1
-    // built `live` without holding any lock; an actor's K2_DestroyActor PRE
-    // observer can fire between phases (e.g., level-streaming unload races
-    // the seed) -- if MarkPropElement then commits a dangling actor pointer
-    // into g_propElementsById, the eid leaks for the session lifetime
-    // because UnmarkKnownKeyedProp already ran for that actor and won't
-    // fire again.
-    for (void* obj : live) {
-        if (!R::IsLive(obj)) continue;
-        const std::wstring cls = R::ClassNameOf(obj);
-        const std::wstring key = ue_wrap::prop::GetInteractableKeyString(obj);
-        if (key.empty() || key == L"None") continue;
-        MarkPropElement(obj, key, cls);
-    }
-    UE_LOGI("prop_lifecycle: seeded known-keyed-props set with %d live actors (%d CDOs, %d dying skipped) -- subsequent snapshots skip GUObjectArray walk",
-            seeded, cdo, dying);
-    done.store(true, std::memory_order_release);
-}
+// Per-actor lifecycle bookkeeping (ProcessedInit dedupe set + KnownKeyedProps
+// maintained set + Prop Element shadow) extracted to
+// coop/prop_element_tracker.{h,cpp} (M-1, 2026-05-29). All references below
+// resolved via `coop::prop_element_tracker::*`.
 
 // Per-feature PropSpawn/PropDestroy retry queues retired 2026-05-27:
 // reliable_channel.cpp now buffers internally so Send() always succeeds.
@@ -435,7 +167,7 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
         const std::wstring nm = R::ToString(R::NameOf(self));
         if (nm.rfind(L"Default__", 0) == 0) return;
     }
-    MarkKnownKeyedProp(self);
+    PT::MarkKnownKeyedProp(self);
 
     auto* s = LoadSession();
     if (!s) return;
@@ -445,12 +177,12 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
                 self);
         return;
     }
-    if (HasProcessedInit(self)) {
+    if (PT::HasProcessedInit(self)) {
         UE_LOGI("grab_hook[Aprop.Init POST]: actor %p already processed -- skip (super-call dedupe)",
                 self);
         return;
     }
-    MarkProcessedInit(self);
+    PT::MarkProcessedInit(self);
 
     // Storage-container spawn fix (2026-05-25): defer broadcast for actors
     // spawned from inside a takeObj call. takeObj POST is the canonical
@@ -517,7 +249,7 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     // the Init POST broadcast site so it has the resolved Key (m_name) +
     // class (m_typeName). Idempotent w.r.t. the seed-scan creation path
     // (early-out if g_actorToPropElementId already has this actor).
-    MarkPropElement(self, keyStr, cls);
+    PT::MarkPropElement(self, keyStr, cls);
     p.key.len = 0;
     for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
         p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
@@ -543,7 +275,7 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     // v15 (2026-05-29 E-2): pair with senderContext = local Player
     // Element::GetSyncContext so receiver can stale-gen drop.
     {
-        const coop::element::ElementId eid = GetPropElementIdForActor(self);
+        const coop::element::ElementId eid = PT::GetPropElementIdForActor(self);
         p.elementId = (eid == coop::element::kInvalidId) ? 0u : eid;
         const coop::element::ElementId selfPlayerEid =
             coop::players::Registry::Get().LocalPlayerElementId();
@@ -578,9 +310,9 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
     // Capture the Prop Element id BEFORE UnmarkKnownKeyedProp drains the
     // shadow (audit fix 2026-05-28 -- the prior order returned kInvalidId
     // on every destroy broadcast).
-    const coop::element::ElementId destroyEid = GetPropElementIdForActor(self);
-    UnmarkProcessedInit(self);
-    UnmarkKnownKeyedProp(self);
+    const coop::element::ElementId destroyEid = PT::GetPropElementIdForActor(self);
+    PT::UnmarkProcessedInit(self);
+    PT::UnmarkKnownKeyedProp(self);
     if (!s->connected()) return;
     if (coop::prop_echo_suppress::ConsumeIncomingDestroy(self)) {
         UE_LOGI("grab_hook[K2_DestroyActor PRE]: actor %p was wire-received destroy -- skip rebroadcast",
@@ -701,9 +433,9 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     // Init POST returned early (g_takeObjInFlight) so MarkPropElement wasn't
     // called from that path. Mint the Prop Element here so this container-
     // extracted actor has a Registry shadow (audit fix 2026-05-28).
-    MarkPropElement(spawnedActor, keyStr, cls);
+    PT::MarkPropElement(spawnedActor, keyStr, cls);
     {
-        const coop::element::ElementId eid = GetPropElementIdForActor(spawnedActor);
+        const coop::element::ElementId eid = PT::GetPropElementIdForActor(spawnedActor);
         p.elementId = (eid == coop::element::kInvalidId) ? 0u : eid;
         // v15 (2026-05-29 E-2): stamp local Player Element sync context.
         const coop::element::ElementId selfPlayerEid =
@@ -727,26 +459,25 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
 
 void SetSession(coop::net::Session* session) {
     g_session_ptr.store(session, std::memory_order_release);
+    // Mirror to the element tracker so its in-lock role read sees the same
+    // session pointer (M-1 2026-05-29 extraction). Note: this is two stores
+    // to two atomic pointers; an observer reading both during the
+    // sub-microsecond window between them could see a torn pair. Benign in
+    // practice because (1) observer registration happens AFTER Install
+    // finishes its setup, and (2) SeedKnownKeyedProps runs INSIDE Install
+    // after both stores -- no concurrent reader exists during the window.
+    // If a future expansion adds concurrent readers, fold the tracker's
+    // pointer into prop_lifecycle's via a forwarding accessor instead.
+    PT::SetSession(session);
 }
 
 bool IsWireSuppressedPropClass(const std::wstring& cls) {
     return cls == P::name::PropMushroomGrowingClass;
 }
 
-coop::element::ElementId GetPropElementIdForActor(void* actor) {
-    if (!actor) return coop::element::kInvalidId;
-    std::lock_guard<std::mutex> lk(g_propElementsMutex);
-    auto it = g_actorToPropElementId.find(actor);
-    if (it == g_actorToPropElementId.end()) return coop::element::kInvalidId;
-    return it->second;
-}
-
-// SnapshotKnownKeyedProps retired 2026-05-29 (M-1): had zero callers since
-// prop_snapshot was migrated to coop::element::Registry::SnapshotByType<Prop>
-// in the Tier 3 Props migration. The maintained g_knownKeyedProps set is
-// still useful internally (Init POST insert / K2_DestroyActor PRE evict
-// gate the steady-state lifecycle), but its public snapshot accessor is
-// dead. RULE 2 cleanup.
+// GetPropElementIdForActor moved to coop::prop_element_tracker (M-1, 2026-05-29).
+// SnapshotKnownKeyedProps retired 2026-05-29 (M-1, prior commit) -- zero callers
+// since prop_snapshot migrated to element::Registry::SnapshotByType<Prop>.
 
 // Enqueue*/DrainPending* functions retired 2026-05-27 -- the reliable
 // channel buffers internally now (see reliable_channel.cpp). Callers just
@@ -755,6 +486,7 @@ coop::element::ElementId GetPropElementIdForActor(void* actor) {
 
 void Install(coop::net::Session* session) {
     g_session_ptr.store(session, std::memory_order_release);
+    PT::SetSession(session);  // mirror; see SetSession comment above.
     // Audit Fix 1 (2026-05-27): composite atomic latch. InstallGrabObservers
     // runs at 125 Hz; until ALL inner flags resolve, every tick was calling
     // R::FindClass (a full GUObjectArray walk with std::wstring alloc per
@@ -809,7 +541,7 @@ void Install(coop::net::Session* session) {
                 // (duplicate inserts are no-ops on the set). Internally
                 // latched -- safe to call again on subsequent Install()
                 // ticks.
-                SeedKnownKeyedProps();
+                PT::SeedKnownKeyedProps();
             }
         }
     }
@@ -837,6 +569,7 @@ void Install(coop::net::Session* session) {
 
 void InstallInventory(coop::net::Session* session) {
     g_session_ptr.store(session, std::memory_order_release);
+    PT::SetSession(session);  // mirror; see SetSession comment above.
     // Audit Fix 2 (2026-05-27): atomic latch matches Install()'s. Without
     // this, the 125 Hz pump's InstallGrabObservers call runs R::FindClass
     // (a full GUObjectArray walk with std::wstring alloc per entry) on
@@ -877,12 +610,7 @@ void InstallInventory(coop::net::Session* session) {
 
 DisconnectStats OnDisconnect() {
     DisconnectStats s;
-    {
-        std::lock_guard<std::mutex> lk(g_processedInitMutex);
-        s.initProcessedDropped = g_processedInitActors.size();
-        g_processedInitActors.clear();
-        g_processedInitOverflowLogged.store(false);
-    }
+    s.initProcessedDropped = PT::ClearProcessedInit();
     g_takeObjInFlight.store(false, std::memory_order_relaxed);
     return s;
 }
