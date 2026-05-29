@@ -32,9 +32,21 @@ struct InterceptorSlot {
 };
 InterceptorSlot g_interceptors[kMaxInterceptors];
 
+// D4-2 (2026-05-29 foundation audit fix): per-table count of populated
+// slots so the detour walk can early-terminate after finding all live
+// entries instead of always walking all kMaxInterceptors / kMaxObservers
+// slots per ProcessEvent dispatch. UE4 dispatches ~100k PE/sec; with the
+// 128-slot post-observer table that was 128 atomic acquire-loads per
+// dispatch on x86 even when only ~30 observers were registered. The
+// count is a release-store sequenced AFTER the targetFn slot store so
+// the detour's acquire-load of the count fences any race-with-register
+// (if the detour sees the new count, it also sees the new slot).
+std::atomic<int> g_interceptorActive{0};
+
 bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
     if (!targetFn || !cb) return false;
     // First pass: replace existing entry for this target (idempotent registration).
+    // Replace does NOT bump the active count -- slot was already counted.
     for (int i = 0; i < kMaxInterceptors; ++i) {
         if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
             g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
@@ -42,11 +54,13 @@ bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
             return true;
         }
     }
-    // Second pass: take the first empty slot.
+    // Second pass: take the first empty slot. Bump active count AFTER the
+    // slot store so the detour's count-bounded walk sees the new entry.
     for (int i = 0; i < kMaxInterceptors; ++i) {
         if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == nullptr) {
             g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
             g_interceptors[i].targetFn.store(targetFn, std::memory_order_release);
+            g_interceptorActive.fetch_add(1, std::memory_order_release);
             return true;
         }
     }
@@ -58,6 +72,7 @@ void ClearInterceptorSlot(void* targetFn) {
         if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
             g_interceptors[i].targetFn.store(nullptr, std::memory_order_release);
             g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
+            g_interceptorActive.fetch_sub(1, std::memory_order_release);
         }
     }
 }
@@ -67,6 +82,7 @@ void ClearAllInterceptors() {
         g_interceptors[i].targetFn.store(nullptr, std::memory_order_release);
         g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
     }
+    g_interceptorActive.store(0, std::memory_order_release);
 }
 
 // SEH-wrapped single-callback dispatch. MSVC disallows mixing C++ unwind
@@ -128,10 +144,23 @@ void SafeCallObserver(ProcessEventObserverFn cb, void* self, void* function, voi
 // on the function pointer pairs with the release store in SetInterceptorSlot
 // (no torn target+cb pair on weakly-ordered ISAs; on x86-64 TSO acquire is
 // free, ordering matters for a future ARM port).
+//
+// D4-2 (2026-05-29): count-bounded walk. Loads g_interceptorActive ONCE at
+// the top; loop terminates when `found == active` so an N-entry table
+// pays N acquire-loads instead of kMaxInterceptors. Common case (no
+// interceptors registered, active == 0) exits immediately. Re-register
+// race during the walk is safe: the slot is still visible after a single
+// dispatch's count window; the acquired count fences any concurrent
+// register's release-store of targetFn.
 inline bool FireInterceptors(void* self, void* function, void* params) {
-    for (int i = 0; i < kMaxInterceptors; ++i) {
+    const int active = g_interceptorActive.load(std::memory_order_acquire);
+    if (active <= 0) return false;
+    int found = 0;
+    for (int i = 0; i < kMaxInterceptors && found < active; ++i) {
         void* tgt = g_interceptors[i].targetFn.load(std::memory_order_acquire);
-        if (!tgt || tgt != function) continue;
+        if (!tgt) continue;
+        ++found;
+        if (tgt != function) continue;
         UFunctionInterceptor cb = g_interceptors[i].cb.load(std::memory_order_relaxed);
         if (cb && SafeCallInterceptor(cb, self, params, function)) return true;
     }
@@ -152,9 +181,19 @@ struct ObserverSlot {
 ObserverSlot g_postObservers[kMaxObservers];
 ObserverSlot g_preObservers[kMaxObservers];
 
+// D4-2: per-table active-slot counts paired with the tables above. Each
+// fetch_add is sequenced AFTER the targetFn release-store, so the detour's
+// acquire-load of the count also acquires the new slot. Matches the
+// g_interceptorActive shape; see its comment block for the full rationale.
+std::atomic<int> g_postObserverActive{0};
+std::atomic<int> g_preObserverActive{0};
+
 // Set a free slot in `table` to (targetFn, cb). Returns false if no free slot
 // or duplicate (we permit overwriting an existing entry for the same target).
-bool SetObserverSlot(ObserverSlot table[], void* targetFn, ProcessEventObserverFn cb) {
+// `activeCounter` is incremented ONLY when an empty slot becomes populated
+// (idempotent re-register on an existing target does not change the count).
+bool SetObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
+                     void* targetFn, ProcessEventObserverFn cb) {
     if (!targetFn || !cb) return false;
     // First pass: replace existing entry for this target.
     for (int i = 0; i < kMaxObservers; ++i) {
@@ -171,18 +210,24 @@ bool SetObserverSlot(ObserverSlot table[], void* targetFn, ProcessEventObserverF
         if (cur == nullptr) {
             table[i].cb.store(cb, std::memory_order_relaxed);
             table[i].targetFn.store(targetFn, std::memory_order_release);
+            activeCounter.fetch_add(1, std::memory_order_release);
             return true;
         }
     }
     return false;  // table full
 }
 
-// Clear any slot in `table` matching `targetFn`.
-void ClearObserverSlot(ObserverSlot table[], void* targetFn) {
+// Clear any slot in `table` matching `targetFn`. Decrements activeCounter
+// once per slot actually cleared (handles the historical case of a duplicate
+// registration that bypassed the first-pass replace, though SetObserverSlot
+// dedups on entry so duplicates are not expected).
+void ClearObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
+                       void* targetFn) {
     for (int i = 0; i < kMaxObservers; ++i) {
         if (table[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
             table[i].targetFn.store(nullptr, std::memory_order_release);
             table[i].cb.store(nullptr, std::memory_order_relaxed);
+            activeCounter.fetch_sub(1, std::memory_order_release);
         }
     }
 }
@@ -190,14 +235,27 @@ void ClearObserverSlot(ObserverSlot table[], void* targetFn) {
 // Fire all observers in `table` whose target matches `function`. Each call
 // runs through SafeCallObserver (SEH wrapper) so an AV in any single
 // callback is logged + absorbed instead of taking down the engine.
-inline void FireObservers(const ObserverSlot table[], void* self, void* function, void* params,
+//
+// D4-2 count-bounded walk: the hot path here used to be 128 atomic acquire-
+// loads per dispatch (the worst-case kMaxObservers walk) on top of every
+// other ProcessEvent observer pass. With the per-table active count loaded
+// ONCE up front and `found == active` early-termination, an N-registered
+// table pays N + holes loads instead of kMaxObservers. Common steady-state
+// case ~30 observers -> 30 loads instead of 128 (or 0 loads when the table
+// is empty, e.g. for the pre-observer table during early boot).
+inline void FireObservers(const ObserverSlot table[], const std::atomic<int>& activeCounter,
+                          void* self, void* function, void* params,
                           const char* phase) {
-    for (int i = 0; i < kMaxObservers; ++i) {
+    const int active = activeCounter.load(std::memory_order_acquire);
+    if (active <= 0) return;
+    int found = 0;
+    for (int i = 0; i < kMaxObservers && found < active; ++i) {
         void* tgt = table[i].targetFn.load(std::memory_order_acquire);
-        if (tgt && tgt == function) {
-            ProcessEventObserverFn cb = table[i].cb.load(std::memory_order_relaxed);
-            if (cb) SafeCallObserver(cb, self, function, params, phase);
-        }
+        if (!tgt) continue;
+        ++found;
+        if (tgt != function) continue;
+        ProcessEventObserverFn cb = table[i].cb.load(std::memory_order_relaxed);
+        if (cb) SafeCallObserver(cb, self, function, params, phase);
     }
 }
 
@@ -332,10 +390,10 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
     // PRE-observers: fire BEFORE the original. Used to snapshot state the BP
     // is about to clear (e.g. PHC.ReleaseComponent PRE reads handle+176
     // GrabbedComponent before PhysX clears it).
-    // The walk is kMaxObservers (16) pointer compares -- same cost class as the
-    // single interceptor compare above. NO observers registered = NO cost
-    // beyond the 16 null loads.
-    FireObservers(g_preObservers, self, function, params, "PRE");
+    // D4-2: count-bounded walk -- pays N atomic loads where N is the active
+    // observer count (typically <= 30) instead of kMaxObservers=128 per
+    // dispatch. Empty-table case exits with a single acquire load.
+    FireObservers(g_preObservers, g_preObserverActive, self, function, params, "PRE");
 
     // Diagnostic name-prefix sniffer (zero cost when no slot is set).
     FireNameDiagnostics(self, function, params);
@@ -356,8 +414,8 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
     // POST-observers: fire AFTER the original. Used to read state the BP just
     // wrote (e.g. PHC.GrabComponentAtLocation POST reads handle+176 to see
     // what was just grabbed; PHC.SetTargetLocation POST sees the per-tick
-    // drive target).
-    FireObservers(g_postObservers, self, function, params, "POST");
+    // drive target). Count-bounded same as PRE.
+    FireObservers(g_postObservers, g_postObserverActive, self, function, params, "POST");
 }
 
 // SEH-only outer detour. No C++ destructors here so __try/__except is
@@ -462,17 +520,17 @@ void UnregisterInterceptor(void* targetUFunction) {
 }
 
 bool RegisterPostObserver(void* targetUFunction, ProcessEventObserverFn cb) {
-    return SetObserverSlot(g_postObservers, targetUFunction, cb);
+    return SetObserverSlot(g_postObservers, g_postObserverActive, targetUFunction, cb);
 }
 
 bool RegisterPreObserver(void* targetUFunction, ProcessEventObserverFn cb) {
-    return SetObserverSlot(g_preObservers, targetUFunction, cb);
+    return SetObserverSlot(g_preObservers, g_preObserverActive, targetUFunction, cb);
 }
 
 void UnregisterObservers(void* targetUFunction) {
     if (!targetUFunction) return;
-    ClearObserverSlot(g_postObservers, targetUFunction);
-    ClearObserverSlot(g_preObservers, targetUFunction);
+    ClearObserverSlot(g_postObservers, g_postObserverActive, targetUFunction);
+    ClearObserverSlot(g_preObservers, g_preObserverActive, targetUFunction);
 }
 
 void ClearAllObservers() {
@@ -482,6 +540,8 @@ void ClearAllObservers() {
         g_preObservers[i].targetFn.store(nullptr, std::memory_order_release);
         g_preObservers[i].cb.store(nullptr, std::memory_order_relaxed);
     }
+    g_postObserverActive.store(0, std::memory_order_release);
+    g_preObserverActive.store(0, std::memory_order_release);
     ClearAllNameDiagnostics();
 }
 
