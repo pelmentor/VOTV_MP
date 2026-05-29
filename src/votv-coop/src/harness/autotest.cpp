@@ -39,7 +39,6 @@
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
-#include "ue_wrap/reflected_offset.h"
 #include "ue_wrap/types.h"
 
 #include <atomic>
@@ -93,8 +92,7 @@ void RunAutonomousGrabTest() {
     GT::Post([rsv, done] {
         rsv->player = R::FindObjectByClass(P::name::MainPlayerClass);
         if (!rsv->player) { UE_LOGW("grab_test: mainPlayer not found"); done->store(2); return; }
-        rsv->grabHandle = *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(rsv->player) + ue_wrap::reflected_offset::MainPlayer_grabHandle());
+        rsv->grabHandle = ue_wrap::engine::ReadMainPlayerGrabHandle(rsv->player);
         if (!rsv->grabHandle) { UE_LOGW("grab_test: mainPlayer.grabHandle is null"); done->store(2); return; }
         rsv->propBase = R::FindClass(P::name::PropClass);
         if (!rsv->propBase) { UE_LOGW("grab_test: prop_C UClass not found"); done->store(2); return; }
@@ -314,8 +312,7 @@ void RunAutonomousGrabTest() {
         auto hr = std::make_shared<HeavyResolved>();
         done->store(0);
         GT::Post([rsv, hr, done] {
-            hr->heavyGrab = *reinterpret_cast<void**>(
-                reinterpret_cast<uint8_t*>(rsv->player) + ue_wrap::reflected_offset::MainPlayer_heavyGrab());
+            hr->heavyGrab = ue_wrap::engine::ReadMainPlayerHeavyGrabPCC(rsv->player);
             if (!hr->heavyGrab) { UE_LOGW("grab_test: mainPlayer.heavyGrab is null"); done->store(2); return; }
             hr->pccCls = R::FindClass(P::name::PhysicsConstraintComponentClass);
             hr->setConstrainedFn = R::FindFunction(hr->pccCls, P::name::SetConstrainedComponentsFn);
@@ -372,8 +369,7 @@ void RunAutonomousGrabTest() {
     UE_LOGI("grab_test: trying to force `grab` Timeline play (closes the last 3 BP-Timeline observer gaps)");
     done->store(0);
     GT::Post([rsv, done] {
-        void* timeline = *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(rsv->player) + ue_wrap::reflected_offset::MainPlayer_grabTimeline());
+        void* timeline = ue_wrap::engine::ReadMainPlayerGrabTimeline(rsv->player);
         if (!timeline) {
             UE_LOGW("grab_test: mainPlayer.grab Timeline is null -- skipping force-play");
             done->store(2); return;

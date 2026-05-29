@@ -238,6 +238,25 @@ bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out);
 // sequences.
 bool WriteMainPlayerGrabbingPair(void* mainPlayer, void* actor, void* component);
 
+// AmainPlayer_C single-component-pointer accessors. Each returns the UObject*
+// stored in a specific component slot on the local pawn:
+//   - GrabHandle       -> UPhysicsHandleComponent driving normal-prop grab
+//   - HeavyGrabPCC     -> UPhysicsConstraintComponent driving heavy-prop grab
+//   - GrabTimeline     -> UTimelineComponent driving the grab animation curve
+// All three are read by the autotest harness's synthetic grab scenario to
+// dispatch UPhysicsHandleComponent.GrabComponentAtLocation / PCC.SetConstrained
+// /Timeline.PlayFromStart against the real game-thread components. gameplay
+// /test code uses these accessors so it never touches the mainPlayer_C struct
+// layout directly (Principle 7). Returns nullptr on null/dead pawn OR if
+// the slot itself is null. Game thread only.
+//
+// Principle 7 (autotest follow-up, 2026-05-29): replaces 3 inline raw struct-
+// offset reads in harness::autotest's grab-resolve / heavy-grab-resolve /
+// timeline-force-play scenarios.
+void* ReadMainPlayerGrabHandle(void* mainPlayer);
+void* ReadMainPlayerHeavyGrabPCC(void* mainPlayer);
+void* ReadMainPlayerGrabTimeline(void* mainPlayer);
+
 // Diagnostic: log every FProperty on a UClass (name, offset, size). Used to
 // verify a property offset we resolved via reflection (e.g. confirm we got
 // the real UMovementComponent::Velocity offset and not a sibling property

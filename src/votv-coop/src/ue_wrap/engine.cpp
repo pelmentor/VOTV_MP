@@ -571,6 +571,24 @@ bool WriteMainPlayerGrabbingPair(void* mainPlayer, void* actor, void* component)
     return true;
 }
 
+void* ReadMainPlayerGrabHandle(void* mainPlayer) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return nullptr;
+    return *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(mainPlayer) + ue_wrap::reflected_offset::MainPlayer_grabHandle());
+}
+
+void* ReadMainPlayerHeavyGrabPCC(void* mainPlayer) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return nullptr;
+    return *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(mainPlayer) + ue_wrap::reflected_offset::MainPlayer_heavyGrab());
+}
+
+void* ReadMainPlayerGrabTimeline(void* mainPlayer) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return nullptr;
+    return *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(mainPlayer) + ue_wrap::reflected_offset::MainPlayer_grabTimeline());
+}
+
 void LogClassProperties(const wchar_t* className) {
     void* cls = R::FindClass(className);
     if (!cls) {
