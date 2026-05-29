@@ -231,10 +231,14 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             //   the host can show it on our puppet. Weather is host-
             //   authoritative; snapshot is host->client only.
             if (isHost && slot >= 1) {
-                UE_LOGI("net: peer slot %d connect edge -- replaying snapshot + flashlight + weather", slot);
+                UE_LOGI("net: peer slot %d connect edge -- replaying snapshot + flashlight + weather + peer states", slot);
                 coop::prop_snapshot::TriggerForSlot(slot);
                 coop::item_activate::QueueConnectBroadcastForSlot(slot);
                 coop::weather_sync::QueueConnectBroadcastForSlot(slot);
+                // T2-4: also catch the new client up to EXISTING peers'
+                // current item state (the lines above replay only the HOST's
+                // own state + host-authoritative weather/props).
+                coop::item_activate::ReplayPeerStatesToSlot(slot);
             } else if (!isHost && slot == 0) {
                 UE_LOGI("net: host (slot 0) connect edge -- replaying local flashlight");
                 coop::item_activate::QueueConnectBroadcastForSlot(slot);

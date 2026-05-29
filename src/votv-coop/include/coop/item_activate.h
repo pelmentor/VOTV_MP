@@ -71,6 +71,17 @@ void ApplyToPuppetOrDefer(uint8_t senderPeerSlot, void* puppetActor,
 // a redundant packet). Game thread only.
 void QueueConnectBroadcastForSlot(int peerSlot);
 
+// T2-4 (host-relay late-joiner peer-state replay). Where
+// QueueConnectBroadcastForSlot replays THIS peer's OWN item state to a
+// newly-joined slot, this replays every OTHER existing peer client's
+// current item state to the joiner -- so it converges to the live world
+// (ItemActivate is edge-triggered, so a flashlight already ON before the
+// joiner arrived would otherwise stay dark on its screen until the owner
+// next toggles). Host-only (the relay hub holds the per-peer cache);
+// no-op on clients. `newSlot` is the freshly-connected client's slot.
+// Game thread only.
+void ReplayPeerStatesToSlot(int newSlot);
+
 // Phase 5F Inc5 per-tick worker. Drains:
 //   (a) pending broadcast queued by QueueConnectBroadcast() -- retries
 //       SendReliable until the channel accepts it, then updates the

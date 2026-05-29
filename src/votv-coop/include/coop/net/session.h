@@ -108,7 +108,15 @@ public:
     // newly-connected client) and per-slot connect-edge replay (each
     // late-joiner gets caught up without re-broadcasting to peers that
     // already have the state).
-    bool SendReliableToSlot(int peerSlot, ReliableKind kind, const void* payload, int len);
+    //
+    // `senderSlot` (v18 host-relay): the LOGICAL origin slot stamped into
+    // the header. Defaults to 0 (the sender's own identity -- correct for
+    // host->client AssignPeerSlot/Join/own-state replay). The late-joiner
+    // PEER-state replay (T2-4) passes the existing peer's slot so the new
+    // client routes the replayed action to that peer's puppet (and the
+    // receiver's eid-range trust check sees the right role).
+    bool SendReliableToSlot(int peerSlot, ReliableKind kind, const void* payload,
+                            int len, uint8_t senderSlot = 0);
 
     // Game thread: pop a delivered reliable message. Inbox is shared across
     // peers (FIFO of arrivals); the kind-typed payload tells the drainer what

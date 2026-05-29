@@ -291,7 +291,8 @@ bool Session::TryGetReliable(ReliableMessage& out) {
     return true;
 }
 
-bool Session::SendReliableToSlot(int peerSlot, ReliableKind kind, const void* payload, int len) {
+bool Session::SendReliableToSlot(int peerSlot, ReliableKind kind, const void* payload,
+                                 int len, uint8_t senderSlot) {
     if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
     if (len < 0 || len > kMaxReliablePayload) {
         UE_LOGW("net: SendReliableToSlot rejected (slot=%d len=%d > %d)",
@@ -315,7 +316,7 @@ bool Session::SendReliableToSlot(int peerSlot, ReliableKind kind, const void* pa
     }
     auto* buf = static_cast<uint8_t*>(msg->m_pData);
     auto* hdr = reinterpret_cast<PacketHeader*>(buf);
-    WriteHeader(*hdr, MsgType::Reliable, seq, ownEpoch_);
+    WriteHeader(*hdr, MsgType::Reliable, seq, ownEpoch_, senderSlot);
     auto* rh = reinterpret_cast<ReliableHeader*>(buf + sizeof(PacketHeader));
     std::memset(rh, 0, sizeof(*rh));
     rh->kind = static_cast<uint8_t>(kind);

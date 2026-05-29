@@ -120,6 +120,18 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 bool g_pendingApplyValid[coop::players::kMaxPeers] = {};
 coop::net::ItemActivatePayload g_pendingApplyPayload[coop::players::kMaxPeers] = {};
 
+// T2-4 (host-relay late-joiner): persistent per-peer-client cache of the
+// LAST item-activate the host applied for that peer (NOT cleared on apply,
+// unlike g_pendingApplyPayload). On a new client's connect edge the host
+// replays each existing peer's cached ON state to the joiner so the joiner
+// converges to the current world (ItemActivate is edge-triggered, so without
+// this a flashlight already ON before the joiner arrived stays dark on its
+// screen until the owner next toggles). Host-only, game thread only. Slot 0
+// (host's own state) is NOT cached here -- QueueConnectBroadcastForSlot
+// already replays the host's own flashlight via BuildPayloadFromLocal.
+bool g_peerActivateValid[coop::players::kMaxPeers] = {};
+coop::net::ItemActivatePayload g_peerActivateCache[coop::players::kMaxPeers] = {};
+
 // Echo-suppression: when we APPLY a remote flashlight state to the
 // puppet, we don't directly invoke updateFlashlight (which would
 // re-dispatch and re-broadcast); we write the bool + toggle the
@@ -610,6 +622,21 @@ void ApplyToPuppetOrDefer(uint8_t senderPeerSlot, void* puppetActor,
                 static_cast<unsigned>(senderPeerSlot));
         return;
     }
+    // T2-4 late-joiner peer-state cache: on the HOST (the relay hub), remember
+    // each PEER CLIENT's latest item state (whether applied now or deferred) so
+    // a peer joining LATER can be caught up to it. Slot 0 (host's own state) is
+    // covered by QueueConnectBroadcastForSlot (BuildPayloadFromLocal); this
+    // cache is only for OTHER clients' states, which the late joiner can't
+    // learn any other way (ItemActivate only fires on toggle). Host-only +
+    // peer-slot-only; ReplayPeerStatesToSlot reads it on a new client's edge.
+    if (senderPeerSlot >= 1) {
+        if (auto* s = g_session.load(std::memory_order_acquire)) {
+            if (s->role() == coop::net::Role::Host) {
+                g_peerActivateCache[senderPeerSlot] = p;
+                g_peerActivateValid[senderPeerSlot] = true;
+            }
+        }
+    }
     if (puppetActor && R::IsLive(puppetActor)) {
         // Puppet is ready -- clear any stale pending entry (defensive:
         // a fresh apply supersedes a still-pending one) + apply now.
@@ -675,6 +702,37 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
             peerSlot, p.state, p.intensity, p.outerConeAngle, p.mode, p.senderElementId);
 }
 
+void ReplayPeerStatesToSlot(int newSlot) {
+    // T2-4 (host-relay late-joiner): replay every EXISTING peer client's
+    // current item state to a newly-joined client so it converges to the
+    // live world. QueueConnectBroadcastForSlot covers the host's OWN state;
+    // this covers the OTHER clients' states (the late joiner can't learn
+    // them otherwise -- ItemActivate is edge-triggered). Host-only.
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != coop::net::Role::Host) return;
+    if (newSlot < 1 || newSlot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    for (int peer = 1; peer < static_cast<int>(coop::players::kMaxPeers); ++peer) {
+        if (peer == newSlot) continue;
+        if (!g_peerActivateValid[peer]) continue;
+        const coop::net::ItemActivatePayload& p = g_peerActivateCache[peer];
+        // Skip OFF -- the joiner's puppet for `peer` defaults to OFF on spawn,
+        // so an OFF replay is a redundant packet (matches the host-own-state
+        // skip in QueueConnectBroadcastForSlot).
+        if (p.state == 0) continue;
+        // Stamp senderSlot = the ORIGIN peer so the joiner routes the action
+        // to that peer's puppet AND the receiver's eid-range trust check sees
+        // the right role (a peer-range senderElementId from a peer slot). The
+        // payload already carries the origin peer's senderElementId, which the
+        // joiner resolves to that peer's mirror (installed via T2-1
+        // PlayerJoined) for puppet routing.
+        s->SendReliableToSlot(newSlot, coop::net::ReliableKind::ItemActivate,
+                              &p, sizeof(p), static_cast<uint8_t>(peer));
+        UE_LOGI("flashlight: T2-4 replayed peer %d state=%d (Intensity=%.2f "
+                "senderElementId=0x%08x) to late joiner slot %d",
+                peer, p.state, p.intensity, p.senderElementId, newSlot);
+    }
+}
+
 void TickConnect() {
     // 2026-05-27: host-side pending-broadcast retry retired (channel queues
     // internally). Kept the receiver-side pending-apply drain -- that's a
@@ -705,6 +763,11 @@ void OnDisconnect() {
         if (g_pendingApplyValid[i]) ++clearedApplies;
         g_pendingApplyValid[i] = false;
         g_pendingApplyPayload[i] = {};
+        // T2-4: drop the late-joiner replay cache too -- it belongs to the
+        // now-dead session; replaying it on a fresh session (possibly a
+        // different peer reusing the slot) would carry wrong-peer state.
+        g_peerActivateValid[i] = false;
+        g_peerActivateCache[i] = {};
     }
     if (clearedApplies > 0) {
         UE_LOGI("flashlight: OnDisconnect cleared %d pending apply slot(s)",
@@ -714,6 +777,10 @@ void OnDisconnect() {
 
 void OnDisconnectForSlot(int peerSlot) {
     if (peerSlot < 0 || peerSlot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    // T2-4: a peer leaving invalidates its cached replay state so a different
+    // peer reusing the slot doesn't inherit the departed peer's flashlight.
+    g_peerActivateValid[peerSlot] = false;
+    g_peerActivateCache[peerSlot] = {};
     if (!g_pendingApplyValid[peerSlot]) return;
     UE_LOGI("flashlight: peer slot %d disconnected -- clearing pending apply (state=%d intensity=%.2f)",
             peerSlot, g_pendingApplyPayload[peerSlot].state,
