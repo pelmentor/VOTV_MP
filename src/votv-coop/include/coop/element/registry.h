@@ -50,7 +50,31 @@ public:
     // element (something the local peer creates that does not need
     // authoritative routing). Same semantics as AllocHostId but on the
     // peer-range stack. Either role may call this.
+    //
+    // D9-2 fix (2026-05-29 PR-FOUNDATION Tier 2): the peer range is
+    // sub-partitioned into per-peer-slot bands so two CLIENT processes
+    // never mint colliding ids (the host relay holds mirrors of BOTH and
+    // RegisterMirror rejects a populated slot). Before SetLocalPeerBand
+    // is called (boot/seed window, slot not yet known), this allocates
+    // from the "pre-slot" band -- those ids are LOCAL-ONLY (a client's
+    // seed-phase Aprop_C Init POST never broadcasts; gated by
+    // !s->connected() + the Aprop_C client early-return), so cross-client
+    // overlap of pre-slot ids is harmless. After SetLocalPeerBand, draws
+    // from the client's exclusive slot band. See SetLocalPeerBand.
     ElementId AllocLocalId(Element* e);
+
+    // Activate this CLIENT process's per-slot sub-band for AllocLocalId
+    // (D9-2 fix). Called once from players::Registry::SetLocalPeerId when
+    // the client learns its peer slot from AssignPeerSlot. `slot` must be
+    // in [1, kMaxPeers); slot 0 (host) never calls this -- the host uses
+    // AllocHostId exclusively for its own elements. Replaces m_localFree
+    // with the slot band's ids. Pre-slot-band ids already handed out
+    // remain valid in the lookup table and freeable (they were popped on
+    // allocation, are not on the free stack, and FreeId returns them to
+    // m_localFree where they recycle harmlessly). Idempotent on the same
+    // slot. Thread-safe (acquires m_mutex). No-op + LOGW on slot 0 / out
+    // of range.
+    void SetLocalPeerBand(uint8_t slot);
 
     // Return an id to its free stack and clear the table slot. Called from
     // Element destructor. No-op on kInvalidId. Logs + skips if the id is
@@ -167,10 +191,16 @@ private:
     mutable std::mutex m_mutex;
     Element* m_byId[kMaxElements] = {};   // index = ElementId; nullptr = free
     std::vector<ElementId> m_hostFree;    // LIFO free stack, host range
-    std::vector<ElementId> m_localFree;   // LIFO free stack, peer range
+    std::vector<ElementId> m_localFree;   // LIFO free stack, ACTIVE peer band
+    // Which peer-range band m_localFree currently holds (D9-2). 0 == the
+    // pre-slot band (boot/seed window, slot not yet known); 1..kMaxPeers-1
+    // == the client slot band activated by SetLocalPeerBand. The host never
+    // changes this off 0 because it never calls AllocLocalId.
+    uint8_t m_activeBand = 0;
 
-    // Pre-populate the free stacks with the full id range (one-time at
-    // construction + on Reset()). Called under m_mutex.
+    // Pre-populate m_hostFree with the full host range and m_localFree with
+    // the pre-slot band only (one-time at construction). Called under
+    // m_mutex (or during construction before any other thread exists).
     void RefillFreeStacks_();
 };
 

@@ -91,6 +91,15 @@ void Registry::SetLocalPeerId(uint8_t id) {
         DropPlayerElement_(localPeerId_);
     }
     localPeerId_ = id;
+    // D9-2 (PR-FOUNDATION Tier 2): a CLIENT now knows its peer slot, so
+    // activate its exclusive ElementId band BEFORE allocating the local
+    // Player Element -- otherwise EnsurePlayerElement_ -> AllocLocalId would
+    // mint from the pre-slot band and could collide with another client's
+    // pre-slot id on the host relay. Slot 0 (host) is skipped: the host
+    // allocates from the host range (AllocHostId), never the peer range.
+    if (id != kPeerIdHost && id < kMaxPeers) {
+        coop::element::Registry::Get().SetLocalPeerBand(id);
+    }
     if (id < kMaxPeers) {
         // Create the LOCAL Player Element (puppet=nullptr; the local IS
         // the local player). Other slots' Player Elements track puppets

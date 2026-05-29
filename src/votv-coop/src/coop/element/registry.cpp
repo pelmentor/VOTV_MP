@@ -15,16 +15,42 @@
 
 #include "coop/element/registry.h"
 
+#include "coop/players_registry.h"  // kMaxPeers (peer-band count, D9-2)
 #include "ue_wrap/log.h"
 
 namespace coop::element {
+
+namespace {
+// D9-2 (PR-FOUNDATION Tier 2): the peer range [kHostRangeSize, kMaxElements)
+// is split into kMaxPeers equal bands. Band index 0 is the "pre-slot" band
+// used during the boot/seed window before a client knows its slot; band
+// indices 1..kMaxPeers-1 are the per-client-slot exclusive bands. Slot 0
+// (kPeerIdHost) reuses band 0 as the pre-slot scratch -- safe because the
+// host NEVER calls AllocLocalId (it allocates its own elements from the
+// host range via AllocHostId), so band 0 is only ever consumed by
+// pre-slot-window allocations on a client.
+constexpr uint32_t kPeerBandCount = coop::players::kMaxPeers;
+constexpr uint32_t kSlotBandSize  =
+    (kMaxElements - kHostRangeSize) / kPeerBandCount;  // 32768/4 = 8192
+
+// [base, end) of the band for the given band index (0 = pre-slot,
+// 1..kMaxPeers-1 = client slots). The last band absorbs any remainder so
+// the union exactly covers the peer range.
+constexpr ElementId BandBase(uint8_t band) {
+    return kHostRangeSize + static_cast<ElementId>(band) * kSlotBandSize;
+}
+constexpr ElementId BandEnd(uint8_t band) {
+    return (band + 1u == kPeerBandCount) ? kMaxElements
+                                         : BandBase(band) + kSlotBandSize;
+}
+}  // namespace
 
 // Forward decl of the latch-flipper in element.cpp (audit fix 2026-05-28).
 void NotifyRegistryShuttingDown();
 
 Registry::Registry() {
     m_hostFree.reserve(kHostRangeSize);
-    m_localFree.reserve(kMaxElements - kHostRangeSize);
+    m_localFree.reserve(kSlotBandSize);
     RefillFreeStacks_();
 }
 
@@ -53,10 +79,48 @@ void Registry::RefillFreeStacks_() {
     for (ElementId id = kHostRangeSize; id-- > 1;) {
         m_hostFree.push_back(id);
     }
+    // D9-2: seed m_localFree with the PRE-SLOT band (band 0) only -- NOT the
+    // whole peer range. A client switches to its exclusive slot band via
+    // SetLocalPeerBand once AssignPeerSlot delivers its slot. Pre-filling the
+    // whole range would let a pre-slot id (e.g. 32768) later be re-issued from
+    // the slot band [32768, ...) while the pre-slot element still holds it ->
+    // intra-process m_byId collision.
     m_localFree.clear();
-    for (ElementId id = kMaxElements; id-- > kHostRangeSize;) {
+    m_activeBand = 0;
+    for (ElementId id = BandEnd(0); id-- > BandBase(0);) {
         m_localFree.push_back(id);
     }
+}
+
+void Registry::SetLocalPeerBand(uint8_t slot) {
+    if (slot == 0 || slot >= coop::players::kMaxPeers) {
+        UE_LOGW("element::Registry: SetLocalPeerBand(%u) invalid -- valid client "
+                "slots are [1, %u); ignoring",
+                static_cast<unsigned>(slot),
+                static_cast<unsigned>(coop::players::kMaxPeers));
+        return;
+    }
+    std::lock_guard<std::mutex> lk(m_mutex);
+    if (m_activeBand == slot) return;  // idempotent re-assign on the same slot
+    // Replace m_localFree with the slot's exclusive band. Pre-slot ids still
+    // alive in m_byId are NOT on the free stack (they were popped at alloc and
+    // not yet freed), so clearing the stack here cannot orphan a live element;
+    // their eventual FreeId pushes them back onto m_localFree (now the slot
+    // band) where they recycle harmlessly (FreeId clears m_byId before the
+    // push, so a re-issue finds an empty slot). Already-freed pre-slot ids
+    // sitting on the old m_localFree are simply discarded -- a bounded
+    // one-time leak of at most the pre-slot allocations destroyed before the
+    // handshake completed (rare; world-load props normally outlive it).
+    m_localFree.clear();
+    m_activeBand = slot;
+    const ElementId base = BandBase(slot);
+    const ElementId end  = BandEnd(slot);
+    m_localFree.reserve(end - base);
+    for (ElementId id = end; id-- > base;) {
+        m_localFree.push_back(id);
+    }
+    UE_LOGI("element::Registry: activated peer band for slot %u -> [%u, %u) "
+            "(%u ids)", static_cast<unsigned>(slot), base, end, end - base);
 }
 
 ElementId Registry::AllocHostId(Element* e) {
@@ -157,7 +221,14 @@ size_t Registry::HostCount() const {
 
 size_t Registry::LocalCount() const {
     std::lock_guard<std::mutex> lk(m_mutex);
-    return (kMaxElements - kHostRangeSize) - m_localFree.size();
+    // D9-2: m_localFree holds the currently-active band only, so the
+    // allocated count is that band's capacity minus the free remainder.
+    // Clamp at 0: after a band switch, freed pre-slot ids recycle onto
+    // m_localFree and can transiently push its size above the band
+    // capacity (a bounded, harmless overshoot) -- avoid size_t underflow.
+    const size_t bandCapacity = BandEnd(m_activeBand) - BandBase(m_activeBand);
+    return m_localFree.size() >= bandCapacity ? 0
+                                              : bandCapacity - m_localFree.size();
 }
 
 size_t Registry::SnapshotActorsByType(ElementType t,
