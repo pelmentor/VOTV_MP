@@ -133,6 +133,14 @@ void Update(net::Session& session, void* localPlayer) {
                         static_cast<size_t>(msg.payloadLen), sizeof(net::PropReleasePayload));
                 break;
             }
+            // B3 audit fix I4: senderPeerSlot threads into remote_prop::OnRelease
+            // for routing into g_drives[slot]. Range-check before use so a
+            // malformed -1 or out-of-range value can't OOB the slot array.
+            if (msg.senderPeerSlot < 0 || msg.senderPeerSlot >= net::kMaxPeers) {
+                UE_LOGW("event_feed: PropRelease invalid senderPeerSlot=%d -- dropping",
+                        msg.senderPeerSlot);
+                break;
+            }
             net::PropReleasePayload p{};
             std::memcpy(&p, msg.payload, sizeof(p));
             // Trust-boundary validation: a NaN/Inf or absurd-magnitude velocity
@@ -290,6 +298,17 @@ void Update(net::Session& session, void* localPlayer) {
                         static_cast<size_t>(msg.payloadLen), sizeof(net::EntitySpawnPayload));
                 break;
             }
+            // B3 audit fix C1: EntitySpawn is host-authoritative. Without
+            // a senderPeerSlot trust gate, a malicious client could flood
+            // EntitySpawn packets with crafted className strings, forcing
+            // R::FindClass GUObjectArray walks on the host's game thread
+            // per packet (CPU amplification).
+            if (msg.senderPeerSlot != 0) {
+                UE_LOGW("event_feed: EntitySpawn from non-host senderPeerSlot=%d "
+                        "-- dropping (NPC sync is host-only)",
+                        msg.senderPeerSlot);
+                break;
+            }
             net::EntitySpawnPayload p{};
             std::memcpy(&p, msg.payload, sizeof(p));
             if (p.className.len > 63) {
@@ -311,6 +330,15 @@ void Update(net::Session& session, void* localPlayer) {
                         static_cast<size_t>(msg.payloadLen), sizeof(net::EntityDestroyPayload));
                 break;
             }
+            // B3 audit fix C1: host-authoritative -- reject non-host
+            // senders. A malicious client could otherwise destroy any
+            // NPC element id it learned from a legitimate EntitySpawn.
+            if (msg.senderPeerSlot != 0) {
+                UE_LOGW("event_feed: EntityDestroy from non-host senderPeerSlot=%d "
+                        "-- dropping (NPC sync is host-only)",
+                        msg.senderPeerSlot);
+                break;
+            }
             net::EntityDestroyPayload p{};
             std::memcpy(&p, msg.payload, sizeof(p));
             net::EntityDestroyPayload pCopy = p;
@@ -323,6 +351,15 @@ void Update(net::Session& session, void* localPlayer) {
             // 2026-05-25 LATE +5h (F3 dev key): peer pressed F3 to refill
             // food/sleep/health/coffeePower. No payload to validate -- the
             // action is fixed. Idempotent so an echo bounce is harmless.
+            // B3 audit fix C3: RestoreVitals is a dev-key path (host
+            // presses F3); receiver must enforce host-only origin or
+            // any peer could trivially nullify hunger/survival tension.
+            if (msg.senderPeerSlot != 0) {
+                UE_LOGW("event_feed: RestoreVitals from non-host senderPeerSlot=%d "
+                        "-- dropping (host-only dev-key origin)",
+                        msg.senderPeerSlot);
+                break;
+            }
             ue_wrap::game_thread::Post([] { ::coop::dev::restore_vitals::ApplyLocally(); });
             break;
         }
@@ -333,6 +370,18 @@ void Update(net::Session& session, void* localPlayer) {
             if (msg.payloadLen < sizeof(net::TeleportClientPayload)) {
                 UE_LOGW("event_feed: TeleportClient payload too short (%zu < %zu)",
                         static_cast<size_t>(msg.payloadLen), sizeof(net::TeleportClientPayload));
+                break;
+            }
+            // B3 audit fix C2: TeleportClient is host-only. Without a
+            // senderPeerSlot trust gate, in a 3-peer session client-slot-1
+            // could craft a TeleportClient targeting client-slot-2
+            // (host's PollGroup fan-out would deliver it) -- a positional
+            // griefing/exploit vector at LAN scale, hard exploit at
+            // internet scale.
+            if (msg.senderPeerSlot != 0) {
+                UE_LOGW("event_feed: TeleportClient from non-host senderPeerSlot=%d "
+                        "-- dropping (host-only)",
+                        msg.senderPeerSlot);
                 break;
             }
             net::TeleportClientPayload p{};
@@ -396,6 +445,38 @@ void Update(net::Session& session, void* localPlayer) {
             if (p.state != 0 && p.state != 1) {
                 UE_LOGW("event_feed: ItemActivate state=%u out of range -- dropping",
                         static_cast<unsigned>(p.state));
+                break;
+            }
+            // B3 audit fix I2: reserved flag bits must be zero. A future
+            // bit added in v15+ would otherwise be silently triggerable
+            // by a peer on an older build.
+            if (p.flags & ~coop::net::kItemActivateFlag_HasActorKey) {
+                UE_LOGW("event_feed: ItemActivate flags=0x%02x has reserved bits "
+                        "set -- dropping",
+                        static_cast<unsigned>(p.flags));
+                break;
+            }
+            // B3 audit fix I1: intensity + cone angles are passed directly
+            // to UE light component setters. Without finite + magnitude
+            // checks, a peer can send NaN/Inf (UB inside the renderer)
+            // or 1e30 (blinding white screen). Matches the validator
+            // pattern every other float-bearing reliable kind uses.
+            if (!std::isfinite(p.intensity) ||
+                !std::isfinite(p.outerConeAngle) ||
+                !std::isfinite(p.innerConeAngle)) {
+                UE_LOGW("event_feed: ItemActivate floats non-finite "
+                        "(intensity=%.2f outer=%.2f inner=%.2f) -- dropping",
+                        p.intensity, p.outerConeAngle, p.innerConeAngle);
+                break;
+            }
+            constexpr float kMaxItemIntensity = 1.0e6f;  // unitless ~10 normal range
+            constexpr float kMaxConeAngle     = 180.0f;  // physical degree ceiling
+            if (std::fabs(p.intensity) > kMaxItemIntensity ||
+                std::fabs(p.outerConeAngle) > kMaxConeAngle ||
+                std::fabs(p.innerConeAngle) > kMaxConeAngle) {
+                UE_LOGW("event_feed: ItemActivate floats out of bounds "
+                        "(intensity=%.2f outer=%.2f inner=%.2f) -- dropping",
+                        p.intensity, p.outerConeAngle, p.innerConeAngle);
                 break;
             }
             // v13 (A4 2026-05-29): self-echo guard via ElementId equality

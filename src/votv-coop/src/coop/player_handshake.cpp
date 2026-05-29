@@ -284,6 +284,16 @@ bool HandleAssignPeerSlot(net::Session& session,
                 "(host self-assigns slot 0; no inbound from client)");
         return true;
     }
+    // B3 audit fix I3: enforce that the SENDER connection is the host
+    // (senderPeerSlot == 0). A malicious client peer could otherwise
+    // craft AssignPeerSlot packets if GNS ever fans out client-to-
+    // client traffic; defending here independent of relay topology.
+    if (msg.senderPeerSlot != 0) {
+        UE_LOGW("player_handshake: AssignPeerSlot from non-host "
+                "senderPeerSlot=%d -- dropping",
+                msg.senderPeerSlot);
+        return true;
+    }
     // Slot must be a valid CLIENT slot (1..kMaxPeers-1). Slot 0 is
     // the host's reserved local-self slot.
     if (p.slot < 1 || p.slot >= net::kMaxPeers) {
