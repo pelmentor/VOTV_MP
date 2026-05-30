@@ -6,8 +6,7 @@
 #include "coop/ini_config.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
-#include "ue_wrap/reflection.h"
-#include "ue_wrap/sdk_profile.h"
+#include "ue_wrap/vitals.h"
 
 #include <windows.h>
 
@@ -15,9 +14,8 @@
 
 namespace coop::dev::restore_vitals {
 
-namespace P = ue_wrap::profile;
-namespace R = ue_wrap::reflection;
 namespace GT = ue_wrap::game_thread;
+namespace V = ue_wrap::vitals;
 
 namespace {
 
@@ -30,82 +28,16 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 // exact UI cap rather than something larger so subsequent food consumption
 // behaves identically to a player who reached max naturally (no hidden
 // over-stored value that would gate hunger draining differently).
+// 2026-05-25 NIGHT (user retest +1): writing coffeePower=100 produced a
+// screen-shaking post-coffee vanilla effect (the BP keys an effect off
+// coffeePower > 0). F3 only tops up food/sleep/health, leaving coffeePower as-is.
 constexpr float kMaxVital = 100.0f;
 
-// One-time resolution cache. Set lazily on first press. Cleared / re-resolved
-// only if the cached UObject pointer fails IsLive (level transition / hot
-// reload). Pre-fix every press walked GUObjectArray TWICE (FindObjectByClass +
-// FindClass) plus four FindPropertyOffset calls -- ~100-300 ms of game-thread
-// blocking per press = the half-second FPS hitch the user reported. With these
-// cached, the hot path is one pointer deref + four float writes.
-// 2026-05-25 NIGHT (user retest +1): user observed that writing coffeePower=100
-// produced a screen-shaking post-coffee vanilla effect (the BP graph keys an
-// effect off coffeePower > 0). Drop coffeePower from the refill -- F3 now only
-// tops up food/sleep/health, leaving coffeePower at whatever the player drank
-// to. (Per RULE 2 the coffeePowerOff cache field is removed entirely rather
-// than left as dead baggage.)
-struct Cache {
-    void* mainGameInstance = nullptr;   // live UmainGameInstance_C*
-    int32_t saveGameInstOff = -1;       // mainGameInstance_C::save_gameInst (UsaveSlot_C*)
-    void* saveSlotClass = nullptr;      // UClass* for UsaveSlot_C (offset lookup target)
-    int32_t foodOff = -1;
-    int32_t sleepOff = -1;
-    int32_t healthOff = -1;
-};
-Cache g_cache;
+// The GameInstance->save_gameInst->saveSlot resolution + the cached-offset writes
+// now live in ue_wrap::vitals (extracted 2026-05-30, P7). This file owns only the
+// dev hotkey + the coop broadcast.
 
 bool KeyDown(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
-
-// Lazily resolve the cache. Returns true once every field is filled. Logs a
-// one-line warning on the first failure so the user knows which step blocked.
-// Called from the game thread (the UObject lookups must be game-thread).
-bool EnsureResolved() {
-    // (1) GameInstance: live singleton, never destroyed after world boot. Cache
-    //     it once; refresh only if the slot was reused for another object.
-    if (g_cache.mainGameInstance && !R::IsLive(g_cache.mainGameInstance)) {
-        g_cache.mainGameInstance = nullptr;
-    }
-    if (!g_cache.mainGameInstance) {
-        g_cache.mainGameInstance = R::FindObjectByClass(P::name::GameInstanceClass);
-        if (!g_cache.mainGameInstance) {
-            UE_LOGW("restore_vitals: mainGameInstance_C not yet alive (still booting?)");
-            return false;
-        }
-    }
-    // (2) save_gameInst offset on mainGameInstance_C. BP-cooked offsets shift
-    //     across recooks (per [[project-adaptation-strategy]]); resolve via
-    //     reflection rather than hardcoding 0x01A8 from the SDK dump.
-    if (g_cache.saveGameInstOff < 0) {
-        void* giClass = R::ClassOf(g_cache.mainGameInstance);
-        if (!giClass) {
-            UE_LOGW("restore_vitals: mainGameInstance has no UClass");
-            return false;
-        }
-        g_cache.saveGameInstOff = R::FindPropertyOffset(giClass, L"save_gameInst");
-        if (g_cache.saveGameInstOff < 0) {
-            UE_LOGW("restore_vitals: save_gameInst field not found on mainGameInstance_C");
-            return false;
-        }
-    }
-    // (3) saveSlot_C UClass (target for offset lookups).
-    if (!g_cache.saveSlotClass) {
-        g_cache.saveSlotClass = R::FindClass(P::name::SaveSlotClass);
-        if (!g_cache.saveSlotClass) {
-            UE_LOGW("restore_vitals: saveSlot_C class unresolvable");
-            return false;
-        }
-    }
-    // (4) Three vital field offsets on saveSlot_C. Same BP-cooked rule as (2).
-    if (g_cache.foodOff   < 0) g_cache.foodOff   = R::FindPropertyOffset(g_cache.saveSlotClass, L"food");
-    if (g_cache.sleepOff  < 0) g_cache.sleepOff  = R::FindPropertyOffset(g_cache.saveSlotClass, L"sleep");
-    if (g_cache.healthOff < 0) g_cache.healthOff = R::FindPropertyOffset(g_cache.saveSlotClass, L"health");
-    if (g_cache.foodOff < 0 || g_cache.sleepOff < 0 || g_cache.healthOff < 0) {
-        UE_LOGW("restore_vitals: vital offsets unresolved (food=%d sleep=%d health=%d)",
-                g_cache.foodOff, g_cache.sleepOff, g_cache.healthOff);
-        return false;
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -114,30 +46,18 @@ void SetSession(coop::net::Session* session) {
 }
 
 void ApplyLocally() {
-    if (!EnsureResolved()) return;
-    // Dereference mainGameInstance.save_gameInst -- the CANONICAL live saveSlot
-    // pointer used by the rest of the BP graph. Pre-fix used
-    // FindObjectByClass(saveSlot_C) which walks GUObjectArray and returns the
-    // first non-CDO; in gameplay there's only one saveSlot_C so the value found
-    // matched, BUT ui_saveSlots.hpp keeps several UsaveSlot_C* arrays
-    // (saves / saves_infront / saves_subslots) that can leave additional
-    // instances live after the menu, and the walk would return whichever
-    // landed at the lower GUObjectArray index. Pointing through GameInstance
-    // bypasses the ambiguity.
-    void* slot = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(g_cache.mainGameInstance) + g_cache.saveGameInstOff);
-    if (!slot) {
-        UE_LOGW("restore_vitals: mainGameInstance.save_gameInst is null (save not registered yet)");
-        return;
+    // Game-thread only (saveSlot writes touch BP state). ue_wrap::vitals caches
+    // the resolution after the first call; a press before the save is registered
+    // returns false on each field and is logged, not crashed.
+    const bool food   = V::Write(V::Field::Food,   kMaxVital);
+    const bool sleep  = V::Write(V::Field::Sleep,  kMaxVital);
+    const bool health = V::Write(V::Field::Health, kMaxVital);
+    if (food && sleep && health) {
+        UE_LOGI("restore_vitals: vitals refilled (food/sleep/health = %.1f)", kMaxVital);
+    } else {
+        UE_LOGW("restore_vitals: refill incomplete (food=%d sleep=%d health=%d) -- "
+                "save not registered / still booting?", food, sleep, health);
     }
-    auto write = [slot](int32_t off, float v) {
-        *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(slot) + off) = v;
-    };
-    write(g_cache.foodOff,   kMaxVital);
-    write(g_cache.sleepOff,  kMaxVital);
-    write(g_cache.healthOff, kMaxVital);
-    UE_LOGI("restore_vitals: vitals refilled (slot=%p, food/sleep/health = %.1f)",
-            slot, kMaxVital);
 }
 
 namespace {

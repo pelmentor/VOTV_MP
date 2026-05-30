@@ -111,6 +111,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/puppet.cpp
     src/ue_wrap/hud_feed.cpp
     src/ue_wrap/prop.cpp
+    src/ue_wrap/vitals.cpp
     src/coop/remote_player.cpp
     src/coop/remote_prop.cpp
     src/coop/save_guard.cpp
