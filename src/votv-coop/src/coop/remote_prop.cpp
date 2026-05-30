@@ -11,6 +11,7 @@
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
+#include "ue_wrap/hot_path_guard.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
@@ -59,6 +60,8 @@ std::array<ActiveDrive, coop::players::kMaxPeers> g_drives{};
 // spawn receiver "this actor is currently being kinematically driven, so
 // skip transform convergence (PropPose owns position)".
 bool IsActorUnderAnyDrive(void* actor) {
+    // g_drives is GT-only-by-convention (T-10, no mutex). Enforce it.
+    UE_ASSERT_GAME_THREAD("g_drives (IsActorUnderAnyDrive)");
     if (!actor) return false;
     for (const auto& d : g_drives) {
         if (d.actor == actor) return true;
@@ -308,6 +311,9 @@ void ResolveAndStartDrive(int slot, const coop::net::WireKey& k) {
 }  // namespace
 
 void Tick(coop::net::Session& session) {
+    // Drives g_drives across all slots (T-10, GT-only). Called every game-
+    // thread tick from net_pump::Tick.
+    UE_ASSERT_GAME_THREAD("g_drives (remote_prop::Tick)");
     if (!session.connected()) {
         ForceRelease();
         return;
@@ -378,6 +384,9 @@ void Tick(coop::net::Session& session) {
 }
 
 void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, void* localPlayer) {
+    // Reads + clears g_drives[senderSlot] (T-10, GT-only). Dispatched from
+    // event_feed on the game thread.
+    UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnRelease)");
     const std::wstring keyW = KeyToWString(payload.key);
     const float linSpeedSq = payload.linVelX * payload.linVelX +
                              payload.linVelY * payload.linVelY +
@@ -595,6 +604,9 @@ bool ResolveDestroyFn() {
 }  // namespace
 
 void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) {
+    // Clears g_drives[*] if the destroyed actor was under drive (T-10, GT-only).
+    // Dispatched from event_feed::Update on the game thread (PropDestroy case).
+    UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDestroy)");
     const std::wstring keyW = KeyToWString(payload.key);
     if (keyW.empty()) {
         UE_LOGW("remote_prop::OnDestroy: empty key -- dropping");
@@ -647,6 +659,9 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
 }
 
 void ForceRelease() {
+    // Clears every slot's g_drives state (T-10, GT-only). Called from
+    // remote_prop::Tick on disconnect and from aggregate teardown (game thread).
+    UE_ASSERT_GAME_THREAD("g_drives (remote_prop::ForceRelease)");
     // Force-release on aggregate disconnect/teardown clears every slot's
     // drive. Per-slot disconnect uses OnDisconnectForSlot instead.
     int released = 0;
@@ -679,6 +694,9 @@ void ForceRelease() {
 }
 
 void OnDisconnectForSlot(int peerSlot) {
+    // Clears g_drives[peerSlot] (T-10, GT-only). Called from net_pump::Tick's
+    // per-slot disconnect edge (game thread).
+    UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDisconnectForSlot)");
     if (peerSlot < 0 || peerSlot >= static_cast<int>(coop::players::kMaxPeers)) return;
     ActiveDrive& d = g_drives[peerSlot];
     if (!d.actor) return;

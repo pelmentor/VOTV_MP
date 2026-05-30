@@ -6,6 +6,7 @@
 #include "coop/element/registry.h"
 #include "coop/remote_player.h"
 #include "ue_wrap/engine.h"
+#include "ue_wrap/hot_path_guard.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
@@ -83,6 +84,10 @@ uint8_t Registry::LocalPeerId() const {
 }
 
 void Registry::SetLocalPeerId(uint8_t id) {
+    // Reads + (via Drop/EnsurePlayerElement_) mutates playerBySlot_ (T-7,
+    // GT-only). Callers: net_pump host self-registration each tick + the
+    // AssignPeerSlot handshake handler -- both on the game thread.
+    UE_ASSERT_GAME_THREAD("players::Registry::SetLocalPeerId (playerBySlot_)");
     // Idempotent on same id (caller pattern: host calls this every tick).
     if (localPeerId_ == id && id < kMaxPeers && playerBySlot_[id]) return;
     // If the local peer id changes (re-assign after reconnect), drop the
@@ -160,6 +165,9 @@ uint8_t Registry::PeerIdOfActor(void* actor) {
 }
 
 coop::element::Player* Registry::GetPlayerElement(uint8_t peerSlot) {
+    // playerBySlot_ is GT-only-by-convention (T-7); the net-thread-safe read is
+    // LocalPlayerElementId()'s atomic, not this raw map walk. Enforce GT here.
+    UE_ASSERT_GAME_THREAD("players::Registry::GetPlayerElement (playerBySlot_)");
     if (peerSlot >= kMaxPeers) return nullptr;
     return playerBySlot_[peerSlot].get();
 }
@@ -175,6 +183,10 @@ coop::element::ElementId Registry::LocalPlayerElementId() const {
 
 bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
                                        coop::element::ElementId wireEid) {
+    // Reads + writes playerBySlot_ directly (T-7, GT-only). Callers: the
+    // HandleJoin / HandlePlayerJoined / HandleAssignPeerSlot handshake handlers,
+    // all dispatched from event_feed::Update on the game thread.
+    UE_ASSERT_GAME_THREAD("players::Registry::EstablishMirrorForSlot (playerBySlot_)");
     if (peerSlot >= kMaxPeers) {
         UE_LOGW("players::Registry: EstablishMirrorForSlot peerSlot=%u out of range "
                 "(max=%u) -- dropping",
@@ -242,6 +254,9 @@ bool Registry::EstablishMirrorForSlot(uint8_t peerSlot,
 }
 
 void Registry::EnsurePlayerElement_(uint8_t peerSlot, coop::RemotePlayer* puppet) {
+    // Mutates playerBySlot_ AND publishes g_localPlayerElementIdAtomic; the
+    // publish is the net-thread-safe READ side, the mutation is GT-only (T-7).
+    UE_ASSERT_GAME_THREAD("players::Registry::EnsurePlayerElement_ (playerBySlot_)");
     if (peerSlot >= kMaxPeers) return;
     // Idempotent: if an Element already exists with the same (peerSlot, puppet)
     // signature, no-op. Callers like net_pump's host self-registration loop
@@ -306,6 +321,9 @@ void Registry::EnsurePlayerElement_(uint8_t peerSlot, coop::RemotePlayer* puppet
 }
 
 void Registry::DropPlayerElement_(uint8_t peerSlot) {
+    // Mutates playerBySlot_ (and clears g_localPlayerElementIdAtomic); GT-only
+    // (T-7). The dtor briefly takes element::Registry::m_mutex -- safe on GT.
+    UE_ASSERT_GAME_THREAD("players::Registry::DropPlayerElement_ (playerBySlot_)");
     if (peerSlot >= kMaxPeers) return;
     if (!playerBySlot_[peerSlot]) return;
     const auto eid = playerBySlot_[peerSlot]->GetId();

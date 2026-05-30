@@ -517,6 +517,14 @@ bool IsGameThread() {
     return gt != 0 && gt == ::GetCurrentThreadId();
 }
 
+bool IsDefinitelyOffGameThread() {
+    // gt==0 means "not known yet" -- we cannot prove anything, so report false
+    // (the guard must not fire at boot before the first ProcessEvent dispatch
+    // records the game thread id). Once known, fire only on a real mismatch.
+    const unsigned long gt = g_gameThreadId.load(std::memory_order_relaxed);
+    return gt != 0 && gt != ::GetCurrentThreadId();
+}
+
 unsigned long long TasksRun() { return g_tasksRun.load(std::memory_order_relaxed); }
 
 bool RegisterInterceptor(void* targetUFunction, UFunctionInterceptor cb) {

@@ -7,6 +7,7 @@
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/remote_player.h"
+#include "ue_wrap/hot_path_guard.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/log.h"
 
@@ -134,6 +135,11 @@ void Reset() {
 void MaybeSendJoinToSlot(net::Session& session, int slot,
                          std::vector<uint8_t>& joinPayload,
                          bool& joinPayloadBuilt) {
+    // Reads g_localNick + g_joinSentBySlot (GT-only side-tables, T-8). Called
+    // from the net_pump connect-edge each tick. (The boot-thread WRITER
+    // SetLocalNickname stays unguarded -- it runs once on the bringup thread
+    // before the pump sends any Join.)
+    UE_ASSERT_GAME_THREAD("g_joinSentBySlot/g_localNick (MaybeSendJoinToSlot)");
     if (slot < 0 || slot >= net::kMaxPeers) return;
     if (g_joinSentBySlot[slot]) return;
     // v13 (A4 2026-05-29): hold off on the FIRST Join until our
@@ -177,6 +183,9 @@ void MaybeSendJoinToSlot(net::Session& session, int slot,
 }
 
 void OnSlotDisconnected(int slot) {
+    // Clears g_joinSentBySlot + g_remoteNickBySlot (T-8); fired from the
+    // net_pump disconnect edge (game thread).
+    UE_ASSERT_GAME_THREAD("g_remoteNickBySlot (OnSlotDisconnected)");
     if (slot < 0 || slot >= net::kMaxPeers) return;
     g_joinSentBySlot[slot] = false;
     // N-5 (2026-05-29 audit): clear the stashed nickname so a subsequent peer
@@ -187,6 +196,9 @@ void OnSlotDisconnected(int slot) {
 }
 
 const std::wstring& NicknameForSlot(int slot) {
+    // Reads g_remoteNickBySlot (T-8). Callers (puppet-spawn nameplate labelling
+    // in net_pump, the handshake handlers) are all on the game thread.
+    UE_ASSERT_GAME_THREAD("g_remoteNickBySlot (NicknameForSlot)");
     static const std::wstring kPlaceholder = L"Remote player";
     if (slot < 0 || slot >= net::kMaxPeers) return kPlaceholder;
     return g_remoteNickBySlot[slot];
@@ -194,6 +206,9 @@ const std::wstring& NicknameForSlot(int slot) {
 
 bool HandleJoinMessage(net::Session& session,
                        const net::Session::ReliableMessage& msg) {
+    // Reads + writes g_remoteNickBySlot (T-8). Dispatched from
+    // event_feed::Update on the game thread (net_pump::Tick -> Update).
+    UE_ASSERT_GAME_THREAD("g_remoteNickBySlot (HandleJoinMessage)");
     // Per-slot nickname keyed on the sender's peer slot. A single
     // global scalar would let two clients on host clobber each
     // other's nick on every Join.
@@ -363,6 +378,9 @@ void BroadcastPlayerJoinedFromHost(net::Session& session, int joinerSlot,
 
 bool HandlePlayerJoined(net::Session& session,
                         const net::Session::ReliableMessage& msg) {
+    // Reads + writes g_remoteNickBySlot (T-8). Dispatched from
+    // event_feed::Update on the game thread (client-side cross-peer identity).
+    UE_ASSERT_GAME_THREAD("g_remoteNickBySlot (HandlePlayerJoined)");
     // Host originates PlayerJoined; it must never receive one. Reject on
     // host + require the sender to be the host (senderPeerSlot==0) on the
     // client -- a client peer crafting PlayerJoined could otherwise inject

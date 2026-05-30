@@ -23,6 +23,7 @@
 #include "coop/weather_sync.h"
 
 #include "ue_wrap/engine.h"
+#include "ue_wrap/hot_path_guard.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -174,10 +175,18 @@ void OnSessionStart() {
 }
 
 coop::RemotePlayer& Puppet(int slot) {
+    // g_puppets is a GT-only-by-convention side-table (no mutex). Enforce it.
+    UE_ASSERT_GAME_THREAD("g_puppets (net_pump::Puppet)");
     return g_puppets[slot];
 }
 
 void Tick(coop::net::Session& session, float displayOffsetX) {
+    // This whole body is game-thread-only: it drives g_puppets (a GT-only-by-
+    // convention side-table) and runs ElementDeleter::Flush (the controlled
+    // game-thread destruction point). One guard at the top enforces the
+    // invariant for everything below it.
+    UE_ASSERT_GAME_THREAD("net_pump::Tick (g_puppets + ElementDeleter::Flush)");
+
     // Deferred-element destruction flush (MTA CElementDeleter shape; see
     // coop/element/element_deleter.h). Drains, on the game thread at one
     // controlled point, any Elements parked for destruction by owner-map

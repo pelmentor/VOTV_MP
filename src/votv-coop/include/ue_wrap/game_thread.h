@@ -39,6 +39,15 @@ void Post(Task task);
 // least once). Useful for asserting before touching engine state directly.
 bool IsGameThread();
 
+// True only if we can PROVE the caller is NOT the game thread -- i.e. the game
+// thread id is KNOWN (the detour has run at least once) AND the current thread
+// differs from it. Distinct from `!IsGameThread()`, which is ALSO true before
+// the id is known (id==0) and would therefore false-positive at boot. This is
+// the predicate the HotPathGuard (ue_wrap/hot_path_guard.h) fires on: it must
+// never trip for "don't-know-yet", only for an actual proven off-thread access
+// to a game-thread-only-by-convention side-table.
+bool IsDefinitelyOffGameThread();
+
 // Number of tasks the dispatcher has executed (diagnostics / self-test).
 unsigned long long TasksRun();
 
