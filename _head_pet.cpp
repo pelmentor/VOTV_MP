@@ -298,24 +298,17 @@ coop::element::ElementId GetPropElementIdForActor(void* actor) {
     return it->second;
 }
 
-// ---- Seed / re-seed scan ------------------------------------------------
+// ---- One-shot seed scan -------------------------------------------------
 //
-// Shared walk body for the one-shot boot seed AND an explicit re-seed (level/
-// world change). Two-phase to avoid holding the mutex for the full ~150k
-// GUObjectArray walk: phase 1 builds a local vector of live keyed-interactable
-// pointers without any lock (reflection probes are thread-safe in our setup);
-// phase 2 takes the mutex once and bulk-inserts. Both phases are IDEMPOTENT --
-// g_knownKeyedProps.insert is a set insert (no-op if present) and MarkPropElement
-// no-ops on an already-tracked actor -- so a re-seed only ADDS props the world
-// gained that we are not yet tracking. Returns counts; `newlyTracked` is how many
-// keyed actors this walk added to g_knownKeyedProps (= the whole set on the first
-// boot seed; the delta on a re-seed).
-namespace {
-struct SeedCounts { int liveFound = 0; int newlyTracked = 0; int cdo = 0; int dying = 0; };
-
-SeedCounts SeedWalk_() {
+// Two-phase to avoid holding the mutex for the full ~150k GUObjectArray
+// walk: phase 1 builds a local vector of live keyed-interactable pointers
+// without any lock (reflection probes are thread-safe in our setup);
+// phase 2 takes the mutex once and bulk-inserts.
+void SeedKnownKeyedProps() {
+    static std::atomic<bool> done{false};
+    if (done.load(std::memory_order_acquire)) return;
     const int32_t n = R::NumObjects();
-    SeedCounts c;
+    int cdo = 0, dying = 0;
     std::vector<void*> live;
     live.reserve(4096);
     for (int32_t i = 0; i < n; ++i) {
@@ -323,16 +316,17 @@ SeedCounts SeedWalk_() {
         if (!obj) continue;
         if (!ue_wrap::prop::IsKeyedInteractable(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
-        if (nm.rfind(L"Default__", 0) == 0) { ++c.cdo; continue; }
-        if (!R::IsLive(obj)) { ++c.dying; continue; }
+        if (nm.rfind(L"Default__", 0) == 0) { ++cdo; continue; }
+        if (!R::IsLive(obj)) { ++dying; continue; }
         live.push_back(obj);
     }
-    c.liveFound = static_cast<int>(live.size());
+    int seeded = 0;
     {
         std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
         for (void* obj : live) {
             if (g_knownKeyedProps.size() >= kKnownKeyedPropsCap) break;
-            if (g_knownKeyedProps.insert(obj).second) ++c.newlyTracked;  // .second = newly inserted
+            g_knownKeyedProps.insert(obj);
+            ++seeded;
         }
     }
     // Tier 3 Props migration 2026-05-28: also create Prop Element shadows
@@ -352,26 +346,11 @@ SeedCounts SeedWalk_() {
         const std::wstring cls = R::ClassNameOf(obj);
         const std::wstring key = ue_wrap::prop::GetInteractableKeyString(obj);
         if (key.empty() || key == L"None") continue;
-        MarkPropElement(obj, key, cls);  // idempotent
+        MarkPropElement(obj, key, cls);
     }
-    return c;
-}
-}  // namespace
-
-void SeedKnownKeyedProps() {
-    static std::atomic<bool> done{false};
-    if (done.load(std::memory_order_acquire)) return;
-    const SeedCounts c = SeedWalk_();
-    UE_LOGI("prop_element_tracker: seeded known-keyed-props set with %d live actors (%d new, %d CDOs, %d dying skipped) -- subsequent snapshots skip GUObjectArray walk",
-            c.liveFound, c.newlyTracked, c.cdo, c.dying);
+    UE_LOGI("prop_element_tracker: seeded known-keyed-props set with %d live actors (%d CDOs, %d dying skipped) -- subsequent snapshots skip GUObjectArray walk",
+            seeded, cdo, dying);
     done.store(true, std::memory_order_release);
-}
-
-size_t ReSeedKnownKeyedProps() {
-    const SeedCounts c = SeedWalk_();
-    UE_LOGI("prop_element_tracker: re-seed found %d live keyed props, added %d NEW to tracking (%d CDOs, %d dying) -- world/level-change reconcile [snapshot-completeness]",
-            c.liveFound, c.newlyTracked, c.cdo, c.dying);
-    return static_cast<size_t>(c.newlyTracked);
 }
 
 // ---- Dead-Element reaper ------------------------------------------------

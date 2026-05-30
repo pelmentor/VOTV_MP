@@ -53,6 +53,9 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // Dead-Prop-Element reaper self-test: both peers; forces a synthetic dead
     // local Prop Element and verifies ReapDeadLocalPropElements evicts it.
     SpawnIf("VOTVCOOP_RUN_PROPREAP_TEST", "prop-reap test", &PropReapTestThread, role);
+    // Re-seed snapshot-completeness probe: both peers; after settle, re-seeds and
+    // logs how many NEW live keyed props the boot seed missed (verify step).
+    SpawnIf("VOTVCOOP_RUN_RESEED_TEST", "re-seed probe", &ReSeedTestThread, role);
 }
 
 }  // namespace harness::autotest

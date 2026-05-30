@@ -219,10 +219,74 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     {
         using ReapClock = std::chrono::steady_clock;
         static ReapClock::time_point sNextReap{};
+        // The reaper evicts up to this many dead Prop Elements per 4s scan (bounds
+        // the per-Flush ~Prop count). SEPARATE from the re-seed episode threshold
+        // below.
+        constexpr size_t kReapEvictCap = 256;
+        // World-change re-seed trigger (snapshot-completeness fix 2026-05-30).
+        // The one-shot boot seed runs on the pre-travel world; after VOTV's
+        // boot-time `open untitled_1` (and any future cave/level travel) the new
+        // level's PLACED props are live-but-untracked (placed props don't fire a
+        // catchable Init POST -- the very reason the seed exists). The host then
+        // tracks ~70 of ~3300 props -> the late-joiner snapshot ships ~2%.
+        //
+        // DETECTOR: the reaper ONLY ever finds props flagged PendingKill WITHOUT a
+        // K2_DestroyActor (normal destruction goes through that observer -> reaped
+        // is 0 in steady gameplay). So a single scan reaping >= kReseedPurge props
+        // is a mass purge = a level/world transition. The threshold is well below
+        // the eviction cap so it also catches SMALL transitions (e.g. exiting a
+        // cave back to the main world purges only the cave's props -- a 256-cap-hit
+        // gate would miss it and leave the main world untracked; audit 2026-05-30),
+        // while staying above any incidental GC.
+        constexpr size_t kReseedPurge = 64;
+        // We defer the re-seed to the END of the purge EPISODE -- the scan where the
+        // reaper drain CATCHES UP (reaps < kReseedPurge => backlog fully drained).
+        // Running it against a fully-drained registry avoids any recycled-address
+        // idempotency edge (a new prop reusing a not-yet-drained dead prop's actor
+        // address would be skipped by MarkPropElement). The episode flag (not a
+        // cooldown) gates re-arming: one purge drains over many 4s scans, all ONE
+        // episode; a genuinely NEW transition (later cave entry) starts a fresh
+        // episode and re-seeds again. Same GT cost class as the boot seed (both
+        // ~thousands of MarkPropElement on this Tick); the reaper leaves the
+        // re-seeded props (fresh valid internalIdx -> IsLiveByIndex true). Smoke
+        // 2026-05-30: snapshot 70 -> 2314 (the 2314-vs-3328-found gap is empty/None-
+        // key props, correctly excluded as non-syncable).
+        static bool sInPurgeEpisode = false;
         const auto reapNow = ReapClock::now();
         if (reapNow >= sNextReap) {
             sNextReap = reapNow + std::chrono::seconds(4);
-            coop::prop_element_tracker::ReapDeadLocalPropElements(256);
+            const size_t reaped = coop::prop_element_tracker::ReapDeadLocalPropElements(kReapEvictCap);
+            if (reaped >= kReseedPurge) {
+                if (!sInPurgeEpisode) {
+                    sInPurgeEpisode = true;
+                    UE_LOGI("net_pump: mass-purge detected (reaped %zu >= %zu) -- world-change re-seed deferred to drain-complete",
+                            reaped, kReseedPurge);
+                }
+            } else if (sInPurgeEpisode) {
+                // Drain caught up: the old level's dead Prop Elements are fully
+                // evicted and the new level has loaded. Re-seed now (clean -- no
+                // recycled-address collisions) + catch up connected peers.
+                sInPurgeEpisode = false;
+                const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps();
+                UE_LOGI("net_pump: world-change re-seed added %zu live keyed prop(s) (snapshot-completeness)", added);
+                // Catch up ALREADY-connected peers to the now-complete prop set:
+                // their connect-edge snapshot enumerated the PRE-re-seed (partial)
+                // registry -- an early joiner during host boot, OR a peer connected
+                // when the host travelled (cave/level-change). Re-trigger the
+                // per-slot snapshot; prop_snapshot queues it if a drain is in flight
+                // and re-enumerates the (now complete) registry at dequeue, and the
+                // client's RegisterPropMirror dedupes props it already holds. No-op
+                // when no peer is connected yet (the normal boot case -- the eventual
+                // connect-edge snapshot then reads the complete registry). Host-only.
+                if (added > 0 && session.role() == coop::net::Role::Host) {
+                    for (int slot = 1; slot < coop::players::kMaxPeers; ++slot) {
+                        if (session.IsSlotReady(slot)) {
+                            coop::prop_snapshot::TriggerForSlot(slot);
+                            UE_LOGI("net_pump: re-snapshot ready slot %d after world-change re-seed", slot);
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -97,4 +97,15 @@ DWORD WINAPI WorldCtxTestThread(LPVOID arg);
 void RunAutonomousPropReapTest();
 DWORD WINAPI PropReapTestThread(LPVOID arg);
 
+// Re-seed snapshot-completeness PROBE (2026-05-30). Both peers. After a long
+// settle (25 s -- well past VOTV's boot-time `open untitled_1` level travel),
+// calls prop_element_tracker::ReSeedKnownKeyedProps on the game thread and logs
+// how many NEW live keyed props it adds. A large add proves the bug (the
+// one-shot boot seed ran on the pre-travel world, so the story map's placed
+// props were never tracked -> incomplete late-joiner snapshot). Gated by env
+// VOTVCOOP_RUN_RESEED_TEST="1". This is the verify step before wiring an
+// automatic world-change re-seed trigger.
+void RunAutonomousReSeedTest();
+DWORD WINAPI ReSeedTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

@@ -752,4 +752,29 @@ DWORD WINAPI PropReapTestThread(LPVOID /*arg*/) {
     return 0;
 }
 
+// ---- re-seed snapshot-completeness probe -----------------------------------
+//
+// Verify step (see autotest.h). After a 25 s settle -- past VOTV's boot-time
+// `open untitled_1` level travel -- runs ReSeedKnownKeyedProps on the GT and
+// logs how many NEW live keyed props it adds. A large number proves the boot
+// seed missed the story map's placed props (incomplete late-joiner snapshot).
+// Gated by env VOTVCOOP_RUN_RESEED_TEST="1".
+void RunAutonomousReSeedTest() {
+    UE_LOGI("reseed_test: starting (waiting 25 s for world settle past boot level-travel)");
+    ::Sleep(25000);
+    auto added = std::make_shared<std::atomic<long>>(-1);
+    GT::Post([added] {
+        const size_t n = coop::prop_element_tracker::ReSeedKnownKeyedProps();
+        added->store(static_cast<long>(n), std::memory_order_release);
+    });
+    for (int i = 0; i < 2000 && added->load(std::memory_order_acquire) < 0; ++i) ::Sleep(5);
+    UE_LOGI("reseed_test: DONE -- re-seed added %ld NEW props (grep 're-seed found' for the full line; >0 confirms the incomplete-snapshot bug)",
+            added->load(std::memory_order_acquire));
+}
+
+DWORD WINAPI ReSeedTestThread(LPVOID /*arg*/) {
+    RunAutonomousReSeedTest();
+    return 0;
+}
+
 }  // namespace harness::autotest

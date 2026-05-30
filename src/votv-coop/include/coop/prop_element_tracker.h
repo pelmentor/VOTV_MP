@@ -96,6 +96,22 @@ coop::element::ElementId GetPropElementIdForActor(void* actor);
 // ~150k object walk).
 void SeedKnownKeyedProps();
 
+// Re-run the seed walk WITHOUT the one-shot latch (snapshot-completeness fix,
+// 2026-05-30). The boot SeedKnownKeyedProps runs ONCE, before VOTV's boot-time
+// level travel (`open untitled_1` into the story map); after the travel its
+// captured actors are all dead and the new level's PLACED props don't fire a
+// catchable Init POST (which is WHY the seed exists), so the host ends up
+// tracking only the ~70 runtime-spawned props instead of ~2000 -> the
+// late-joiner snapshot ships ~70 props. This re-walks GUObjectArray and adds any
+// live keyed-interactable the world has gained that we are not yet tracking.
+// Fully idempotent (set-insert + idempotent MarkPropElement) so it is safe to
+// call repeatedly; pairs with ReapDeadLocalPropElements (which drains the old
+// level's dead shadows). Returns the number of NEW props added to tracking.
+// Game-thread only; expensive (full ~150k GUObjectArray walk) -- call on a
+// world/level-change edge, never per-tick. This is also the re-seed a future
+// cave/level-travel feature needs.
+size_t ReSeedKnownKeyedProps();
+
 // ---- Dead-Element reaper (PR-FOUNDATION, 2026-05-30) ----------------------
 // Reconcile the LOCAL Prop Element shadows against the live world: any local
 // (non-mirror) Prop Element whose backing actor the engine has purged
