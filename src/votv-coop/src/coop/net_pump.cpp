@@ -9,6 +9,7 @@
 #include "coop/element/element_deleter.h"
 #include "coop/event_feed.h"
 #include "coop/garbage_sync.h"
+#include "coop/save_block.h"
 #include "coop/grab_observer.h"
 #include "coop/item_activate.h"
 #include "coop/net/protocol.h"
@@ -158,6 +159,9 @@ void InstallObservers(coop::net::Session& session) {
     coop::weather_sync::Install(&session);   // Phase 5W weather
     coop::garbage_sync::SetSession(&session);
     coop::garbage_sync::Install();           // Phase 5G garbage
+    // PR-FOUNDATION-2 (B): client world-save block (host-only persistence).
+    // No-op on the host; on the client installs the SaveGameToSlot detour once.
+    coop::save_block::Install(&session);
     // NOTE: coop::shutdown::Install / UpdateWindowTitle are called from
     // the timeline tick lambda DIRECTLY in harness.cpp -- they MUST NOT
     // be gated on g_netLocal like this function is (HWND subclass +

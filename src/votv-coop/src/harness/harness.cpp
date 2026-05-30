@@ -1,6 +1,7 @@
 #include "harness/harness.h"
 
 #include "harness/autotest.h"
+#include "harness/autotest_dispatch.h"
 #include "harness/config.h"
 #include "harness/screenshot.h"
 #include "harness/sdk_check.h"
@@ -498,52 +499,11 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             UE_LOGI("harness: ==== PLAY READY (coop net %s) ====",
                     netCfg.role == coop::net::Role::Host ? "host" : "client");
 
-            // Autonomous grab test: env-gated, runs on BOTH peers. Host drives
-            // the full grab/move/release routine through engine native
-            // PhysicsHandle UFunctions; client does scan-only (so we can compare
-            // Key.ComparisonIndex cross-peer to verify cooked-content FNames are
-            // stable -- the hypothesis Stage 4's wire serialization depends on).
-            // See harness::autotest::RunAutonomousGrabTest for expected log lines.
-            if (cfg::ReadEnv("VOTVCOOP_RUN_GRAB_TEST") == "1") {
-                UE_LOGI("harness: VOTVCOOP_RUN_GRAB_TEST=1 (%s) -- spawning grab test thread",
-                        netCfg.role == coop::net::Role::Host ? "host" : "client");
-                if (HANDLE h = ::CreateThread(nullptr, 0, harness::autotest::GrabTestThread, nullptr, 0, nullptr)) {
-                    ::CloseHandle(h);
-                }
-            }
-
-            // Phase 5F autonomous flashlight test. Both peers run it; each
-            // toggles its own local flashlight via reflection 4 times, the
-            // POST observer broadcasts each, and the OTHER peer should
-            // receive + apply to its puppet. Log diff is the proof.
-            if (cfg::ReadEnv("VOTVCOOP_RUN_FLASHLIGHT_TEST") == "1") {
-                UE_LOGI("harness: VOTVCOOP_RUN_FLASHLIGHT_TEST=1 (%s) -- spawning flashlight test thread",
-                        netCfg.role == coop::net::Role::Host ? "host" : "client");
-                if (HANDLE h = ::CreateThread(nullptr, 0, harness::autotest::FlashlightTestThread, nullptr, 0, nullptr)) {
-                    ::CloseHandle(h);
-                }
-            }
-            // Phase 5W weather sync autonomous test. Host-only (the routine
-            // self-gates on role; client just observes via wire). Forces
-            // rain ON/OFF cycles via weather_sync::DebugForceRain which
-            // follows the RULE-1 proper invocation sequence (enable_rain
-            // precondition + setRainProperties + causeRain +
-            // setWindParameters) per the 2026-05-27 RE pass.
-            if (cfg::ReadEnv("VOTVCOOP_RUN_WEATHER_TEST") == "1") {
-                UE_LOGI("harness: VOTVCOOP_RUN_WEATHER_TEST=1 (%s) -- spawning weather test thread",
-                        netCfg.role == coop::net::Role::Host ? "host" : "client");
-                if (HANDLE h = ::CreateThread(nullptr, 0, harness::autotest::WeatherTestThread, nullptr, 0, nullptr)) {
-                    ::CloseHandle(h);
-                }
-            }
-            // Phase 5W Inc-fix-2 red-sky test (visually unambiguous variant).
-            if (cfg::ReadEnv("VOTVCOOP_RUN_REDSKY_TEST") == "1") {
-                UE_LOGI("harness: VOTVCOOP_RUN_REDSKY_TEST=1 (%s) -- spawning red sky test thread",
-                        netCfg.role == coop::net::Role::Host ? "host" : "client");
-                if (HANDLE h = ::CreateThread(nullptr, 0, harness::autotest::RedSkyTestThread, nullptr, 0, nullptr)) {
-                    ::CloseHandle(h);
-                }
-            }
+            // Autonomous autotest dispatch: spawn each VOTVCOOP_RUN_*_TEST worker
+            // thread whose env flag is set (every routine self-gates on role
+            // internally). Extracted to harness/autotest_dispatch.cpp -- the
+            // cluster had grown to five near-identical blocks.
+            harness::autotest::SpawnEnvGatedTests(netCfg.role);
 
             // Audit H8 (2026-05-27): the 30-second autotest correction loop
             // was deleted. It existed to fight K2_TeleportTo getting reverted

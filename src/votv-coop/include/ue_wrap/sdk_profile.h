@@ -56,6 +56,20 @@ inline constexpr const char* kSigProcessEvent =
     "40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC F0 00 00 00 48 8D 6C 24 30 "
     "48 89 9D 18 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C5 48 89 85 B0 00 00 00";
 
+// UGameplayStatics::SaveGameToSlot(USaveGame* obj, const FString& slot, int32 idx)
+// -> bool. The SINGLE physical write chokepoint: every save trigger (autosave/
+// sleep/quicksave/menu/forced + the direct-SaveGameToSlot world triggers) and
+// both save containers (saveSlot_C world save + save_main_C meta save) funnel
+// their TArray<uint8> through this native fn -> ISaveGameSystem::SaveGame.
+// Hooking HERE (not the BP saveToSlot funnel) is mechanism-correct: BP->BP calls
+// dispatch via ProcessInternal, bypassing our ProcessEvent detour, so a UFunction
+// interceptor on saveToSlot would never fire. RE: research/findings/
+// votv-save-path-RE-2026-05-30.md; IDA UGameplayStatics__SaveGameToSlot @0x142B59AA0.
+// Match == function address (unique-verified prologue through `mov edi,r8d`).
+inline constexpr const char* kSigSaveGameToSlot =
+    "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 8B DA 33 F6 "
+    "48 8D 54 24 30 48 89 74 24 30 48 89 74 24 38 41 8B F8";
+
 // ---- struct offsets (stable within UE4.27; re-check on an engine bump) ----
 namespace off {
 inline constexpr size_t UObject_InternalIndex = 0x0C;  // int32 -- slot in GUObjectArray (O(1) liveness check)

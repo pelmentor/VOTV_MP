@@ -63,4 +63,15 @@ DWORD WINAPI WeatherTestThread(LPVOID arg);
 void RunAutonomousRedSkyTest();
 DWORD WINAPI RedSkyTestThread(LPVOID arg);
 
+// PR-FOUNDATION-2 (B): autonomous CLIENT save-block test. Client-only. After
+// stabilization, resolves the live saveSlot_C world-save object and calls its
+// saveToSlot UFunction via reflection -- driving UGameplayStatics::SaveGameToSlot
+// (our client hook target) without needing an autosave/menu trigger. Proves the
+// hook CANCELS the write (not just that it installed): the client log shows
+// `saveblock_test: invoking ...` then `save_block: BLOCKED ...`. The host runs
+// nothing and installs no hook (its save path is untouched).
+// Gated by env VOTVCOOP_RUN_SAVEBLOCK_TEST="1".
+void RunAutonomousSaveBlockTest();
+DWORD WINAPI SaveBlockTestThread(LPVOID arg);
+
 }  // namespace harness::autotest
