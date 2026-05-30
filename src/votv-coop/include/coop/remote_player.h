@@ -134,6 +134,21 @@ private:
                              // field overrides (post-2026-05-27 RE per
                              // research/findings/votv-local-anim-drive-RE-2026-05-27.md).
 
+    // GUObjectArray InternalIndex of actor_, captured at Spawn while the puppet
+    // was known live (via reflection::InternalIndexOf). valid() validates actor_
+    // with reflection::IsLiveByIndex(actor_, internalIdx_) -- NOT plain IsLive.
+    // Why: a mass GC purge can free the puppet WITHOUT firing our Destroy path,
+    // then recycle its address/slot to a smaller foreign UObject. Plain IsLive
+    // reads the index FROM the object's own memory, so it returns true for that
+    // recycled impostor; ApplyToEngine then raw-derefs actor_ at large
+    // mainPlayer_C offsets (CMC @0x288, mesh @0x4F8, lag_fl @0x670) and AVs --
+    // and builds a ParamFrame on its garbage UFunction*, ballooning RSS. Gating
+    // on the CACHED index closes the recycling hole (the slot-identity compare
+    // rejects the impostor). See [[feedback-islive-unsafe-on-freed-cached-pointer]]
+    // (root-caused 2026-05-30 from the 4-peer smoke: per-tick AV flood + 11 GB
+    // balloon on a client). -1 = no puppet (valid() short-circuits on actor_==null).
+    int32_t internalIdx_ = -1;
+
     // Both offsets are captured ONCE at Spawn from the RECEIVER's own local
     // mainPlayer_C -- same BP class as the source, so the BP-authored RelLoc
     // values are identical on every peer (BP construction sets the same

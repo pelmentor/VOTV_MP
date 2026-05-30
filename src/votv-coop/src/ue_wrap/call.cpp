@@ -46,7 +46,28 @@ const ParamFrame::Metadata* GetOrBuildMetadata(void* fn) {
     // threads race a first-time resolve for different fns.
     ParamFrame::Metadata built;
     built.frameSize = reflection::FunctionFrameSize(fn);
-    if (built.frameSize > 0) {
+    // Trust boundary: frameSize is UStruct::PropertiesSize read straight out of
+    // engine memory. A real UFunction parameter frame is at most a few KB (UE4's
+    // own ProcessEvent stack-allocates it). A garbage-large value here -- e.g. fn
+    // points at a recycled GUObjectArray slot whose UFunction* now aliases a freed
+    // or foreign UObject, so PropertiesSize is read from the wrong field -- would
+    // otherwise drive buf_.assign(frameSize) below into a multi-hundred-MB / GB
+    // allocation, repeated every ParamFrame construction (the buf_ alloc is
+    // per-call, NOT cached). That is the 4-peer-smoke client RSS balloon: one
+    // ApplyToEngine/Drive ParamFrame per net_pump tick allocating ~GB, the
+    // following CallFunction AVing on the bogus frame (the one absorbed exception
+    // per tick), RSS climbing to the harness cap. Reject an out-of-range frame the
+    // same way a negative one is rejected (frameSize < 0 below) -- the ParamFrame
+    // stays invalid, Call() no-ops, and the bogus dispatch never happens.
+    // 64 KiB is orders of magnitude above any legitimate UFunction frame yet far
+    // below any value that balloons RSS.
+    constexpr int32_t kMaxFrameSize = 64 * 1024;
+    if (built.frameSize > kMaxFrameSize) {
+        UE_LOGE("ParamFrame: function %p reports frame size %d > %d cap -- "
+                "rejecting (corrupt/stale UFunction*?)",
+                fn, built.frameSize, kMaxFrameSize);
+        built.frameSize = -1;  // mark malformed; ParamFrame ctor refuses below
+    } else if (built.frameSize > 0) {
         for (const auto& p : reflection::FunctionParams(fn)) {
             built.offsets.emplace_back(p.name, p.offset);
         }

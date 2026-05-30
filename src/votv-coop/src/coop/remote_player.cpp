@@ -160,6 +160,10 @@ bool RemotePlayer::Spawn() {
         UE_LOGE("RemotePlayer::Spawn: SpawnPuppet failed");
         return false;
     }
+    // Capture the puppet's GUObjectArray slot while it is known live, so valid()
+    // can validate actor_ with IsLiveByIndex (recycling-proof) rather than plain
+    // IsLive (which a GC-recycled address defeats). See internalIdx_ in the header.
+    internalIdx_ = R::InternalIndexOf(actor_);
 
     // 2026-05-25 v8 (hands-on fix): measure BOTH source's and puppet's
     // mesh chain composite to compute the offset. The prior v7 used only
@@ -290,7 +294,15 @@ bool RemotePlayer::Spawn() {
     return true;
 }
 
-bool RemotePlayer::valid() const { return actor_ != nullptr && R::IsLive(actor_); }
+bool RemotePlayer::valid() const {
+    // IsLiveByIndex (NOT plain IsLive): validates actor_ against the GUObjectArray
+    // slot captured at Spawn, so a GC-freed-then-recycled actor address is
+    // rejected by the slot-identity compare instead of passing IsLive's
+    // self-read recycling hole. Closes the per-tick ApplyToEngine AV / RSS
+    // balloon (root-caused 2026-05-30, 4-peer smoke). actor_!=nullptr short-
+    // circuits so a stale internalIdx_ after Destroy is harmless.
+    return actor_ != nullptr && R::IsLiveByIndex(actor_, internalIdx_);
+}
 
 void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
     if (!valid()) { actor_ = nullptr; return; }
@@ -439,8 +451,13 @@ void RemotePlayer::Destroy() {
     // No AnimInstance field cleanup needed -- the AnimInstance dies with
     // the actor.
     nameplate::Unregister(this);  // drops + destroys the floating label
-    if (R::IsLive(actor_)) E::DestroyActor(actor_);
+    // IsLiveByIndex (consistent with valid()): if the puppet was GC-freed and
+    // its address recycled, plain IsLive would pass and DestroyActor would
+    // destroy the FOREIGN impostor at that address. The slot-identity compare
+    // rejects it -- the real puppet is already gone, so skip DestroyActor.
+    if (R::IsLiveByIndex(actor_, internalIdx_)) E::DestroyActor(actor_);
     actor_ = nullptr;
+    internalIdx_ = -1;
     hasPose_ = false;
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
