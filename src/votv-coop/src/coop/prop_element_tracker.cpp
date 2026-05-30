@@ -7,6 +7,7 @@
 
 #include "coop/prop_element_tracker.h"
 
+#include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
 #include "coop/element/registry.h"
@@ -175,11 +176,20 @@ void UnmarkKnownKeyedProp(void* actor) {
         g_knownKeyedProps.erase(actor);
     }
     // Resolve the local eid under the reverse-map mutex, erase the reverse
-    // entry, then RELEASE the mutex before draining the Element out of the
-    // shared manager. ABBA-safe: PropMirrors().Take takes the type mutex (not
-    // nested with the leaf reverse-map mutex) and the drained unique_ptr
-    // destructs OUTSIDE every lock -- ~Prop -> Registry::FreeId acquires the
-    // Registry mutex with nothing else held.
+    // entry, then RELEASE the mutex before extracting the Element. This observer
+    // (K2_DestroyActor PRE) can fire on a parallel-anim WORKER thread, so the
+    // Element must NOT be destructed inline here -- a worker-instant ~Prop ->
+    // Registry::FreeId would race any in-flight raw pointer to it. PR-FOUNDATION-3
+    // Inc4 (2026-05-30): route the taken Element through ElementDeleter (exactly
+    // the npc_sync NpcDestroy_PRE pattern) so the actual ~Prop/FreeId runs at the
+    // single game-thread Flush (net_pump::Tick), being-deleted-flagged from the
+    // moment it is queued. ABBA-safe: the leaf reverse-map mutex is released
+    // before Take (type mutex) + Enqueue (deleter leaf mutex); neither nests.
+    // Local-eid safety: the deferred eid stays allocated (in Registry m_byId, NOT
+    // on the free stack) until Flush, so a concurrent MarkPropElement's
+    // AllocAndInstall cannot re-pop it -- no eid-reuse collision (unlike a wire
+    // mirror's remote-controlled eid, which is why the game-thread mirror destroy
+    // paths stay inline; see remote_prop::UnregisterPropMirror).
     coop::element::ElementId eid = coop::element::kInvalidId;
     {
         std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
@@ -188,9 +198,7 @@ void UnmarkKnownKeyedProp(void* actor) {
         eid = it->second;
         g_actorToPropElementId.erase(it);
     }
-    auto drained = PropMirrors().Take(eid);
-    // drained destructor fires here, OUTSIDE every mutex (FreeId, m_mirror=false).
-    (void)drained;
+    coop::element::ElementDeleter::Get().Enqueue(PropMirrors().Take(eid));
 }
 
 // ---- Prop Element shadow ------------------------------------------------
@@ -266,16 +274,17 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
     // actor meanwhile, drop ours.
     std::unique_lock<std::mutex> lk(g_actorToPropElementIdMutex);
     if (g_actorToPropElementId.count(actor) > 0) {
-        // Lost the race. Release the leaf mutex, then Take our just-installed
-        // Element back out of the manager and let it destruct -- ~Prop ->
-        // Registry::FreeId returns `eid` to its origin stack and clears
-        // m_byId[eid]. ABBA-safe: Take's type mutex + the dtor's Registry
-        // mutex run with the leaf mutex released. (eid is in [1, kMaxElements)
-        // -- AllocHostId/AllocLocalId never return 0 -- so Take won't treat it
-        // as the wire-sentinel and no-op.)
+        // Lost the race. Release the leaf mutex, then extract our just-installed
+        // Element and route it through ElementDeleter (Inc4) -- this MarkPropElement
+        // can run on a parallel-anim WORKER thread (Init POST), so ~Prop ->
+        // Registry::FreeId must NOT run inline at this worker instant. Deferred to
+        // the game-thread Flush, being-deleted-flagged on Enqueue; the dtor returns
+        // `eid` to its origin stack + clears m_byId[eid] there. ABBA-safe: Take
+        // (type mutex) + Enqueue (deleter leaf mutex) run with the leaf reverse-map
+        // mutex released. (eid is in [1, kMaxElements) -- AllocHostId/AllocLocalId
+        // never return 0 -- so Take won't treat it as the wire-sentinel and no-op.)
         lk.unlock();
-        auto losing = PropMirrors().Take(eid);
-        (void)losing;  // destructs here, FreeId without any lock held
+        coop::element::ElementDeleter::Get().Enqueue(PropMirrors().Take(eid));
         return;
     }
     g_actorToPropElementId[actor] = eid;
