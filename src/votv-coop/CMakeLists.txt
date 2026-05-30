@@ -135,6 +135,7 @@ add_library(votv-coop SHARED
     src/coop/weather_redsky.cpp
     src/coop/ini_config.cpp
     src/coop/element/element.cpp
+    src/coop/element/element_deleter.cpp
     src/coop/element/registry.cpp
     src/coop/net/session.cpp
     src/coop/net/session_status.cpp

@@ -6,6 +6,7 @@
 
 #include "coop/net_pump.h"
 
+#include "coop/element/element_deleter.h"
 #include "coop/event_feed.h"
 #include "coop/garbage_sync.h"
 #include "coop/grab_observer.h"
@@ -177,6 +178,14 @@ coop::RemotePlayer& Puppet(int slot) {
 }
 
 void Tick(coop::net::Session& session, float displayOffsetX) {
+    // Deferred-element destruction flush (MTA CElementDeleter shape; see
+    // coop/element/element_deleter.h). Drains, on the game thread at one
+    // controlled point, any Elements parked for destruction by owner-map
+    // drains since the last tick. Steady-state cost is a single uncontended
+    // mutex acquire + empty-queue check (no producer routes destruction here
+    // yet -- that lands with the Npc/Prop ownership migration).
+    coop::element::ElementDeleter::Get().Flush();
+
     // Lazily bring up the on-screen event feed once the GameInstance exists (it
     // is the persistent widget outer). One-time FindObjectByClass until it
     // succeeds, then it stops -- never a per-tick walk after init.
