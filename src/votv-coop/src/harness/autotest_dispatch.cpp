@@ -50,6 +50,9 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // bug2 world-context staleness guard self-test: both peers; forces a stale
     // world context and verifies EnsureWorldContext recovers.
     SpawnIf("VOTVCOOP_RUN_WORLDCTX_TEST", "world-context test", &WorldCtxTestThread, role);
+    // Dead-Prop-Element reaper self-test: both peers; forces a synthetic dead
+    // local Prop Element and verifies ReapDeadLocalPropElements evicts it.
+    SpawnIf("VOTVCOOP_RUN_PROPREAP_TEST", "prop-reap test", &PropReapTestThread, role);
 }
 
 }  // namespace harness::autotest

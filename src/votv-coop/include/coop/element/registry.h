@@ -173,7 +173,14 @@ public:
     // re-validating via IsLiveByIndex without re-locking the Registry.
     //
     // Returns count copied (out is cleared first).
-    struct ActorIdPair { void* actor; ElementId id; int32_t internalIdx; };
+    //
+    // `mirror` is the Element's IsMirror() flag, captured under the same mutex.
+    // The dead-Prop-Element reaper (prop_element_tracker) uses it to reap ONLY
+    // local shadows: a wire mirror's teardown is the host's PropDestroy, never a
+    // local reconciliation. Distinguishing by this per-Element flag (not by the
+    // actor pointer) is robust against the engine recycling a purged actor's
+    // address for a new keyed prop.
+    struct ActorIdPair { void* actor; ElementId id; int32_t internalIdx; bool mirror; };
     size_t SnapshotActorsByType(ElementType t, std::vector<ActorIdPair>& out) const;
 
     // INTENTIONALLY NO bulk-Reset() API (audited 2026-05-28). Each

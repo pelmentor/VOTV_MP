@@ -88,4 +88,13 @@ DWORD WINAPI SaveBtnDisableTestThread(LPVOID arg);
 void RunAutonomousWorldCtxTest();
 DWORD WINAPI WorldCtxTestThread(LPVOID arg);
 
+// Dead-Prop-Element reaper self-test (2026-05-30). Both peers. Constructs a
+// synthetic DEAD local Prop Element and verifies prop_element_tracker::
+// ReapDeadLocalPropElements evicts it (the fix for the mass-purge leak: a
+// cave/level transition flags ~2000 props PendingKill without firing
+// K2_DestroyActor, so dead Prop Element shadows leak until the 16384 caps
+// exhaust). Gated by env VOTVCOOP_RUN_PROPREAP_TEST="1".
+void RunAutonomousPropReapTest();
+DWORD WINAPI PropReapTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

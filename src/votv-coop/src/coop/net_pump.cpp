@@ -18,6 +18,7 @@
 #include "coop/npc_sync.h"
 #include "coop/player_handshake.h"
 #include "coop/players_registry.h"
+#include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
 #include "coop/prop_snapshot.h"
 #include "coop/remote_player.h"
@@ -202,6 +203,28 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // mutex acquire + empty-queue check (no producer routes destruction here
     // yet -- that lands with the Npc/Prop ownership migration).
     coop::element::ElementDeleter::Get().Flush();
+
+    // Dead-Prop-Element reconciliation (PR-FOUNDATION 2026-05-30). A mass GC
+    // purge (cave/level transition, save-load) flags ~2000 props PendingKill AT
+    // ONCE without firing per-actor K2_DestroyActor, so the sole eviction path
+    // (the PRE observer) is bypassed and the dead Prop Element shadows leak --
+    // unbounded across transitions, exhausting the 16384 tracker caps after ~7
+    // and silently breaking prop tracking. Throttle to ~once per 4 s + cap 256
+    // evicts/call so steady-state cost is one bounded Registry walk every few
+    // seconds (no-op when nothing is dead) and a post-purge backlog drains over
+    // a handful of scans. Runs regardless of connection state (props seed at
+    // boot; a transition can happen before any peer connects) and on BOTH roles
+    // (each peer maintains its OWN local props). Game-thread (this Tick) -- the
+    // reaper Enqueues to the deleter, flushed at the top of the NEXT tick.
+    {
+        using ReapClock = std::chrono::steady_clock;
+        static ReapClock::time_point sNextReap{};
+        const auto reapNow = ReapClock::now();
+        if (reapNow >= sNextReap) {
+            sNextReap = reapNow + std::chrono::seconds(4);
+            coop::prop_element_tracker::ReapDeadLocalPropElements(256);
+        }
+    }
 
     // Lazily bring up the on-screen event feed once the GameInstance exists (it
     // is the persistent widget outer). One-time FindObjectByClass until it

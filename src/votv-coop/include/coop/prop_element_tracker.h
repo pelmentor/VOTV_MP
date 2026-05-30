@@ -96,4 +96,35 @@ coop::element::ElementId GetPropElementIdForActor(void* actor);
 // ~150k object walk).
 void SeedKnownKeyedProps();
 
+// ---- Dead-Element reaper (PR-FOUNDATION, 2026-05-30) ----------------------
+// Reconcile the LOCAL Prop Element shadows against the live world: any local
+// (non-mirror) Prop Element whose backing actor the engine has purged
+// (reflection::IsLiveByIndex == false on the cached index) is evicted exactly
+// as its K2_DestroyActor PRE would have -- drained out of the canonical
+// MirrorManager<Prop> by eid and routed through ElementDeleter -- minus the
+// wire PropDestroy (a mass purge is engine teardown, not a gameplay destroy to
+// replicate). Needed because a mass GC purge (cave/level transition, save-load)
+// flags ~2000 props PendingKill AT ONCE without firing per-actor
+// K2_DestroyActor, so the sole eviction path is bypassed and the dead shadows
+// leak: unbounded across transitions, and after ~7 the 16384 KnownKeyedProps /
+// ProcessedInit caps exhaust and NEW props stop being tracked -- silently
+// breaking the late-joiner snapshot and live prop-spawn replication.
+//
+// Reaps by EID with an IsMirror() gate (robust against the engine recycling a
+// purged actor's address for a new keyed prop -- an actor-keyed evict could
+// then kill the live new Element). Caps at `maxEvictions` per call so a
+// post-purge backlog drains across a handful of throttled scans instead of one
+// frame. No-op (returns 0) when nothing is dead. Game-thread only (mirrors the
+// K2_DestroyActor PRE eviction site + the ElementDeleter::Flush contract).
+// Returns the number of dead local Prop Elements evicted.
+size_t ReapDeadLocalPropElements(size_t maxEvictions);
+
+// Self-test (env VOTVCOOP_RUN_PROPREAP_TEST): construct a synthetic DEAD local
+// Prop Element (sentinel actor + internalIdx -1 so IsLiveByIndex rejects it
+// without any deref), verify ReapDeadLocalPropElements evicts it + clears all
+// three actor-keyed maps + frees the eid after a Flush, and verify it leaves a
+// LIVE local Prop Element untouched. Logs PASS/FAIL. Game-thread only. Proves
+// the reap mechanism without the (hard-to-reproduce) natural mass-purge.
+bool DebugCheckPropElementReap();
+
 }  // namespace coop::prop_element_tracker

@@ -353,4 +353,168 @@ void SeedKnownKeyedProps() {
     done.store(true, std::memory_order_release);
 }
 
+// ---- Dead-Element reaper ------------------------------------------------
+//
+// See header for WHY. Reaps by EID (not by actor pointer) with an IsMirror()
+// gate so it is robust against the engine recycling a purged actor's address.
+
+size_t ReapDeadLocalPropElements(size_t maxEvictions) {
+    if (maxEvictions == 0) return 0;
+    // One mutex-guarded copy of (actor, eid, internalIdx, mirror) for every Prop
+    // Element. No Element* deref after the Registry mutex releases; the cached
+    // internalIdx lets us validate each actor via IsLiveByIndex WITHOUT
+    // dereferencing a possibly-purged actor pointer (IsLive would AV).
+    std::vector<coop::element::Registry::ActorIdPair> pairs;
+    coop::element::Registry::Get().SnapshotActorsByType(
+        coop::element::ElementType::Prop, pairs);
+    size_t evicted = 0;
+    for (const auto& pr : pairs) {
+        if (evicted >= maxEvictions) break;
+        if (pr.mirror) continue;                                   // wire mirror -> host's PropDestroy owns it
+        if (R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;  // actor alive -> keep
+        // Dead LOCAL Prop Element. Clear the actor-keyed bookkeeping ONLY where it
+        // still maps to THIS eid: if pr.actor's address was recycled by a newer
+        // keyed prop, g_actorToPropElementId[pr.actor] now points at the new eid
+        // and must NOT be disturbed (that would un-track the live new Element).
+        bool ownActorEntry = false;
+        {
+            std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
+            auto it = g_actorToPropElementId.find(pr.actor);
+            if (it != g_actorToPropElementId.end() && it->second == pr.id) {
+                g_actorToPropElementId.erase(it);
+                ownActorEntry = true;
+            }
+        }
+        if (ownActorEntry) {
+            {
+                std::lock_guard<std::mutex> lk(g_knownKeyedPropsMutex);
+                g_knownKeyedProps.erase(pr.actor);
+            }
+            UnmarkProcessedInit(pr.actor);
+        }
+        // Take the dead Element out of the canonical manager BY EID + defer its
+        // destruct (FreeId) to the game-thread ElementDeleter::Flush -- identical
+        // to UnmarkKnownKeyedProp's drain, minus the wire broadcast. Take(eid) is
+        // a no-op returning null if a racing K2_DestroyActor PRE already took it
+        // (Enqueue(null) is a no-op) -- single ownership transfer either way.
+        coop::element::ElementDeleter::Get().Enqueue(PropMirrors().Take(pr.id));
+        ++evicted;
+    }
+    if (evicted > 0) {
+        UE_LOGI("prop_element_tracker: reaped %zu dead local Prop Element(s) "
+                "(mass-purge / level-transition cleanup; scanned %zu Prop Element(s), cap %zu/call)",
+                evicted, pairs.size(), maxEvictions);
+    }
+    return evicted;
+}
+
+// ---- Reaper self-test ---------------------------------------------------
+
+bool DebugCheckPropElementReap() {
+    // Sentinel actor address that is NEVER dereferenced: IsLiveByIndex rejects it
+    // on the internalIdx<0 fast-path (no GUObjectArray read), the maps key on the
+    // pointer value only, and ~Prop does not own the actor -- so no real UObject
+    // memory is ever touched by this fixture.
+    void* deadActor = reinterpret_cast<void*>(static_cast<uintptr_t>(0xDEAD0001));
+    auto* s = LoadSession();
+    const bool isHost = (s != nullptr && s->role() == coop::net::Role::Host);
+
+    // Install a synthetic DEAD local Prop Element wired EXACTLY as a real one is
+    // (manager + all three actor-keyed maps), but with internalIdx = -1 so the
+    // reaper's IsLiveByIndex gate classifies it dead -- standing in for an actor
+    // the engine mass-purged without firing K2_DestroyActor.
+    auto deadEl = std::make_unique<coop::element::Prop>();
+    deadEl->SetName("synth-reap-dead");
+    deadEl->SetActor(deadActor, -1);
+    const coop::element::ElementId deadEid =
+        PropMirrors().AllocAndInstall(std::move(deadEl), isHost);
+    if (deadEid == coop::element::kInvalidId) {
+        UE_LOGW("propreap_test: FAIL -- AllocAndInstall returned kInvalidId (Registry exhausted?)");
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
+        g_actorToPropElementId[deadActor] = deadEid;
+    }
+    MarkKnownKeyedProp(deadActor);
+    MarkProcessedInit(deadActor);
+
+    // LIVE control: a second synthetic LOCAL element bound to a REAL live UObject
+    // (so IsLiveByIndex passes). The reaper MUST preserve it -- proving it never
+    // false-positive-evicts a live prop. Pick the first live object that is NOT
+    // already a tracked prop (so we never clobber real tracking). Using a non-prop
+    // UObject as the actor is fine: the reaper only IsLiveByIndex-checks it (no
+    // deref) and the maps key on the pointer; we clean it up below.
+    void* liveActor = nullptr;
+    int32_t liveIdx = -1;
+    {
+        const int32_t n = R::NumObjects();
+        for (int32_t i = 0; i < n; ++i) {
+            void* o = R::ObjectAt(i);
+            if (o && R::IsLive(o) &&
+                GetPropElementIdForActor(o) == coop::element::kInvalidId) {
+                liveActor = o;
+                liveIdx = R::InternalIndexOf(o);
+                break;
+            }
+        }
+    }
+    coop::element::ElementId liveEid = coop::element::kInvalidId;
+    if (liveActor) {
+        auto liveEl = std::make_unique<coop::element::Prop>();
+        liveEl->SetName("synth-reap-live");
+        liveEl->SetActor(liveActor, liveIdx);
+        liveEid = PropMirrors().AllocAndInstall(std::move(liveEl), isHost);
+        if (liveEid != coop::element::kInvalidId) {
+            std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
+            g_actorToPropElementId[liveActor] = liveEid;
+        }
+    }
+
+    const bool preRegistered = (coop::element::Registry::Get().Get(deadEid) != nullptr) &&
+                               (GetPropElementIdForActor(deadActor) == deadEid) &&
+                               HasProcessedInit(deadActor);
+    if (!preRegistered) {
+        UE_LOGW("propreap_test: FAIL -- synthetic dead Element not fully registered pre-reap");
+        return false;
+    }
+
+    const size_t reaped = ReapDeadLocalPropElements(256);
+
+    // Reverse map + processed-init must be cleared SYNCHRONOUSLY by the reaper.
+    const bool mapsCleared = (GetPropElementIdForActor(deadActor) == coop::element::kInvalidId) &&
+                             !HasProcessedInit(deadActor);
+    // The LIVE control must SURVIVE (IsLiveByIndex true -> reaper skips it). Read
+    // BEFORE the cleanup below. Vacuously true only if we found no live object to
+    // bind (impossible in a live process; defensive).
+    const bool livePreserved =
+        (liveEid == coop::element::kInvalidId) ||
+        (GetPropElementIdForActor(liveActor) == liveEid &&
+         coop::element::Registry::Get().Get(liveEid) != nullptr);
+    // The eid is freed only when the parked unique_ptr destructs -- force the
+    // controlled game-thread Flush now (we ARE on the game thread) and re-check.
+    coop::element::ElementDeleter::Get().Flush();
+    const bool eidFreed = (coop::element::Registry::Get().Get(deadEid) == nullptr);
+
+    // Clean up the live control so the test leaves no synthetic element bound to a
+    // random live UObject in the real registry.
+    if (liveEid != coop::element::kInvalidId) {
+        {
+            std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
+            auto it = g_actorToPropElementId.find(liveActor);
+            if (it != g_actorToPropElementId.end() && it->second == liveEid) {
+                g_actorToPropElementId.erase(it);
+            }
+        }
+        coop::element::ElementDeleter::Get().Enqueue(PropMirrors().Take(liveEid));
+        coop::element::ElementDeleter::Get().Flush();
+    }
+
+    const bool pass = (reaped >= 1) && mapsCleared && eidFreed && livePreserved;
+    UE_LOGI("propreap_test: forced-dead reap check %s -- reaped=%zu mapsCleared=%d eidFreed=%d livePreserved=%d (deadEid=%u, liveEid=%u, isHost=%d)",
+            pass ? "PASS" : "FAIL", reaped, mapsCleared ? 1 : 0, eidFreed ? 1 : 0,
+            livePreserved ? 1 : 0, deadEid, liveEid, isHost ? 1 : 0);
+    return pass;
+}
+
 }  // namespace coop::prop_element_tracker
