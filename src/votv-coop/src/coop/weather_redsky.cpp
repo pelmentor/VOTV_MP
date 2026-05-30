@@ -314,8 +314,8 @@ void Apply(const coop::net::RedSkyPayload& payload) {
 
 void OnDisconnect() {
     if (g_observersRegistered) {
-        if (g_spawnRedSkyFn)    GT::UnregisterObservers(g_spawnRedSkyFn);
-        if (g_redSkyEventSetFn) GT::UnregisterObservers(g_redSkyEventSetFn);
+        if (g_spawnRedSkyFn)    GT::UnregisterObservers(g_spawnRedSkyFn, &OnSpawnRedSkyPost);
+        if (g_redSkyEventSetFn) GT::UnregisterObservers(g_redSkyEventSetFn, &OnRedSkyEventSetPost);
         g_observersRegistered = false;
         UE_LOGI("weather: red-sky OnDisconnect unregistered POST observers");
     }

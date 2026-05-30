@@ -147,7 +147,7 @@ bool RegisterHostObserver() {
 
 void OnDisconnect() {
     if (g_observerRegistered && g_beginDeferredSpawnFn) {
-        GT::UnregisterObservers(g_beginDeferredSpawnFn);
+        GT::UnregisterObservers(g_beginDeferredSpawnFn, &OnSpawnPostLightning);
         g_observerRegistered = false;
         UE_LOGI("weather: lightning OnDisconnect unregistered POST observer");
     }

@@ -703,7 +703,7 @@ void Install(coop::net::Session* session) {
             } else if (!ue_wrap::game_thread::RegisterPreObserver(destroyFn, &NpcDestroy_PRE)) {
                 // K2 failed after POST succeeded -- roll back POST so we don't
                 // leave it firing forever for a disabled system.
-                ue_wrap::game_thread::UnregisterObservers(fn);
+                ue_wrap::game_thread::UnregisterObservers(fn, &NpcSpawn_POST);
                 g_npcSyncDisabledThisProcess.store(true, std::memory_order_release);
                 UE_LOGE("npc-sync: RegisterPreObserver FAILED for K2_DestroyActor "
                         "(observer table full) -- NPC sync DISABLED + rolled back POST "

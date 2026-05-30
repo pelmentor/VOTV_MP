@@ -45,12 +45,16 @@ std::atomic<int> g_interceptorActive{0};
 
 bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
     if (!targetFn || !cb) return false;
-    // First pass: replace existing entry for this target (idempotent registration).
-    // Replace does NOT bump the active count -- slot was already counted.
+    // (targetFn, cb)-keyed, same multi-registrant invariant as SetObserverSlot
+    // (2026-05-30): FireInterceptors consults EVERY slot matching `function` and
+    // stops at the first cb returning true, so two distinct interceptors on one
+    // UFunction now coexist instead of the later silently overwriting the
+    // earlier. No active collision exists today (npc_sync is the sole
+    // BeginDeferred interceptor), but this kills the same latent clobber class.
+    // First pass: idempotent re-register of the exact (target, cb) pair.
     for (int i = 0; i < kMaxInterceptors; ++i) {
-        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
-            g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
-            g_interceptors[i].targetFn.store(targetFn, std::memory_order_release);
+        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn &&
+            g_interceptors[i].cb.load(std::memory_order_relaxed) == cb) {
             return true;
         }
     }
@@ -67,9 +71,10 @@ bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
     return false;  // table full
 }
 
-void ClearInterceptorSlot(void* targetFn) {
+void ClearInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
     for (int i = 0; i < kMaxInterceptors; ++i) {
-        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
+        if (g_interceptors[i].targetFn.load(std::memory_order_relaxed) == targetFn &&
+            g_interceptors[i].cb.load(std::memory_order_relaxed) == cb) {
             g_interceptors[i].targetFn.store(nullptr, std::memory_order_release);
             g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
             g_interceptorActive.fetch_sub(1, std::memory_order_release);
@@ -263,26 +268,37 @@ ObserverSlot g_preObservers[kMaxObservers];
 std::atomic<int> g_postObserverActive{0};
 std::atomic<int> g_preObserverActive{0};
 
-// Set a free slot in `table` to (targetFn, cb). Returns false if no free slot
-// or duplicate (we permit overwriting an existing entry for the same target).
-// `activeCounter` is incremented ONLY when an empty slot becomes populated
-// (idempotent re-register on an existing target does not change the count).
+// Add (targetFn, cb) to `table`. Returns false if the table is full.
+//
+// MULTIPLE observers per UFunction (2026-05-30 root-cause fix): the dedup key
+// is the (targetFn, cb) PAIR, not targetFn alone. Several subsystems
+// legitimately observe the SAME UFunction -- e.g. BeginDeferredActorSpawnFromClass
+// is a POST-observer target for BOTH npc_sync (binds the spawned NPC actor into
+// its Element) AND weather_lightning (detects a lightningStrike spawn); and
+// Actor.K2_DestroyActor is a PRE-observer target for BOTH npc_sync and
+// prop_lifecycle. The old key-on-targetFn-only logic made the SECOND registrant
+// silently OVERWRITE the first's cb in the shared slot, so one of the two
+// observers never fired (host NPC actor-bind was clobbered by lightning ->
+// POST-bound=0, destroy-sync dead). FireObservers fires EVERY slot whose target
+// matches `function`, so giving each (target, cb) its own slot runs all of them.
+// `activeCounter` is bumped only when an empty slot is populated; an exact
+// (target, cb) re-register is an idempotent no-op (does not change the count).
 bool SetObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
                      void* targetFn, ProcessEventObserverFn cb) {
     if (!targetFn || !cb) return false;
-    // First pass: replace existing entry for this target.
+    // First pass: idempotent re-register -- a slot already holding THIS EXACT
+    // (target, cb) pair is a no-op. (Registration is serialized on the game
+    // thread, so the relaxed loads race only with the detour reader, which the
+    // release-store of targetFn below fences.)
     for (int i = 0; i < kMaxObservers; ++i) {
-        void* cur = table[i].targetFn.load(std::memory_order_relaxed);
-        if (cur == targetFn) {
-            table[i].cb.store(cb, std::memory_order_relaxed);
-            table[i].targetFn.store(targetFn, std::memory_order_release);
+        if (table[i].targetFn.load(std::memory_order_relaxed) == targetFn &&
+            table[i].cb.load(std::memory_order_relaxed) == cb) {
             return true;
         }
     }
     // Second pass: take the first empty slot.
     for (int i = 0; i < kMaxObservers; ++i) {
-        void* cur = table[i].targetFn.load(std::memory_order_relaxed);
-        if (cur == nullptr) {
+        if (table[i].targetFn.load(std::memory_order_relaxed) == nullptr) {
             table[i].cb.store(cb, std::memory_order_relaxed);
             table[i].targetFn.store(targetFn, std::memory_order_release);
             activeCounter.fetch_add(1, std::memory_order_release);
@@ -292,14 +308,15 @@ bool SetObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
     return false;  // table full
 }
 
-// Clear any slot in `table` matching `targetFn`. Decrements activeCounter
-// once per slot actually cleared (handles the historical case of a duplicate
-// registration that bypassed the first-pass replace, though SetObserverSlot
-// dedups on entry so duplicates are not expected).
+// Clear the slot in `table` matching the (targetFn, cb) PAIR. cb-specific so
+// unregistering one subsystem's observer does NOT clear a CO-REGISTERED
+// observer on the same UFunction (the multi-observer-per-target invariant
+// above). Decrements activeCounter once per slot actually cleared.
 void ClearObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
-                       void* targetFn) {
+                       void* targetFn, ProcessEventObserverFn cb) {
     for (int i = 0; i < kMaxObservers; ++i) {
-        if (table[i].targetFn.load(std::memory_order_relaxed) == targetFn) {
+        if (table[i].targetFn.load(std::memory_order_relaxed) == targetFn &&
+            table[i].cb.load(std::memory_order_relaxed) == cb) {
             table[i].targetFn.store(nullptr, std::memory_order_release);
             table[i].cb.store(nullptr, std::memory_order_relaxed);
             activeCounter.fetch_sub(1, std::memory_order_release);
@@ -619,8 +636,8 @@ bool RegisterInterceptor(void* targetUFunction, UFunctionInterceptor cb) {
     return SetInterceptorSlot(targetUFunction, cb);
 }
 
-void UnregisterInterceptor(void* targetUFunction) {
-    ClearInterceptorSlot(targetUFunction);
+void UnregisterInterceptor(void* targetUFunction, UFunctionInterceptor cb) {
+    ClearInterceptorSlot(targetUFunction, cb);
 }
 
 bool RegisterPostObserver(void* targetUFunction, ProcessEventObserverFn cb) {
@@ -631,10 +648,13 @@ bool RegisterPreObserver(void* targetUFunction, ProcessEventObserverFn cb) {
     return SetObserverSlot(g_preObservers, g_preObserverActive, targetUFunction, cb);
 }
 
-void UnregisterObservers(void* targetUFunction) {
-    if (!targetUFunction) return;
-    ClearObserverSlot(g_postObservers, g_postObserverActive, targetUFunction);
-    ClearObserverSlot(g_preObservers, g_preObserverActive, targetUFunction);
+void UnregisterObservers(void* targetUFunction, ProcessEventObserverFn cb) {
+    if (!targetUFunction || !cb) return;
+    // cb-specific: clears only THIS observer's slot, leaving any co-registered
+    // observer on the same UFunction intact. A given cb lives in exactly one of
+    // the two tables, so probing both is harmless.
+    ClearObserverSlot(g_postObservers, g_postObserverActive, targetUFunction, cb);
+    ClearObserverSlot(g_preObservers, g_preObserverActive, targetUFunction, cb);
 }
 
 void ClearAllObservers() {

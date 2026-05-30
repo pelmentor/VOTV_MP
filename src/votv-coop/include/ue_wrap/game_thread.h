@@ -87,12 +87,14 @@ using UFunctionInterceptor = bool(*)(void* self, void* params);
 inline constexpr int kMaxInterceptors = 16;
 
 // Register a PRE-dispatch interceptor for `targetUFunction`. Returns false if
-// the table is full or arguments are null. Idempotent: re-registering the
-// same target replaces its cb.
+// the table is full or arguments are null. Multiple distinct interceptors may
+// target one UFunction (keyed on the (target, cb) pair); FireInterceptors
+// consults each and stops at the first returning true. Re-registering the exact
+// same (target, cb) is an idempotent no-op.
 bool RegisterInterceptor(void* targetUFunction, UFunctionInterceptor cb);
 
-// Remove the interceptor (if any) for `targetUFunction`. No-op if absent.
-void UnregisterInterceptor(void* targetUFunction);
+// Remove the specific (targetUFunction, cb) interceptor. No-op if absent.
+void UnregisterInterceptor(void* targetUFunction, UFunctionInterceptor cb);
 
 // Post-dispatch UFunction observers. Unlike SetInterceptor, observers are
 // SIDE-EFFECT ONLY -- the original UFunction body always runs. Multiple
@@ -109,18 +111,27 @@ void UnregisterInterceptor(void* targetUFunction);
 //     the BP is about to CLEAR (e.g. read GrabbedComponent in a
 //     PHC.ReleaseComponent observer before PhysX clears it).
 //
-// Performance: on the hot path, the detour walks a fixed-size kMaxObservers
-// table comparing the dispatched function pointer against each registered
-// target. Still constant-time, no allocation, no hashing. Sizing history:
+// MULTIPLE observers per UFunction are supported: the table is keyed on the
+// (target, cb) PAIR, so several subsystems can observe the SAME UFunction and
+// the detour fires ALL of their cbs. (2026-05-30: keying on target alone let
+// the second registrant silently overwrite the first -- weather_lightning's
+// BeginDeferred POST clobbered npc_sync's NPC actor-bind, killing host
+// destroy-sync. Unregister is correspondingly (target, cb)-specific.)
+//
+// Performance: on the hot path, the detour walks the table comparing the
+// dispatched function pointer against each registered target, bounded by the
+// live count (found==active early-out), not kMaxObservers. Constant-time, no
+// allocation, no hashing. Sizing history:
 //   16 (initial) -> 64 (2026-05-25 after subclass-aware Aprop_C::Init
 //   override scan ran 54 unique BP subclasses through the table)
 //   -> 128 (2026-05-27 after Phase 5W weather added 5 scheduler + 3
 //   mutator observers + 1 lightning POST + the existing flashlight/grab
-//   subsystems all stacked; 64 silently dropped the last ~10
-//   registrations).
-// Memory cost: 128 slots * 16 B/slot * 2 tables (post + pre) = 4 KB. Trivial.
-// Per-dispatch cost: 128 acquire-loads on the hot path; even at 50 k
-// ProcessEvent/s that's well under 1 ms of CPU per second.
+//   subsystems all stacked; 64 silently dropped the last ~10 registrations)
+//   -> 256 (2026-05-30: ~73 POST observers steady-state already, and the
+//   multi-observer-per-target fix adds a slot per co-registration; headroom).
+// Memory cost: 256 slots * 16 B/slot * 2 tables (post + pre) = 8 KB. Trivial.
+// Per-dispatch cost is count-bounded, so the larger table does not slow the
+// common case.
 //
 // Thread-safety: registration uses an atomic store so the detour reads a
 // consistent state. The table is fixed-size; no rehash, no realloc. Game-
@@ -128,7 +139,7 @@ void UnregisterInterceptor(void* targetUFunction);
 // ProcessEvent detour always fires on the dispatching thread (usually
 // game thread; sometimes a task-graph worker for parallel anim).
 using ProcessEventObserverFn = void(*)(void* self, void* function, void* params);
-inline constexpr int kMaxObservers = 128;
+inline constexpr int kMaxObservers = 256;
 
 // Register a POST-dispatch observer for `targetUFunction`. Returns false
 // if the table is full or arguments are null. Safe to call from any
@@ -138,9 +149,11 @@ bool RegisterPostObserver(void* targetUFunction, ProcessEventObserverFn cb);
 // Register a PRE-dispatch observer for `targetUFunction`. Same shape.
 bool RegisterPreObserver(void* targetUFunction, ProcessEventObserverFn cb);
 
-// Remove ALL observers (post + pre) targeting `targetUFunction`. No-op
-// if not registered. Used at session-end / DLL-unload to detach cleanly.
-void UnregisterObservers(void* targetUFunction);
+// Remove the specific (targetUFunction, cb) observer from whichever table
+// (post or pre) holds it. cb-specific so a co-registered observer on the same
+// UFunction survives. No-op if not registered. Used at session-end / DLL-unload
+// and on rollback of a half-installed observer pair.
+void UnregisterObservers(void* targetUFunction, ProcessEventObserverFn cb);
 
 // Drop the entire observer table (post + pre). Called from Uninstall().
 void ClearAllObservers();
