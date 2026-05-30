@@ -163,6 +163,19 @@ items.
   etc.) listed as pre-Phase-5N1 task to confirm each NPC either uses
   AIPerception, `Cast to mainPlayer_C`, or `GetPlayerPawn(0)` -- the
   last hardcodes the first player only and would need per-NPC hook.
+  ADDED 2026-05-30 (user): this explicitly covers **scripted pursuit /
+  chase EVENTS** -- e.g. the **zombie-kerfur** event where the enemy
+  actively pursues a player. The pursuer must be able to chase ANY peer
+  (and switch targets between peers -- nearest / most-recently-seen /
+  aggro, whatever the BP uses), not lock onto the host. Host-authoritative:
+  the host runs the pursuit AI, selects the target among ALL peers
+  (host's local `mainPlayer_C` + every client puppet), and replicates the
+  chosen target + NPC pose so each client sees the enemy chase the correct
+  peer. Same puppet-as-`mainPlayer_C` requirement (so the pursuer perceives
+  / casts the client puppet as a valid player); the per-NPC targeting RE
+  above must, for each pursuer, confirm it enumerates all players rather
+  than `GetPlayerPawn(0)`. FUTURE scope (lands with the NPC AI-targeting
+  work, Phase 5N1); not built yet.
 
 <!--
 Template for an entry:
@@ -390,3 +403,9 @@ Design implications (do NOT build yet; record so the architecture serves it):
   current scope). Plasmo-Voice-style proximity positional + push-to-
   talk; would reuse the local player's `UAudioCaptureComponent` for
   capture and a new VoiceFrame unreliable packet.
+- 2026-05-30 — **Scripted pursuit/chase events target ALL peers** (user):
+  e.g. the zombie-kerfur event must pursue any peer, not just the host
+  (and may switch targets between peers). Host-authoritative target
+  selection over all players + replicated chosen-target/pose. Concretizes
+  the 2026-05-24 enemies-target-both decision; FUTURE (Phase 5N1 NPC AI
+  targeting).
