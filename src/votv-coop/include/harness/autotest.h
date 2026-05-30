@@ -82,4 +82,10 @@ DWORD WINAPI SaveBlockTestThread(LPVOID arg);
 void RunAutonomousSaveBtnDisableTest();
 DWORD WINAPI SaveBtnDisableTestThread(LPVOID arg);
 
+// bug2 world-context staleness guard self-test (2026-05-30). Both peers. Forces the cached
+// world context stale and verifies engine::EnsureWorldContext recovers (the fix for the host
+// failing to spawn the client puppet). Gated by env VOTVCOOP_RUN_WORLDCTX_TEST="1".
+void RunAutonomousWorldCtxTest();
+DWORD WINAPI WorldCtxTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

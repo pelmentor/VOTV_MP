@@ -52,6 +52,14 @@ void* SpawnActor(void* actorClass, const FVector& location, bool inertPawn = fal
 void* BeginDeferredSpawn(void* actorClass, const FVector& location, const FRotator& rotation);
 bool  FinishDeferredSpawn(void* actor, const FVector& location, const FRotator& rotation);
 
+// Self-test for the bug2 world-context staleness guard (2026-05-30). Forces the
+// cached world context to look stale (corrupts the cached GUObjectArray index so
+// IsLiveByIndex fails -- simulating a freed World after a level reload), then runs
+// EnsureWorldContext and verifies it DROPPED the stale entry and re-resolved to a
+// LIVE context. Returns true on recovery. Game-thread only; leaves the cache valid.
+// Gated behind an autotest env flag -- not a shipping path.
+bool DebugCheckWorldContextRecovery();
+
 // AActor::K2_GetActorLocation on `actor`. Returns (0,0,0) if it cannot be called.
 FVector GetActorLocation(void* actor);
 

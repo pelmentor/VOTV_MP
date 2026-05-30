@@ -47,6 +47,9 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // PR-FOUNDATION-2 (B part 2) save-button grey-out: client-only; drives
     // InpActEvt_Escape so the pause-menu Save button disable is observable.
     SpawnIf("VOTVCOOP_RUN_SAVEBTN_TEST", "save-button test", &SaveBtnDisableTestThread, role);
+    // bug2 world-context staleness guard self-test: both peers; forces a stale
+    // world context and verifies EnsureWorldContext recovers.
+    SpawnIf("VOTVCOOP_RUN_WORLDCTX_TEST", "world-context test", &WorldCtxTestThread, role);
 }
 
 }  // namespace harness::autotest

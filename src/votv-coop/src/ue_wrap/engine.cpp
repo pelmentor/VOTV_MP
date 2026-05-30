@@ -34,12 +34,44 @@ static_assert(sizeof(ExecuteConsoleCommandParams) == 0x20, "param frame layout")
 void* g_kslCdo = nullptr;
 void* g_execFn = nullptr;
 void* g_worldContext = nullptr;
+int32_t g_worldContextIdx = -1;  // GUObjectArray index of g_worldContext (for the safe staleness check)
 
 void* ResolveWorldContext() {
     // The GameInstance persists across level loads and is a valid world context.
     if (void* gi = R::FindObjectByClass(P::name::GameInstanceClass)) return gi;
     // Fall back to any live World (e.g. before the GameInstance is up).
     return R::FindObjectByClass(P::name::WorldClass);
+}
+
+// Return a VALID world context, dropping + re-resolving a stale one. Centralized so EVERY
+// spawn/exec site shares the staleness guard -- the guard must not live at only some sites.
+//
+// bug2 ROOT CAUSE (2026-05-30): ResolveWorldContext prefers the persistent GameInstance but
+// FALLS BACK to a World (which dies on a level reload). Resolve() dropped a dead context
+// before reuse; SpawnActor + BeginDeferredSpawn only checked `!g_worldContext`, so a stale
+// (freed) fallback World -- cached pre-GameInstance, then killed by the host's save-load
+// level transition -- got reused, and BeginDeferredActorSpawnFromClass(World=null) returned
+// null FOREVER (the host never spawned the connecting client's puppet; 128 consecutive
+// failures observed in the 2026-05-30 smoke). Validate via IsLiveByIndex on the cached index,
+// NOT IsLive(ptr): a GC-freed World pointer must not be dereferenced
+// ([[feedback-islive-unsafe-on-freed-cached-pointer]]). After dropping a stale World the
+// re-resolve prefers the GameInstance, which never dies -> the failure cannot recur.
+void* EnsureWorldContext() {
+    if (g_worldContext && !R::IsLiveByIndex(g_worldContext, g_worldContextIdx)) {
+        UE_LOGW("engine: g_worldContext STALE (dead/recreated world, idx=%d) -- re-resolving "
+                "[bug2 guard: prevents BeginDeferredActorSpawnFromClass null]", g_worldContextIdx);
+        g_worldContext = nullptr;
+        g_worldContextIdx = -1;
+    }
+    if (!g_worldContext) {
+        g_worldContext = ResolveWorldContext();
+        g_worldContextIdx = g_worldContext ? R::InternalIndexOf(g_worldContext) : -1;
+        if (g_worldContext) {
+            UE_LOGI("engine: world context resolved -> %p (class=%ls, idx=%d)",
+                    g_worldContext, R::ClassNameOf(g_worldContext).c_str(), g_worldContextIdx);
+        }
+    }
+    return g_worldContext;
 }
 
 bool Resolve() {
@@ -49,12 +81,11 @@ bool Resolve() {
             g_execFn = R::FindFunction(cls, P::name::ExecuteConsoleCommandFn);
         }
     }
-    // World context can become available later than the CDO; re-resolve until
-    // found. Also drop it if it was destroyed (a stale World from the pre-
-    // GameInstance fallback would otherwise be used after a level reload).
-    if (g_worldContext && !R::IsLive(g_worldContext)) g_worldContext = nullptr;
-    if (!g_worldContext) g_worldContext = ResolveWorldContext();
-    return g_kslCdo && g_execFn && g_worldContext;
+    // World context can become available later than the CDO; the centralized
+    // EnsureWorldContext re-resolves until found AND drops a destroyed one (a stale
+    // World from the pre-GameInstance fallback would otherwise be reused after a
+    // level reload -- see the helper's bug2 note).
+    return g_kslCdo && g_execFn && EnsureWorldContext();
 }
 
 }  // namespace
@@ -233,7 +264,7 @@ void* SpawnActor(void* actorClass, const FVector& location, bool inertPawn) {
                 g_gsCdo, g_beginSpawnFn, g_finishSpawnFn);
         return nullptr;
     }
-    if (!g_worldContext) g_worldContext = ResolveWorldContext();
+    EnsureWorldContext();  // drop+re-resolve a stale world context (bug2 guard)
 
     const FTransform xform = MakeTransform(location);
 
@@ -293,6 +324,29 @@ void* SpawnActor(void* actorClass, const FVector& location, bool inertPawn) {
     return finished ? finished : actor;
 }
 
+bool DebugCheckWorldContextRecovery() {
+    EnsureWorldContext();  // baseline: ensure a valid context is cached first
+    if (!g_worldContext) {
+        UE_LOGW("worldctx_test: no world context resolved -- cannot self-test the guard");
+        return false;
+    }
+    void* before = g_worldContext;
+    const int32_t goodIdx = g_worldContextIdx;
+    // Simulate a freed/recreated World after a level reload: the cached index no longer
+    // matches g_worldContext's slot. Use an adjacent (in-range) index so IsLiveByIndex
+    // returns false via a slot mismatch -- the same trigger the real stale World hits --
+    // without any out-of-range read.
+    g_worldContextIdx = goodIdx ^ 1;
+    void* recovered = EnsureWorldContext();  // must DROP (IsLiveByIndex false) + re-resolve
+    const bool ok = recovered != nullptr && R::IsLiveByIndex(recovered, g_worldContextIdx);
+    UE_LOGI("worldctx_test: forced-stale guard check -- before=%p (idx=%d) corrupted->%d -> "
+            "recovered=%p (class=%ls, idx=%d) live=%d -> %s",
+            before, goodIdx, goodIdx ^ 1, recovered,
+            recovered ? R::ClassNameOf(recovered).c_str() : L"<null>",
+            g_worldContextIdx, ok ? 1 : 0, ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 namespace {
 // Build a transform with rotation from FRotator (degrees -> quaternion). UE4
 // uses Pitch=Y, Yaw=Z, Roll=X ordering for FRotator::Quaternion().
@@ -319,7 +373,7 @@ void* BeginDeferredSpawn(void* actorClass, const FVector& location, const FRotat
                 g_gsCdo, g_beginSpawnFn);
         return nullptr;
     }
-    if (!g_worldContext) g_worldContext = ResolveWorldContext();
+    EnsureWorldContext();  // drop+re-resolve a stale world context (bug2 guard)
     const FTransform xform = MakeTransform(location, rotation);
     ParamFrame begin(g_beginSpawnFn);
     begin.Set<void*>(L"WorldContextObject", g_worldContext);
