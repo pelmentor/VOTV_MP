@@ -124,6 +124,81 @@ int RunObserverSEH(ProcessEventObserverFn cb, void* self, void* function, void* 
     }
 }
 
+// ---- Absorbed-fault localization (firewall diagnosability) -----------------
+// The Pump() crash firewall absorbs a faulting task so the host survives, but
+// historically it logged only a GENERIC "absorbed exception" line -- it did not
+// say WHERE the fault was. That blind spot cost real RE time twice (the bug1
+// per-tick AV balloon needed convergent-agent RE; bug2 -- the intermittent
+// unpossessed-first-client AV flood -- still can't be pinned without it). These
+// pieces capture the faulting instruction pointer + the access address + the
+// containing module/RVA, so the next absorbed fault names its own site. A
+// votv-coop.dll RVA maps to a function via votv-coop.map (/MAP) +
+// tools/maprva.py; a game-exe hit means the fault is inside a ProcessEvent-
+// dispatched UFunction on a bad object.
+struct TaskFaultInfo {
+    void*         faultingIP = nullptr;  // EXCEPTION_RECORD::ExceptionAddress
+    void*         accessAddr = nullptr;  // ExceptionInformation[1] on an AV
+    unsigned long code       = 0;        // 0xC0000005 == EXCEPTION_ACCESS_VIOLATION
+};
+thread_local TaskFaultInfo t_lastTaskFault{};
+
+// SEH filter -- runs in the faulting context (registers still valid) BEFORE the
+// unwind, so it must only stash, never allocate. Returns EXCEPTION_EXECUTE_HANDLER.
+int TaskFaultFilter(EXCEPTION_POINTERS* ep) {
+    t_lastTaskFault.code       = ep->ExceptionRecord->ExceptionCode;
+    t_lastTaskFault.faultingIP = ep->ExceptionRecord->ExceptionAddress;
+    t_lastTaskFault.accessAddr =
+        (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+         ep->ExceptionRecord->NumberParameters >= 2)
+            ? reinterpret_cast<void*>(ep->ExceptionRecord->ExceptionInformation[1])
+            : nullptr;
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// SEH-only (no C++ destructors in this frame -- MSVC constraint, same contract
+// as RunObserverSEH; `task` is a reference so it has no destructor here).
+// Under /EHa the __except unwind STILL runs the task frame's C++ destructors
+// (that is precisely why this image is built /EHa), so the load-bearing
+// lock-release property of the Pump catch it replaces is fully preserved.
+// Catches both structured exceptions (AV/div0) AND C++ throws (the latter as
+// code 0xE06D7363). Returns 0 clean, 1 if an exception was caught.
+int RunTaskSEH(const Task& task) {
+    __try {
+        task();
+        return 0;
+    } __except (TaskFaultFilter(GetExceptionInformation())) {
+        return 1;
+    }
+}
+
+// Resolve a faulting IP to "module+0xRVA" for the log. C++ (uses Win32 + a
+// thread-local buffer); called only from Pump's C++ body, never from the
+// SEH-only RunTaskSEH. The logged RVA is ASLR-independent (ip - runtime base),
+// so it maps directly against votv-coop.map's preferred-base RVAs.
+const char* FormatModuleRva(void* ip) {
+    static thread_local char buf[320];
+    HMODULE hmod = nullptr;
+    if (ip && ::GetModuleHandleExW(
+                  GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                      GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                  reinterpret_cast<LPCWSTR>(ip), &hmod) &&
+        hmod) {
+        char path[MAX_PATH] = {0};
+        ::GetModuleFileNameA(hmod, path, MAX_PATH);
+        const char* base = path;
+        for (const char* p = path; *p; ++p)
+            if (*p == '\\' || *p == '/') base = p + 1;
+        const unsigned long long rva =
+            reinterpret_cast<uintptr_t>(ip) - reinterpret_cast<uintptr_t>(hmod);
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%s+0x%llX modbase=%p",
+                    base, rva, static_cast<void*>(hmod));
+    } else {
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE, "<unknown-module ip=%p>", ip);
+    }
+    return buf;
+}
+// ---- end absorbed-fault localization ---------------------------------------
+
 bool SafeCallInterceptor(UFunctionInterceptor cb, void* self, void* params, void* function) {
     bool intercept = false;
     if (RunInterceptorSEH(cb, self, params, &intercept) != 0) {
@@ -334,13 +409,26 @@ void Pump() {
         // what(); catch(...) covers the rest (other C++ throws + absorbed
         // structured exceptions). The pump LOOP CONTINUES either way, so one
         // faulting task never stops the others or wedges the tick.
-        try {
-            task();
-        } catch (const std::exception& e) {
-            UE_LOGE("game_thread: posted task threw C++ exception: %s", e.what());
-        } catch (...) {
-            UE_LOGE("game_thread: posted task raised an exception "
-                    "(C++ throw or absorbed structured exception/AV); skipped, pump continues");
+        // RunTaskSEH wraps task() in an SEH frame whose filter captures the
+        // faulting IP + AV access address BEFORE the unwind, so an absorbed fault
+        // names its own site instead of logging the old generic message. Under
+        // /EHa the __except unwind still runs the task's C++ destructors, so the
+        // load-bearing lock-release property is unchanged. The pump LOOP CONTINUES
+        // either way, so one faulting task never stops the others or wedges the tick.
+        t_lastTaskFault = {};
+        if (RunTaskSEH(task) != 0) {
+            constexpr unsigned long kCppExceptionCode = 0xE06D7363u;  // MSVC C++ throw
+            if (t_lastTaskFault.code == kCppExceptionCode) {
+                UE_LOGE("game_thread: posted task threw a C++ exception at ip=%p [%s]; "
+                        "skipped, pump continues",
+                        t_lastTaskFault.faultingIP,
+                        FormatModuleRva(t_lastTaskFault.faultingIP));
+            } else {
+                UE_LOGE("game_thread: posted task FAULT code=0x%08lX ip=%p [%s] access=%p; "
+                        "skipped, pump continues",
+                        t_lastTaskFault.code, t_lastTaskFault.faultingIP,
+                        FormatModuleRva(t_lastTaskFault.faultingIP), t_lastTaskFault.accessAddr);
+            }
         }
         g_tasksRun.fetch_add(1, std::memory_order_relaxed);
     }

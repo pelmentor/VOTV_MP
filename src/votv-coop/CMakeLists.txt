@@ -210,6 +210,11 @@ if (MSVC)
     # PRIVATE -> third-party GNS/minhook stay /EHsc (per-TU codegen flag,
     # mixing in one image is supported).
     target_compile_options(votv-coop PRIVATE /W4 /permissive- /EHa)
+    # /MAP emits votv-coop.map (symbol -> RVA) so a faulting IP captured by the
+    # game_thread Pump firewall (absorbed-fault localization) maps to a function
+    # name by grep via tools/maprva.py -- no IDA needed. The .map lands in
+    # build/ (gitignored); link-time cost is trivial.
+    target_link_options(votv-coop PRIVATE /MAP)
 
     # MinHook must match the mod's static CRT or the link fails.
     set_property(TARGET minhook PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
