@@ -293,7 +293,7 @@ void Update(net::Session& session, void* localPlayer) {
                     break;
                 }
             }
-            remote_prop_spawn::OnSpawn(p);
+            remote_prop_spawn::OnSpawn(p, msg.senderPeerSlot);
             break;
         }
         case net::ReliableKind::PropDestroy: {

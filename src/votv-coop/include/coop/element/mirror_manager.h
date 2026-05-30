@@ -76,7 +76,13 @@ public:
     // outside the lock so the dtor early-returns), or
     // element::Registry::RegisterMirror failure (rolled back; same
     // dtor-outside-lock pattern). Logs at each failure case.
-    bool Install(ElementId wireEid, std::unique_ptr<T> mirror) {
+    // `ownerSlot` (D1-7) tags the mirror with its ORIGINATING peer slot so a
+    // per-slot disconnect can drain exactly that peer's mirrors via
+    // DrainMirrorsForSlot. Pass the reliable header's senderPeerSlot (the
+    // host-relay logical origin). -1 leaves the mirror untagged (never matched
+    // by a per-slot drain) -- used where per-slot eviction does not apply (e.g.
+    // host-authoritative NPC mirrors, which only vacate on full teardown).
+    bool Install(ElementId wireEid, std::unique_ptr<T> mirror, int ownerSlot = -1) {
         if (wireEid == 0u) return false;            // wire sentinel "no Element"
         if (wireEid == kInvalidId) {
             UE_LOGW("MirrorManager: Install with kInvalidId rejected (sender bug?)");
@@ -87,6 +93,9 @@ public:
                     wireEid);
             return false;
         }
+        // Tag before publishing under m_mutex so the disconnect drain (which
+        // takes the same mutex) observes a consistent (element, ownerSlot).
+        mirror->SetOwnerSlot(static_cast<int8_t>(ownerSlot));
         T* raw = nullptr;
         // Step 2 + duplicate-check under the per-type mutex. The mutex
         // is released BEFORE the registry call (Step 3) to keep the
@@ -310,6 +319,34 @@ public:
             std::lock_guard<std::mutex> lk(m_mutex);
             for (auto it = m_byId.begin(); it != m_byId.end();) {
                 if (it->second && it->second->IsMirror()) {
+                    drained.push_back(std::move(it->second));
+                    it = m_byId.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        return drained.size();
+        // dtors fire here, OUTSIDE m_mutex.
+    }
+
+    // Drain ONLY the wire mirrors (IsMirror()==true) OWNED BY `ownerSlot`,
+    // leaving every other peer's mirrors and all AllocAndInstall'd locals in
+    // place. The per-slot disconnect drain (D1-7): when peer N drops, its props
+    // mirrored here become orphan eids that must vacate the Registry so a
+    // reconnecting N (or a recycled eid) does not collide / accumulate. Same
+    // ABBA-safe move-out-under-lock / destruct-outside pattern + same m_mirror /
+    // m_ownerSlot GT-serialization contract as DrainMirrorsOnly (both reads are
+    // published at Install under GT serialization; see that method's note).
+    // Returns count drained.
+    size_t DrainMirrorsForSlot(int ownerSlot) {
+        const int8_t want = static_cast<int8_t>(ownerSlot);
+        std::vector<std::unique_ptr<T>> drained;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            for (auto it = m_byId.begin(); it != m_byId.end();) {
+                if (it->second && it->second->IsMirror() &&
+                    it->second->GetOwnerSlot() == want) {
                     drained.push_back(std::move(it->second));
                     it = m_byId.erase(it);
                 } else {

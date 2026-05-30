@@ -536,8 +536,15 @@ std::string NarrowAscii(const std::wstring& w) {
 void RegisterPropMirror(coop::element::ElementId eid,
                         void* actor,
                         const std::wstring& key,
-                        const std::wstring& cls) {
+                        const std::wstring& cls,
+                        int senderSlot) {
     if (!actor) return;
+    // Tag with the originating peer slot for per-slot disconnect eviction
+    // (D1-7). Out-of-range/unknown -> -1 (untagged; only drained on full
+    // teardown). kMaxPeers bounds it to the 4-peer slot space.
+    const int ownerSlot =
+        (senderSlot >= 0 && senderSlot < static_cast<int>(coop::players::kMaxPeers))
+            ? senderSlot : -1;
     // Build the Prop mirror with name/typeName/actor populated, then
     // hand off to MirrorManager::Install. The template encapsulates
     // the 5-step pattern (alloc-under-lock + RegisterMirror +
@@ -547,10 +554,10 @@ void RegisterPropMirror(coop::element::ElementId eid,
     if (!key.empty()) mirror->SetName(NarrowAscii(key));
     if (!cls.empty()) mirror->SetTypeName(NarrowAscii(cls));
     mirror->SetActor(actor, R::InternalIndexOf(actor));
-    if (PropMirrors().Install(eid, std::move(mirror))) {
+    if (PropMirrors().Install(eid, std::move(mirror), ownerSlot)) {
         UE_LOGI("remote_prop::RegisterPropMirror: eid=%u bound to actor=%p "
-                "key='%ls' cls='%ls'",
-                eid, actor, key.c_str(), cls.c_str());
+                "key='%ls' cls='%ls' ownerSlot=%d",
+                eid, actor, key.c_str(), cls.c_str(), ownerSlot);
     }
     // On false: Install already logged the failure case (rejected
     // sentinel id, duplicate, or RegisterMirror failure).
@@ -698,6 +705,18 @@ void OnDisconnectForSlot(int peerSlot) {
     // per-slot disconnect edge (game thread).
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDisconnectForSlot)");
     if (peerSlot < 0 || peerSlot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    // D1-7: drain THIS peer's wire prop mirrors so they don't accumulate in the
+    // Registry until full teardown (a reconnecting peer / recycled eid would
+    // otherwise collide). Mirror-only + owner-slot-filtered: convergent locals
+    // (m_mirror=false) and other peers' mirrors are untouched. The drained
+    // Elements' dtors run outside the manager mutex (Registry::UnregisterMirror).
+    // Done BEFORE the early-return below so a slot with mirrors but no held
+    // drive still gets cleaned.
+    const size_t drainedMirrors = PropMirrors().DrainMirrorsForSlot(peerSlot);
+    if (drainedMirrors > 0) {
+        UE_LOGI("remote_prop: peer slot %d disconnect -- drained %zu wire prop mirror(s)",
+                peerSlot, drainedMirrors);
+    }
     ActiveDrive& d = g_drives[peerSlot];
     if (!d.actor) return;
     if (d.mesh) DriveSimulate(d.mesh, true);

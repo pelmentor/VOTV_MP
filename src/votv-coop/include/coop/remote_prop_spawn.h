@@ -39,7 +39,9 @@ namespace coop::remote_prop_spawn {
 
 // Called from event_feed when a PropSpawn reliable message arrives.
 // Game-thread only (UFunction calls are GT-only). event_feed posts
-// via game_thread::Post to satisfy this.
-void OnSpawn(const coop::net::PropSpawnPayload& payload);
+// via game_thread::Post to satisfy this. `senderSlot` is the reliable
+// header's senderPeerSlot (host-relay logical origin) -- tagged onto the
+// mirror for per-slot disconnect eviction (D1-7).
+void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot);
 
 }  // namespace coop::remote_prop_spawn

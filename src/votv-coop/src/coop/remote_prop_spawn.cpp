@@ -129,7 +129,7 @@ void RestoreCollisionIfNeeded(const wchar_t* pathLabel,
 
 }  // namespace
 
-void OnSpawn(const coop::net::PropSpawnPayload& payload) {
+void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot) {
     using ue_wrap::ParamFrame;
     using ue_wrap::Call;
     const std::wstring classW = ClassNameToWString(payload.className);
@@ -171,7 +171,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
             // PropDestroy from sender resolves via eid (we just declined
             // to teleport-pop, but the wire identity binding is still
             // useful).
-            coop::remote_prop::RegisterPropMirror(payload.elementId, existing, keyW, classW);
+            coop::remote_prop::RegisterPropMirror(payload.elementId, existing, keyW, classW, senderSlot);
             return;
         }
         UE_LOGI("remote_prop::OnSpawn: key '%ls' already resolves to live actor %p -- de-duping, converging transform to host (loc=(%.1f,%.1f,%.1f))",
@@ -190,7 +190,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
         // A2 mirror binding: associate sender's wire eid with the resolved
         // local actor so future PropDestroy / eid-routed lookups land
         // correctly.
-        coop::remote_prop::RegisterPropMirror(payload.elementId, existing, keyW, classW);
+        coop::remote_prop::RegisterPropMirror(payload.elementId, existing, keyW, classW, senderSlot);
         return;
     }
     // Phase 5S0 Gap I-1 (2026-05-24): exact-Key match failed. Try fuzzy
@@ -218,7 +218,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
             // fuzzy path -- symmetric with the exact-key drive-skip path
             // above. Without this, Registry::Get(eid) on this peer would
             // never resolve for a fuzzy+drive-skipped prop.
-            coop::remote_prop::RegisterPropMirror(payload.elementId, fuzzy, keyW, classW);
+            coop::remote_prop::RegisterPropMirror(payload.elementId, fuzzy, keyW, classW, senderSlot);
             return;
         }
         UE_LOGI("remote_prop::OnSpawn: Gap-I-1 FUZZY MATCH '%ls' (wire key '%ls') -> existing actor %p within %.1f cm -- de-duping, converging transform + rekeying",
@@ -269,7 +269,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
         // A2 (2026-05-29) mirror binding: the fuzzy-matched actor was just
         // rekey'd to the wire Key above, so future PropPose / PropDestroy
         // from sender resolves via key OR eid lookup.
-        coop::remote_prop::RegisterPropMirror(payload.elementId, fuzzy, keyW, classW);
+        coop::remote_prop::RegisterPropMirror(payload.elementId, fuzzy, keyW, classW, senderSlot);
         return;
     }
     if (!ResolveSpawnFns()) {
@@ -407,7 +407,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload) {
     // spawned local actor. Subsequent Registry::Get(eid) on this peer
     // resolves to this actor; PropDestroy with the same eid drains the
     // mirror + destroys the actor.
-    coop::remote_prop::RegisterPropMirror(payload.elementId, spawned, keyW, classW);
+    coop::remote_prop::RegisterPropMirror(payload.elementId, spawned, keyW, classW, senderSlot);
 }
 
 }  // namespace coop::remote_prop_spawn

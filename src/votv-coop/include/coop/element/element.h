@@ -156,6 +156,21 @@ public:
     // it -- mirrors borrow ids from the host's allocation space).
     bool IsMirror() const { return m_mirror; }
 
+    // For a wire MIRROR (IsMirror()==true): the peer slot of the ORIGINATING
+    // peer -- the logical origin the host relay stamps into the reliable
+    // header's senderPeerSlot (session.cpp:512; preserved through relay so a
+    // prop from peer A carries slot A on peer B, not the relaying host's 0).
+    // Lets a per-slot disconnect drain exactly the departing peer's mirrors
+    // (D1-7) instead of leaking them until full teardown. -1 = no owner:
+    // AllocAndInstall'd locals (m_mirror=false) and any mirror left untagged.
+    // (MTA precedent: CClientGame removes a quitting player's owned elements on
+    // Event_OnPlayerQuit; our per-type MirrorManager::DrainMirrorsForSlot is the
+    // same per-player eviction, generalized.) Set on the game thread at Install
+    // and read on the game thread at the disconnect drain -- same publish-once /
+    // GT-serialized discipline as m_mirror.
+    int8_t GetOwnerSlot() const   { return m_ownerSlot; }
+    void   SetOwnerSlot(int8_t s) { m_ownerSlot = s; }
+
 private:
     // m_id + m_mirror are set by Registry when the element is registered.
     // They are otherwise immutable. Registry uses a friend helper.
@@ -171,6 +186,7 @@ private:
     int32_t     m_internalIdx  = -1;     // cached GUObjectArray slot of m_actor
     bool        m_beingDeleted = false;
     bool        m_mirror       = false;
+    int8_t      m_ownerSlot    = -1;     // originating peer slot for mirrors (D1-7); -1 = none
 };
 
 }  // namespace coop::element

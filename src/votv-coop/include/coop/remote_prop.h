@@ -76,10 +76,14 @@ bool IsActorUnderAnyDrive(void* actor);
 // reject). Implements the 5-step RegisterMirror pattern (alloc -> insert
 // under MirrorManager mutex -> RegisterMirror -> rollback on failure).
 // See [[feedback-registry-register-mirror-pattern]] for the contract.
+// `senderSlot` is the originating peer slot (reliable header senderPeerSlot,
+// the host-relay logical origin) -- tagged onto the mirror so a per-slot
+// disconnect drains exactly this peer's mirrors (D1-7). Pass -1 if unknown.
 void RegisterPropMirror(coop::element::ElementId eid,
                         void* actor,
                         const std::wstring& key,
-                        const std::wstring& cls);
+                        const std::wstring& cls,
+                        int senderSlot);
 
 // Extract null-terminated wstring from a WireKey. Shared utility used
 // by both the drive subsystem (FindSlotByKey, OnRelease, OnDestroy)
