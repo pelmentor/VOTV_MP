@@ -272,6 +272,42 @@ exact death->menu call site no longer needs hooking.
   **MUST-VERIFY #6 BEFORE Inc3-wire: does `addDamage`/`Add Player Damage` read health
   from the ACTOR or the shared saveSlot? If shared, invoking it on a host-side puppet
   corrupts the LOCAL player's saveSlot.** Smoke via `DebugForceHitPuppet`.
+  **STATIC RE 2026-05-31 (two independent lines CONVERGED -> answer = SHARED saveSlot;
+  runtime confirm pending):** (a) SDK dump: `mainPlayer_C` has ZERO health/HP/maxHealth
+  storage fields -- only the `damaged`@0xC10 / `receivedDamage`@0xD48 delegates + transient
+  flags (`dead`@0xA78, `canFallDamage`, `isBurning`, ...). Health lives ONLY on
+  `UsaveSlot_C` (health@0x428), reached via `mainGameInstance_C::save_gameInst`@0x1A8 (ONE
+  per process). So a damage entry has no `self` health to mutate -> it MUST resolve the
+  shared slot (the same chain `ue_wrap::vitals` / F3 RestoreVitals use). (b) IDA: same
+  layout cross-checked live; `impactDamageCPP` is a NATIVE exec thunk taking the hit
+  `AActor*` + forwarding to the BP impl (vtable+8) -- renamed `execImpactDamageCPP_mainPlayer`
+  @0x14112CA60; NPC attack spheres (`npc_zombie.attack_init` overlap) apply damage to
+  whatever actor they overlap. => **nativeEnemyCallsPawnDamage = TRUE**: a stock enemy
+  hitting a host-side PUPPET runs that puppet's damage path -> writes the HOST's own
+  `saveSlot.health`. HAZARD is REAL. Residual wiggle (why runtime confirm still needed):
+  `addDamage`'s `skipSetting` param COULD suppress the write, and the actual subtract is BP
+  Ubergraph bytecode (not in the dump / not native-decompilable). PROBE = `ProbeDamageHazardOnHost`
+  (env `VOTVCOOP_RUN_DMGHAZARD_TEST`): fire BOTH `Add Player Damage(5)` and `addDamage(5,
+  skipSetting=false)` on the slot-1 puppet, diff the host's own saveSlot.health; local-player
+  control disambiguates BP-early-out from a non-landing call.
+  **RUNTIME RESULT 2026-05-31 (probe PASS, host RSS stable, health restored) -- the SAFE
+  outcome:** health IS the shared saveSlot (LOCAL control: `Add Player Damage(5)` on the host's
+  OWN possessed player dropped 100.00 -> 95.05) BUT **both `Add Player Damage` AND `addDamage`
+  are NO-OPS on the unpossessed puppet (100.00 -> 100.00 for each) -- the player-damage BP
+  family GUARDS on possession (`GetController()`).** So directly invoking a damage UFunction on
+  a host-side puppet is a SAFE no-op: NO host-saveSlot corruption. The feared hazard does NOT
+  materialise through these entries. **CONSEQUENCE for Inc3-wire (REVISED from the static
+  prediction): NO corruption-suppression layer is needed. The design is OBSERVE-and-RELAY --
+  host observer on the puppet's damage entry (gated `GetController()==null && remote-slot`) ->
+  reliable PlayerDamage to the owner -> owner runs `Add Player Damage` on its OWN possessed
+  player (the control proved this writes correctly) -> health drops -> streams -> the
+  Inc3-visual flash fires. The early-out IS the built-in safety; must-fix #2 stays a trust
+  gate, not a mandatory interceptor.** RESIDUAL (an Inc3-wire BUILD detail, NOT a #6 blocker):
+  VOTV's native enemy reaches the pawn via `impactDamageCPP`/overlap (native hit-actor forward,
+  exec thunk `execImpactDamageCPP_mainPlayer`@0x14112CA60) -> confirm the OBSERVER hook catches
+  the actual function the enemy invokes (ProcessEvent-dispatched vs native-only -- recall
+  "ProcessEvent interceptor misses BP->BP internal calls"); the early-out almost certainly
+  applies there too (it forwards to the same BP family) but is unverified.
 - **Inc4 — flinch/burning display (polish).**
 - **~~Inc5 — respawn/revive~~ CUT (user decision 2026-05-30, see 4.5):** permadeath-
   rejoinable uses VOTV's native death->menu; no respawn/revive feature. Residual
@@ -287,8 +323,14 @@ display-only so N/A to Inc2b — death stays native SP flow); #4 sleep/faint vs 
 distinction — Inc2b excludes death (the `!dead` sender gate) and sleep is a SEPARATE
 system (AdreamBase_C, no unified bool), so the bit is purely "ragdolled, not dead";
 #5 stream health FRACTION not absolute (Inc1 SHIPPED). MUST-VERIFY: #6 puppet-damage-
-vs-shared-saveSlot (pre-Inc3, OPEN); #8 ragdollMode on unpossessed puppet (Inc2a
-PASS). SHOULD: ~~#7 OnDisconnectForSlot~~ MOOT under Inc2b (no per-slot ragdoll
+vs-shared-saveSlot (pre-Inc3 -- **RESOLVED 2026-05-31**: static RE [SDK: no per-actor
+health field; IDA: native enemy hits the hit-actor] said SHARED saveSlot; runtime probe
+`VOTVCOOP_RUN_DMGHAZARD_TEST` CONFIRMED shared (local control -4.95) AND found the SAFE
+twist -- both `Add Player Damage` + `addDamage` EARLY-OUT on the unpossessed puppet
+(possession guard), so invoking damage on a host-side puppet is a no-op, no corruption.
+=> Inc3-WIRE = OBSERVE-and-relay, NOT a suppression layer; residual = confirm the observer
+catches the native impactDamageCPP/overlap entry); #8 ragdollMode on unpossessed puppet
+(Inc2a PASS). SHOULD: ~~#7 OnDisconnectForSlot~~ MOOT under Inc2b (no per-slot ragdoll
 state to drain — the puppet's destroy-on-disconnect + fresh-puppet-reads-false
 handles it); #9 re-ragdoll idempotent no-op (DONE — the reconcile reads actual vs
 desired, no-op when matching); #10 doc the refuse-to-die trust limit (a peer faking

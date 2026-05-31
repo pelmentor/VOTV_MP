@@ -65,6 +65,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // host confirms its slot-1 puppet's nameplate flashes red via the streamed
     // health drop (no new wire).
     SpawnIf("VOTVCOOP_RUN_DAMAGE_TEST", "damage flash e2e test", &DamageTestThread, role);
+    // Vitals #6 puppet-damage HAZARD probe (gates Inc3-WIRE): host invokes Add Player
+    // Damage on the slot-1 puppet + diffs its OWN saveSlot.health to confirm (at
+    // runtime) that player health is the shared per-machine saveSlot. Client just
+    // connects so the puppet exists.
+    SpawnIf("VOTVCOOP_RUN_DMGHAZARD_TEST", "damage-hazard #6 probe", &DmgHazardTestThread, role);
 }
 
 }  // namespace harness::autotest

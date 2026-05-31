@@ -128,4 +128,15 @@ DWORD WINAPI RagdollTestThread(LPVOID arg);
 void RunAutonomousDamageTest();
 DWORD WINAPI DamageTestThread(LPVOID arg);
 
+// Vitals #6 puppet-damage HAZARD probe (2026-05-31, harness/autotest_vitals.cpp).
+// Gates Inc3-WIRE. HOST-only verdict: invokes AmainPlayer_C::"Add Player Damage" on
+// the slot-1 UNPOSSESSED puppet and diffs the host's OWN saveSlot.health. A drop ==
+// health is the shared per-machine saveSlot (static RE said so; this locks it at
+// runtime) -> Inc3-WIRE must intercept native damage on puppets, not just relay it.
+// A local-player control disambiguates a BP early-out from a non-landing call; host
+// health is restored after. The client just connects so the puppet exists. Gated by
+// env VOTVCOOP_RUN_DMGHAZARD_TEST="1".
+void RunAutonomousDmgHazardTest();
+DWORD WINAPI DmgHazardTestThread(LPVOID arg);
+
 }  // namespace harness::autotest
