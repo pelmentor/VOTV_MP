@@ -54,6 +54,13 @@ inline coop::net::Session* LoadSession() {
 bool g_propInitScanDone = false;
 bool g_propDestroyObserverInstalled = false;
 bool g_inventoryObserverInstalled = false;
+// Late-load catch for the non-Aprop_C keyed garbage classes (chipPile/clump/
+// trashBits). The one-shot Aprop-lineage Init scan below latches g_propInitScanDone
+// on the FIRST keyed Init found (Aprop_C, which loads with the world), so garbage
+// BP classes that load a moment later are missed -> they never broadcast PropSpawn
+// -> trash-ball interaction never syncs (root-caused 2026-05-31). This latches
+// once all three garbage Init UFunctions are hooked; see RegisterExtraKeyedInitObservers.
+bool g_extraKeyedInitDone = false;
 std::vector<void*> g_registeredPropInitFns;
 
 // Storage-container spawn fix (2026-05-25 RE): bracketed by takeObj PRE
@@ -435,6 +442,97 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     s->SendPropSpawn(p);  // channel queues internally
 }
 
+// Late-load catch for the non-Aprop_C keyed-interactable garbage/trash classes
+// (actorChipPile_C / prop_garbageClump_C / trashBitsPile_C -- the "мусорные
+// шарики"). These BP classes load LAZILY on first world encounter, frequently
+// AFTER the one-shot Aprop_C-lineage Init scan in Install() has already latched
+// g_propInitScanDone. That scan therefore never hooks their Init UFunction, so a
+// freshly spawned clump never fires GrabObserver_Aprop_Init_POST -> never
+// broadcasts PropSpawn -> the receiver has no entity to drive -> trash-ball
+// pickup/carry/throw does not sync at all (root-caused 2026-05-31).
+//
+// Fix (RULE 1): resolve each class by name and hook its OWN Init UFunction
+// directly, with a per-class sticky latch + an overall latch so the work stops
+// (O(1)) once all are hooked. This is NOT a per-tick full-GUObjectArray rescan
+// (which would re-arm the 19 GB wstring bomb the prop.cpp ResolveExtraBases
+// sticky atomics exist to prevent); it does at most 3 FindClass/FindFunction per
+// tick, and only between world-load and the moment all three classes are present
+// (a few seconds), mirroring the existing FindClass-until-loaded pattern Install
+// already uses for prop_C / Actor. Caller gates it on g_propInitScanDone so it
+// never churns at the menu (before any world prop has loaded).
+//
+// FindFunction(cls, "Init") returns the Init UFunction OWNED by cls (OuterOf ==
+// cls), exactly matching the Aprop-lineage scan's owning-class filter: a class
+// that overrides Init is hooked here; one that only inherits a base Init is
+// already covered by that base's registration (deduped against
+// g_registeredPropInitFns). Game thread only (called from Install via net_pump).
+bool RegisterExtraKeyedInitObservers() {
+    if (g_extraKeyedInitDone) return true;
+    struct Extra { const wchar_t* cls; bool* done; };
+    static bool sTrash = false, sClump = false, sChip = false;
+    static int  sAttempts = 0;
+    constexpr int kMaxAttempts = 120;  // ~2 min at the ~1 Hz throttled call rate
+    const Extra extras[] = {
+        { L"trashBitsPile_C",     &sTrash },
+        { L"prop_garbageClump_C", &sClump },
+        { L"actorChipPile_C",     &sChip  },
+    };
+    const std::wstring kInitName(P::name::PropInitFn);
+    int done = 0;
+    for (const auto& e : extras) {
+        if (*e.done) { ++done; continue; }
+        void* cls = R::FindClass(e.cls);
+        if (!cls) continue;  // BP class not loaded yet -- retry next Install() tick
+        void* initFn = R::FindFunction(cls, kInitName.c_str());
+        if (!initFn) {
+            // Class loaded but owns no Init override -> it dispatches an inherited
+            // base Init, already coverable via that base. Nothing of our own to
+            // register; stop retrying this one.
+            *e.done = true; ++done;
+            UE_LOGI("grab_hook[extra]: %ls owns no Init UFunction (inherits base) -- nothing to hook", e.cls);
+            continue;
+        }
+        bool already = false;
+        for (void* fn : g_registeredPropInitFns) if (fn == initFn) { already = true; break; }
+        if (already) { *e.done = true; ++done; continue; }
+        if (GT::RegisterPostObserver(initFn, GrabObserver_Aprop_Init_POST)) {
+            g_registeredPropInitFns.push_back(initFn);
+            *e.done = true; ++done;
+            UE_LOGI("grab_hook[extra]: registered POST observer for %ls::Init @ %p "
+                    "(late-load catch -- trash-ball sync)", e.cls, initFn);
+        } else {
+            // The observer table won't shrink, so retrying is futile -- mark done
+            // to keep Install() converging to O(1). kMaxObservers is 256, so this
+            // is a loud, unexpected WARN if it ever fires.
+            UE_LOGW("grab_hook[extra]: RegisterPostObserver failed for %ls::Init (observer table full) -- skipping", e.cls);
+            *e.done = true; ++done;
+        }
+    }
+    if (done == 3) {
+        g_extraKeyedInitDone = true;
+        UE_LOGI("grab_hook[extra]: all 3 keyed garbage classes resolved/handled -- trash-ball "
+                "Init catch complete (O(1) hereafter)");
+        return true;
+    }
+    // O(1)-safety bound (audit 2026-05-31): cap the retry so Install() reaches its
+    // O(1) steady state even if a garbage class never loads this session (a map/area
+    // with no chipPiles). These classes are hard-referenced by actorChipPile_C and
+    // load with the world, so all 3 normally resolve within ~1-2 s; the ~2 min budget
+    // (at the ~1 Hz call rate) covers any lazy load while GUARANTEEING the per-tick
+    // FindClass walk terminates rather than running for the whole session.
+    if (++sAttempts >= kMaxAttempts) {
+        g_extraKeyedInitDone = true;
+        UE_LOGW("grab_hook[extra]: gave up after %d attempts -- unresolved: %s%s%s; Init catch "
+                "latched to keep Install() O(1) (re-arms next session)",
+                sAttempts,
+                sTrash ? "" : "trashBitsPile_C ",
+                sClump ? "" : "prop_garbageClump_C ",
+                sChip  ? "" : "actorChipPile_C ");
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 // ---- public API --------------------------------------------------------
@@ -527,6 +625,19 @@ void Install(coop::net::Session* session) {
             }
         }
     }
+    // Catch the lazily-loaded garbage/trash keyed classes the one-shot Aprop scan
+    // above missed (chipPile/clump/trashBits -- trash-ball sync, 2026-05-31).
+    // Gated on g_propInitScanDone so it only runs once world props are loading
+    // (never churns FindClass at the menu); self-latches via g_extraKeyedInitDone.
+    // Throttled to ~1 Hz: each unresolved class costs one FindClass (a full
+    // GUObjectArray name walk). prop_garbageClump_C may not load until the first
+    // chipPile pickup (potentially minutes in), so at 125 Hz an unthrottled poll
+    // would burn a sustained ~6M wstring allocs/sec walk until then -- the throttle
+    // caps it at ~3 walks/sec, trivial, while keeping <=1 s catch latency.
+    if (g_propInitScanDone && !g_extraKeyedInitDone) {
+        static int sExtraThrottle = 0;
+        if ((sExtraThrottle++ % 125) == 0) RegisterExtraKeyedInitObservers();
+    }
     if (!g_propDestroyObserverInstalled) {
         if (void* actorCls = R::FindClass(P::name::ActorClassName)) {
             if (void* fn = R::FindFunction(actorCls, P::name::DestroyActorFn)) {
@@ -543,7 +654,10 @@ void Install(coop::net::Session* session) {
         }
     }
     // InstallInventory has its own atomic guard + early-out; not gated here.
-    if (g_propInitScanDone && g_propDestroyObserverInstalled) {
+    // g_extraKeyedInitDone is part of the latch so Install keeps re-entering until
+    // the lazily-loaded garbage Init observers are hooked (else trash-ball sync
+    // silently never arms); once all latches are set, Install is an O(1) no-op.
+    if (g_propInitScanDone && g_extraKeyedInitDone && g_propDestroyObserverInstalled) {
         g_allInstalled.store(true, std::memory_order_release);
         UE_LOGI("prop_lifecycle: Install() complete -- subsequent calls are O(1) no-ops");
     }

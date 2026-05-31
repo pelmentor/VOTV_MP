@@ -12,6 +12,7 @@
 #include "coop/save_block.h"
 #include "coop/save_button_disable.h"
 #include "coop/grab_observer.h"
+#include "coop/ini_config.h"
 #include "coop/item_activate.h"
 #include "coop/player_damage.h"
 #include "coop/net/protocol.h"
@@ -462,12 +463,14 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         // RELIABLE PropRelease so the peer re-enables SimulatePhysics (and we
         // never rely solely on the 500 ms stream-stop timeout).
         //
-        // 2026-05-29 (post-A-4 follow-up): both fields now read via
-        // ue_wrap::engine::ReadMainPlayerGrabState (Principle 7 -- no inline
-        // raw struct-offset derefs at coop layer). holdingActor stays null
-        // when the offset isn't resolved in the current build (chipPile/clump
-        // morph is a later VOTV recook); same drift-detection coverage as
-        // before because the wrapper still uses reflected_offset internally.
+        // 2026-05-29 (post-A-4 follow-up): both fields read via
+        // ue_wrap::engine::ReadMainPlayerGrabState (Principle 7 -- no inline raw
+        // struct-offset derefs at coop layer). The wrapper resolves
+        // mainPlayer.holding_actor via reflected_offset (MainPlayer_holding_actor
+        // IS defined), so holdingActor is populated whenever the field exists.
+        // Whether picking up a chipPile/clump actually SETS holding_actor (vs the
+        // clump self-driving off its own holdPlayer) is a live-BP question
+        // (Candidate A vs B); the [probe] below answers it from a real hands-on.
         ue_wrap::engine::MainPlayerGrabState gs{};
         void* heldActor = nullptr;
         if (ue_wrap::engine::ReadMainPlayerGrabState(g_netLocal, gs)) {
@@ -480,6 +483,34 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             if (!heldActor && gs.holdingActor && R::IsLive(gs.holdingActor) &&
                 ue_wrap::prop::IsKeyedInteractable(gs.holdingActor)) {
                 heldActor = gs.holdingActor;
+            }
+        }
+        // [probe] garbage-ball pickup diagnostic (2026-05-31, ini
+        // garbage_pickup_probe=1): resolves whether a chipPile/clump pickup sets
+        // grabbing_actor or holding_actor (the open Candidate-A-vs-B question)
+        // from a real hands-on carry, plus the held actor's class + key +
+        // keyed-interactable verdict, proving the held-pose path can see the
+        // clump. Only fires while something is held, throttled ~4 Hz; gated off
+        // by default so steady-state cost is one atomic-bool load.
+        static const bool sProbeGarbage =
+            ::coop::ini_config::IsIniKeyTrue("garbage_pickup_probe");
+        if (sProbeGarbage && (gs.grabbingActor || gs.holdingActor)) {
+            static uint32_t sN = 0;
+            if ((sN++ % 30) == 0) {
+                void* ga = gs.grabbingActor;
+                void* ha = gs.holdingActor;
+                const bool gaLive = ga && R::IsLive(ga);
+                const bool haLive = ha && R::IsLive(ha);
+                const int haKeyed =
+                    haLive ? (int)ue_wrap::prop::IsKeyedInteractable(ha) : -1;
+                const std::wstring hKey = (haKeyed == 1)
+                    ? ue_wrap::prop::GetInteractableKeyString(ha)
+                    : std::wstring(L"-");
+                UE_LOGI("[probe garbage_pickup]: grabbing_actor=%p(%ls) "
+                        "holding_actor=%p(%ls) holdingKeyed=%d holdingKey='%ls'",
+                        ga, gaLive ? R::ClassNameOf(ga).c_str() : L"-",
+                        ha, haLive ? R::ClassNameOf(ha).c_str() : L"-",
+                        haKeyed, hKey.c_str());
             }
         }
         if (heldActor && R::IsLive(heldActor)) {
