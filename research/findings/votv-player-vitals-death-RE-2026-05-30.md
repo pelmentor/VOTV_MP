@@ -41,6 +41,16 @@ death(death=true)**; `fallen(bool death)`; `faint` delegate@0x9C0 (non-lethal KO
 **Respawn/revive UNKNOWN** — no co-op revive in BP/our enum; SP death = load-last-save
 OR ragdoll->getup (`AutoRagdollGetup@0xC6B`, `canGetUp@0xC59`). Gates Inc5.
 
+**Faint TRIGGER (user 2026-05-31 + dump-grounded):** faint fires on EXHAUSTION
+(energy/stamina near 0). Dump confirms an exhaustion system: `isExhausted_bool@0x0F04`
+(bool), UFunction `isExhausted(bool Message, bool& exhausted)@490`, `skipFatigue@0x0B49`.
+The numeric meter is most likely `saveSlot.sleep@0xE8` (VOTV's tiredness/stamina bar):
+sleep->0 => isExhausted => `faint()@159` => `ragdollMode(true, passOut=true, false)`.
+INC2b CONSEQUENCE: the forced-faint verification autotest can call `faint()` DIRECTLY
+on the local possessed player to drive the rising edge (no need to deplete stamina),
+then assert the OTHER peer's puppet ragdolls end-to-end. Exact trigger chain
+(sleep-threshold vs isExhausted vs faint) is BP-internal -> confirm at Inc2b runtime.
+
 **Our surface today (CONFIRMED nothing):** protocol v18; `PoseSnapshot` 32B with
 `uint8_t _pad[3]` + `stateBits` bit0=isInAir, bits1..7 reserved; `RemotePlayer`
 drives pose/anim only; puppet discriminator `GetController()==null`.
