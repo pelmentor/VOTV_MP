@@ -572,6 +572,10 @@ void RemotePlayer::ApplyToEngine() {
     // keeps updating curPos_ meanwhile, so the first post-recover ApplyToEngine
     // snaps the puppet to the owner's current pose. (The actor pivot stays put while
     // ragdolled, which also keeps the nameplate anchored over the fallen body.)
+    // NOTE 2026-05-31: a "follow the sim mesh" attempt was reverted -- it strobes
+    // the OTHER visible body mesh (native ACharacter::Mesh @0x0280, parent of the
+    // simulating mesh_playerVisible); clean fix needs a re-parent. See
+    // [[project-ragdoll-sync]] memory.
     if (ragdollDispatched_) return;
 
     // Wire convention + per-tick Z/yaw recipe (post-2026-05-25 puppet rework):

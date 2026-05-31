@@ -296,6 +296,27 @@ bool TryResolveAllFunctions() {
     return sResolved == 5 && mResolved == 7;
 }
 
+// [probe] eff_rain particle active-state read (UActorComponent::IsActive).
+// Used by the gated weather probe to settle the load-bearing rain unknown:
+// is the eff_rain UParticleSystemComponent ACTIVE on the HOST (rendering rain)
+// but INACTIVE on the CLIENT after ApplyFromHost? If host=1/client=0 the fix is
+// a direct Activate(); if both=1 the miss is the per-tick rainStrength parameter
+// drive, not Activate. Reflection UFunction -- no offset guess. Game thread.
+void* g_isActiveFn = nullptr;
+bool ReadComponentIsActive(void* comp, bool* outOk) {
+    if (outOk) *outOk = false;
+    if (!comp || !R::IsLive(comp)) return false;
+    if (!g_isActiveFn) {
+        if (void* c = R::FindClass(L"ActorComponent"))
+            g_isActiveFn = R::FindFunction(c, L"IsActive");
+    }
+    if (!g_isActiveFn) return false;
+    ue_wrap::ParamFrame f(g_isActiveFn);
+    if (!ue_wrap::Call(comp, f)) return false;
+    if (outOk) *outOk = true;
+    return f.Get<bool>(L"ReturnValue");
+}
+
 }  // namespace
 
 void Install(coop::net::Session* session) {
@@ -589,6 +610,37 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
 }
 
 void TickConnect() {
+    // [probe] weather diagnostic (2026-05-31, ini weather_probe=1): on BOTH peers,
+    // ~1 Hz log the cycle's rain + fog observable state + eff_rain IsActive. The
+    // user watches ONE rain+fog episode; comparing host vs client logs settles
+    // (a) is rain particle active on host but not client (Activate-vs-param), and
+    // (b) which fog the thick fog is (enable_fog vs enable_superfog). Gated off by
+    // default; cheap when off (one bool load).
+    {
+        static const bool sProbe = ::coop::ini_config::IsIniKeyTrue("weather_probe");
+        if (sProbe) {
+            static uint32_t sN = 0;
+            if ((sN++ % 125) == 0) {
+                void* cycle = ResolveCycle();
+                if (cycle && R::IsLive(cycle)) {
+                    auto* b = reinterpret_cast<uint8_t*>(cycle);
+                    const bool  isRaining = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_isRaining);
+                    const float rainStr   = *reinterpret_cast<float*>(b + P::off::AdaynightCycle_rainStrength);
+                    const bool  enFog     = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_fog);
+                    const bool  enSuper   = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_superfog);
+                    void*       effRain   = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_eff_rain);
+                    bool ok = false;
+                    const bool active = ReadComponentIsActive(effRain, &ok);
+                    auto* s = g_session.load(std::memory_order_acquire);
+                    const char* role = (s && s->role() == coop::net::Role::Host) ? "HOST" : "CLIENT";
+                    UE_LOGI("[probe weather] role=%s isRaining=%d rainStrength=%.2f enable_fog=%d "
+                            "enable_superfog=%d eff_rain=%p IsActive=%d(ok=%d)",
+                            role, isRaining ? 1 : 0, rainStr, enFog ? 1 : 0, enSuper ? 1 : 0,
+                            effRain, active ? 1 : 0, ok ? 1 : 0);
+                }
+            }
+        }
+    }
     // 2026-05-27: host-side pending-broadcast retry retired (channel queues
     // internally). Kept the receiver-side g_pendingApply -- that's a STATE
     // defer (waiting for local cycle UClass to resolve), NOT a channel-busy
