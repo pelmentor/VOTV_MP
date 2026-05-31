@@ -190,14 +190,27 @@ items.
   AI/hit per enemies-target-both above, then tells the hit peer). Wire:
   continuous health/food/sleep piggybacked on `PoseSnapshot` (8-bit, ZERO size
   change — spends the existing `_pad[3]`; health streamed as the FRACTION
-  `health/maxHealth` since `maxHealth` is per-peer, not shared; `stateBits`
-  bit1=isRagdoll, bit2=isBurning, DISPLAY-ONLY) + reliable `PlayerDamage` (host
-  enemy hit -> owner, host-only-send/not-relayable) + reliable
-  `PlayerRagdollState` (dying/sleeping peer -> all; carries death vs passOut/
-  faint, since VOTV's `ragdollMode`/`isRagdoll` is SHARED by sleep+faint+death
-  — a sleeping peer must show a SLEEPING puppet, not a dead one). The reliable
-  event is the SOLE authority for DEAD/RAGDOLL<->ALIVE; the unreliable stateBits
-  only refresh display within that state (never trigger a transition).
+  `health/maxHealth` since `maxHealth` is per-peer, not shared) + the `stateBits`
+  ragdoll DISPLAY bit (bit1 `kStateBitRagdoll`, see below) + reliable
+  `PlayerDamage` (host enemy hit -> owner, host-only-send/not-relayable, Inc3).
+  **Ragdoll/faint (Inc2b) = a CONTINUOUS per-peer DISPLAY bit, NOT a reliable
+  event.** The sender sets `stateBits` bit1 from its own `isRagdoll && !dead`;
+  the receiver EDGE-DETECTS the wire bit + dispatches the puppet flop/recover once
+  per transition. One bit covers EVERY ragdoll cause — manual **C-key**, exhaustion
+  `faint()`, KO — since all flip `isRagdoll`; there is no readable `passOut`/cause
+  to distinguish them, and faint is a transient lossy-tolerant display state (MTA's
+  `CPlayerPuresyncPacket` flag shape), so it rides the proven per-peer pose relay
+  rather than a discrete reliable event. **The puppet flop is on the puppet's OWN
+  mesh, not VOTV's ragdoll:** the orphan puppet is tickless/controllerless, so
+  VOTV's `ragdollMode` (which spawns a separate `playerRagdoll_C` physics actor)
+  leaks +5 GB on it (the actor goes PendingKill but never GC-reaps and keeps
+  simulating). Instead we borrow the player ragdoll PhysicsAsset
+  (`kerfurOmegaV1_PhysicsAsset`), `SetPhysicsAsset` it on `mesh_playerVisible`,
+  enable collision, and `SetAllBodiesSimulatePhysics(true)` — leak-free, we own the
+  teardown (probe-confirmed `IsAnyRigidBodyAwake=1` during, host RSS stable). The
+  LOCAL player keeps using VOTV's real ragdoll (works — possessed). **Death is
+  EXCLUDED from the bit** (the `!dead` gate): death uses VOTV's native SP menu flow
+  and ends/leaves the session, never a synced recoverable faint.
   **Death lifecycle (user decision 2026-05-30): permadeath, rejoinable; host
   death ends the session.** Both host and peer death use VOTV's NATIVE SP
   death->menu flow (no death->menu intercept). Host death = session ends for all
@@ -220,8 +233,10 @@ items.
   design (incl. adversarial-verify must-fixes):
   `research/findings/votv-player-vitals-death-RE-2026-05-30.md`. STATUS: Inc0 (P7
   extraction) + Inc1 (continuous health/food/sleep on PoseSnapshot + nameplate
-  health bar, display-only) SHIPPED (6f5949c); Inc2 (ragdoll/faint sync), Inc3
-  (PlayerDamage enemy-hit delivery) pending; respawn/revive CUT (see above).
+  health bar) SHIPPED (6f5949c); Inc2a (#8 PASS, 4d52d40) + **Inc2b ragdoll/faint
+  DISPLAY-bit sync SHIPPED 2026-05-31** (protocol v20, `kStateBitRagdoll`,
+  continuous-bit pivot — see the wire note above); Inc3 (PlayerDamage enemy-hit
+  delivery) pending; respawn/revive CUT (see above).
 
 <!--
 Template for an entry:
@@ -481,3 +496,30 @@ Design implications (do NOT build yet; record so the architecture serves it):
   Vitals **Inc1 SHIPPED 6f5949c** (Pelmentor): continuous health/food/sleep on
   PoseSnapshot `_pad[3]` (zero size change, v18->v19) + display-only nameplate
   health bar; pre-deploy checklist PASS, sender resolution proven on both peers.
+- 2026-05-31 — **Vitals Inc2b ragdoll/faint sync SHIPPED + DESIGN PIVOT.** The
+  banked Inc2 design was a reliable `PlayerRagdollState` event; Inc2b instead ships
+  a CONTINUOUS per-peer DISPLAY bit (`PoseSnapshot.stateBits` bit1 `kStateBitRagdoll`,
+  protocol v19->v20, zero size change). Driven by RE that landed AFTER the plan:
+  (a) user confirmed the player ragdolls on the **C key** (manual
+  `InpActEvt_ragdoll_..._25`) in addition to exhaustion faint + KO — all flip the
+  SAME `isRagdoll` bit; (b) mainPlayer_C has NO readable `passOut` field (only a
+  `ragdollMode` param), so the reliable payload's passOut/death/cause were
+  unpopulatable; (c) faint is transient + lossy-tolerant + death-excluded =
+  a pure display state (MTA `CPlayerPuresyncPacket` flag shape). Sender sets the
+  bit = `isRagdoll && !dead`; receiver reconciles the puppet against the puppet's
+  ACTUAL isRagdoll (`ragdollMode(1,1,0)` rising / `forceGetUp()` falling), self-
+  healing + idempotent. The bit rides the proven per-peer pose relay, so the
+  reliable design's machinery (new ReliableKind, relay-whitelist, lane, defer/latch,
+  connect-replay, per-slot disconnect) is ALL unnecessary (those existed only to
+  survive a dropped-transition permanent desync the self-healing bit can't have).
+  P7 split clean (ue_wrap engine accessors + reflected_offset; coop = 1 sender line
+  + 1 edge-latch reconcile). RECEIVER VISUAL: VOTV's real `ragdollMode` spawns a
+  separate `playerRagdoll_C` physics actor that LEAKS +5 GB on the tickless orphan
+  puppet (PendingKill but never GC-reaped, keeps simulating) -- root-caused via 6
+  teardown attempts + 2-agent IDA/SDK RE + probes; USER chose to ragdoll the
+  puppet's OWN mesh instead (borrow `kerfurOmegaV1_PhysicsAsset`, SetPhysicsAsset +
+  enable collision + SetAllBodiesSimulatePhysics) -- leak-free, probe-confirmed
+  flopping (`IsAnyRigidBodyAwake=1`, host RSS stable 3.5 GB). e2e wire autotest:
+  client drives local ragdoll, host confirms slot-1 puppet flips isRagdoll + the
+  mesh physically flops. Death stays native SP flow (excluded). Inc3 PlayerDamage
+  still pending.

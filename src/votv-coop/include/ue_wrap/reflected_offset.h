@@ -45,6 +45,13 @@ int32_t MainPlayer_Heavy();
 // Probe-confirmed 2026-05-27; the PropPose-emit branch reads this as a
 // fallback when grabbing_actor is null.
 int32_t MainPlayer_holding_actor();
+// Ragdoll/faint DISPLAY state (vitals pillar Inc2b, 2026-05-31). isRagdoll is
+// the AnimBP gate flipped by ragdollMode() -- set by ANY ragdoll cause (manual
+// C-key InpActEvt_ragdoll_..._25, exhaustion faint(), KO). `dead` is the death
+// bool; the sender excludes death-ragdolls (death = native SP menu flow, ends
+// the session -- NOT a synced display state). Both recook-volatile BP fields.
+int32_t MainPlayer_isRagdoll();
+int32_t MainPlayer_dead();
 
 // AnimBlueprint_kerfurOmega_regular_C field accessors (VOTV BP).
 int32_t AnimBP_kerfur_walkSpeed();

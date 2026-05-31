@@ -960,6 +960,26 @@ inline constexpr const wchar_t* SoundAttenuationClass = L"SoundAttenuation";
 // updates) that match the user-observed local rendering.
 inline constexpr const wchar_t* MainPlayerFlashlightStateChangedFn = L"flashlightStateChanged";
 
+// Vitals pillar Inc2b (2026-05-31, ragdoll/faint DISPLAY sync). mainPlayer_C
+// drives every ragdoll cause (manual C-key, exhaustion faint, KO) through ONE
+// UFunction `ragdollMode(bool ragdoll, bool passOut, bool death)` (mainPlayer.hpp:
+// 484) and recovers via `forceGetUp()` (line 641). MUST-VERIFY #8 proved both
+// drive an UNPOSSESSED puppet (commit 4d52d40): ragdollMode(true,true,false)
+// flips isRagdoll 0->1 + spawns the ragdoll actor; forceGetUp() clears the
+// AnimBP gate. The receiver reconcile applies exactly those calls.
+inline constexpr const wchar_t* MainPlayerRagdollModeFn = L"ragdollMode";
+inline constexpr const wchar_t* MainPlayerForceGetUpFn  = L"forceGetUp";
+
+// The player body's ragdoll PhysicsAsset (the protagonist is a kerfurOmega; its
+// visible skin `kerfurOmega_KelSkin` carries NO physics asset of its own --
+// VOTV's real ragdoll is a separate physics-enabled actor). The puppet-own-mesh
+// faint (Inc2b) borrows this asset: SetPhysicsAsset on the puppet's
+// mesh_playerVisible, then SetAllBodiesSimulatePhysics(true) flops it. Resolved by
+// name via FindObject (probe 2026-05-31 enumerated the 14 loaded PhysicsAssets).
+inline constexpr const wchar_t* PlayerRagdollPhysicsAssetName = L"kerfurOmegaV1_PhysicsAsset";
+inline constexpr const wchar_t* PhysicsAssetClass             = L"PhysicsAsset";
+inline constexpr const wchar_t* SetPhysicsAssetFn             = L"SetPhysicsAsset";
+
 // 2026-05-26 deep-RE puppet light fix: reuse AddComponentByClassFn +
 // FinishAddComponentFn (already defined above for nameplate WidgetComponent
 // spawning). We spawn a FRESH USpotLightComponent on the puppet via

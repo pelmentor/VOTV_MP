@@ -221,7 +221,25 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // health). Reliable death/ragdoll authority is a later increment (these bytes
 // are continuous, lossy, and intentionally never trigger a DEAD transition).
 // See research/findings/votv-player-vitals-death-RE-2026-05-30.md.
-inline constexpr uint16_t kProtocolVersion = 19;
+//
+// v20 (2026-05-31) -- vitals pillar Inc2b (ragdoll/faint DISPLAY sync):
+// PoseSnapshot.stateBits gains bit 1 `kStateBitRagdoll` (per-pose, per-peer-
+// authoritative). The sender sets it from its OWN AmainPlayer_C::isRagdoll
+// (excluding death -- death = native SP menu flow, ends the session). isRagdoll
+// is flipped by EVERY ragdoll cause: manual C-key (InpActEvt_ragdoll_..._25),
+// exhaustion faint(), and KO -- so this one bit covers all of them. The
+// receiver reconciles the peer's puppet against the bit (ragdollMode(1,1,0) on
+// rising, forceGetUp() on falling), self-healing + idempotent. ZERO wire-size
+// change (stateBits byte already exists; bit 1 was reserved). DELIBERATE
+// DIVERGENCE from the banked reliable-event design (PlayerRagdollState
+// ReliableKind): faint is a TRANSIENT, lossy-tolerant, per-peer DISPLAY state
+// with multiple causes and no readable passOut/death distinction, so the
+// self-healing continuous-bit shape (sibling of kStateBitInAir + the v19 vitals
+// piggyback, and MTA's CPlayerPuresyncPacket flag shape) is the root-cause-
+// correct fit -- it rides the proven per-peer pose relay (no new ReliableKind /
+// relay-whitelist / lane / defer-latch / connect-replay machinery, which existed
+// only to survive the reliable design's permanent-desync failure mode).
+inline constexpr uint16_t kProtocolVersion = 20;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -496,14 +514,21 @@ static_assert(sizeof(PacketHeader) == 20, "PacketHeader must be 20 bytes");
 //                   player computation.
 //   speed        -- horizontal velocity magnitude (cm/s) -> remote AnimBP
 //                   locomotion blend.
-//   stateBits    -- per-pose flags. v8 layout:
+//   stateBits    -- per-pose flags. Layout:
 //                     bit 0 = isInAir (source CMC.MovementMode == MOVE_Falling).
 //                             Drives the puppet's BUA-POST observer to clear
 //                             useLegIK/rise so the foot-IK trace doesn't plant
 //                             the puppet's feet to the satellite's grounded
 //                             position while the source is airborne (jump
 //                             stretching fix, 2026-05-27).
-//                     bits 1..7 reserved (crouched, KO, ragdoll, ...).
+//                     bit 1 = isRagdoll (v20 Inc2b): source AmainPlayer_C::
+//                             isRagdoll AND NOT dead. Set by every ragdoll cause
+//                             (manual C-key, exhaustion faint, KO). The receiver
+//                             reconciles the puppet (ragdollMode(1,1,0) on the
+//                             rising edge, forceGetUp() on the falling edge).
+//                             Death is excluded -- it uses the native SP menu
+//                             flow + ends the session, never a synced pose flag.
+//                     bits 2..7 reserved (crouched, ...).
 struct PoseSnapshot {
     float   x, y, z;
     float   yaw;
@@ -525,7 +550,8 @@ struct PoseSnapshot {
 static_assert(sizeof(PoseSnapshot) == 32, "PoseSnapshot must be 32 bytes");
 
 // PoseSnapshot.stateBits flags. Single-byte field; flags assigned bit-by-bit.
-inline constexpr uint8_t kStateBitInAir = 0x01;
+inline constexpr uint8_t kStateBitInAir   = 0x01;
+inline constexpr uint8_t kStateBitRagdoll = 0x02;  // v20 Inc2b: source is ragdolled (faint/manual-C/KO, NOT dead)
 
 // v19: VOTV vital scalars (food, sleep, and the default maxHealth) top out at
 // 100.0. `health` is normalized by the per-peer `maxHealth` (upgrades/story can

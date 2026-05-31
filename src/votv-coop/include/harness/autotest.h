@@ -108,11 +108,14 @@ DWORD WINAPI PropReapTestThread(LPVOID arg);
 void RunAutonomousReSeedTest();
 DWORD WINAPI ReSeedTestThread(LPVOID arg);
 
-// Vitals Inc2a ragdoll probe (2026-05-31, harness/autotest_vitals.cpp). Host-only.
-// Answers MUST-VERIFY #8: fires mainPlayer_C::ragdollMode(1,1,0) on the slot-1
-// UNPOSSESSED puppet and diffs isRagdoll + ragdollActor before/after (then
-// forceGetUp to recover) -- proves whether the BP drives an unpossessed actor
-// before any Inc2 wire is built. Gated by env VOTVCOOP_RUN_RAGDOLL_TEST="1".
+// Vitals Inc2b ragdoll/faint e2e WIRE test (2026-05-31, harness/autotest_vitals.cpp).
+// BOTH peers, role-branched: the CLIENT drives ragdollMode(1,1,0)/forceGetUp() on
+// its LOCAL possessed player; the HOST observes its slot-1 puppet flip isRagdoll
+// 0->1->0 purely via the pose stream's kStateBitRagdoll + RemotePlayer's reconcile.
+// Proves the full sender-bit + receiver-reconcile path end to end. Supersedes the
+// Inc2a standalone #8 probe (host-drives-own-puppet -- PASSED, 4d52d40; the e2e
+// path covers it, so it was retired per RULE 2). Gated by env
+// VOTVCOOP_RUN_RAGDOLL_TEST="1" (host = observer, client = driver).
 void RunAutonomousRagdollTest();
 DWORD WINAPI RagdollTestThread(LPVOID arg);
 

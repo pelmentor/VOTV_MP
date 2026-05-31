@@ -1,36 +1,44 @@
-// harness/autotest_vitals.cpp -- autonomous vitals-pillar probes.
+// harness/autotest_vitals.cpp -- autonomous vitals-pillar wire test.
 //
-// Inc2a verification probe. Answers vitals-design MUST-VERIFY #8: does
-// mainPlayer_C::ragdollMode() drive an UNPOSSESSED puppet (GetController()==null),
-// or does the BP early-out on possession? A BP UFunction's bytecode is not
-// statically readable (IDA sees only the ProcessInternal thunk), so this fires
-// ragdollMode on the host's slot-1 puppet and DIFFS isRagdoll + ragdollActor
-// before/after -- the methodology's "verify behaviour by diffing observable
-// state" rule. It also exercises the RECOVER path (forceGetUp) that Inc2b's
-// falling edge needs.
+// Inc2b end-to-end ragdoll/faint sync test. Drives the FULL wire path:
 //
-// This is diagnostic/autotest code -> the documented exception to the
-// no-raw-read rule. It reads fields by reflection-resolved offset
-// (FindPropertyOffset, name-based + recook-safe) purely to LOG state; the
-// production Inc2b sender/receiver reads go through a ue_wrap wrapper.
+//   CLIENT (driver): calls ragdollMode(true,true,false) on its LOCAL possessed
+//     mainPlayer_C (exactly what the C-key / exhaustion-faint do internally),
+//     waits, then forceGetUp() -- so its OWN isRagdoll flips 1 then 0.
+//   HOST (observer): polls its slot-1 puppet (the client's body) and confirms
+//     isRagdoll flips 0->1 then 1->0 -- driven PURELY by the client's pose
+//     stream carrying PoseSnapshot.stateBits bit 1 (kStateBitRagdoll) +
+//     RemotePlayer::SetTargetPose's reconcile applying ragdollMode/forceGetUp
+//     on the puppet.
 //
-// Host-only (the slot-1 puppet is the unpossessed orphan). Gated by env
-// VOTVCOOP_RUN_RAGDOLL_TEST=1 (registered in autotest_dispatch.cpp). The smoke
-// inherits the env via mp.py's os.environ.copy(), so the host process picks it
-// up; the client self-skips on the role check.
+// This SUPERSEDES the prior standalone #8 probe (host drove its OWN puppet
+// directly to prove ragdollMode works on an unpossessed orphan -- PASSED,
+// commit 4d52d40). The e2e test exercises that same receiver-apply path AND
+// the sender bit-pack AND the relay-free per-peer pose stream, so the
+// standalone probe is retired (RULE 2 -- no parallel old + new verification).
+//
+// Reads/drives go through the ue_wrap::engine ragdoll wrappers (the production
+// Inc2b code path), not raw reflection -- so the test validates the shipping
+// accessors too. Game-thread work is posted via GT::Post; a bounded WaitDone
+// guards every wait so a faulting call can't hang the smoke.
+//
+// Gated by env VOTVCOOP_RUN_RAGDOLL_TEST=1 (registered in autotest_dispatch.cpp;
+// the smoke inherits it via mp.py's os.environ.copy()). Role read from
+// VOTVCOOP_NET_ROLE: "client" => driver, anything else => host observer.
 
 #include "harness/autotest.h"
 
 #include "coop/net_pump.h"
+#include "coop/players_registry.h"
 #include "coop/remote_player.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
+#include "ue_wrap/puppet.h"
 #include "ue_wrap/reflection.h"
 
 #include <atomic>
-#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -47,15 +55,171 @@ std::string ReadEnv(const char* name) {
     return (n > 0 && n < sizeof(buf)) ? std::string(buf) : std::string();
 }
 
-// Bounded spin-wait on a game-thread task's completion flag. Returns true if the
-// task signalled (1=ok / 2=fail), false if it never completed within timeoutMs
-// -- which would mean the posted task faulted (the SEH firewall ate the AV and
-// the done flag was never set). A bound is mandatory here: ragdollMode on an
-// unpossessed puppet is the unknown we're testing and COULD fault, and an
-// unbounded wait would hang the whole smoke.
+// Bounded spin-wait on a game-thread task's completion flag. Returns true if
+// the task signalled (set the flag non-zero), false if it never completed
+// within timeoutMs -- which would mean the posted task faulted (the SEH
+// firewall ate the AV and the flag was never set). A bound is mandatory:
+// driving ragdollMode on the local player COULD fault and an unbounded wait
+// would hang the whole smoke.
 bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
     for (int i = 0; i < timeoutMs / 5 && d->load() == 0; ++i) ::Sleep(5);
     return d->load() != 0;
+}
+
+// Read whether the slot-1 puppet's mesh has any awake rigid body == it is
+// physically ragdolling (flopping). IsAnyRigidBodyAwake (UPrimitiveComponent) is
+// the reliable signal -- IsSimulatingPhysics(emptyBone) false-negatives on a
+// skeletal ragdoll. Returns false on a missing/unreadable puppet.
+bool PuppetMeshIsFlopping() {
+    auto done = std::make_shared<std::atomic<int>>(0);
+    auto awake = std::make_shared<int>(0);
+    GT::Post([done, awake] {
+        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        if (puppet && R::IsLive(puppet)) {
+            void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+            if (mesh && R::IsLive(mesh)) {
+                if (void* awakeFn = R::FindFunction(R::FindClass(L"PrimitiveComponent"), L"IsAnyRigidBodyAwake")) {
+                    ue_wrap::ParamFrame f(awakeFn);
+                    if (ue_wrap::Call(mesh, f) && f.Get<bool>(L"ReturnValue")) *awake = 1;
+                }
+            }
+        }
+        done->store(1);
+    });
+    WaitDone(done, 8000);
+    return *awake != 0;
+}
+
+// HOST side: observe the slot-1 puppet (the client's body). Confirm its
+// isRagdoll flips 0->1 (driven by the client over the wire) then 1->0.
+void ObserveOnHost() {
+    UE_LOGI("ragdoll_test[host]: observer armed -- polling slot-1 puppet for a "
+            "wire-driven ragdoll (up to 120 s)");
+
+    // Phase machine: 0 = waiting for puppet to exist; 1 = waiting for the
+    // RISING edge (isRagdoll 0->1); 2 = waiting for the FALLING edge (1->0).
+    int phase = 0;
+    bool sawPuppet = false;
+    bool sawFlop = false;
+    for (int attempt = 0; attempt < 120 && phase < 3; ++attempt) {
+        auto done = std::make_shared<std::atomic<int>>(0);
+        auto isRag = std::make_shared<int>(-1);  // -1 = puppet not live / unreadable
+        GT::Post([done, isRag] {
+            void* puppet = coop::net_pump::Puppet(1).GetActor();
+            if (!puppet || !R::IsLive(puppet)) { *isRag = -1; done->store(1); return; }
+            bool isRagdoll = false, dead = false;
+            if (E::ReadMainPlayerRagdollState(puppet, isRagdoll, dead)) {
+                *isRag = isRagdoll ? 1 : 0;
+            } else {
+                *isRag = -1;  // offsets not resolved yet
+            }
+            done->store(1);
+        });
+        WaitDone(done, 8000);
+        const int r = *isRag;
+
+        if (phase == 0) {
+            if (r >= 0 && !sawPuppet) {
+                sawPuppet = true;
+                UE_LOGI("ragdoll_test[host]: slot-1 puppet resolved (isRagdoll=%d) -- waiting for wire-driven ragdoll", r);
+            }
+            if (r >= 0) phase = 1;  // puppet readable -> start watching for the rising edge
+        }
+        if (phase == 1 && r == 1) {
+            // Confirm the puppet mesh is PHYSICALLY flopping (not just the flag set).
+            sawFlop = PuppetMeshIsFlopping();
+            UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet isRagdoll 0->1 over the wire; "
+                    "puppet mesh physically flopping=%d", sawFlop ? 1 : 0);
+            phase = 2;
+        }
+        if (phase == 2 && r == 0) {
+            UE_LOGI("ragdoll_test[host]: observed FALLING edge -- puppet isRagdoll 1->0 (recovered)");
+            phase = 3;
+        }
+        ::Sleep(1000);
+    }
+
+    if (phase >= 3) {
+        UE_LOGI("ragdoll_test[host]: VERDICT Inc2b e2e %s -- a client's local ragdoll "
+                "propagated to its host puppet (rising + falling) purely via the pose stream; "
+                "puppet mesh physically flopped=%d (own-mesh sim, leak-free)",
+                sawFlop ? "PASS" : "PARTIAL (no flop)", sawFlop ? 1 : 0);
+    } else if (!sawPuppet) {
+        UE_LOGW("ragdoll_test[host]: VERDICT INCONCLUSIVE -- slot-1 puppet never resolved "
+                "(no client connected? puppet never spawned)");
+    } else if (phase == 1) {
+        UE_LOGW("ragdoll_test[host]: VERDICT FAIL -- puppet resolved but never saw a "
+                "wire-driven ragdoll (rising edge). Sender bit or receiver reconcile broken.");
+    } else {
+        UE_LOGW("ragdoll_test[host]: VERDICT PARTIAL -- saw the ragdoll RISING edge but not "
+                "the recover (falling). forceGetUp recover path may be broken.");
+    }
+    UE_LOGI("ragdoll_test[host]: DONE");
+}
+
+// CLIENT side: drive the LOCAL possessed player into a ragdoll, then recover --
+// the same ragdollMode/forceGetUp calls the C-key / faint do. The local
+// isRagdoll flip rides the pose stream's kStateBitRagdoll to the host.
+void DriveOnClient() {
+    UE_LOGI("ragdoll_test[client]: driver armed -- waiting for the local player");
+
+    // Wait for a live local mainPlayer_C (post-possession). Poll up to 60 s.
+    auto local = std::make_shared<void*>(nullptr);
+    for (int attempt = 0; attempt < 60 && !*local; ++attempt) {
+        auto done = std::make_shared<std::atomic<int>>(0);
+        GT::Post([local, done] {
+            void* mp = coop::players::Registry::Get().Local();
+            if (mp && R::IsLive(mp)) *local = mp;
+            done->store(1);
+        });
+        WaitDone(done, 8000);
+        if (!*local) ::Sleep(1000);
+    }
+    if (!*local) {
+        UE_LOGW("ragdoll_test[client]: VERDICT INCONCLUSIVE -- no local player in 60 s; cannot drive");
+        return;
+    }
+
+    // Let the host spawn the slot-1 puppet + arm its observer (the puppet
+    // appears a few seconds after our first pose). 12 s is comfortably past
+    // that on a LAN smoke.
+    UE_LOGI("ragdoll_test[client]: local player resolved -- waiting 12 s for the host puppet to spawn");
+    ::Sleep(12000);
+
+    // Drive the local ragdoll (== what the C-key / exhaustion faint do). On the
+    // possessed local player this is the normal in-game path, so it's safe.
+    {
+        auto done = std::make_shared<std::atomic<int>>(0);
+        void* mp = *local;
+        GT::Post([mp, done] {
+            const bool ok = E::SetMainPlayerRagdollMode(mp, /*ragdoll=*/true, /*passOut=*/true, /*death=*/false);
+            UE_LOGI("ragdoll_test[client]: drove LOCAL ragdollMode(1,1,0) -> ok=%d (host puppet should flop now)", ok ? 1 : 0);
+            done->store(1);
+        });
+        if (!WaitDone(done, 8000)) {
+            UE_LOGW("ragdoll_test[client]: ragdollMode call did not complete (faulted?) -- aborting drive");
+            return;
+        }
+    }
+
+    // Hold the ragdoll long enough for the host observer to catch the rising
+    // edge over the wire.
+    ::Sleep(5000);
+
+    // Recover (== wakeup / get-up). Clears the local isRagdoll AnimBP gate;
+    // the cleared bit rides the next pose so the host puppet gets up too.
+    {
+        auto done = std::make_shared<std::atomic<int>>(0);
+        void* mp = *local;
+        GT::Post([mp, done] {
+            const bool ok = E::ForceMainPlayerGetUp(mp);
+            UE_LOGI("ragdoll_test[client]: drove LOCAL forceGetUp() -> ok=%d (host puppet should recover now)", ok ? 1 : 0);
+            done->store(1);
+        });
+        WaitDone(done, 8000);
+    }
+    ::Sleep(3000);
+    UE_LOGI("ragdoll_test[client]: drive sequence DONE");
 }
 
 }  // namespace
@@ -63,169 +227,11 @@ bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
 void RunAutonomousRagdollTest() {
     const std::string roleEnv = ReadEnv("VOTVCOOP_NET_ROLE");
     const bool isHost = (roleEnv != "client");  // default Host if unset
-    if (!isHost) {
-        UE_LOGI("ragdoll_test: client role -- skipping (host-only probe)");
-        return;
-    }
-    UE_LOGI("ragdoll_test: host probe armed -- polling up to 90 s for the slot-1 puppet");
-
-    struct Resolved {
-        void* puppet = nullptr;
-        int32_t idx = -1;
-        void* cls = nullptr;
-        void* ragdollFn = nullptr;
-        void* getUpFn = nullptr;
-        void* ctrl = nullptr;
-        int32_t offIsRagdoll = -1, offDead = -1, offRagdollActor = -1;
-        bool ok = false;
-    };
-    auto rsv = std::make_shared<Resolved>();
-    auto done = std::make_shared<std::atomic<int>>(0);  // 0 pending, 1 ok, 2 fail
-
-    // ---- Poll for the puppet. It exists only after the client connects + sends
-    // its first pose (tens of seconds into a LAN smoke), so fire as soon as it's
-    // there; give up after 90 s.
-    for (int attempt = 0; attempt < 90 && !rsv->ok; ++attempt) {
-        done->store(0);
-        GT::Post([rsv, done] {
-            void* puppet = coop::net_pump::Puppet(1).GetActor();
-            if (!puppet || !R::IsLive(puppet)) { done->store(2); return; }
-            rsv->puppet = puppet;
-            rsv->idx = R::InternalIndexOf(puppet);
-            rsv->cls = R::ClassOf(puppet);
-            if (!rsv->cls) { done->store(2); return; }
-            rsv->ragdollFn = R::FindFunction(rsv->cls, L"ragdollMode");
-            rsv->getUpFn = R::FindFunction(rsv->cls, L"forceGetUp");
-            rsv->offIsRagdoll = R::FindPropertyOffset(rsv->cls, L"isRagdoll");
-            rsv->offDead = R::FindPropertyOffset(rsv->cls, L"dead");
-            rsv->offRagdollActor = R::FindPropertyOffset(rsv->cls, L"ragdollActor");
-            rsv->ctrl = E::GetController(puppet);
-            rsv->ok = (rsv->ragdollFn && rsv->offIsRagdoll >= 0 && rsv->offRagdollActor >= 0);
-            done->store(rsv->ok ? 1 : 2);
-        });
-        if (!WaitDone(done, 8000)) {
-            UE_LOGW("ragdoll_test: resolve task did not complete (faulted?) -- aborting");
-            return;
-        }
-        if (!rsv->ok) ::Sleep(1000);
-    }
-    if (!rsv->ok) {
-        UE_LOGW("ragdoll_test: gave up -- no live puppet / ragdollMode UFunction in 90 s");
-        return;
-    }
-    UE_LOGI("ragdoll_test: resolved puppet=%p ctrl=%p (null=unpossessed) ragdollFn=%p getUpFn=%p "
-            "off isRagdoll=0x%X dead=0x%X ragdollActor=0x%X",
-            rsv->puppet, rsv->ctrl, rsv->ragdollFn, rsv->getUpFn,
-            rsv->offIsRagdoll, rsv->offDead, rsv->offRagdollActor);
-
-    auto isRag = std::make_shared<int>(0);
-    auto ragAct = std::make_shared<void*>(nullptr);
-    auto snapshot = [&](const char* label) {
-        done->store(0);
-        GT::Post([rsv, label, done, isRag, ragAct] {
-            if (!R::IsLiveByIndex(rsv->puppet, rsv->idx)) {
-                UE_LOGW("ragdoll_test [%s]: puppet not live", label);
-                *isRag = -1; *ragAct = nullptr; done->store(1); return;
-            }
-            auto* b = reinterpret_cast<uint8_t*>(rsv->puppet);
-            const bool r = *reinterpret_cast<bool*>(b + rsv->offIsRagdoll);
-            const bool d = rsv->offDead >= 0 ? *reinterpret_cast<bool*>(b + rsv->offDead) : false;
-            void* ra = *reinterpret_cast<void**>(b + rsv->offRagdollActor);
-            *isRag = r ? 1 : 0; *ragAct = ra;
-            UE_LOGI("ragdoll_test [%s]: isRagdoll=%d dead=%d ragdollActor=%p", label, r ? 1 : 0, d ? 1 : 0, ra);
-            done->store(1);
-        });
-        WaitDone(done, 8000);
-    };
-
-    snapshot("BEFORE");
-    const int beforeRag = *isRag;
-    void* beforeActor = *ragAct;
-
-    // ---- ragdollMode(true, true, false) = FAINT (ragdoll + passOut, NOT death).
-    // If a Set returns 0 the param name was wrong (SetRaw logs the bad name); the
-    // verdict accounts for that by reporting the set results.
-    done->store(0);
-    GT::Post([rsv, done] {
-        ue_wrap::ParamFrame f(rsv->ragdollFn);
-        const bool s1 = f.Set<bool>(L"ragdoll", true);
-        const bool s2 = f.Set<bool>(L"passOut", true);
-        const bool s3 = f.Set<bool>(L"death", false);
-        const bool ok = ue_wrap::Call(rsv->puppet, f);
-        UE_LOGI("ragdoll_test: ragdollMode(1,1,0) set(ragdoll=%d,passOut=%d,death=%d) -> Call=%d",
-                s1, s2, s3, ok);
-        done->store(1);
-    });
-    if (!WaitDone(done, 8000)) {
-        UE_LOGW("ragdoll_test: ragdollMode call did not complete (faulted on unpossessed puppet?) "
-                "-- VERDICT #8 INCONCLUSIVE (call unsafe). Inc2b needs a redesign before any wire.");
-        return;
-    }
-
-    ::Sleep(600);  // let the BP / ragdoll-actor spawn timeline settle
-    snapshot("AFTER-RAGDOLL");
-    const int afterRag = *isRag;
-    void* afterActor = *ragAct;
-
-    // ---- Recover. The Inc2b falling edge needs a call that un-ragdolls an
-    // UNPOSSESSED puppet. forceGetUp() is an animation-driven getup that appears
-    // to need the possessed pawn (a first probe pass showed it leaving isRagdoll=1),
-    // so test the SYMMETRIC INVERSE ragdollMode(false,false,false) here -- if that
-    // clears isRagdoll + despawns ragdollActor, it's the receiver's recover call.
-    // forceGetUp is kept as a logged fallback.
-    done->store(0);
-    GT::Post([rsv, done] {
-        ue_wrap::ParamFrame f(rsv->ragdollFn);
-        f.Set<bool>(L"ragdoll", false);
-        f.Set<bool>(L"passOut", false);
-        f.Set<bool>(L"death", false);
-        const bool ok = ue_wrap::Call(rsv->puppet, f);
-        UE_LOGI("ragdoll_test: ragdollMode(0,0,0) recover -> Call=%d", ok);
-        done->store(1);
-    });
-    WaitDone(done, 8000);
-    ::Sleep(600);
-    snapshot("AFTER-RECOVER-RAGDOLLMODE");
-    const int recovRag = *isRag;
-    if (recovRag == 1 && rsv->getUpFn) {
-        // ragdollMode(0,0,0) didn't clear it -- try forceGetUp as a fallback.
-        done->store(0);
-        GT::Post([rsv, done] {
-            ue_wrap::ParamFrame f(rsv->getUpFn);
-            const bool ok = ue_wrap::Call(rsv->puppet, f);
-            UE_LOGI("ragdoll_test: forceGetUp() fallback -> Call=%d", ok);
-            done->store(1);
-        });
-        WaitDone(done, 8000);
-        ::Sleep(600);
-        snapshot("AFTER-RECOVER-FORCEGETUP");
-    }
-    // Recover finding for Inc2b's falling edge: ragdollMode(0,0,0) does NOT clear
-    // isRagdoll on an unpossessed puppet (recovRag stays 1); forceGetUp() DOES
-    // clear the isRagdoll AnimBP gate. The spawned AplayerRagdoll_C actor lingers
-    // after either -- its cleanup is a hands-on Inc2b detail.
-    UE_LOGI("ragdoll_test: recover -- ragdollMode(0,0,0) left isRagdoll=%d; "
-            "forceGetUp() is the call that clears the AnimBP gate (see AFTER-RECOVER-* above)",
-            recovRag);
-
-    // ---- Verdict: the #8 answer.
-    const bool unpossessed = (rsv->ctrl == nullptr);
-    const bool ragdolled = (beforeRag == 0 && afterRag == 1) ||
-                           (beforeActor == nullptr && afterActor != nullptr);
-    if (unpossessed && ragdolled) {
-        UE_LOGI("ragdoll_test: VERDICT #8 PASS -- ragdollMode drives an UNPOSSESSED puppet "
-                "(ctrl=null, isRagdoll %d->%d, ragdollActor %p->%p). Inc2b wire is GO.",
-                beforeRag, afterRag, beforeActor, afterActor);
-    } else if (!unpossessed) {
-        UE_LOGW("ragdoll_test: VERDICT #8 INCONCLUSIVE -- puppet is POSSESSED (ctrl=%p); not the "
-                "unpossessed-orphan case the wire targets. Re-check puppet spawn.", rsv->ctrl);
+    if (isHost) {
+        ObserveOnHost();
     } else {
-        UE_LOGW("ragdoll_test: VERDICT #8 FAIL -- ragdollMode did NOT ragdoll the unpossessed "
-                "puppet (isRagdoll %d->%d, ragdollActor %p->%p). The BP likely early-outs on "
-                "GetController()==null; Inc2b receiver-apply must be redesigned (RULE 1, no bool poke).",
-                beforeRag, afterRag, beforeActor, afterActor);
+        DriveOnClient();
     }
-    UE_LOGI("ragdoll_test: DONE");
 }
 
 DWORD WINAPI RagdollTestThread(LPVOID) {

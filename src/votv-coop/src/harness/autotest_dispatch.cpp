@@ -56,10 +56,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // Re-seed snapshot-completeness probe: both peers; after settle, re-seeds and
     // logs how many NEW live keyed props the boot seed missed (verify step).
     SpawnIf("VOTVCOOP_RUN_RESEED_TEST", "re-seed probe", &ReSeedTestThread, role);
-    // Vitals Inc2a ragdoll probe: host-only; fires ragdollMode on the unpossessed
-    // slot-1 puppet + diffs isRagdoll/ragdollActor (answers MUST-VERIFY #8 before
-    // any Inc2 wire). Self-skips on client role.
-    SpawnIf("VOTVCOOP_RUN_RAGDOLL_TEST", "ragdoll probe", &RagdollTestThread, role);
+    // Vitals Inc2b ragdoll e2e wire test: BOTH peers. Client DRIVES its local
+    // ragdollMode/forceGetUp; host OBSERVES its slot-1 puppet flip isRagdoll
+    // 0->1->0 purely via the pose stream's kStateBitRagdoll + receiver reconcile.
+    // (Supersedes the Inc2a #8 standalone probe -- the e2e path covers it.)
+    SpawnIf("VOTVCOOP_RUN_RAGDOLL_TEST", "ragdoll e2e test", &RagdollTestThread, role);
 }
 
 }  // namespace harness::autotest

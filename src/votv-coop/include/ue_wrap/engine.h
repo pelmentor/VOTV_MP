@@ -454,6 +454,55 @@ bool SetSceneComponentVisibility(void* sceneComponent, bool newVisibility, bool 
 bool SetSpotLightOuterConeAngle(void* spotLight, float newAngle);
 bool SetSpotLightInnerConeAngle(void* spotLight, float newAngle);
 
+// ---- Ragdoll / faint DISPLAY state (vitals pillar Inc2b) -----------------
+// AmainPlayer_C drives every ragdoll cause (manual C-key, exhaustion faint,
+// KO) through one UFunction + an AnimBP gate bool. These wrappers let the
+// coop layer read the local player's ragdoll state (sender) and drive a
+// puppet into/out of the faint pose (receiver) without touching engine
+// memory or reflection directly (Principle 7). Offsets are name-resolved
+// (recook-safe via reflected_offset); UFunctions are cached on first call.
+// All game-thread only.
+
+// Read AmainPlayer_C::isRagdoll (the AnimBP ragdoll gate, set by ANY ragdoll
+// cause) + ::dead (death bool). Returns false (leaving out-params untouched)
+// on a null/dead pawn or if either field offset can't be resolved yet.
+bool ReadMainPlayerRagdollState(void* mainPlayer, bool& isRagdoll, bool& dead);
+
+// AmainPlayer_C::ragdollMode(ragdoll, passOut, death). The receiver drives the
+// puppet into the verified faint pose with (true, true, false) -- MUST-VERIFY
+// #8 proved this flips an UNPOSSESSED puppet's isRagdoll 0->1 + spawns its
+// ragdoll actor. Returns false on null/dead pawn or unresolved UFunction.
+bool SetMainPlayerRagdollMode(void* mainPlayer, bool ragdoll, bool passOut, bool death);
+
+// AmainPlayer_C::forceGetUp() -- begins the get-up. On a normal POSSESSED player
+// (tick enabled) this fully recovers (clears isRagdoll + tears down the ragdoll
+// actor over its timeline). Returns false on null/dead pawn or unresolved
+// UFunction. POSSESSED-player only (e.g. the local player's own recover); for an
+// orphan PUPPET use StopPuppetMeshRagdoll below (the tick-driven cleanup this
+// relies on can't run on a tickless orphan).
+bool ForceMainPlayerGetUp(void* mainPlayer);
+
+// ---- Orphan-puppet faint visual via the puppet's OWN mesh -----------------
+// vitals Inc2b receiver. We do NOT use VOTV's ragdollMode on the puppet: that
+// spawns a separate playerRagdoll_C physics actor whose entire lifecycle
+// (get-up, GC, PhysX teardown) is tick/timeline-coupled and assumes a POSSESSED
+// player. On our deliberately tickless, controllerless orphan puppet that actor
+// self-invalidates to PendingKill but is never GC-reaped, so its PhysX keeps
+// simulating -> +5 GB RSS runaway (root-caused 2026-05-31, IDA/SDK RE + probe).
+// Instead we ragdoll the puppet's OWN mesh_playerVisible -- a component WE own,
+// so enable/disable is clean and leak-free (user decision 2026-05-31).
+
+// Make the puppet flop: SetAllBodiesSimulatePhysics(true) on mesh_playerVisible
+// (@0x04F8) so the skin's physics asset simulates from its current pose, + set
+// isRagdoll=true as a state marker. The caller pauses pose-driving while this is
+// active so the physics owns the body. Returns false on null/dead pawn.
+bool StartPuppetMeshRagdoll(void* puppet);
+
+// Recover: SetAllBodiesSimulatePhysics(false) on mesh_playerVisible so the mesh
+// snaps back to AnimBP-driven animation, + clear isRagdoll. The caller resumes
+// pose-driving. Returns false on null/dead pawn. Game thread only.
+bool StopPuppetMeshRagdoll(void* puppet);
+
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the
 // GameInstance first (lives across map loads) and falls back to the World.

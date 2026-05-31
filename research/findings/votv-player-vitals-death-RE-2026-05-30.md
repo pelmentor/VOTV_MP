@@ -201,13 +201,51 @@ exact death->menu call site no longer needs hooking.
   a latched one-shot sender log PROVED the chain resolves real values on both peers
   (health=100/100 food=96.5 sleep=97.6 -> wire h=255 f=246 s=249). RESIDUAL (hands-on):
   bar-drops-on-damage / F3-refill dynamic check (autonomous peers take no damage).
-- **Inc2 — reliable PlayerRagdollState + puppet ragdoll:** rising-edge poll of
-  `isRagdoll@0x87F` carrying death/passOut; receiver `ragdollMode` on puppet +
-  RemotePlayer DEAD/KO state (interp frozen); stateBit1 display-only (gated).
-  Add to relay whitelist (#1). `vitals_sync::OnDisconnectForSlot` wired at
-  net_pump disconnect (#7, clears DEAD latch so reconnect starts ALIVE). RE
-  pre-req #8 (ragdoll on unpossessed puppet). Smoke: `DebugForceKill`/sleep ->
-  puppet ragdoll vs faint distinct.
+- **Inc2a SHIPPED 4d52d40 — MUST-VERIFY #8 = PASS** (env-gated host probe): an
+  UNPOSSESSED puppet CAN ragdoll via `ragdollMode(1,1,0)` (isRagdoll 0->1 +
+  ragdollActor spawned, dead stayed 0); recover = `forceGetUp()` (NOT
+  `ragdollMode(0,0,0)`, which does NOT clear the AnimBP gate on an unpossessed
+  puppet). Offsets matched the dump (isRagdoll@0x87F dead@0xA78 ragdollActor@0xC40).
+- **Inc2b SHIPPED 2026-05-31 — DESIGN PIVOT: continuous per-peer DISPLAY bit, NOT a
+  reliable event.** v19->v20; `PoseSnapshot.stateBits` bit 1 `kStateBitRagdoll`
+  (sibling of bit0 isInAir + the v19 vitals piggyback). Sender (net_pump::
+  ReadLocalPose) sets the bit = OWN `isRagdoll && !dead` via
+  `ue_wrap::engine::ReadMainPlayerRagdollState`. Receiver (RemotePlayer::
+  SetTargetPose) EDGE-DETECTS the wire bit (`ragdollDispatched_` latch, reset in
+  Destroy) + dispatches ONCE per transition; while ragdolled, `ApplyToEngine`
+  early-returns (pose-drive paused, physics owns the body).
+  **RECEIVER VISUAL (the hard part): the puppet is a tickless, controllerless
+  orphan, and VOTV's real `ragdollMode` spawns a SEPARATE `playerRagdoll_C` physics
+  actor whose lifecycle (get-up, GC, PhysX teardown) is tick/timeline-coupled -> on
+  the orphan it goes PendingKill but never GC-reaps + keeps simulating -> +5 GB RSS
+  leak (root-caused; 6 teardown attempts + 2-agent IDA/SDK RE failed to kill it).
+  USER DECISION 2026-05-31: ragdoll the puppet's OWN mesh (we own it -> clean
+  enable/disable, no zombie).** `StartPuppetMeshRagdoll`: the skin
+  (`kerfurOmega_KelSkin`) has no physics asset, so BORROW the player ragdoll asset
+  (`kerfurOmegaV1_PhysicsAsset`, resolved by name) -> `SetPhysicsAsset` on
+  `mesh_playerVisible` -> `SetCollisionEnabled(QueryAndPhysics)` (render-only mesh
+  needs collision or the bodies do not simulate) -> `SetAllBodiesSimulatePhysics(true)`.
+  `StopPuppetMeshRagdoll` reverses it. Probe-CONFIRMED: puppet mesh
+  `IsAnyRigidBodyAwake=1` during / 0 after, world `playerRagdoll_C=0`, host RSS
+  stable 3.5 GB. LOCAL player still uses VOTV's real `ragdollMode`/`forceGetUp`
+  (works -- possessed). P7 split: ue_wrap (engine_mainplayer Read/Start/Stop +
+  reflected_offset isRagdoll/dead + cached asset/UFunctions) vs coop (1 sender line
+  + 1 edge-latch reconcile). **WHY the WIRE pivot (RULE 1, evidence landed AFTER the banked plan):**
+  (a) `isRagdoll` is flipped by EVERY ragdoll cause — manual **C-key**
+  (`InpActEvt_ragdoll_K2Node_InputActionEvent_25`, user 2026-05-31), exhaustion
+  `faint()`, KO — so ONE bit covers all of them; (b) there is NO readable `passOut`
+  field on mainPlayer_C (only a `ragdollMode` PARAM), so the banked payload's
+  passOut/death/cause fields were unpopulatable; (c) death is EXCLUDED (native SP
+  menu flow ends the session), so this is purely a TRANSIENT, lossy-tolerant
+  DISPLAY state — exactly MTA's CPlayerPuresyncPacket flag shape, NOT a discrete
+  authority event. The continuous bit rides the proven per-peer pose relay, so it
+  NEEDS NONE of the reliable design's machinery (new ReliableKind, relay-whitelist
+  #1, lane, defer/latch, connect-replay, OnDisconnectForSlot #7) — those existed
+  ONLY to survive the reliable shape's permanent-desync-on-dropped-transition
+  failure mode, which the self-healing bit cannot have. Verification: e2e wire
+  autotest (`VOTVCOOP_RUN_RAGDOLL_TEST=1`) — CLIENT drives local ragdollMode/
+  forceGetUp, HOST observes its slot-1 puppet flip isRagdoll 0->1->0 purely via the
+  pose stream. (Supersedes the Inc2a standalone #8 probe — e2e covers that path.)
 - **Inc3 — reliable PlayerDamage (host enemy hit -> owner):** host observer on
   damage UFunction on a CLIENT puppet (gated GetController()==null && remote)
   -> send to owner -> owner runs LOCAL Add Player Damage. **MUST-VERIFY #6
@@ -221,13 +259,22 @@ exact death->menu call site no longer needs hooking.
   through the existing snapshot (no death->menu intercept needed).
 
 ## Must-fix / must-verify ledger (from adversarial verify)
-MUST (in design): #1 relay-whitelist PlayerRagdollState; #2 PlayerDamage host-only/
-not-relayable trust; #3 reliable-event-is-DEAD/ALIVE-authority, unreliable bits
-display-only; #4 sleep/faint vs death distinction via passOut; #5 stream health
-FRACTION not absolute. MUST-VERIFY (gate increments): #6 puppet-damage-vs-shared-
-saveSlot (pre-Inc3); #8 ragdollMode on unpossessed puppet (pre-Inc2). SHOULD: #7
-OnDisconnectForSlot; #9 re-death idempotent no-op; #10 doc the refuse-to-die trust
-limit; #11 P7 extraction separate commit; #12 full redeploy on v19.
+MUST (in design): ~~#1 relay-whitelist PlayerRagdollState~~ MOOT under Inc2b's
+continuous-bit pivot (the bit rides the existing per-peer pose relay; no reliable
+kind to whitelist); #2 PlayerDamage host-only/not-relayable trust (still applies to
+Inc3); #3 reliable-event-is-DEAD/ALIVE-authority (was DEATH-context; faint is
+display-only so N/A to Inc2b — death stays native SP flow); #4 sleep/faint vs death
+distinction — Inc2b excludes death (the `!dead` sender gate) and sleep is a SEPARATE
+system (AdreamBase_C, no unified bool), so the bit is purely "ragdolled, not dead";
+#5 stream health FRACTION not absolute (Inc1 SHIPPED). MUST-VERIFY: #6 puppet-damage-
+vs-shared-saveSlot (pre-Inc3, OPEN); #8 ragdollMode on unpossessed puppet (Inc2a
+PASS). SHOULD: ~~#7 OnDisconnectForSlot~~ MOOT under Inc2b (no per-slot ragdoll
+state to drain — the puppet's destroy-on-disconnect + fresh-puppet-reads-false
+handles it); #9 re-ragdoll idempotent no-op (DONE — the reconcile reads actual vs
+desired, no-op when matching); #10 doc the refuse-to-die trust limit (a peer faking
+its own ragdoll bit only flops its OWN puppet — harmless, same as the vitals fraction
+trust model); #11 P7 extraction (DONE — ue_wrap vs coop split clean); #12 full
+redeploy on the version bump.
 
 UNKNOWNs feeding later RE: `p_health@0x658` semantics; the BP setter of `dead`
 (we poll, don't need it); VOTV respawn mechanism (gates Inc5); whether `maxHealth`

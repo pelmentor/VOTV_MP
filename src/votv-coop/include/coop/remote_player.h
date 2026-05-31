@@ -217,6 +217,17 @@ private:
     // clear -> MOVE_Walking=1. The kerfur AnimBP reads MovementMode
     // natively to gate the foot-IK alpha (useLegIK/rise).
     uint8_t          curStateBits_ = 0;
+    // v20 (Inc2b) ragdoll latches (both reset in Destroy()):
+    //   ragdollWireState_  -- the last WIRE-bit value we acted on (the edge
+    //                         detector; fires the flop/recover dispatch once per
+    //                         transition, no per-pose retry).
+    //   ragdollDispatched_ -- whether the flop ACTUALLY engaged -> pauses
+    //                         pose-driving (ApplyToEngine early-returns) so physics
+    //                         owns the body. Stays false if StartPuppetMeshRagdoll
+    //                         failed, so the puppet keeps pose-driving (graceful
+    //                         degradation, audit 2026-05-31) instead of freezing.
+    bool             ragdollWireState_ = false;
+    bool             ragdollDispatched_ = false;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;

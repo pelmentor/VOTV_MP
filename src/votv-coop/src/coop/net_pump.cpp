@@ -147,6 +147,22 @@ bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) 
     if (ue_wrap::puppet::ReadCharacterIsFalling(local)) {
         out.stateBits |= coop::net::kStateBitInAir;
     }
+    // v20 (Inc2b): piggyback the LOCAL player's ragdoll/faint state. isRagdoll
+    // is the AnimBP gate flipped by EVERY ragdoll cause (manual C-key, exhaustion
+    // faint, KO); we sync it as a per-peer DISPLAY flag so each peer's puppet
+    // flops on the others' screens. Death is EXCLUDED -- a death-ragdoll routes
+    // through VOTV's native SP menu flow + ends the session ([[project-coop-no-
+    // host-migration]]), so it must not show as a recoverable faint on a puppet
+    // that's about to be torn down. One wrapper read (a couple of derefs after
+    // the offset cache fills) on this hot path -- same cost class as the
+    // ReadCharacterIsFalling above it.
+    {
+        bool isRagdoll = false, dead = false;
+        if (ue_wrap::engine::ReadMainPlayerRagdollState(local, isRagdoll, dead) &&
+            isRagdoll && !dead) {
+            out.stateBits |= coop::net::kStateBitRagdoll;
+        }
+    }
     // v19: piggyback the LOCAL player's vitals (health fraction + food + sleep)
     // in the 3 bytes that were `_pad` -- ZERO wire-size change. ue_wrap::vitals
     // reads THIS machine's UsaveSlot_C (one per machine), so the values are

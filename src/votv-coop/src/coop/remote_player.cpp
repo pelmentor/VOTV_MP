@@ -315,6 +315,41 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
               coop::net::DequantizeUnitFraction(snap.foodFrac),
               coop::net::DequantizeUnitFraction(snap.sleepFrac));
 
+    // v20 (Inc2b): drive the puppet's ragdoll/faint flop from the streamed
+    // kStateBitRagdoll. EDGE-DETECT ON THE WIRE BIT (the authoritative continuous
+    // per-peer state) via ragdollWireState_ -- dispatch the flop/recover exactly
+    // ONCE per wire transition. We deliberately do NOT reconcile against the
+    // puppet's ACTUAL physics state: the flop/recover are async, so a "fire while
+    // actual != desired" loop would re-dispatch every pose. The wire bit is
+    // continuous, so this still self-heals (a dropped edge latches on the next
+    // pose carrying the bit; Destroy() resets both latches so a recycled puppet
+    // re-converges).
+    //
+    // TWO latches (audit 2026-05-31): ragdollWireState_ = the wire-bit edge
+    // detector (fires the dispatch once); ragdollDispatched_ = whether the flop
+    // ACTUALLY engaged -> pauses pose-driving (ApplyToEngine early-return) so the
+    // physics owns the body. They DIFFER on the rising edge only when
+    // StartPuppetMeshRagdoll fails (e.g. the borrowed physics asset can't resolve):
+    // ragdollWireState_ still latches (no per-pose retry spam) but ragdollDispatched_
+    // stays false, so the puppet keeps POSE-DRIVING (follows the source upright)
+    // instead of freezing -- graceful degradation. Game thread (net_pump::Tick).
+    {
+        const bool desiredRagdoll = (snap.stateBits & coop::net::kStateBitRagdoll) != 0;
+        if (desiredRagdoll != ragdollWireState_) {
+            ragdollWireState_ = desiredRagdoll;
+            if (desiredRagdoll) {
+                // Flop the puppet's OWN mesh (orphan-safe; VOTV's ragdollMode spawns
+                // a separate playerRagdoll_C physics actor that leaks +5 GB on our
+                // tickless orphan -- root-caused 2026-05-31, user chose mesh-sim).
+                // Pause pose-drive ONLY if the flop engaged.
+                ragdollDispatched_ = E::StartPuppetMeshRagdoll(actor_);
+            } else {
+                E::StopPuppetMeshRagdoll(actor_);
+                ragdollDispatched_ = false;
+            }
+        }
+    }
+
     const ue_wrap::FVector tgtPos{snap.x, snap.y, snap.z};
 
     // First packet: the puppet sits at the fake spawn placement (250 cm in
@@ -471,10 +506,23 @@ void RemotePlayer::Destroy() {
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
     dirty_ = false;
+    ragdollWireState_ = false;   // v20: a recycled puppet starts un-ragdolled + re-converges
+    ragdollDispatched_ = false;
     UE_LOGI("RemotePlayer::Destroy: puppet + nameplate gone");
 }
 
 void RemotePlayer::ApplyToEngine() {
+    // v20 (Inc2b): while the puppet is RAGDOLLED, do NOT drive its transform. The
+    // puppet's skeletal mesh is an active PhysX ragdoll (ragdollMode spawned
+    // AplayerRagdoll_C); SetActorLocation-teleporting a simulating physics body
+    // every tick fights PhysX -> penetration/contact explosion -> unbounded solver
+    // allocation (+5 GB host RSS in ~5 s, root-caused 2026-05-31). Let the ragdoll
+    // own the body until the falling edge clears ragdollDispatched_; SetTargetPose
+    // keeps updating curPos_ meanwhile, so the first post-recover ApplyToEngine
+    // snaps the puppet to the owner's current pose. (The actor pivot stays put while
+    // ragdolled, which also keeps the nameplate anchored over the fallen body.)
+    if (ragdollDispatched_) return;
+
     // Wire convention + per-tick Z/yaw recipe (post-2026-05-25 puppet rework):
     //
     //   wire.z = source.actor.Z (stable capsule centre, MTA::CEntitySA::vPos
