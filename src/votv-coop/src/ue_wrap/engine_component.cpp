@@ -159,6 +159,23 @@ bool SetSkeletalMesh(void* component, void* skeletalMeshAsset) {
     return Call(component, f);
 }
 
+bool ClearSkeletalMesh(void* component) {
+    // SetSkeletalMesh(NewMesh=null): the component renders NOTHING, but its
+    // visibility flags + AttachParent graph are untouched. Used by
+    // StartPuppetMeshRagdoll to suppress the native ACharacter::Mesh @0x0280
+    // double-image during the puppet flop WITHOUT hiding it -- mesh_playerVisible
+    // @0x4F8 is a CHILD of @0x0280 and UE4 USceneComponent::IsVisible() cascades
+    // up the parent chain, so a bHiddenInGame hide on @0x0280 would kill the
+    // simulating child too (the reverted 2026-05-25 "no visible model" regression).
+    // Clearing the mesh asset avoids that cascade. bReinitPose=false (no mesh to
+    // repose from). Separate fn because SetSkeletalMesh deliberately rejects null.
+    if (!component || !ResolveMeshFns() || !g_setSkeletalMeshFn) return false;
+    ParamFrame f(g_setSkeletalMeshFn);
+    f.Set<void*>(L"NewMesh", nullptr);
+    f.Set<bool>(L"bReinitPose", false);
+    return Call(component, f);
+}
+
 bool SetAnimClass(void* component, void* animBlueprintClass) {
     if (!component || !animBlueprintClass || !ResolveMeshFns()) {
         UE_LOGE("engine: SetAnimClass unresolved (comp=%p cls=%p fn=%p)",

@@ -373,9 +373,10 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
                 // a separate playerRagdoll_C physics actor that leaks +5 GB on our
                 // tickless orphan -- root-caused 2026-05-31, user chose mesh-sim).
                 // Pause pose-drive ONLY if the flop engaged.
-                ragdollDispatched_ = E::StartPuppetMeshRagdoll(actor_);
+                ragdollDispatched_ = E::StartPuppetMeshRagdoll(actor_, savedCharMeshAsset_);
             } else {
-                E::StopPuppetMeshRagdoll(actor_);
+                E::StopPuppetMeshRagdoll(actor_, savedCharMeshAsset_);
+                savedCharMeshAsset_ = nullptr;
                 ragdollDispatched_ = false;
             }
         }
@@ -556,6 +557,7 @@ void RemotePlayer::Destroy() {
     dirty_ = false;
     ragdollWireState_ = false;   // v20: a recycled puppet starts un-ragdolled + re-converges
     ragdollDispatched_ = false;
+    savedCharMeshAsset_ = nullptr;  // the mesh died with the actor -- no restore needed
     hurtFlashEndMs_ = 0;         // v20 Inc3: clear the hurt-flash (nameplate already unregistered)
     hurtFlashActive_ = false;
     hurtSavedMaterials_.clear(); // the mesh died with the actor -- no restore needed, drop stale ptrs
@@ -572,10 +574,12 @@ void RemotePlayer::ApplyToEngine() {
     // keeps updating curPos_ meanwhile, so the first post-recover ApplyToEngine
     // snaps the puppet to the owner's current pose. (The actor pivot stays put while
     // ragdolled, which also keeps the nameplate anchored over the fallen body.)
-    // NOTE 2026-05-31: a "follow the sim mesh" attempt was reverted -- it strobes
-    // the OTHER visible body mesh (native ACharacter::Mesh @0x0280, parent of the
-    // simulating mesh_playerVisible); clean fix needs a re-parent. See
-    // [[project-ragdoll-sync]] memory.
+    // NOTE 2026-05-31: while flopped the actor pivot stays put (no follow -- a
+    // root-follow strobed the puppet). The double-image from the OTHER visible body
+    // (native ACharacter::Mesh @0x0280, the animated parent of the simulating
+    // mesh_playerVisible @0x4F8) is handled in StartPuppetMeshRagdoll, which CLEARS
+    // @0x0280's mesh asset during the flop so only the limp @0x4F8 renders (restored
+    // on recover). See [[project-ragdoll-sync]].
     if (ragdollDispatched_) return;
 
     // Wire convention + per-tick Z/yaw recipe (post-2026-05-25 puppet rework):

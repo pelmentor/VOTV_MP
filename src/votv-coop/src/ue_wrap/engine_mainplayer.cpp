@@ -508,6 +508,17 @@ bool ForceMainPlayerGetUp(void* mainPlayer) {
     return Call(mainPlayer, f);
 }
 
+bool WriteMainPlayerIsRagdoll(void* mainPlayer, bool isRagdoll) {
+    // TEST DRIVER ONLY -- flips isRagdoll @0x87F without invoking ragdollMode, so a
+    // remote peer's puppet flops over the wire WITHOUT spawning the leaky
+    // playerRagdoll_C on this possessed player. Not a production path.
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    const int32_t off = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
+    if (off < 0) return false;
+    *reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(mainPlayer) + off) = isRagdoll;
+    return true;
+}
+
 bool InvokeAddPlayerDamage(void* mainPlayer, float damage) {
     if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
     ResolveAddPlayerDamageFn();
@@ -517,7 +528,8 @@ bool InvokeAddPlayerDamage(void* mainPlayer, float damage) {
     return Call(mainPlayer, f);
 }
 
-bool StartPuppetMeshRagdoll(void* puppet) {
+bool StartPuppetMeshRagdoll(void* puppet, void*& outSavedCharMeshAsset) {
+    outSavedCharMeshAsset = nullptr;
     if (!puppet || !R::IsLive(puppet)) return false;
     auto* base = reinterpret_cast<uint8_t*>(puppet);
     // Ragdoll the puppet's OWN mesh (we own it; no leaky playerRagdoll_C actor).
@@ -532,17 +544,36 @@ bool StartPuppetMeshRagdoll(void* puppet) {
     if (!pa) return false;
     SetMeshPhysicsAsset(mesh, pa);
     SetMeshSimulation(mesh, true);
+    // Sim engaged. Suppress the OTHER visible body: the puppet renders TWO
+    // overlapping meshes sharing the skin -- the native ACharacter::Mesh @0x0280
+    // (AnimBP-animated) and this mesh_playerVisible @0x4F8. Left visible, @0x0280
+    // stays upright/animated and double-images over the limp ragdoll (2026-05-31
+    // hands-on "тэпало по корам"). CLEAR @0x0280's mesh asset (renders nothing) so
+    // only the limp @0x4F8 shows -- we CAN'T hide @0x0280 (IsVisible cascades to
+    // its child @0x4F8 = the 2026-05-25 "no visible model" regression). Save the
+    // asset for restore on recover. Done AFTER the sim engages so a failed flop
+    // above never vanishes the body.
+    if (void* charMesh = *reinterpret_cast<void**>(base + P::off::ACharacter_Mesh)) {
+        outSavedCharMeshAsset = *reinterpret_cast<void**>(
+            reinterpret_cast<uint8_t*>(charMesh) + P::off::USkinnedMesh_SkeletalMesh);
+        ClearSkeletalMesh(charMesh);
+    }
     // State marker the host observer / any AnimBP ragdoll-awareness reads.
     const int32_t offRag = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
     if (offRag >= 0) *reinterpret_cast<bool*>(base + offRag) = true;
     return true;
 }
 
-bool StopPuppetMeshRagdoll(void* puppet) {
+bool StopPuppetMeshRagdoll(void* puppet, void* savedCharMeshAsset) {
     if (!puppet || !R::IsLive(puppet)) return false;
     auto* base = reinterpret_cast<uint8_t*>(puppet);
     void* mesh = *reinterpret_cast<void**>(base + P::off::AmainPlayer_mesh_playerVisible);
     SetMeshSimulation(mesh, false);  // mesh snaps back to AnimBP-driven animation
+    // Restore the native ACharacter::Mesh @0x0280 body cleared at flop start.
+    if (savedCharMeshAsset) {
+        if (void* charMesh = *reinterpret_cast<void**>(base + P::off::ACharacter_Mesh))
+            SetSkeletalMesh(charMesh, savedCharMeshAsset);
+    }
     const int32_t offRag = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
     if (offRag >= 0) *reinterpret_cast<bool*>(base + offRag) = false;
     return true;

@@ -94,6 +94,33 @@ bool PuppetMeshIsFlopping() {
     return *awake != 0;
 }
 
+// Read whether the slot-1 puppet's VISIBLE mesh (mesh_playerVisible @0x4F8) is
+// still IsVisible() == true. The 2026-05-31 visual fix CLEARS the OTHER body mesh
+// (native ACharacter::Mesh @0x0280, which is @0x4F8's AttachParent) during the
+// flop so only the limp sim mesh renders; the load-bearing risk is that this
+// cascade-hides the child. IsVisible() walks the AttachParent bHiddenInGame chain,
+// so calling it on @0x4F8 proves NO cascade -- ClearSkeletalMesh touches only the
+// mesh asset (not visibility), so this must stay true. Returns false if unreadable.
+bool PuppetVisMeshIsVisible() {
+    auto done = std::make_shared<std::atomic<int>>(0);
+    auto vis = std::make_shared<int>(0);
+    GT::Post([done, vis] {
+        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        if (puppet && R::IsLive(puppet)) {
+            void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+            if (mesh && R::IsLive(mesh)) {
+                if (void* visFn = R::FindFunction(R::FindClass(L"SceneComponent"), L"IsVisible")) {
+                    ue_wrap::ParamFrame f(visFn);
+                    if (ue_wrap::Call(mesh, f) && f.Get<bool>(L"ReturnValue")) *vis = 1;
+                }
+            }
+        }
+        done->store(1);
+    });
+    WaitDone(done, 8000);
+    return *vis != 0;
+}
+
 // HOST side: observe the slot-1 puppet (the client's body). Confirm its
 // isRagdoll flips 0->1 (driven by the client over the wire) then 1->0.
 void ObserveOnHost() {
@@ -132,8 +159,12 @@ void ObserveOnHost() {
         if (phase == 1 && r == 1) {
             // Confirm the puppet mesh is PHYSICALLY flopping (not just the flag set).
             sawFlop = PuppetMeshIsFlopping();
+            // Cascade-proof for the 2026-05-31 visual fix: the limp sim mesh must
+            // STAY visible after ClearSkeletalMesh suppresses the other body mesh.
+            const bool visMeshVisible = PuppetVisMeshIsVisible();
             UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet isRagdoll 0->1 over the wire; "
-                    "puppet mesh physically flopping=%d", sawFlop ? 1 : 0);
+                    "puppet mesh physically flopping=%d, sim-mesh IsVisible=%d (1=no cascade-hide -> "
+                    "single clean limp body)", sawFlop ? 1 : 0, visMeshVisible ? 1 : 0);
             phase = 2;
         }
         if (phase == 2 && r == 0) {
@@ -196,8 +227,13 @@ void DriveOnClient() {
         auto done = std::make_shared<std::atomic<int>>(0);
         void* mp = *local;
         GT::Post([mp, done] {
-            const bool ok = E::SetMainPlayerRagdollMode(mp, /*ragdoll=*/true, /*passOut=*/true, /*death=*/false);
-            UE_LOGI("ragdoll_test[client]: drove LOCAL ragdollMode(1,1,0) -> ok=%d (host puppet should flop now)", ok ? 1 : 0);
+            // TEST-SAFE driver: flip isRagdoll DIRECTLY instead of VOTV's real
+            // ragdollMode. ragdollMode spawns a playerRagdoll_C that leaks +5GB on
+            // the possessed player (the ship-blocker under separate RE); the wire
+            // bit kStateBitRagdoll reads isRagdoll, so a direct write still flops
+            // the HOST puppet -- without OOMing this driving client.
+            const bool ok = E::WriteMainPlayerIsRagdoll(mp, /*isRagdoll=*/true);
+            UE_LOGI("ragdoll_test[client]: wrote isRagdoll=1 DIRECTLY -> ok=%d (test-safe, no playerRagdoll_C; host puppet should flop now)", ok ? 1 : 0);
             done->store(1);
         });
         if (!WaitDone(done, 8000)) {
@@ -216,8 +252,8 @@ void DriveOnClient() {
         auto done = std::make_shared<std::atomic<int>>(0);
         void* mp = *local;
         GT::Post([mp, done] {
-            const bool ok = E::ForceMainPlayerGetUp(mp);
-            UE_LOGI("ragdoll_test[client]: drove LOCAL forceGetUp() -> ok=%d (host puppet should recover now)", ok ? 1 : 0);
+            const bool ok = E::WriteMainPlayerIsRagdoll(mp, /*isRagdoll=*/false);
+            UE_LOGI("ragdoll_test[client]: wrote isRagdoll=0 DIRECTLY -> ok=%d (test-safe; host puppet should recover now)", ok ? 1 : 0);
             done->store(1);
         });
         WaitDone(done, 8000);

@@ -386,6 +386,13 @@ bool SetAnimTickAlways(void* skeletalMeshComponent);
 // SkinnedMeshComponent class (the function's OWNING class). Game thread only.
 bool SetSkeletalMesh(void* skeletalMeshComponent, void* skeletalMeshAsset);
 
+// USkinnedMeshComponent::SetSkeletalMesh(null) -- clear the mesh asset so the
+// component renders NOTHING, without touching its visibility flags / AttachParent
+// (a bHiddenInGame hide on a parent whose child is a simulating ragdoll mesh would
+// cascade and hide the child via IsVisible's parent-walk; clearing the asset does
+// not). Separate fn because SetSkeletalMesh deliberately rejects null. Game thread.
+bool ClearSkeletalMesh(void* skeletalMeshComponent);
+
 // USkeletalMeshComponent::SetAnimClass(NewClass) -- assign an AnimBP class to a
 // SkeletalMeshComponent and (re)instantiate it (also flips AnimationMode to
 // UseAnimBlueprint). Drives the puppet's pose. Game thread only.
@@ -492,6 +499,14 @@ bool SetMainPlayerRagdollMode(void* mainPlayer, bool ragdoll, bool passOut, bool
 // relies on can't run on a tickless orphan).
 bool ForceMainPlayerGetUp(void* mainPlayer);
 
+// TEST DRIVER ONLY: write mainPlayer.isRagdoll @0x87F directly. The pose stream's
+// kStateBitRagdoll is derived from this field, so a direct write makes a REMOTE
+// peer's puppet flop WITHOUT invoking VOTV's real ragdollMode -- i.e. without
+// spawning the leaky AplayerRagdoll_C on this possessed player. NOT the production
+// faint/KO/C-key path (that is VOTV's own BP). Used by the autonomous ragdoll test
+// so the host-puppet visual smoke doesn't OOM the driving client. Game thread.
+bool WriteMainPlayerIsRagdoll(void* mainPlayer, bool isRagdoll);
+
 // AmainPlayer_C::"Add Player Damage"(Damage, damageLocation, fullBody, blood, Source)
 // -- the primary player-damage entry. vitals Inc3-WIRE: the OWNER peer invokes this on
 // its OWN POSSESSED mainPlayer_C when the host relays an enemy hit, so the damage runs
@@ -542,14 +557,21 @@ void* ResolveMaterialByName(const wchar_t* name);
 
 // Make the puppet flop: SetAllBodiesSimulatePhysics(true) on mesh_playerVisible
 // (@0x04F8) so the skin's physics asset simulates from its current pose, + set
-// isRagdoll=true as a state marker. The caller pauses pose-driving while this is
-// active so the physics owns the body. Returns false on null/dead pawn.
-bool StartPuppetMeshRagdoll(void* puppet);
+// isRagdoll=true as a state marker. ALSO clears the native ACharacter::Mesh
+// @0x0280's mesh asset (saved into outSavedCharMeshAsset) so ONLY the limp
+// simulating @0x4F8 renders during the flop -- @0x0280 is a SECOND visible body
+// sharing the skin and, left animated/upright, double-images over the ragdoll.
+// The caller pauses pose-driving while active so physics owns the body, and must
+// pass outSavedCharMeshAsset back to StopPuppetMeshRagdoll. Clears @0x0280 only
+// AFTER the sim engages, so a failed flop leaves the body visible (graceful).
+// Returns false on null/dead pawn or if the sim couldn't engage.
+bool StartPuppetMeshRagdoll(void* puppet, void*& outSavedCharMeshAsset);
 
 // Recover: SetAllBodiesSimulatePhysics(false) on mesh_playerVisible so the mesh
-// snaps back to AnimBP-driven animation, + clear isRagdoll. The caller resumes
-// pose-driving. Returns false on null/dead pawn. Game thread only.
-bool StopPuppetMeshRagdoll(void* puppet);
+// snaps back to AnimBP-driven animation, restore the native ACharacter::Mesh
+// @0x0280 body (savedCharMeshAsset from StartPuppetMeshRagdoll), + clear isRagdoll.
+// The caller resumes pose-driving. Returns false on null/dead pawn. Game thread.
+bool StopPuppetMeshRagdoll(void* puppet, void* savedCharMeshAsset);
 
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the

@@ -244,6 +244,11 @@ private:
     //                         degradation, audit 2026-05-31) instead of freezing.
     bool             ragdollWireState_ = false;
     bool             ragdollDispatched_ = false;
+    // The native ACharacter::Mesh @0x0280 skeletal mesh asset, saved when the flop
+    // CLEARS it (so only the limp mesh_playerVisible @0x4F8 renders -- no upright
+    // double-image) and restored on recover. null when not flopped. The puppet has
+    // TWO visible body meshes sharing the skin; see ue_wrap StartPuppetMeshRagdoll.
+    void*            savedCharMeshAsset_ = nullptr;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;
