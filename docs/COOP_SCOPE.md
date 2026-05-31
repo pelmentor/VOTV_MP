@@ -237,9 +237,12 @@ items.
   DISPLAY-bit sync SHIPPED 2026-05-31** (protocol v20, `kStateBitRagdoll`,
   continuous-bit pivot — see the wire note above); **Inc3-visual (puppet damage
   HURT-FLASH: nameplate flashes red on a streamed health drop, no new wire)
-  SHIPPED 2026-05-31** (mesh red-overlay variant deferred behind a probe); Inc3-wire
-  (host-auth enemy-hit -> owner damage delivery, needs MUST-VERIFY #6) pending;
-  respawn/revive CUT (see above).
+  SHIPPED 2026-05-31**, plus **Inc3-BODY-PULSE SHIPPED 2026-05-31** (Minecraft-style
+  whole-body red flash by material SWAP to the EXISTING skeletal gore mat
+  `inst_goregibs_organsSK` on both visible body meshes — no asset edit/Principle 1;
+  generic static-mesh mats fall back to grey on a skinned mesh, so a skeletal mat is
+  required); Inc3-wire (host-auth enemy-hit -> owner damage delivery, needs
+  MUST-VERIFY #6) pending; respawn/revive CUT (see above).
 
 <!--
 Template for an entry:

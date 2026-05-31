@@ -33,6 +33,7 @@
 #include "ue_wrap/reflected_offset.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace ue_wrap::engine {
 namespace {
@@ -196,7 +197,104 @@ void SetMeshSimulation(void* meshComp, bool simulate) {
     }
 }
 
+// Inc3 damage body-pulse: cached solid-red material + the UPrimitiveComponent
+// material UFunctions (GetNumMaterials / GetMaterial / SetMaterial).
+void* g_hurtMat = nullptr;
+void* g_getNumMatFn = nullptr, *g_getMatFn = nullptr, *g_setMatFn = nullptr;
+
+void* ResolveHurtMat() {
+    if (g_hurtMat && R::IsLive(g_hurtMat)) return g_hurtMat;
+    g_hurtMat = ResolveMaterialByName(P::name::PlayerHurtFlashMaterialName);
+    return g_hurtMat;
+}
+void ResolveMatFns() {
+    if (g_getNumMatFn && g_getMatFn && g_setMatFn) return;
+    void* c = R::FindClass(L"PrimitiveComponent");
+    if (!c) return;
+    if (!g_getNumMatFn) g_getNumMatFn = R::FindFunction(c, L"GetNumMaterials");
+    if (!g_getMatFn)    g_getMatFn    = R::FindFunction(c, L"GetMaterial");
+    if (!g_setMatFn)    g_setMatFn    = R::FindFunction(c, L"SetMaterial");
+}
+
+// Swap EVERY material slot on ONE component `comp` to `mat`, APPENDING each
+// (comp, index, original) into `saved` (caller-owned) for RestoreHurtFlashMaterial.
+void SwapComponentMaterials(void* comp, void* mat, std::vector<SavedMaterial>& saved) {
+    if (!comp || !R::IsLive(comp) || !mat) return;
+    ResolveMatFns();
+    if (!g_getNumMatFn || !g_getMatFn || !g_setMatFn) return;
+    int32_t num = 0;
+    { ParamFrame f(g_getNumMatFn); if (Call(comp, f)) num = f.Get<int32_t>(L"ReturnValue"); }
+    for (int32_t i = 0; i < num && i < 16; ++i) {
+        void* orig = nullptr;
+        { ParamFrame f(g_getMatFn); f.Set<int32_t>(L"ElementIndex", i); if (Call(comp, f)) orig = f.Get<void*>(L"ReturnValue"); }
+        saved.push_back({comp, i, orig});
+        { ParamFrame f(g_setMatFn); f.Set<int32_t>(L"ElementIndex", i); f.Set<void*>(L"Material", mat); Call(comp, f); }
+    }
+}
+
+// The puppet's two visible body meshes (the native ACharacter slot @0x280 AND
+// mesh_playerVisible @0x4F8 -- both render, both carry the kel4 skin).
+void* PuppetVisibleMesh(void* puppet, size_t off) {
+    if (!puppet || !R::IsLive(puppet)) return nullptr;
+    void* c = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(puppet) + off);
+    return (c && R::IsLive(c)) ? c : nullptr;
+}
+
 }  // namespace
+
+void* ResolveMaterialByName(const wchar_t* name) {
+    if (!name) return nullptr;
+    // MaterialInstanceConstant first (most pak materials), then a base Material
+    // (e.g. EmissiveMeshMaterial), then any-class fallback.
+    void* m = R::FindObject(name, P::name::MaterialInstanceConstantClassName);
+    if (m && R::IsLive(m)) return m;
+    m = R::FindObject(name, L"Material");
+    if (m && R::IsLive(m)) return m;
+    m = R::FindObject(name, nullptr);
+    return (m && R::IsLive(m)) ? m : nullptr;
+}
+
+bool ApplyHurtFlashMaterial(void* puppet, std::vector<SavedMaterial>& saved) {
+    // Self-protecting: if `saved` is non-empty a flash is ALREADY applied. A second
+    // apply without an intervening restore would re-read the gore material as the
+    // "original" and stick it permanently. The caller (RemotePlayer flash edge) is
+    // edge-gated, but guarding here makes the ue_wrap API safe for any caller.
+    if (!saved.empty()) return false;
+    void* hurtMat = ResolveHurtMat();
+    if (!hurtMat || !puppet || !R::IsLive(puppet)) return false;
+    SwapComponentMaterials(PuppetVisibleMesh(puppet, P::off::ACharacter_Mesh), hurtMat, saved);
+    SwapComponentMaterials(PuppetVisibleMesh(puppet, P::off::AmainPlayer_mesh_playerVisible), hurtMat, saved);
+    return !saved.empty();
+}
+
+bool RestoreHurtFlashMaterial(void* /*puppet*/, std::vector<SavedMaterial>& saved) {
+    ResolveMatFns();
+    if (g_setMatFn) {
+        for (const auto& s : saved) {
+            if (!s.component || !R::IsLive(s.component)) continue;  // component GC'd
+            // If the cached original material was GC'd during the ~0.5 s window,
+            // restore nullptr -- SetMaterial(null) reverts the slot to the
+            // SkeletalMesh asset's default (the kel skin), the correct outcome.
+            void* orig = (s.original && R::IsLive(s.original)) ? s.original : nullptr;
+            ParamFrame f(g_setMatFn);
+            f.Set<int32_t>(L"ElementIndex", s.index);
+            f.Set<void*>(L"Material", orig);
+            Call(s.component, f);
+        }
+    }
+    saved.clear();
+    return true;
+}
+
+// Eager-resolve the hurt material + the UPrimitiveComponent material UFunctions so
+// the first damage flash does zero GUObjectArray name walks. Called once per puppet
+// spawn (cached forever on success). If the gore material isn't loaded yet it's a
+// no-op and the first flash resolves lazily -- but it is resident base content, so
+// the warmup succeeds and steady-state flashes never re-walk the object array.
+void WarmupHurtFlashCache() {
+    ResolveHurtMat();
+    ResolveMatFns();
+}
 
 bool WarmupPhcReleaseCache() {
     const bool ok = ResolvePhcReleaseCached();

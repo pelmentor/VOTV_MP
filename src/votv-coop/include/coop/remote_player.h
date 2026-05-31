@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace coop {
 
@@ -210,6 +211,10 @@ private:
     bool     hurtFlashActive_ = false;
     static constexpr uint64_t kHurtFlashMs = 500;     // red for ~0.5 s per hit
     static constexpr float    kHurtEpsilon = 0.006f;  // > 1 wire quantization step (1/255) -- ignore dequant jitter
+    // Inc3 body pulse: the puppet's original materials (both visible meshes),
+    // cached on the flash rising edge (engine swaps them to the gore-red skin) +
+    // restored on the falling edge. Each entry is (component, slot, original).
+    std::vector<ue_wrap::SavedMaterial> hurtSavedMaterials_;
 
     // Receiver-side interpolation state (game thread only -- the engine path is
     // single-threaded; no mutex). curPos_/curYaw_/curSpeed_ is what was last

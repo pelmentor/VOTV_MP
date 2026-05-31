@@ -12,6 +12,8 @@
 
 #include "ue_wrap/types.h"
 
+#include <vector>
+
 namespace ue_wrap::engine {
 
 // Run a console command (UKismetSystemLibrary::ExecuteConsoleCommand) -- the
@@ -499,6 +501,34 @@ bool ForceMainPlayerGetUp(void* mainPlayer);
 // simulating -> +5 GB RSS runaway (root-caused 2026-05-31, IDA/SDK RE + probe).
 // Instead we ragdoll the puppet's OWN mesh_playerVisible -- a component WE own,
 // so enable/disable is clean and leak-free (user decision 2026-05-31).
+
+// ---- Inc3 damage body-pulse (puppet mesh material swap) -------------------
+// The saved-material cache type (which component / slot index / original) is
+// ue_wrap::SavedMaterial in types.h. The puppet renders TWO visible body meshes
+// (Mesh@0x280 + mesh_playerVisible), so the saved set spans both -- a flat
+// (component,index,original) list restores every slot exactly regardless of how
+// many components or slots were swapped. The caller (RemotePlayer) owns the vector.
+using ue_wrap::SavedMaterial;
+
+// Swap BOTH visible body meshes' materials to the hurt-flash material
+// (PlayerHurtFlashMaterialName -- a SKELETAL gore skin so it renders red, not the
+// default grey), CACHING every original into `saved`. Restore with
+// RestoreHurtFlashMaterial passing the same vector. This is the Minecraft-style
+// "whole body flashes red" damage pulse; it shares the nameplate hurt-flash
+// trigger. Materials are render state independent of animation/physics, so it
+// composes with the pose drive + ragdoll. No-op-safe (returns false) if the
+// puppet/mesh/material won't resolve; then the nameplate flash still fires
+// (graceful). Game thread only.
+bool ApplyHurtFlashMaterial(void* puppet, std::vector<SavedMaterial>& saved);
+bool RestoreHurtFlashMaterial(void* puppet, std::vector<SavedMaterial>& saved);
+
+// Eager-resolve the hurt material + material UFunctions (call once per puppet
+// spawn) so the first damage flash does no GUObjectArray name walks. Game thread.
+void WarmupHurtFlashCache();
+
+// Resolve a loaded UMaterialInterface by object name (tries MaterialInstanceConstant,
+// then base Material, then any class). Returns nullptr if not loaded. Game thread.
+void* ResolveMaterialByName(const wchar_t* name);
 
 // Make the puppet flop: SetAllBodiesSimulatePhysics(true) on mesh_playerVisible
 // (@0x04F8) so the skin's physics asset simulates from its current pose, + set

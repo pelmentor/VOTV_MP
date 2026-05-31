@@ -27,10 +27,12 @@
 // VOTVCOOP_NET_ROLE: "client" => driver, anything else => host observer.
 
 #include "harness/autotest.h"
+#include "harness/screenshot.h"
 
 #include "coop/net_pump.h"
 #include "coop/players_registry.h"
 #include "coop/remote_player.h"
+#include "coop/dev/teleport_client.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -253,10 +255,85 @@ void ObserveDamageOnHost() {
         }
         if (phase == 1 && s == 1) {
             UE_LOGI("damage_test[host]: observed HURT FLASH ON -- puppet nameplate red, driven by the wire-streamed health drop (Inc3 WORKS)");
+            // Confirm the BODY material swap took (slot-0 should be the solid-red
+            // hurt material) + capture a screenshot for the visual check.
+            {
+                auto d2 = std::make_shared<std::atomic<int>>(0);
+                GT::Post([d2] {
+                    void* puppet = coop::net_pump::Puppet(1).GetActor();
+                    if (!puppet || !R::IsLive(puppet)) { d2->store(1); return; }
+                    const ue_wrap::FVector P = E::GetActorLocation(puppet);
+                    // Frame the puppet DYNAMICALLY: teleport the host to ~3.5 m in
+                    // front of the puppet (toward -X) looking back at it, so the red
+                    // body is in the screenshot regardless of where the puppet is
+                    // (static test-pose teleports desync the puppet on a big jump).
+                    coop::dev::teleport_client::ApplyLocally({P.X + 280.f, P.Y, P.Z + 20.f,
+                                                              /*pitch*/ -2.f, /*yaw*/ 180.f, /*roll*/ 0.f});
+                    void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+                    std::wstring matName = L"<?>";
+                    if (mesh && R::IsLive(mesh)) {
+                        if (void* gm = R::FindFunction(R::FindClass(L"PrimitiveComponent"), L"GetMaterial")) {
+                            ue_wrap::ParamFrame f(gm); f.Set<int32_t>(L"ElementIndex", 0);
+                            if (ue_wrap::Call(mesh, f)) { void* m = f.Get<void*>(L"ReturnValue");
+                                if (m) matName = R::ToString(R::NameOf(m)); }
+                        }
+                    }
+                    UE_LOGI("damage_test[host]: framed puppet@(%.0f,%.0f,%.0f); body slot-0 material = '%ls' (expect the gore hurt skin)",
+                            P.X, P.Y, P.Z, matName.c_str());
+                    d2->store(1);
+                });
+                WaitDone(d2, 8000);
+                ::Sleep(300);  // let the host teleport + render settle before the grab
+                // Re-confirm the body is STILL red at capture time (the sustained
+                // drive keeps the flash open ~4 s, so it should be).
+                {
+                    auto d4 = std::make_shared<std::atomic<int>>(0);
+                    GT::Post([d4] {
+                        void* puppet = coop::net_pump::Puppet(1).GetActor();
+                        if (puppet && R::IsLive(puppet)) {
+                            void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+                            if (mesh && R::IsLive(mesh)) {
+                                if (void* gm = R::FindFunction(R::FindClass(L"PrimitiveComponent"), L"GetMaterial")) {
+                                    ue_wrap::ParamFrame f(gm); f.Set<int32_t>(L"ElementIndex", 0);
+                                    if (ue_wrap::Call(mesh, f)) { void* m = f.Get<void*>(L"ReturnValue");
+                                        UE_LOGI("damage_test[host]: AT CAPTURE body slot-0 = '%ls' (must still be the gore hurt skin)",
+                                                m ? R::ToString(R::NameOf(m)).c_str() : L"<null>"); }
+                                }
+                            }
+                        }
+                        d4->store(1);
+                    });
+                    WaitDone(d4, 8000);
+                }
+                // Capture the red body while the flash window is still open.
+                // Pure GDI PrintWindow of the host window -- any thread, no toast.
+                const bool shot = harness::screenshot::Capture(L"damage-flash-on");
+                UE_LOGI("damage_test[host]: screenshot 'damage-flash-on' saved=%d", shot ? 1 : 0);
+            }
             phase = 2;
         }
         if (phase == 2 && s == 0) {
             UE_LOGI("damage_test[host]: observed HURT FLASH OFF -- nameplate restored");
+            // Confirm the BODY material restored to the skin (NOT stuck red).
+            auto d3 = std::make_shared<std::atomic<int>>(0);
+            GT::Post([d3] {
+                void* puppet = coop::net_pump::Puppet(1).GetActor();
+                if (puppet && R::IsLive(puppet)) {
+                    void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+                    if (mesh && R::IsLive(mesh)) {
+                        if (void* gm = R::FindFunction(R::FindClass(L"PrimitiveComponent"), L"GetMaterial")) {
+                            ue_wrap::ParamFrame f(gm); f.Set<int32_t>(L"ElementIndex", 0);
+                            if (ue_wrap::Call(mesh, f)) {
+                                void* m = f.Get<void*>(L"ReturnValue");
+                                UE_LOGI("damage_test[host]: puppet body slot-0 material after flash = '%ls' (expect the kel skin, NOT the gore hurt skin)",
+                                        m ? R::ToString(R::NameOf(m)).c_str() : L"<null>");
+                            }
+                        }
+                    }
+                }
+                d3->store(1);
+            });
+            WaitDone(d3, 8000);
             phase = 3;
         }
         ::Sleep(200);
@@ -299,25 +376,25 @@ void DriveDamageOnClient() {
         UE_LOGW("damage_test[client]: VERDICT INCONCLUSIVE -- saveSlot health never resolved; cannot drive");
         return;
     }
-    UE_LOGI("damage_test[client]: save resolved (maxHealth=%.1f) -- waiting 5 s for the host puppet to spawn", *maxH);
-    ::Sleep(5000);  // the host puppet spawns on our first pose (~immediately after connect)
+    UE_LOGI("damage_test[client]: save resolved (maxHealth=%.1f) -- waiting 6 s for the host puppet to spawn", *maxH);
+    ::Sleep(6000);  // the host puppet spawns on our first pose (~immediately after connect)
 
-    // Three descending writes (0.6 -> 0.4 -> 0.2 of max), 600 ms apart. Each is a
-    // fresh drop edge -> re-arms the 500 ms flash -> ~1.7 s of flashing for the
-    // host's 200 ms poll to catch.
-    const float steps[3] = {0.6f, 0.4f, 0.2f};
-    for (int i = 0; i < 3; ++i) {
+    // SUSTAINED drop: ~12 small monotonic writes (0.92 -> ~0.48 of max) 300 ms
+    // apart. Each is a fresh drop edge that re-arms the 500 ms flash, so the puppet
+    // flashes CONTINUOUSLY for ~4 s -- ample for the host to detect + frame +
+    // screenshot the red body mid-flash. Stays well above 0 (no death).
+    for (int i = 0; i < 12; ++i) {
         auto done = std::make_shared<std::atomic<int>>(0);
-        const float target = *maxH * steps[i];
+        const float target = *maxH * (0.92f - 0.04f * i);
         GT::Post([target, done] {
             const bool ok = V::Write(V::Field::Health, target);
             UE_LOGI("damage_test[client]: wrote local health=%.1f -> ok=%d (Inc1 streams it; host puppet should flash)", target, ok ? 1 : 0);
             done->store(1);
         });
         WaitDone(done, 8000);
-        ::Sleep(600);
+        ::Sleep(300);
     }
-    ::Sleep(2000);
+    ::Sleep(1500);
     UE_LOGI("damage_test[client]: drive sequence DONE");
 }
 

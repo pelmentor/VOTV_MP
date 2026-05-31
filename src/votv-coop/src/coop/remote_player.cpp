@@ -165,6 +165,10 @@ bool RemotePlayer::Spawn() {
     // IsLive (which a GC-recycled address defeats). See internalIdx_ in the header.
     internalIdx_ = R::InternalIndexOf(actor_);
 
+    // Eager-resolve the Inc3 hurt-flash material + UFunctions so the first damage
+    // flash on this puppet does zero GUObjectArray name walks (cached forever).
+    E::WarmupHurtFlashCache();
+
     // 2026-05-25 v8 (hands-on fix): measure BOTH source's and puppet's
     // mesh chain composite to compute the offset. The prior v7 used only
     // puppet's chain delta and assumed source delta=0 (per an early-init
@@ -521,7 +525,12 @@ void RemotePlayer::Tick() {
     const bool wantFlash = (hurtFlashEndMs_ != 0 && NowMs() < hurtFlashEndMs_);
     if (wantFlash != hurtFlashActive_) {
         hurtFlashActive_ = wantFlash;
-        nameplate::SetFlash(this, wantFlash);
+        nameplate::SetFlash(this, wantFlash);  // nameplate red
+        // Body pulse: swap the puppet mesh to solid red on the rising edge,
+        // restore the originals on the falling edge (Minecraft-style hit flash).
+        // Composes with the pose drive + ragdoll (materials are render state).
+        if (wantFlash) E::ApplyHurtFlashMaterial(actor_, hurtSavedMaterials_);
+        else           E::RestoreHurtFlashMaterial(actor_, hurtSavedMaterials_);
         if (!wantFlash) hurtFlashEndMs_ = 0;
     }
 }
@@ -549,6 +558,7 @@ void RemotePlayer::Destroy() {
     ragdollDispatched_ = false;
     hurtFlashEndMs_ = 0;         // v20 Inc3: clear the hurt-flash (nameplate already unregistered)
     hurtFlashActive_ = false;
+    hurtSavedMaterials_.clear(); // the mesh died with the actor -- no restore needed, drop stale ptrs
     UE_LOGI("RemotePlayer::Destroy: puppet + nameplate gone");
 }
 

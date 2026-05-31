@@ -51,6 +51,13 @@ struct FLinearColor {
 };
 static_assert(sizeof(FLinearColor) == 16, "FLinearColor layout");
 
+// SavedMaterial -- one cached material-override slot for the Inc3 hurt flash:
+// which component, which slot index, the original material to restore. Not
+// marshaled into a param frame; it lives here (not engine.h) so the gameplay
+// layer (RemotePlayer) can cache a std::vector of them WITHOUT pulling the full
+// engine.h wrapper API into the widely-included remote_player.h.
+struct SavedMaterial { void* component = nullptr; int32_t index = 0; void* original = nullptr; };
+
 inline FTransform MakeTransform(const FVector& location) {
     FTransform t;
     t.TX = location.X;

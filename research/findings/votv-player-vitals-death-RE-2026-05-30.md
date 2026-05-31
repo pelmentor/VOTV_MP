@@ -299,3 +299,50 @@ redeploy on the version bump.
 UNKNOWNs feeding later RE: `p_health@0x658` semantics; the BP setter of `dead`
 (we poll, don't need it); VOTV respawn mechanism (gates Inc5); whether `maxHealth`
 changes mid-session (moot — we stream the fraction).
+
+---
+
+## Inc3-BODY-PULSE addendum (2026-05-31) — material-swap hurt overlay
+
+Shipped the "Minecraft red mesh overlay" variant of the damage indicator (the
+Inc3-visual nameplate flash's sibling), sharing the same `hurtFlashEndMs_`
+trigger. On the flash rising edge the puppet's body materials are swapped to a
+red material; on the falling edge they are restored. NO new wire (rides the
+existing streamed health-fraction DECREASE detector).
+
+KEY RE FINDING — **why a material swap can render flat GREY**: a material whose
+shaders were only compiled for static meshes / particles (e.g. `inst_color_red`,
+`inst_redDwarf`, `inst_color_white`) has **no GPUSkinVertexFactory permutation**,
+so when `SetMaterial` assigns it to the SKINNED kerfur body, the renderer
+substitutes UE's **default grey** material. The swap took (the slot reads back as
+the new material) and the mesh re-renders — it just renders grey. Diagnosis: if
+many different materials all render identical grey, it is the fallback, not a
+swap bug. FIX: use a SKELETAL-character material. `inst_goregibs_organsSK` ("SK"
+= skeletal; a gore/blood skin) renders its real bloody-red. `inst_grunt_gored`
+also works. (Full reusable note: memory `reference-skeletal-mesh-material-swap-grey-fallback`.)
+
+PUPPET MESH STRUCTURE (identity-probe, slot-1 puppet): the puppet renders TWO
+visible body meshes — native `ACharacter::Mesh`@0x280 AND `mesh_playerVisible`
+@0x4F8 (BOTH `IsVisible()`==true, both carry `inst_kel4_body`); `arms`@0x5F8 and
+`playermodel`@0x638 are `visible=0`. The hurt swap targets BOTH visible meshes
+(swapping only one leaves the other's kel skin occluding the change). `Puppet(1)`
+is a genuine unpossessed orphan (`GetController()`==null), confirming we swap the
+puppet, not the host's own local Kel.
+
+ENGINE API (P7, ue_wrap/engine_mainplayer.cpp): `ApplyHurtFlashMaterial(puppet,
+saved)` / `RestoreHurtFlashMaterial(puppet, saved)` with a flat
+`std::vector<ue_wrap::SavedMaterial>{component,index,original}` spanning both
+meshes; helpers `SwapComponentMaterials` / `PuppetVisibleMesh` /
+`ResolveMaterialByName` / `WarmupHurtFlashCache` (eager-resolve at puppet spawn so
+the first flash does no GUObjectArray walk). `PlayerHurtFlashMaterialName =
+inst_goregibs_organsSK` in sdk_profile.h. Apply is self-guarded against
+double-apply; restore passes `null` for a GC'd original (reverts to the skin).
+e2e `VOTVCOOP_RUN_DAMAGE_TEST`: VERDICT PASS, host RSS stable, 2-agent audit 0
+CRITICAL FAIL.
+
+FRAMING LESSON (for autonomous visual verification): `teleport_client::
+ApplyLocally` moves the HOST'S OWN player, and VOTV SILENTLY REVERTS
+large-distance teleports — so "frame the puppet by teleporting the host in front
+of it" only works when host + puppet spawned near each other. When they spawn far
+apart the host snaps back and the puppet stays small/off-frame; user live-watch
+was the reliable signal.

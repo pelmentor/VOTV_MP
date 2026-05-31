@@ -980,6 +980,22 @@ inline constexpr const wchar_t* PlayerRagdollPhysicsAssetName = L"kerfurOmegaV1_
 inline constexpr const wchar_t* PhysicsAssetClass             = L"PhysicsAsset";
 inline constexpr const wchar_t* SetPhysicsAssetFn             = L"SetPhysicsAsset";
 
+// Inc3 damage body-pulse: the puppet's skin (inst_kel4_*) exposes no drivable
+// tint param (probe 2026-05-31), so the hurt-flash SWAPS the body mesh materials
+// to an EXISTING pak material (no asset edit -- Principle 1), then restores the
+// originals. The swap is the Minecraft-style "whole body flashes red" effect.
+// UMeshComponent material UFunctions live on UPrimitiveComponent.
+//
+// MUST be a SKELETAL-character material: static-mesh/particle materials (e.g.
+// inst_color_red, inst_redDwarf) have no GPUSkinVertexFactory shader permutation,
+// so UE substitutes its DEFAULT GREY material on the skinned kerfur (confirmed
+// 2026-05-31: user saw "grey solid", not red). inst_goregibs_organsSK is a gore
+// SKIN material ("SK" == skeletal) -> it renders its real bloody-red texture on
+// the kerfur. Swapped onto BOTH visible body meshes (Mesh@0x280 +
+// mesh_playerVisible) since the puppet renders both.
+inline constexpr const wchar_t* PlayerHurtFlashMaterialName = L"inst_goregibs_organsSK";
+inline constexpr const wchar_t* MaterialInstanceConstantClassName = L"MaterialInstanceConstant";
+
 // 2026-05-26 deep-RE puppet light fix: reuse AddComponentByClassFn +
 // FinishAddComponentFn (already defined above for nameplate WidgetComponent
 // spawning). We spawn a FRESH USpotLightComponent on the puppet via
