@@ -239,7 +239,28 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // correct fit -- it rides the proven per-peer pose relay (no new ReliableKind /
 // relay-whitelist / lane / defer-latch / connect-replay machinery, which existed
 // only to survive the reliable design's permanent-desync failure mode).
-inline constexpr uint16_t kProtocolVersion = 21;
+//
+// v22 (2026-06-01) -- ragdoll PHYSICS sync (the pelvis-attached puppet ragdoll
+// learns the ragdolling peer's ACTUAL physics instead of free-simulating its own).
+// v20's kStateBitRagdoll only synced the on/off STATE; the host then spawned an
+// INDEPENDENT playerRagdoll_C body that flopped on the HOST's local PhysX -- so a
+// client who ragdolled off a ledge and flew forward looked like a body flopping in
+// place on the host (the gross motion did NOT match). This bump adds a new
+// unreliable MsgType::RagdollPose (=16) -- a sibling of PropPose, sent only WHILE a
+// peer is ragdolling -- carrying that peer's ragdoll PELVIS world transform +
+// linear + angular velocity (read off its native AmainPlayer_C::ragdollActor's
+// SkeletalMesh pelvis bone). The receiver feeds the velocity onto its mirror body's
+// pelvis each packet (SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
+// -- the SAME UPrimitiveComponent ops PropRelease uses) so the mirror body tumbles
+// to TRACK the client, and drives the puppet's rotation from the streamed pelvis
+// rotation directly (exact, no reliance on the host sim matching). MTA precedent:
+// dead-reckoning a networked entity from a streamed transform + velocity is
+// CClientPed's time-based interpolation shape (CClientPed.cpp:218 / 5405). Mirrors
+// the prop pipeline exactly (PropPose continuous transform + PropRelease velocity,
+// fused into one per-frame ragdoll packet). ParseHeader rejects pre-v22 peers so a
+// v21 host (which has no RagdollPose dispatch) is a visible version mismatch rather
+// than a silently-dropped packet.
+inline constexpr uint16_t kProtocolVersion = 22;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -256,6 +277,11 @@ enum class MsgType : uint8_t {
     PoseSnapshot = 2,  // player pose (unreliable, newest wins)
     Reliable = 4,      // ordered+delivered message wrapping a ReliableKind payload
     PropPose = 8,      // held-prop world transform (unreliable, per-frame while held)
+    RagdollPose = 16,  // v22: ragdolling peer's pelvis transform + velocity
+                       //      (unreliable, per-frame WHILE that peer is ragdolled).
+                       //      Sibling of PropPose: the receiver feeds the velocity
+                       //      onto its mirror ragdoll body's pelvis so it tracks the
+                       //      sender's real ragdoll instead of free-simulating.
 };
 
 // Payload kinds carried inside a Reliable message. The chat/event-feed groundwork:
@@ -648,6 +674,42 @@ struct PropPosePacket {
     PropPoseSnapshot pose;    // 56
 };
 static_assert(sizeof(PropPosePacket) == 76, "PropPosePacket must be 76 bytes");
+
+// v22: ragdoll PELVIS physics state. Sent unreliable, ~sendHz, WHILE the sender's
+// AmainPlayer_C::isRagdoll is set (the native C-key/faint/KO ragdoll). The sender
+// reads its own ragdollActor's SkeletalMesh pelvis bone:
+//   x,y,z              -- pelvis WORLD location (cm). Receiver uses this for a
+//                         drift watchdog (mirror body pelvis vs streamed) -- not a
+//                         hard correction in v22 (the velocity slaving keeps them
+//                         tracking from a co-located ragdoll start; a teleport-
+//                         correct of a simulating skeletal body is a follow-up if
+//                         hands-on shows drift).
+//   pitch,yaw,roll     -- pelvis WORLD rotation (deg). Receiver drives the puppet's
+//                         rotation from THIS directly (exact -- the visible Dr. Kel
+//                         is rigidly pelvis-attached, so its tumble orientation is
+//                         the pelvis orientation), replacing the read-off-the-local-
+//                         sim-body rotation that could diverge from the client's.
+//   linVel{X,Y,Z}      -- pelvis linear velocity (cm/s), GetPhysicsLinearVelocity.
+//   angVel{X,Y,Z}      -- pelvis angular velocity (deg/s),
+//                         GetPhysicsAngularVelocityInDegrees.
+// Receiver applies linVel+angVel to its mirror body's pelvis each packet
+// (SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees, bAddToCurrent=0)
+// so the mirror body's gross motion slaves to the sender's real ragdoll. Same
+// FVector cm/s + FVector deg/s units + capture/apply UFunction pair as
+// PropReleasePayload -- the proven prop launch-energy path.
+struct RagdollPoseSnapshot {
+    float x, y, z;                    // pelvis world location (cm)
+    float pitch, yaw, roll;           // pelvis world rotation (deg)
+    float linVelX, linVelY, linVelZ;  // pelvis linear velocity (cm/s)
+    float angVelX, angVelY, angVelZ;  // pelvis angular velocity (deg/s)
+};
+static_assert(sizeof(RagdollPoseSnapshot) == 48, "RagdollPoseSnapshot must be 48 bytes");
+
+struct RagdollPosePacket {
+    PacketHeader        header;  // 20
+    RagdollPoseSnapshot pose;    // 48
+};
+static_assert(sizeof(RagdollPosePacket) == 68, "RagdollPosePacket must be 68 bytes");
 
 // v5: PropRelease reliable payload. Sent ONCE when the sender's grab ends.
 // Receiver re-enables SimulatePhysics on the cached prop, then sets linear +

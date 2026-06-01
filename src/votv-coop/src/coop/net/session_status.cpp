@@ -86,6 +86,12 @@ void Session::ResetPeerRemoteState(int peerSlot) {
     lastRemotePropSeq_[peerSlot] = 0;
     remotePropStamp_[peerSlot] = 0;
     lastReadPropStamp_[peerSlot] = 0;
+    // v22: clear the ragdoll pelvis-physics slot too, so a reconnecting peer
+    // doesn't inherit the dead generation's stale ragdoll stream.
+    hasRemoteRagdoll_[peerSlot] = false;
+    lastRemoteRagdollSeq_[peerSlot] = 0;
+    remoteRagdollStamp_[peerSlot] = 0;
+    lastReadRagdollStamp_[peerSlot] = 0;
     // PR-FOUNDATION-1b v16: clear the latched senderEpoch so the next
     // connection on this slot re-latches via HandleMessage's first-packet
     // path. Without this, a reconnecting peer's fresh epoch would fail

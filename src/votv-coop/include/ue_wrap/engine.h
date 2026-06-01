@@ -575,6 +575,22 @@ bool DetachActorFromRagdollBody(void* actor);
 // its capsule upright, so rotation must be applied explicitly. false on failure. GT only.
 bool GetRagdollBodyPelvisRotation(void* body, FRotator& outRot);
 
+// v22 ragdoll physics sync -- SENDER side. Read the LOCAL player's NATIVE ragdoll
+// (AmainPlayer_C::ragdollActor @0xC40, the AplayerRagdoll_C the C-key/faint spawned)
+// pelvis bone WORLD transform + pelvis linear + angular velocity, for streaming to
+// peers (RagdollPoseSnapshot). Returns false if the player isn't ragdolling (no
+// ragdollActor) or the pelvis/mesh can't resolve. Velocities are cm/s + deg/s (the
+// PropRelease units). Game thread only.
+bool ReadLocalRagdollPelvisPhysics(void* mainPlayer, FVector& outLoc, FRotator& outRot,
+                                   FVector& outLinVel, FVector& outAngVel);
+
+// v22 ragdoll physics sync -- RECEIVER side. Slave our spawned mirror `body`'s pelvis
+// rigid body to a peer's streamed velocity: SetPhysicsLinearVelocity +
+// SetPhysicsAngularVelocityInDegrees on the pelvis bone (bAddToCurrent=false, the same
+// PropRelease apply pair) so the mirror body tumbles to TRACK the sender's real ragdoll
+// instead of free-simulating. No-op-safe if body/mesh/pelvis won't resolve. GT only.
+void DriveRagdollBodyPelvisVelocity(void* body, const FVector& linVel, const FVector& angVel);
+
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the
 // GameInstance first (lives across map loads) and falls back to the World.

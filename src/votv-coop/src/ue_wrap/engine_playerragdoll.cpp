@@ -36,8 +36,12 @@ namespace R = reflection;
 
 // CXX SDK (Game_0.9.0n): AplayerRagdoll_C::Player @0x0248 (AmainPlayer_C*);
 // Aragdoll_C::SkeletalMesh @0x0230 (USkeletalMeshComponent*, the body mesh).
+// AmainPlayer_C::ragdollActor @0x0C40 (AplayerRagdoll_C*, the NATIVE ragdoll the
+// C-key/faint spawns -- the v22 sender reads its pelvis physics). Offset cited to
+// the CXX dump + autotest_ragdoll_spawn_probe.cpp (which read the same field).
 constexpr size_t kPlayerRagdoll_Player  = 0x0248;
 constexpr size_t kAragdoll_SkeletalMesh = 0x0230;
+constexpr size_t kMainPlayer_ragdollActor = 0x0C40;
 
 // Cached UClass + sim UFunctions (resolve once; playerRagdoll_C loads with
 // gameplay and is always resident per the probe's residency check). Plain void*
@@ -53,6 +57,13 @@ void* g_setCollisionFn    = nullptr;
 void* g_getSocketRotFn   = nullptr;
 uint8_t g_pelvisFName[8] = {};
 bool g_havePelvisFName   = false;
+// v22 ragdoll physics sync caches (resolve once; SceneComponent::GetSocketLocation +
+// the 4 UPrimitiveComponent velocity ops -- the same pair the prop pipeline uses).
+void* g_getSocketLocFn = nullptr;
+void* g_getLinVelFn    = nullptr;  // UPrimitiveComponent::GetPhysicsLinearVelocity
+void* g_getAngVelFn    = nullptr;  // ::GetPhysicsAngularVelocityInDegrees
+void* g_setLinVelFn    = nullptr;  // ::SetPhysicsLinearVelocity
+void* g_setAngVelFn    = nullptr;  // ::SetPhysicsAngularVelocityInDegrees
 
 void* ResolveRagdollClass() {
     if (g_ragdollClass && R::IsLive(g_ragdollClass)) return g_ragdollClass;
@@ -112,6 +123,49 @@ bool FindBoneFName(void* meshComp, const wchar_t* wantName, uint8_t outName[8]) 
         }
     }
     return false;
+}
+
+// Ensure g_pelvisFName holds the "pelvis" bone FName (resolve once from any ragdoll
+// mesh -- the name is one GNames entry, identical across the sender's native ragdoll
+// and our spawned mirror body). Returns false until it resolves. Game thread.
+bool EnsurePelvisFName(void* mesh) {
+    if (g_havePelvisFName) return true;
+    g_havePelvisFName = FindBoneFName(mesh, L"pelvis", g_pelvisFName);
+    return g_havePelvisFName;
+}
+
+// Resolve the SceneComponent::GetSocketLocation + the 4 UPrimitiveComponent velocity
+// UFunctions once. Returns false if the engine classes/functions can't be found.
+bool ResolvePhysicsFns() {
+    if (!g_getSocketLocFn) {
+        if (void* sc = R::FindClass(L"SceneComponent")) g_getSocketLocFn = R::FindFunction(sc, L"GetSocketLocation");
+    }
+    if (!g_getSocketRotFn) {
+        if (void* sc = R::FindClass(L"SceneComponent")) g_getSocketRotFn = R::FindFunction(sc, L"GetSocketRotation");
+    }
+    // Resolve the 4 UPrimitiveComponent velocity ops. Cache the class pointer once so
+    // a single still-unresolved fn (e.g. a transient FindFunction miss) re-runs only
+    // its own FindFunction, NOT a fresh FindClass GUObjectArray walk every frame (the
+    // per-pointer-independent guard pattern the sibling SceneComponent lookups use).
+    if (!g_getLinVelFn || !g_getAngVelFn || !g_setLinVelFn || !g_setAngVelFn) {
+        static void* sPrimCompCls = nullptr;
+        if (!sPrimCompCls || !R::IsLive(sPrimCompCls)) sPrimCompCls = R::FindClass(L"PrimitiveComponent");
+        if (sPrimCompCls) {
+            if (!g_getLinVelFn) g_getLinVelFn = R::FindFunction(sPrimCompCls, L"GetPhysicsLinearVelocity");
+            if (!g_getAngVelFn) g_getAngVelFn = R::FindFunction(sPrimCompCls, L"GetPhysicsAngularVelocityInDegrees");
+            if (!g_setLinVelFn) g_setLinVelFn = R::FindFunction(sPrimCompCls, L"SetPhysicsLinearVelocity");
+            if (!g_setAngVelFn) g_setAngVelFn = R::FindFunction(sPrimCompCls, L"SetPhysicsAngularVelocityInDegrees");
+        }
+    }
+    return g_getSocketLocFn && g_getSocketRotFn &&
+           g_getLinVelFn && g_getAngVelFn && g_setLinVelFn && g_setAngVelFn;
+}
+
+// Resolve a ragdoll actor's body SkeletalMesh @0x230 (live-checked). null on miss.
+void* RagdollMeshOf(void* ragdollActor) {
+    if (!ragdollActor || !R::IsLive(ragdollActor)) return nullptr;
+    void* mesh = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(ragdollActor) + kAragdoll_SkeletalMesh);
+    return (mesh && R::IsLive(mesh)) ? mesh : nullptr;
 }
 
 }  // namespace
@@ -207,6 +261,52 @@ bool GetRagdollBodyPelvisRotation(void* body, FRotator& outRot) {
     if (!Call(mesh, f)) return false;
     outRot = f.Get<FRotator>(L"ReturnValue");
     return true;
+}
+
+bool ReadLocalRagdollPelvisPhysics(void* mainPlayer, FVector& outLoc, FRotator& outRot,
+                                   FVector& outLinVel, FVector& outAngVel) {
+    outLoc = FVector{}; outRot = FRotator{}; outLinVel = FVector{}; outAngVel = FVector{};
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    // The native ragdoll the C-key/faint spawned. Null until the player ragdolls;
+    // cleared on recover -- so a non-null + live value IS the "is ragdolling" signal.
+    void* ragdollActor =
+        *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(mainPlayer) + kMainPlayer_ragdollActor);
+    void* mesh = RagdollMeshOf(ragdollActor);
+    if (!mesh) return false;
+    if (!ResolvePhysicsFns()) return false;
+    if (!EnsurePelvisFName(mesh)) return false;
+    // Pelvis WORLD location + rotation (the kel-tumble anchor).
+    { ParamFrame f(g_getSocketLocFn); f.SetRaw(L"InSocketName", g_pelvisFName, sizeof(g_pelvisFName));
+      if (!Call(mesh, f)) return false; outLoc = f.Get<FVector>(L"ReturnValue"); }
+    { ParamFrame f(g_getSocketRotFn); f.SetRaw(L"InSocketName", g_pelvisFName, sizeof(g_pelvisFName));
+      if (!Call(mesh, f)) return false; outRot = f.Get<FRotator>(L"ReturnValue"); }
+    // Pelvis linear (cm/s) + angular (deg/s) velocity -- the "physics properties".
+    { ParamFrame f(g_getLinVelFn); f.SetRaw(L"BoneName", g_pelvisFName, sizeof(g_pelvisFName));
+      if (!Call(mesh, f)) return false; outLinVel = f.Get<FVector>(L"ReturnValue"); }
+    { ParamFrame f(g_getAngVelFn); f.SetRaw(L"BoneName", g_pelvisFName, sizeof(g_pelvisFName));
+      if (!Call(mesh, f)) return false; outAngVel = f.Get<FVector>(L"ReturnValue"); }
+    return true;
+}
+
+void DriveRagdollBodyPelvisVelocity(void* body, const FVector& linVel, const FVector& angVel) {
+    void* mesh = RagdollMeshOf(body);
+    if (!mesh) return;
+    if (!ResolvePhysicsFns()) return;
+    if (!EnsurePelvisFName(mesh)) return;
+    // Overwrite (bAddToCurrent=false) the pelvis body's velocity with the sender's --
+    // the body slaves its gross motion to the real ragdoll. The constrained limb bodies
+    // sim freely (invisible); only the pelvis trajectory feeds the visible pelvis-
+    // attached kel. Same SetPhysics{Linear,Angular}Velocity pair as PropRelease.
+    { ParamFrame f(g_setLinVelFn);
+      f.Set<FVector>(L"NewVel", linVel);
+      f.Set<bool>(L"bAddToCurrent", false);
+      f.SetRaw(L"BoneName", g_pelvisFName, sizeof(g_pelvisFName));
+      Call(mesh, f); }
+    { ParamFrame f(g_setAngVelFn);
+      f.Set<FVector>(L"NewAngVel", angVel);
+      f.Set<bool>(L"bAddToCurrent", false);
+      f.SetRaw(L"BoneName", g_pelvisFName, sizeof(g_pelvisFName));
+      Call(mesh, f); }
 }
 
 }  // namespace ue_wrap::engine

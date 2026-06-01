@@ -58,6 +58,14 @@ public:
     void SetTargetPose(const coop::net::PoseSnapshot& snap);
     void Tick();
 
+    // v22 ragdoll PHYSICS sync. Called on each fresh RagdollPose packet for this
+    // peer (net_pump per-slot drive) WHILE the peer is ragdolling. Slaves the mirror
+    // ragdoll body's pelvis velocity to the sender's real ragdoll (so it tumbles to
+    // track, not free-simulate) + stamps the streamed pelvis rotation that the next
+    // ApplyToEngine drives onto the kel. No-op until a body exists (ragdoll active).
+    // Game thread only.
+    void SetRagdollPose(const coop::net::RagdollPoseSnapshot& snap);
+
     // Tear down the puppet: DestroyActor on the engine SkeletalMeshActor and
     // unregister the floating nameplate. Called on peer disconnect (Bye /
     // exit) -- otherwise the puppet lingers in the world frozen at its last
@@ -265,6 +273,13 @@ private:
     // pelvis-attached to it; both are torn down on recover / Destroy().
     void*            ragdollBody_ = nullptr;
     int32_t          ragdollBodyIdx_ = -1;
+    // v22 ragdoll physics: the latest streamed pelvis state for this peer (transform
+    // + velocity). hasRagdollPose_ gates the rotation drive: until the first packet
+    // arrives ApplyToEngine bootstraps the kel rotation from the mirror body's own
+    // pelvis; once streaming, it uses lastRagdollPose_'s EXACT pelvis rotation (no
+    // reliance on the local sim matching the sender). Both reset when ragdoll stops.
+    coop::net::RagdollPoseSnapshot lastRagdollPose_{};
+    bool             hasRagdollPose_ = false;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;

@@ -88,6 +88,11 @@ public:
     // connected peers each sendHz tick.
     void SetLocalPose(const PoseSnapshot& pose);
     void SetLocalPropPose(bool set, const PropPoseSnapshot& pose);
+    // v22: publish our local ragdoll's pelvis physics (transform + velocity) while
+    // we are ragdolling. `set` is true each sendHz frame the local player is
+    // ragdolled, false on the recover edge (mirrors SetLocalPropPose's held/release
+    // gate). Net thread fan-outs to all peers only while set.
+    void SetLocalRagdollPose(bool set, const RagdollPoseSnapshot& pose);
 
     // Per-peer accessors. peerSlot is the coop::players::Registry slot
     // (0 = host, 1..kMaxPeers-1 = clients). Returns false if peerSlot is
@@ -95,6 +100,10 @@ public:
     // is not Connected.
     bool TryGetRemotePose(int peerSlot, PoseSnapshot& out, bool* outIsNew = nullptr);
     bool TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* outIsNew = nullptr);
+    // v22: per-peer ragdoll pelvis physics. Returns false unless that slot has a
+    // fresh ragdoll pose AND aggregate state is Connected. outIsNew distinguishes a
+    // newly-arrived packet (apply the velocity) from a re-read of the last one.
+    bool TryGetRemoteRagdollPose(int peerSlot, RagdollPoseSnapshot& out, bool* outIsNew = nullptr);
 
     // Game thread: queue a reliable message. Host fan-outs to all connected
     // clients; client sends to host. Returns false on payload-too-large or
@@ -226,6 +235,10 @@ private:
     PropPoseSnapshot localPropPose_{};
     bool hasLocalProp_ = false;
     uint32_t lastLocalPropSeq_ = 0;
+    // v22: local ragdoll pelvis physics (game thread writes while ragdolling, net
+    // thread reads + fan-outs). Same held/release shape as localPropPose_.
+    RagdollPoseSnapshot localRagdollPose_{};
+    bool hasLocalRagdoll_ = false;
 
     // Per-peer remote pose slots. Net thread writes (under remoteMutex_) on
     // receive; game thread reads via TryGetRemotePose(...).
@@ -240,6 +253,12 @@ private:
     std::array<uint32_t, kMaxPeers> lastRemotePropSeq_{};
     std::array<uint64_t, kMaxPeers> remotePropStamp_{};
     std::array<uint64_t, kMaxPeers> lastReadPropStamp_{};
+    // v22: per-peer ragdoll pelvis physics (same per-slot stamp/seq shape as prop).
+    std::array<RagdollPoseSnapshot, kMaxPeers> remoteRagdollPoses_{};
+    std::array<bool, kMaxPeers> hasRemoteRagdoll_{};
+    std::array<uint32_t, kMaxPeers> lastRemoteRagdollSeq_{};
+    std::array<uint64_t, kMaxPeers> remoteRagdollStamp_{};
+    std::array<uint64_t, kMaxPeers> lastReadRagdollStamp_{};
     // Per-slot expected senderEpoch latched from the first packet arriving
     // from that slot (PR-FOUNDATION-1b v16). Zero == not yet latched;
     // subsequent packets whose header epoch doesn't match are dropped at

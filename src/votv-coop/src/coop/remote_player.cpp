@@ -521,6 +521,24 @@ void RemotePlayer::Tick() {
     }
 }
 
+void RemotePlayer::SetRagdollPose(const coop::net::RagdollPoseSnapshot& snap) {
+    // v22: stash the latest streamed pelvis state + slave the mirror body's pelvis
+    // velocity to it NOW (game thread). The body then tumbles to TRACK the sender's
+    // real ragdoll instead of free-simulating its own flop. The stored pelvis
+    // rotation is applied to the kel next ApplyToEngine (dirty_ forces it to run).
+    // No-op until the body exists (ragdoll active) -- a packet that races ahead of
+    // the kStateBitRagdoll spawn edge is harmlessly dropped; the next one applies.
+    lastRagdollPose_ = snap;
+    hasRagdollPose_ = true;
+    if (ragdollActive_ && ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) {
+        E::DriveRagdollBodyPelvisVelocity(
+            ragdollBody_,
+            ue_wrap::FVector{snap.linVelX, snap.linVelY, snap.linVelZ},
+            ue_wrap::FVector{snap.angVelX, snap.angVelY, snap.angVelZ});
+        dirty_ = true;  // refresh the kel rotation from the streamed pelvis next Tick
+    }
+}
+
 void RemotePlayer::Destroy() {
     if (!actor_) return;
     // The puppet's own CMC carries Velocity / MovementMode that BUA reads
@@ -548,6 +566,7 @@ void RemotePlayer::Destroy() {
     dirty_ = false;
     ragdollWireState_ = false;   // a recycled puppet starts un-ragdolled + re-converges
     ragdollActive_ = false;
+    hasRagdollPose_ = false;     // v22: drop stale streamed ragdoll pelvis state
     hurtFlashEndMs_ = 0;         // v20 Inc3: clear the hurt-flash (nameplate already unregistered)
     hurtFlashActive_ = false;
     hurtSavedMaterials_.clear(); // the mesh died with the actor -- no restore needed, drop stale ptrs
@@ -594,6 +613,7 @@ void RemotePlayer::StopRagdollDisplay() {
     ragdollBody_ = nullptr;
     ragdollBodyIdx_ = -1;
     ragdollActive_ = false;
+    hasRagdollPose_ = false;  // v22: next ragdoll bootstraps rotation fresh (not stale streamed)
     UE_LOGI("RemotePlayer::StopRagdollDisplay: detached puppet + destroyed ragdoll body");
 }
 
@@ -611,10 +631,19 @@ void RemotePlayer::ApplyToEngine() {
             // The pelvis attach follows the body's POSITION, but the puppet is a
             // character so its capsule stays UPRIGHT (kel slides + yaws but never
             // tumbles). Drive the pelvis WORLD rotation onto the puppet each frame so
-            // the Dr. Kel skin tumbles WITH the flop too (user 2026-06-01). One cheap
-            // socket read + SetActorRotation; only while ragdolled.
+            // the Dr. Kel skin tumbles WITH the flop too. v22: once the peer's ragdoll
+            // PHYSICS stream is flowing, use the EXACT streamed pelvis rotation (the
+            // mirror body's velocity is slaved to the sender, but reading the streamed
+            // rotation directly removes any dependence on the local sim matching --
+            // the kel orientation is then identical to the sender's real ragdoll).
+            // Before the first packet, bootstrap from the mirror body's own pelvis.
             ue_wrap::FRotator pr;
-            if (E::GetRagdollBodyPelvisRotation(ragdollBody_, pr)) E::SetActorRotation(actor_, pr);
+            if (hasRagdollPose_) {
+                pr = ue_wrap::FRotator{lastRagdollPose_.pitch, lastRagdollPose_.yaw, lastRagdollPose_.roll};
+                E::SetActorRotation(actor_, pr);
+            } else if (E::GetRagdollBodyPelvisRotation(ragdollBody_, pr)) {
+                E::SetActorRotation(actor_, pr);
+            }
             return;
         }
         StopRagdollDisplay();  // body died under us -- detach, clear, resume pose-drive below

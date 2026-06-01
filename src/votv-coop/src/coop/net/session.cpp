@@ -145,6 +145,17 @@ bool Session::Start(const Config& cfg) {
     // Clear any stale latches from a previous Start()/Stop() cycle on
     // this same Session instance (test harnesses reuse the object).
     for (int i = 0; i < kMaxPeers; ++i) expectedEpoch_[i] = 0;
+    // Clear stale LOCAL-stream "has published" flags too. The net thread isn't
+    // spawned yet (no concurrency here), so no lock needed -- same as the epoch
+    // clear above. Without this, a Session reused after a Stop() that happened
+    // mid-ragdoll (or mid-hold) would carry hasLocalRagdoll_/hasLocalProp_=true
+    // into the new session and the first net-thread send would fan out the PRIOR
+    // session's stale pelvis/prop pose before the game thread's first pump tick
+    // republishes current state. (v22 fixes the new ragdoll flag + the pre-existing
+    // pose/prop ones at the root -- a fresh session has published nothing yet.)
+    hasLocal_ = false;
+    hasLocalProp_ = false;
+    hasLocalRagdoll_ = false;
 
     if (!EnsureGnsInit()) return false;
 
@@ -261,6 +272,12 @@ void Session::SetLocalPropPose(bool set, const PropPoseSnapshot& pose) {
     if (set) localPropPose_ = pose;
 }
 
+void Session::SetLocalRagdollPose(bool set, const RagdollPoseSnapshot& pose) {
+    std::lock_guard<std::mutex> lk(localMutex_);
+    hasLocalRagdoll_ = set;
+    if (set) localRagdollPose_ = pose;
+}
+
 bool Session::TryGetRemotePose(int peerSlot, PoseSnapshot& out, bool* outIsNew) {
     if (state_.load() != ConnState::Connected) return false;
     if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
@@ -280,6 +297,17 @@ bool Session::TryGetRemotePropPose(int peerSlot, PropPoseSnapshot& out, bool* ou
     out = remotePropPoses_[peerSlot];
     if (outIsNew) *outIsNew = (remotePropStamp_[peerSlot] != lastReadPropStamp_[peerSlot]);
     lastReadPropStamp_[peerSlot] = remotePropStamp_[peerSlot];
+    return true;
+}
+
+bool Session::TryGetRemoteRagdollPose(int peerSlot, RagdollPoseSnapshot& out, bool* outIsNew) {
+    if (state_.load() != ConnState::Connected) return false;
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+    std::lock_guard<std::mutex> lk(remoteMutex_);
+    if (!hasRemoteRagdoll_[peerSlot]) return false;
+    out = remoteRagdollPoses_[peerSlot];
+    if (outIsNew) *outIsNew = (remoteRagdollStamp_[peerSlot] != lastReadRagdollStamp_[peerSlot]);
+    lastReadRagdollStamp_[peerSlot] = remoteRagdollStamp_[peerSlot];
     return true;
 }
 
@@ -573,6 +601,48 @@ void Session::HandleMessage(int peerSlot, const void* data, int len) {
         }
         break;
     }
+    case MsgType::RagdollPose: {
+        if (len < static_cast<int>(sizeof(RagdollPosePacket))) return;
+        RagdollPosePacket pkt;
+        std::memcpy(&pkt, data, sizeof(pkt));
+        // Trust-boundary sanitize (same shape as PropPose): reject NaN/Inf and
+        // out-of-bounds before storing -- a velocity write of a poisoned value
+        // would corrupt the receiver's PhysX state. Velocities are unbounded in
+        // principle but a finite + sane-magnitude check rejects garbage; the
+        // rotation goes onto SetActorRotation so it must be a finite FRotator.
+        const float vals[12] = {pkt.pose.x, pkt.pose.y, pkt.pose.z,
+                                pkt.pose.pitch, pkt.pose.yaw, pkt.pose.roll,
+                                pkt.pose.linVelX, pkt.pose.linVelY, pkt.pose.linVelZ,
+                                pkt.pose.angVelX, pkt.pose.angVelY, pkt.pose.angVelZ};
+        for (float v : vals) if (!std::isfinite(v)) return;
+        if (std::fabs(pkt.pose.x) > kMaxCoord ||
+            std::fabs(pkt.pose.y) > kMaxCoord ||
+            std::fabs(pkt.pose.z) > kMaxCoord) return;
+        // Rotation must be in the canonical FRotator range (the sender normalizes
+        // via NormalizeAxis) -- same guard the PropPose case applies. SetActorRotation
+        // normalizes internally so an out-of-range value wouldn't crash, but reject it
+        // at the trust boundary for parity with PropPose (a finite-but-huge angle from
+        // a malformed/hostile datagram has no legitimate sender).
+        if (std::fabs(pkt.pose.pitch) > 180.f ||
+            std::fabs(pkt.pose.yaw)   > 180.f ||
+            std::fabs(pkt.pose.roll)  > 180.f) return;
+        {
+            std::lock_guard<std::mutex> lk(remoteMutex_);
+            if (hasRemoteRagdoll_[routeSlot] &&
+                static_cast<int32_t>(seq - lastRemoteRagdollSeq_[routeSlot]) <= 0) {
+                break;
+            }
+            remoteRagdollPoses_[routeSlot] = pkt.pose;
+            lastRemoteRagdollSeq_[routeSlot] = seq;
+            hasRemoteRagdoll_[routeSlot] = true;
+            ++remoteRagdollStamp_[routeSlot];
+        }
+        // Host relay: forward this client's ragdoll pose to every OTHER client.
+        if (cfg_.role == Role::Host) {
+            RelayUnreliableToOtherClients(peerSlot, data, len);
+        }
+        break;
+    }
     case MsgType::Reliable: {
         if (len < static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader))) return;
         ReliableHeader rh;
@@ -701,10 +771,13 @@ void Session::NetThread() {
             bool have;
             PropPoseSnapshot localProp;
             bool haveProp;
+            RagdollPoseSnapshot localRagdoll;
+            bool haveRagdoll;
             { std::lock_guard<std::mutex> lk(localMutex_);
               local = localPose_; have = hasLocal_;
-              localProp = localPropPose_; haveProp = hasLocalProp_; }
-            if (have || haveProp) {
+              localProp = localPropPose_; haveProp = hasLocalProp_;
+              localRagdoll = localRagdollPose_; haveRagdoll = hasLocalRagdoll_; }
+            if (have || haveProp || haveRagdoll) {
                 for (int i = 0; i < kMaxPeers; ++i) {
                     const uint32_t hConn = peerConns_[i].load();
                     if (hConn == 0) continue;
@@ -723,6 +796,16 @@ void Session::NetThread() {
                         WriteHeader(pkt.header, MsgType::PropPose,
                                     sendSeq_.fetch_add(1), ownEpoch_);
                         pkt.pose = localProp;
+                        const EResult rc = sockets->SendMessageToConnection(
+                            hConn, &pkt, sizeof(pkt),
+                            k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);
+                        if (rc == k_EResultOK) sent_.fetch_add(1);
+                    }
+                    if (haveRagdoll) {
+                        RagdollPosePacket pkt{};
+                        WriteHeader(pkt.header, MsgType::RagdollPose,
+                                    sendSeq_.fetch_add(1), ownEpoch_);
+                        pkt.pose = localRagdoll;
                         const EResult rc = sockets->SendMessageToConnection(
                             hConn, &pkt, sizeof(pkt),
                             k_nSteamNetworkingSend_UnreliableNoDelay, nullptr);

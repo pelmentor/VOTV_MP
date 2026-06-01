@@ -92,6 +92,12 @@ void* g_lastHeldProp = nullptr;
 coop::net::WireKey g_lastHeldKey{};
 uint64_t g_propEmitCount = 0;
 
+// v22 ragdoll-physics edge detector (same file-scope rationale as g_lastHeldProp:
+// a static-local would carry a stale "was ragdolling" across a session restart and
+// emit a spurious recover-edge false on the next session). Cleared by OnSessionStart.
+bool g_wasRagdolling = false;
+uint64_t g_ragdollEmitCount = 0;
+
 // Game thread, ~send-rate: read the local player's pose. Pulled in from
 // harness.cpp 2026-05-28; full rationale comments preserved.
 bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) {
@@ -235,6 +241,8 @@ void OnSessionStart() {
     g_lastHeldProp = nullptr;
     g_lastHeldKey = {};
     g_propEmitCount = 0;
+    g_wasRagdolling = false;
+    g_ragdollEmitCount = 0;
 }
 
 coop::RemotePlayer& Puppet(int slot) {
@@ -573,6 +581,43 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             g_lastHeldProp = nullptr;
             g_lastHeldKey = {};
         }
+
+        // v22 ragdoll PHYSICS stream. While the local player's native ragdoll
+        // exists (C-key/faint/KO), read its pelvis world transform + linear+angular
+        // velocity and publish so each peer's mirror body slaves its pelvis to the
+        // real ragdoll (instead of free-simulating its own flop). Mirrors the held-
+        // prop stream above: publish each frame while active, one false-edge on
+        // recover. ReadLocalRagdollPelvisPhysics returns false when not ragdolling,
+        // so the active->idle transition is the recover edge.
+        {
+            ue_wrap::FVector rdLoc{}, rdLin{}, rdAng{};
+            ue_wrap::FRotator rdRot{};
+            if (ue_wrap::engine::ReadLocalRagdollPelvisPhysics(g_netLocal, rdLoc, rdRot, rdLin, rdAng)) {
+                coop::net::RagdollPoseSnapshot rp{};
+                rp.x = rdLoc.X; rp.y = rdLoc.Y; rp.z = rdLoc.Z;
+                // Normalize the rotation at the wire boundary (the receiver drives
+                // SetActorRotation off it + the canonical FRotator guard expects
+                // (-180,180]); velocities are magnitudes, sent raw.
+                rp.pitch = ue_wrap::NormalizeAxis(rdRot.Pitch);
+                rp.yaw   = ue_wrap::NormalizeAxis(rdRot.Yaw);
+                rp.roll  = ue_wrap::NormalizeAxis(rdRot.Roll);
+                rp.linVelX = rdLin.X; rp.linVelY = rdLin.Y; rp.linVelZ = rdLin.Z;
+                rp.angVelX = rdAng.X; rp.angVelY = rdAng.Y; rp.angVelZ = rdAng.Z;
+                session.SetLocalRagdollPose(true, rp);
+                g_wasRagdolling = true;
+                const uint64_t n = ++g_ragdollEmitCount;
+                if (n <= 3 || (n % 60) == 0) {
+                    const float linMag = std::sqrt(rdLin.X * rdLin.X + rdLin.Y * rdLin.Y + rdLin.Z * rdLin.Z);
+                    UE_LOGI("net: RagdollPose emit #%llu -> pelvis(%.0f, %.0f, %.0f) rot(%.0f, %.0f, %.0f) |linVel|=%.0f cm/s",
+                            static_cast<unsigned long long>(n),
+                            rp.x, rp.y, rp.z, rp.pitch, rp.yaw, rp.roll, linMag);
+                }
+            } else if (g_wasRagdolling) {
+                session.SetLocalRagdollPose(false, {});
+                g_wasRagdolling = false;
+                UE_LOGI("net: RagdollPose stream STOP (local player recovered)");
+            }
+        }
     }
 
     // Per-slot pose drive. Iterate ALL peer slots [0, kMaxPeers) and skip
@@ -645,6 +690,21 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             }
         }
     }
+    // v22: per-slot ragdoll PELVIS-physics drive. Decoupled from the pose stream
+    // above (a momentary pose-packet gap must not stall the ragdoll velocity feed).
+    // Only FRESH packets apply -- the puppet's mirror body integrates between them.
+    // SetRagdollPose applies the velocity to the body + stamps the streamed pelvis
+    // rotation for the next Tick's ApplyToEngine. Runs BEFORE the Tick loop so the
+    // velocity is set before the same-frame ApplyToEngine reads the body.
+    for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
+        if (!g_puppets[slot].valid()) continue;
+        coop::net::RagdollPoseSnapshot rdoll;
+        bool rdollNew = false;
+        if (session.TryGetRemoteRagdollPose(slot, rdoll, &rdollNew) && rdollNew) {
+            g_puppets[slot].SetRagdollPose(rdoll);
+        }
+    }
+
     // Tick every live puppet (independent of which slot received pose data
     // this frame -- the per-puppet interpolation needs Tick every frame even
     // when no fresh pose arrived).
