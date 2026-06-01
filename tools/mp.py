@@ -1085,6 +1085,90 @@ def cmd_npctest(args) -> None:
     sys.exit(0)
 
 
+def cmd_ragdollshot(args) -> None:
+    """Force the CLIENT's player into ragdoll over the wire (leak-safe -- the test
+    driver flips isRagdoll directly, no real ragdollMode / no playerRagdoll_C) and
+    capture 2 screenshots of the HOST window showing the client's PUPPET, to verify
+    the puppet actually FALLS limp (own-mesh physics flop) rather than staying
+    rigid. Reuses the RAGDOLL_TEST (client = driver, host = observer) with an
+    extended hold so both shots land during the flop."""
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "ragdoll_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+
+    if kill_all() > 0:
+        log("note: pre-existing VotV instances killed before ragdollshot")
+    deploy_all()
+
+    # Drive the ragdoll e2e test (client drives via direct isRagdoll write -> host
+    # puppet flops via own-mesh sim) with a long hold so we can grab 2 host shots.
+    os.environ["VOTVCOOP_RUN_RAGDOLL_TEST"] = "1"
+    os.environ["VOTVCOOP_RAGDOLL_HOLD_MS"] = str(args.hold_ms)
+
+    log("--- HOST LAUNCH (ragdoll observer) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb)
+    log(f"waiting up to {args.boot_timeout}s for host to bind UDP {args.port}...")
+    bound = False
+    for i in range(args.boot_timeout):
+        time.sleep(1)
+        if host_owns_udp(host_pid, args.port):
+            log(f"host bound UDP {args.port} after {i+1}s"); bound = True; break
+        if not any(p["PID"] == host_pid for p in list_votv()):
+            log("HOST DIED before binding UDP"); tail_log(HOST_DIR / "votv-coop.log", 30, "HOST"); sys.exit(1)
+    if not bound:
+        log("FAIL: host did not bind UDP"); kill_all(); sys.exit(1)
+
+    log("--- CLIENT LAUNCH (ragdoll driver) ---")
+    client_pid = launch_peer("client", args.port, "Client", peer="127.0.0.1",
+                             res_x=1280, res_y=720, peer_slot=1, monitor=2,
+                             tile_index=0, memory_limit_gb=args.memory_limit_gb)
+    wait_for_client_connect(CLIENT_DIR, args.client_boot_timeout, "CLIENT", client_pid)
+
+    host_log = HOST_DIR / "votv-coop.log"
+    shots: list[Path] = []
+    # BEFORE shot: the host frames the STANDING puppet (before the ragdoll fires).
+    if _wait_for_log(host_log, "BEFORE-SHOT READY", args.ragdoll_timeout, "HOST"):
+        time.sleep(1)  # let the camera aim settle
+        pb = shots_dir / "host_ragdoll_before.png"
+        if _capture_window(host_pid, pb):
+            shots.append(pb)
+            log(f"  BEFORE shot (standing puppet): {pb.name}")
+    else:
+        log("WARN: never saw BEFORE-SHOT READY -- skipping the before shot")
+    # DURING shots: the driver fires the ragdoll ~12 s after its local player
+    # resolves; the host observer logs the rising edge once the puppet flops.
+    if not _wait_for_log(host_log, "observed RISING edge", args.ragdoll_timeout, "HOST"):
+        log("FAIL: host never observed the ragdoll rising edge")
+        tail_log(host_log, 30, "HOST"); kill_all(); sys.exit(2)
+    log(f"--- CAPTURING HOST 2x during the flop ({args.shot_gap}s apart) ---")
+    for n in (1, 2):
+        p = shots_dir / f"host_ragdoll_during_{n}.png"
+        if _capture_window(host_pid, p):
+            shots.append(p)
+        if n == 1:
+            time.sleep(args.shot_gap)
+
+    # Verdict markers (read before kill).
+    flopping = _log_count(host_log, "physically flopping=1")
+    visible = _log_count(host_log, "sim-mesh IsVisible=1")
+    tail_log(host_log, 14, "HOST")
+
+    log("--- KILLING ---")
+    kill_all()
+
+    log("--- RAGDOLLSHOT VERDICT ---")
+    for p in shots:
+        log(f"  screenshot: {p}")
+    log(f"host: 'physically flopping=1' lines={flopping}, 'sim-mesh IsVisible=1' lines={visible}")
+    if len(shots) < 2:
+        log(f"FAIL: captured only {len(shots)}/2 host screenshots"); sys.exit(2)
+    if flopping < 1:
+        log("WARN: host never logged 'physically flopping=1' -- the puppet may be RIGID; inspect the screenshots")
+    log(f"DONE: 2 host screenshots captured during the flop -> {shots_dir}")
+    sys.exit(0)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="VOTV coop orchestrator")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1206,6 +1290,17 @@ def main() -> None:
                        help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_npc.add_argument(flag, **kw)
     p_npc.set_defaults(func=cmd_npctest)
+
+    p_rag = sub.add_parser("ragdollshot",
+                           help="force the client's player into ragdoll + capture 2 host screenshots of the puppet falling")
+    p_rag.add_argument("--boot-timeout", type=int, default=40, help="seconds to wait for host UDP bind")
+    p_rag.add_argument("--client-boot-timeout", type=int, default=75, help="seconds for the client to connect")
+    p_rag.add_argument("--ragdoll-timeout", type=int, default=70, help="seconds to wait for the host to observe the ragdoll rising edge")
+    p_rag.add_argument("--hold-ms", type=int, default=20000, help="how long the client holds the ragdoll (ms) -- must cover both shots")
+    p_rag.add_argument("--shot-gap", type=int, default=5, help="seconds between the 2 host screenshots")
+    p_rag.add_argument("--memory-limit-gb", type=float, default=12.0, help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_rag.add_argument(flag, **kw)
+    p_rag.set_defaults(func=cmd_ragdollshot)
 
     args = ap.parse_args()
     args.func(args)

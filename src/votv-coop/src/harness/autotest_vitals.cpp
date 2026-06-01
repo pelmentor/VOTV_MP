@@ -43,6 +43,8 @@
 #include "ue_wrap/vitals.h"
 
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <string>
 
@@ -121,17 +123,105 @@ bool PuppetVisMeshIsVisible() {
     return *vis != 0;
 }
 
+// Aim the HOST player's camera at the slot-1 puppet's body, so an autonomous
+// screenshot (mp.py ragdollshot) actually FRAMES the falling puppet. The puppet
+// converges right next to the host but often off to the side / behind, out of the
+// forward FOV. Computes the look-at from the host camera (actor + ~60 eye height)
+// to the puppet's MESH world location (the limp body during the flop) and writes
+// the host controller's ControlRotation. Game thread; bounded.
+void AimHostAtPuppet() {
+    auto done = std::make_shared<std::atomic<int>>(0);
+    GT::Post([done] {
+        void* local = coop::players::Registry::Get().Local();
+        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        if (!local || !R::IsLive(local) || !puppet || !R::IsLive(puppet)) { done->store(1); return; }
+        void* ctrl = E::GetController(local);
+        if (!ctrl || !R::IsLive(ctrl)) { done->store(1); return; }
+        const ue_wrap::FVector h = E::GetActorLocation(local);
+        void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+        const ue_wrap::FVector p = (mesh && R::IsLive(mesh)) ? E::GetComponentLocation(mesh)
+                                                             : E::GetActorLocation(puppet);
+        const float dx = p.X - h.X, dy = p.Y - h.Y, dz = p.Z - (h.Z + 60.f);
+        const float horiz = std::sqrt(dx * dx + dy * dy);
+        const float yaw = std::atan2(dy, dx) * 57.29578f;
+        const float pitch = std::atan2(dz, horiz) * 57.29578f;
+        E::SetControlRotation(ctrl, ue_wrap::FRotator{pitch, yaw, 0.f});
+        UE_LOGI("ragdoll_test[host]: aimed host camera at puppet body (yaw=%.0f pitch=%.0f dist=%.0f)",
+                yaw, pitch, std::sqrt(dx * dx + dy * dy + dz * dz));
+        done->store(1);
+    });
+    WaitDone(done, 8000);
+}
+
+// Move the HOST ~280 units back from the puppet (same Z -> stays on the floor, no
+// fall) so the fallen body is AHEAD in the frame, not directly under the host's
+// own first-person legs (host + client spawn overlapping, so a straight-down view
+// is just the host's own feet occluding the body). One-shot at the rising edge.
+void PositionHostForShot() {
+    auto done = std::make_shared<std::atomic<int>>(0);
+    GT::Post([done] {
+        void* local = coop::players::Registry::Get().Local();
+        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        if (!local || !R::IsLive(local) || !puppet || !R::IsLive(puppet)) { done->store(1); return; }
+        const ue_wrap::FVector h = E::GetActorLocation(local);
+        const ue_wrap::FVector p = E::GetActorLocation(puppet);
+        float dx = h.X - p.X, dy = h.Y - p.Y;            // direction AWAY from the puppet
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1.f) { dx = 1.f; dy = 0.f; } else { dx /= len; dy /= len; }
+        const ue_wrap::FVector dst{ p.X + dx * 280.f, p.Y + dy * 280.f, h.Z };
+        E::SetActorLocation(local, dst);
+        UE_LOGI("ragdoll_test[host]: moved host to (%.0f,%.0f,%.0f) ~280u back from puppet for the shot",
+                dst.X, dst.Y, dst.Z);
+        done->store(1);
+    });
+    WaitDone(done, 8000);
+}
+
+// [probe ragdoll-geom] -- decisive welded-root-vs-real-fall diagnostic. RE
+// (wf_4f87bbb5) concluded the puppet kel body is VISIBLE-not-hidden during the
+// flop but DEGENERATE; the leading hypothesis is a WELDED ROOT (mesh_playerVisible
+// simulated without detaching from its parent -> the rig can't translate to the
+// floor). This samples whether the body's bounds + lowest bone actually DROP
+// toward the host's feet during the flop, or stay pinned at chest height.
+// Read-only (no leak on the tickless orphan). Game thread.
+void ProbePuppetRagdollGeometry(const char* tag) {
+    auto done = std::make_shared<std::atomic<int>>(0);
+    GT::Post([done, tag] {
+        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        void* local = coop::players::Registry::Get().Local();
+        if (!puppet || !R::IsLive(puppet)) { done->store(1); return; }
+        ue_wrap::FVector origin{}, extent{};
+        const bool okB = E::GetActorBounds(puppet, false, origin, extent);
+        const float bottom = origin.Z - extent.Z;
+        void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+        const float compZ = (mesh && R::IsLive(mesh)) ? E::GetComponentLocation(mesh).Z : 0.f;
+        float lowBoneZ = 0.f;
+        const bool okBone = (mesh && R::IsLive(mesh)) ? E::GetLowestBoneWorldZ(mesh, lowBoneZ) : false;
+        const float hostZ = (local && R::IsLive(local)) ? E::GetActorLocation(local).Z : 0.f;
+        UE_LOGI("[probe ragdoll-geom %s]: bounds origin.Z=%.0f bottom=%.0f(ok=%d) compZ=%.0f "
+                "lowestBoneZ=%.0f(ok=%d) hostActorZ=%.0f -> floor~%.0f (body FALLS if bottom/bone "
+                "approach the floor; WELDED if they stay ~compZ chest height)",
+                tag, origin.Z, bottom, okB ? 1 : 0, compZ, lowBoneZ, okBone ? 1 : 0,
+                hostZ, hostZ - 88.f);
+        done->store(1);
+    });
+    WaitDone(done, 8000);
+}
+
 // HOST side: observe the slot-1 puppet (the client's body). Confirm its
 // isRagdoll flips 0->1 (driven by the client over the wire) then 1->0.
 void ObserveOnHost() {
     UE_LOGI("ragdoll_test[host]: observer armed -- polling slot-1 puppet for a "
             "wire-driven ragdoll (up to 120 s)");
 
-    // Phase machine: 0 = waiting for puppet to exist; 1 = waiting for the
-    // RISING edge (isRagdoll 0->1); 2 = waiting for the FALLING edge (1->0).
+    // Phase machine: 0 = waiting for puppet to exist; 1 = puppet up, settle +
+    // frame the STANDING puppet (before-shot) then wait for the RISING edge
+    // (isRagdoll 0->1); 2 = waiting for the FALLING edge (1->0).
     int phase = 0;
     bool sawPuppet = false;
     bool sawFlop = false;
+    bool positioned = false;  // host moved back + aimed at the standing puppet
+    int settle = 0;           // poll ticks waited for the puppet to converge
     for (int attempt = 0; attempt < 120 && phase < 3; ++attempt) {
         auto done = std::make_shared<std::atomic<int>>(0);
         auto isRag = std::make_shared<int>(-1);  // -1 = puppet not live / unreadable
@@ -156,16 +246,34 @@ void ObserveOnHost() {
             }
             if (r >= 0) phase = 1;  // puppet readable -> start watching for the rising edge
         }
-        if (phase == 1 && r == 1) {
-            // Confirm the puppet mesh is PHYSICALLY flopping (not just the flag set).
-            sawFlop = PuppetMeshIsFlopping();
-            // Cascade-proof for the 2026-05-31 visual fix: the limp sim mesh must
-            // STAY visible after ClearSkeletalMesh suppresses the other body mesh.
-            const bool visMeshVisible = PuppetVisMeshIsVisible();
-            UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet isRagdoll 0->1 over the wire; "
-                    "puppet mesh physically flopping=%d, sim-mesh IsVisible=%d (1=no cascade-hide -> "
-                    "single clean limp body)", sawFlop ? 1 : 0, visMeshVisible ? 1 : 0);
-            phase = 2;
+        // phase 1: puppet is up. Settle (let it converge from the spawn placeholder),
+        // then move the host back + aim at the STANDING puppet and announce the
+        // before-shot is ready; then keep tracking until the ragdoll fires.
+        if (phase == 1 && !positioned) {
+            if (++settle >= 4) {
+                PositionHostForShot();
+                AimHostAtPuppet();
+                positioned = true;
+                UE_LOGI("ragdoll_test[host]: host positioned + aimed at STANDING puppet -- BEFORE-SHOT READY");
+                ProbePuppetRagdollGeometry("standing");  // baseline before the flop
+            }
+        } else if (phase == 1 && positioned) {
+            AimHostAtPuppet();  // keep the standing puppet framed until it flops
+            if (r == 1) {
+                // Confirm the puppet mesh is PHYSICALLY flopping (not just the flag).
+                sawFlop = PuppetMeshIsFlopping();
+                // Cascade-proof for the visual fix: the limp sim mesh must STAY
+                // visible after ClearSkeletalMesh suppresses the other body mesh.
+                const bool visMeshVisible = PuppetVisMeshIsVisible();
+                UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet isRagdoll 0->1 over the wire; "
+                        "puppet mesh physically flopping=%d, sim-mesh IsVisible=%d (1=no cascade-hide -> "
+                        "single clean limp body)", sawFlop ? 1 : 0, visMeshVisible ? 1 : 0);
+                phase = 2;
+            }
+        }
+        if (phase == 2 && r == 1) {
+            AimHostAtPuppet();  // track the falling body through the capture window
+            ProbePuppetRagdollGeometry("flop");  // does the body actually drop?
         }
         if (phase == 2 && r == 0) {
             UE_LOGI("ragdoll_test[host]: observed FALLING edge -- puppet isRagdoll 1->0 (recovered)");
@@ -242,9 +350,20 @@ void DriveOnClient() {
         }
     }
 
-    // Hold the ragdoll long enough for the host observer to catch the rising
-    // edge over the wire.
-    ::Sleep(5000);
+    // Hold the ragdoll. Default 5 s (enough for the host observer's rising-edge
+    // poll). VOTVCOOP_RAGDOLL_HOLD_MS overrides it -- the `mp.py ragdollshot`
+    // scenario sets a longer hold so the orchestrator can grab 2 host screenshots
+    // of the puppet WHILE it is flopped (proving it falls limp, not rigid).
+    int holdMs = 5000;
+    {
+        const std::string h = ReadEnv("VOTVCOOP_RAGDOLL_HOLD_MS");
+        if (!h.empty()) {
+            const int v = std::atoi(h.c_str());
+            if (v > 0 && v <= 120000) holdMs = v;
+        }
+    }
+    UE_LOGI("ragdoll_test[client]: holding ragdoll for %d ms", holdMs);
+    ::Sleep(holdMs);
 
     // Recover (== wakeup / get-up). Clears the local isRagdoll AnimBP gate;
     // the cleared bit rides the next pose so the host puppet gets up too.
