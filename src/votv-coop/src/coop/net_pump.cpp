@@ -99,14 +99,19 @@ bool g_wasRagdolling = false;
 uint64_t g_ragdollEmitCount = 0;
 
 // Death policy one-shot (2026-06-01, client-death OOM fix). When the LOCAL player
-// dies, the coop session must LEAVE so VOTV's native death->menu can tear the world
-// down unobstructed -- otherwise the session stays connected with thousands of prop
-// mirrors + puppets referencing the dying world, the teardown jams, the peer stays
-// stuck on the black death screen, and RSS balloons to OOM (MallocBinned2 null ->
-// per-frame AV flood). Latched so we stop the session exactly once per death; reset
-// by OnSessionStart so a rejoin re-arms it. File-scope for the same reason as the
-// edge detectors above.
+// dies we SYNCHRONOUSLY tear down ALL coop game-side state (destroy puppet actors +
+// drain Element state) + Stop the session, THEN -- as a safety net -- force a return
+// to the main menu ~20 s later if VOTV's native death->menu hasn't transitioned on its
+// own. Hands-on (2026-06-01) proved Session::Stop() ALONE is insufficient: the client
+// log froze exactly at the "LOCAL PLAYER DIED" line, i.e. the death world-reload
+// blocked the game thread immediately, so the NEXT-tick disconnect-edge cleanup never
+// ran -> our orphan puppet actors + mirrors stayed in the dying world -> still
+// balloons to OOM. So the teardown must happen synchronously on the death frame, and
+// a forced menu kick covers the case where the native transition still jams.
+// Latched/armed once per death; reset by OnSessionStart so a rejoin re-arms.
 bool g_localDeathHandled = false;
+bool g_menuForced = false;  // forced-return-to-menu safety net fired (one-shot)
+std::chrono::steady_clock::time_point g_deathAt{};  // when the local death was handled (arms the 5 s kick)
 
 // Game thread, ~send-rate: read the local player's pose. Pulled in from
 // harness.cpp 2026-05-28; full rationale comments preserved.
@@ -254,6 +259,8 @@ void OnSessionStart() {
     g_wasRagdolling = false;
     g_ragdollEmitCount = 0;
     g_localDeathHandled = false;
+    g_menuForced = false;
+    g_deathAt = {};
 }
 
 coop::RemotePlayer& Puppet(int slot) {
@@ -463,32 +470,79 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     coop::item_activate::TickConnect();
     coop::weather_sync::TickConnect();
 
+    // DEATH POLICY forced-menu BACKSTOP (user 2026-06-01). If we handled a local death
+    // and ~20 s later we are STILL in the gameplay world (`untitled` -- VOTV's native
+    // death->menu either jammed or respawned us, neither of which we want under the
+    // permadeath policy), force the transition with the standard UE4 `disconnect`
+    // console command (browses to the default/menu map). Runs OUTSIDE the g_netLocal
+    // gate so it fires even if death unpossessed the player (g_netLocal -> null). The
+    // 20 s window lets the player see the death before the kick. We latch g_menuForced
+    // ONLY on a DEFINITIVE world answer: if FindObjectByClass(World) returns null (world
+    // mid-transition at the probe instant) we DON'T latch and retry next tick, so a
+    // transient null can't permanently skip the backstop (audit 2026-06-01).
+    if (g_localDeathHandled && !g_menuForced &&
+        (std::chrono::steady_clock::now() - g_deathAt) >= std::chrono::seconds(20)) {
+        if (void* w = R::FindObjectByClass(P::name::WorldClass)) {
+            const bool stillInGameplay =
+                R::ToString(R::NameOf(w)).find(L"ntitled") != std::wstring::npos;
+            if (stillInGameplay) {
+                UE_LOGW("net: 20 s post-death + still in gameplay world (native death->menu jammed) "
+                        "-- forcing return to main menu via `disconnect`");
+                ue_wrap::engine::ExecuteConsoleCommand(L"disconnect");
+            } else {
+                UE_LOGI("net: 20 s post-death, already left the gameplay world -- no forced menu needed");
+            }
+            g_menuForced = true;  // latch only on a definitive world answer
+        }
+        // else: world pointer null = reload still in flight -> retry next tick (no latch)
+    }
+
     if (g_netLocal && !R::IsLive(g_netLocal)) { g_netLocal = nullptr; g_netLocalController = nullptr; }
     if (!g_netLocal) g_netLocal = coop::players::Registry::Get().Local();
     if (g_netLocal) {
-        // DEATH POLICY (2026-06-01 client-death OOM fix). If the local player has
-        // DIED, LEAVE the coop session NOW -- before VOTV's native death sequence
-        // tears the world down. The death screen shows for a beat (game thread still
-        // ticking -> this poll fires) BEFORE the synchronous world reload; if the
-        // session is still up at the reload, our observers + ~3000 prop mirrors +
-        // puppets churn against the dying world, the teardown jams, the peer is stuck
-        // on the black screen, and RSS balloons to OOM. Stopping here = the reload
-        // runs clean (like SP, which has working death) and the peer reaches the menu.
-        // One-shot (g_localDeathHandled), so it stops the session exactly once.
-        // Role-correct via Session::Stop: on a client it leaves that client; on the
-        // host it ends the session for everyone ([[project-coop-no-host-migration]]
-        // "HOST DEATH ENDS SESSION"). Permadeath-rejoinable: reconnect re-Starts +
-        // OnSessionStart re-arms. `dead` is true ONLY on real death (faint/KO/manual
-        // ragdoll leave it false), so a ragdolling-but-alive player is never dropped.
+        // DEATH POLICY (2026-06-01 client-death OOM fix, hardened after hands-on). On
+        // local death, SYNCHRONOUSLY tear down ALL coop game-side state on THIS frame,
+        // then Stop the session. Hands-on proved Session::Stop() alone is insufficient:
+        // the client log froze exactly at this line, i.e. VOTV's death world-reload
+        // blocked the game thread immediately, so the deferred disconnect-edge cleanup
+        // (next Tick) NEVER RAN -- our orphan puppet actors + Element mirrors stayed in
+        // the dying world and it still ballooned to OOM. So we destroy our puppet ACTORS
+        // + drain every subsystem's state HERE, before the reload, mirroring the per-slot
+        // + aggregate disconnect edges. One-shot (g_localDeathHandled). Role-correct via
+        // Session::Stop (client leaves itself; host ends the session for all -- "HOST
+        // DEATH ENDS SESSION"). Permadeath-rejoinable: reconnect re-Starts + OnSessionStart
+        // re-arms. `dead` is true ONLY on real death (faint/KO/manual-C leave it false).
         if (!g_localDeathHandled && session.connected()) {
             bool isRagdoll = false, dead = false;
             if (ue_wrap::engine::ReadMainPlayerRagdollState(g_netLocal, isRagdoll, dead) && dead) {
                 g_localDeathHandled = true;
-                UE_LOGW("net: LOCAL PLAYER DIED -- leaving coop session so VOTV's native death->menu "
-                        "runs unobstructed (role=%s; permadeath-rejoinable)",
+                g_deathAt = std::chrono::steady_clock::now();  // arm the 5 s forced-menu backstop
+                UE_LOGW("net: LOCAL PLAYER DIED -- tearing down coop state synchronously + leaving "
+                        "session (role=%s; permadeath-rejoinable)",
                         session.role() == coop::net::Role::Host ? "HOST (ends session)" : "CLIENT");
+                // Per-slot teardown: drop + destroy each puppet ACTOR (Destroy() also tears
+                // down its ragdoll body) + per-slot subsystem state.
+                for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
+                    coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
+                    if (g_puppets[slot].valid()) g_puppets[slot].Destroy();
+                    coop::prop_snapshot::CancelForSlot(slot);
+                    coop::remote_prop::OnDisconnectForSlot(slot);
+                    coop::item_activate::OnDisconnectForSlot(slot);
+                }
+                // Aggregate teardown: session-wide Element/dedup state (mirrors the
+                // g_wasConnected disconnect edge).
+                coop::remote_prop::ForceRelease();
+                coop::prop_lifecycle::OnDisconnect();
+                coop::prop_snapshot::OnDisconnect();
+                coop::npc_sync::OnDisconnect();
+                coop::item_activate::OnDisconnect();
+                coop::weather_sync::OnDisconnect();
+                // Reset the edge detectors so the next Tick (if any) doesn't re-run the
+                // disconnect edges against already-cleaned state.
+                g_wasConnected = false;
+                g_wasConnectedBySlot.fill(false);
                 session.Stop();
-                return;  // session down; subsequent ticks early-out + the disconnect edge tears down puppets/mirrors
+                return;
             }
         }
         // Re-resolve the controller only when missing or invalidated; the
