@@ -100,18 +100,28 @@ uint64_t g_ragdollEmitCount = 0;
 
 // Death policy one-shot (2026-06-01, client-death OOM fix). When the LOCAL player
 // dies we SYNCHRONOUSLY tear down ALL coop game-side state (destroy puppet actors +
-// drain Element state) + Stop the session, THEN -- as a safety net -- force a return
-// to the main menu ~20 s later if VOTV's native death->menu hasn't transitioned on its
-// own. Hands-on (2026-06-01) proved Session::Stop() ALONE is insufficient: the client
-// log froze exactly at the "LOCAL PLAYER DIED" line, i.e. the death world-reload
-// blocked the game thread immediately, so the NEXT-tick disconnect-edge cleanup never
-// ran -> our orphan puppet actors + mirrors stayed in the dying world -> still
-// balloons to OOM. So the teardown must happen synchronously on the death frame, and
-// a forced menu kick covers the case where the native transition still jams.
+// drain Element state) + Stop the session, THEN force a return to the MAIN MENU.
+//
+// Two hands-on iterations established the real shape (logs are the truth):
+//   1. Session::Stop() ALONE is insufficient -- our orphan puppet actors + Element
+//      mirrors stayed in the dying world (the deferred disconnect-edge cleanup never
+//      reached) -> teardown must be SYNCHRONOUS on the death frame (below).
+//   2. The forced kick used `disconnect`, which is a NO-OP in VOTV: single-player has
+//      no UE netdriver, so `disconnect` drops a connection that doesn't exist -- it
+//      does NOT browse to a map. The client's log proved it: 14 s after `disconnect`
+//      was issued it was STILL in the `untitled` gameplay world, ragdolling, until the
+//      possessed-player ragdoll leaked to OOM (~34 s post-death; "I'm too injured"
+//      toast on a black screen the whole time -- VOTV's native death never transitions
+//      to menu here, it just leaves you ragdolling). The CORRECT primitive is the SAME
+//      `open <map>` travel we boot with: the menu world is /Game/menu.menu (RE
+//      2026-05-30), so `open menu`. The game thread is NOT blocked during the dead
+//      window (the pump logs fine for 34 s), so a posted `open menu` travels normally
+//      and tears down `untitled` (+ the leaking ragdoll) well before OOM.
 // Latched/armed once per death; reset by OnSessionStart so a rejoin re-arms.
 bool g_localDeathHandled = false;
-bool g_menuForced = false;  // forced-return-to-menu safety net fired (one-shot)
-std::chrono::steady_clock::time_point g_deathAt{};  // when the local death was handled (arms the 5 s kick)
+bool g_menuForced = false;  // we have left the gameplay world post-death (one-shot latch)
+std::chrono::steady_clock::time_point g_deathAt{};  // when the local death was handled
+std::chrono::steady_clock::time_point g_lastMenuOpenAttempt{};  // last `open menu` issue (re-issue throttle)
 
 // Game thread, ~send-rate: read the local player's pose. Pulled in from
 // harness.cpp 2026-05-28; full rationale comments preserved.
@@ -261,6 +271,7 @@ void OnSessionStart() {
     g_localDeathHandled = false;
     g_menuForced = false;
     g_deathAt = {};
+    g_lastMenuOpenAttempt = {};
 }
 
 coop::RemotePlayer& Puppet(int slot) {
@@ -470,36 +481,50 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     coop::item_activate::TickConnect();
     coop::weather_sync::TickConnect();
 
-    // DEATH POLICY forced-menu BACKSTOP (user 2026-06-01). If we handled a local death
-    // and ~20 s later we are STILL in the gameplay world (`untitled` -- VOTV's native
-    // death->menu either jammed or respawned us, neither of which we want under the
-    // permadeath policy), force the transition with the standard UE4 `disconnect`
-    // console command (browses to the default/menu map). Runs OUTSIDE the g_netLocal
-    // gate so it fires even if death unpossessed the player (g_netLocal -> null). The
-    // 20 s window lets the player see the death before the kick. We latch g_menuForced
-    // ONLY on a DEFINITIVE world answer: if FindObjectByClass(World) returns null (world
-    // mid-transition at the probe instant) we DON'T latch and retry next tick, so a
-    // transient null can't permanently skip the backstop (audit 2026-06-01).
-    if (g_localDeathHandled && !g_menuForced &&
-        (std::chrono::steady_clock::now() - g_deathAt) >= std::chrono::seconds(20)) {
+    // DEATH POLICY forced-menu (user 2026-06-01; mechanism corrected after the 2nd
+    // hands-on -- see the g_localDeathHandled comment block for the full trail). On a
+    // handled local death we travel to the MAIN MENU via `open menu` (the verified
+    // /Game/menu.menu world; the SAME `open <map>` mechanism we boot gameplay with via
+    // `open untitled_1`). `disconnect` was wrong -- a no-op without a netdriver. Runs
+    // OUTSIDE the g_netLocal gate so it fires even if death unpossessed the player.
+    //
+    // Timing: the native flow demonstrably never recovers (the player just keeps
+    // ragdolling in `untitled`), so there is nothing to wait for -- every extra second
+    // only leaks more ragdoll memory toward the ~34 s OOM. Fire after a short grace (a
+    // brief death beat + lets the synchronous teardown settle), then RE-ISSUE every few
+    // seconds until we actually leave the gameplay world -- robust against a single
+    // dropped console command. Latch g_menuForced ONLY on the definitive answer that we
+    // left `untitled`; a transient null world (travel in flight at the probe instant)
+    // is NOT a latch -> retry next tick.
+    if (g_localDeathHandled && !g_menuForced) {
+        const auto now = std::chrono::steady_clock::now();
         if (void* w = R::FindObjectByClass(P::name::WorldClass)) {
             const bool stillInGameplay =
                 R::ToString(R::NameOf(w)).find(L"ntitled") != std::wstring::npos;
-            if (stillInGameplay) {
-                UE_LOGW("net: 20 s post-death + still in gameplay world (native death->menu jammed) "
-                        "-- forcing return to main menu via `disconnect`");
-                ue_wrap::engine::ExecuteConsoleCommand(L"disconnect");
-            } else {
-                UE_LOGI("net: 20 s post-death, already left the gameplay world -- no forced menu needed");
+            if (!stillInGameplay) {
+                g_menuForced = true;  // left the gameplay world -> at/loading the menu, done
+                UE_LOGI("net: post-death -- left the gameplay world (menu travel succeeded)");
+            } else if ((now - g_deathAt) >= std::chrono::seconds(4) &&
+                       (now - g_lastMenuOpenAttempt) >= std::chrono::seconds(3)) {
+                g_lastMenuOpenAttempt = now;
+                UE_LOGW("net: post-death + still in gameplay world -- forcing return to "
+                        "main menu via `open menu`");
+                ue_wrap::engine::ExecuteConsoleCommand(L"open menu");
             }
-            g_menuForced = true;  // latch only on a definitive world answer
+            // else: within the grace window or the re-issue cooldown -> wait
         }
-        // else: world pointer null = reload still in flight -> retry next tick (no latch)
+        // else: world pointer null = travel in flight -> retry next tick (no latch)
     }
 
     if (g_netLocal && !R::IsLive(g_netLocal)) { g_netLocal = nullptr; g_netLocalController = nullptr; }
     if (!g_netLocal) g_netLocal = coop::players::Registry::Get().Local();
-    if (g_netLocal) {
+    // The `!g_localDeathHandled` gate: the FIRST tick after death this block still runs
+    // (it is where death is detected + the synchronous teardown fires), but once handled
+    // we STOP all local-send work. Hands-on showed the ragdoll sender kept emitting 1140+
+    // RagdollPose packets on the stopped session post-death -- reading the dead player's
+    // pelvis ~100x/s while we are en route to the menu. Now the only per-tick work in the
+    // dead window is the forced-menu backstop above.
+    if (g_netLocal && !g_localDeathHandled) {
         // DEATH POLICY (2026-06-01 client-death OOM fix, hardened after hands-on). On
         // local death, SYNCHRONOUSLY tear down ALL coop game-side state on THIS frame,
         // then Stop the session. Hands-on proved Session::Stop() alone is insufficient:
@@ -516,7 +541,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             bool isRagdoll = false, dead = false;
             if (ue_wrap::engine::ReadMainPlayerRagdollState(g_netLocal, isRagdoll, dead) && dead) {
                 g_localDeathHandled = true;
-                g_deathAt = std::chrono::steady_clock::now();  // arm the 5 s forced-menu backstop
+                g_deathAt = std::chrono::steady_clock::now();  // arm the forced-menu (`open menu`) backstop
                 UE_LOGW("net: LOCAL PLAYER DIED -- tearing down coop state synchronously + leaving "
                         "session (role=%s; permadeath-rejoinable)",
                         session.role() == coop::net::Role::Host ? "HOST (ends session)" : "CLIENT");
