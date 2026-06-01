@@ -346,39 +346,23 @@ void RemotePlayer::SetTargetPose(const coop::net::PoseSnapshot& snap) {
               coop::net::DequantizeUnitFraction(snap.foodFrac),
               coop::net::DequantizeUnitFraction(snap.sleepFrac));
 
-    // v20 (Inc2b): drive the puppet's ragdoll/faint flop from the streamed
-    // kStateBitRagdoll. EDGE-DETECT ON THE WIRE BIT (the authoritative continuous
-    // per-peer state) via ragdollWireState_ -- dispatch the flop/recover exactly
-    // ONCE per wire transition. We deliberately do NOT reconcile against the
-    // puppet's ACTUAL physics state: the flop/recover are async, so a "fire while
-    // actual != desired" loop would re-dispatch every pose. The wire bit is
-    // continuous, so this still self-heals (a dropped edge latches on the next
-    // pose carrying the bit; Destroy() resets both latches so a recycled puppet
-    // re-converges).
-    //
-    // TWO latches (audit 2026-05-31): ragdollWireState_ = the wire-bit edge
-    // detector (fires the dispatch once); ragdollDispatched_ = whether the flop
-    // ACTUALLY engaged -> pauses pose-driving (ApplyToEngine early-return) so the
-    // physics owns the body. They DIFFER on the rising edge only when
-    // StartPuppetMeshRagdoll fails (e.g. the borrowed physics asset can't resolve):
-    // ragdollWireState_ still latches (no per-pose retry spam) but ragdollDispatched_
-    // stays false, so the puppet keeps POSE-DRIVING (follows the source upright)
-    // instead of freezing -- graceful degradation. Game thread (net_pump::Tick).
+    // Ragdoll display (2026-06-01 xray-actor rework): drive the puppet's ragdoll from
+    // the streamed kStateBitRagdoll. EDGE-DETECT on the wire bit via ragdollWireState_
+    // -- spawn the body / recover exactly ONCE per transition (the bit is continuous,
+    // so a dropped edge self-heals on the next pose; Destroy() resets the latches so a
+    // recycled puppet re-converges). On the rising edge we HIDE the puppet's kel
+    // meshes + spawn a SEPARATE playerRagdoll_C body that flops locally
+    // (StartRagdollDisplay); on the falling edge we destroy it + restore the meshes
+    // (StopRagdollDisplay). REPLACES the doomed own-mesh flop (the kel skin can't bind
+    // a borrowed physics asset -> rendered invisible) and is DEATH-FREE (ragdollMode is
+    // globally scoped + kills the host). Game thread (net_pump::Tick).
+    // See [[project-ragdoll-sync]].
     {
         const bool desiredRagdoll = (snap.stateBits & coop::net::kStateBitRagdoll) != 0;
         if (desiredRagdoll != ragdollWireState_) {
             ragdollWireState_ = desiredRagdoll;
-            if (desiredRagdoll) {
-                // Flop the puppet's OWN mesh (orphan-safe; VOTV's ragdollMode spawns
-                // a separate playerRagdoll_C physics actor that leaks +5 GB on our
-                // tickless orphan -- root-caused 2026-05-31, user chose mesh-sim).
-                // Pause pose-drive ONLY if the flop engaged.
-                ragdollDispatched_ = E::StartPuppetMeshRagdoll(actor_, savedCharMeshAsset_);
-            } else {
-                E::StopPuppetMeshRagdoll(actor_, savedCharMeshAsset_);
-                savedCharMeshAsset_ = nullptr;
-                ragdollDispatched_ = false;
-            }
+            if (desiredRagdoll) StartRagdollDisplay();
+            else                StopRagdollDisplay();
         }
     }
 
@@ -527,9 +511,10 @@ void RemotePlayer::Tick() {
     if (wantFlash != hurtFlashActive_) {
         hurtFlashActive_ = wantFlash;
         nameplate::SetFlash(this, wantFlash);  // nameplate red
-        // Body pulse: swap the puppet mesh to solid red on the rising edge,
-        // restore the originals on the falling edge (Minecraft-style hit flash).
-        // Composes with the pose drive + ragdoll (materials are render state).
+        // Body pulse: swap the puppet mesh to solid red on the rising edge, restore on
+        // the falling edge (Minecraft-style hit flash). The puppet's kel mesh stays
+        // VISIBLE while ragdolled (pelvis-attached to the invisible ragdoll body), so the
+        // flash composes fine with the ragdoll -- materials are render state.
         if (wantFlash) E::ApplyHurtFlashMaterial(actor_, hurtSavedMaterials_);
         else           E::RestoreHurtFlashMaterial(actor_, hurtSavedMaterials_);
         if (!wantFlash) hurtFlashEndMs_ = 0;
@@ -544,6 +529,12 @@ void RemotePlayer::Destroy() {
     // No AnimInstance field cleanup needed -- the AnimInstance dies with
     // the actor.
     nameplate::Unregister(this);  // drops + destroys the floating label
+    // Tear down the ragdoll display body FIRST (it's a SEPARATE actor that would
+    // otherwise outlive the puppet as an orphan). IsLiveByIndex-guarded so a
+    // GC-recycled address isn't mistaken for our body.
+    if (ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) E::DestroyActor(ragdollBody_);
+    ragdollBody_ = nullptr;
+    ragdollBodyIdx_ = -1;
     // IsLiveByIndex (consistent with valid()): if the puppet was GC-freed and
     // its address recycled, plain IsLive would pass and DestroyActor would
     // destroy the FOREIGN impostor at that address. The slot-identity compare
@@ -555,32 +546,70 @@ void RemotePlayer::Destroy() {
     interpFinishMs_ = 0;
     lastAlpha_ = 0.f;
     dirty_ = false;
-    ragdollWireState_ = false;   // v20: a recycled puppet starts un-ragdolled + re-converges
-    ragdollDispatched_ = false;
-    savedCharMeshAsset_ = nullptr;  // the mesh died with the actor -- no restore needed
+    ragdollWireState_ = false;   // a recycled puppet starts un-ragdolled + re-converges
+    ragdollActive_ = false;
     hurtFlashEndMs_ = 0;         // v20 Inc3: clear the hurt-flash (nameplate already unregistered)
     hurtFlashActive_ = false;
     hurtSavedMaterials_.clear(); // the mesh died with the actor -- no restore needed, drop stale ptrs
     UE_LOGI("RemotePlayer::Destroy: puppet + nameplate gone");
 }
 
+void RemotePlayer::StartRagdollDisplay() {
+    if (!actor_ || !R::IsLiveByIndex(actor_, internalIdx_)) return;
+
+    // Spawn an INVISIBLE playerRagdoll_C physics body co-located with the puppet (its
+    // own "plushy" mesh is hidden inside SpawnPlayerRagdollBody). If it fails, leave the
+    // puppet UPRIGHT + pose-driving (ragdollActive_ stays false) -- graceful. The body's
+    // Player @0x248 = this puppet; the spawn is DEATH-FREE (no ragdollMode).
+    const ue_wrap::FVector loc = E::GetActorLocation(actor_);
+    const ue_wrap::FRotator rot = E::GetActorRotation(actor_);
+    void* body = E::SpawnPlayerRagdollBody(actor_, loc, rot);
+    if (!body) {
+        UE_LOGW("RemotePlayer::StartRagdollDisplay: playerRagdoll_C spawn failed -- puppet stays upright (graceful)");
+        return;
+    }
+    ragdollBody_ = body;
+    ragdollBodyIdx_ = R::InternalIndexOf(body);
+
+    // PELVIS-attach the VISIBLE Dr. Kel puppet to the invisible ragdoll body so it
+    // tumbles WITH the physics (the user's "pelvis to pelvis attachment"). The kel skin
+    // stays visible -- it IS the funny ragdoll visual. No skeleton binding needed (rigid
+    // transform follow). If the attach fails, destroy the body + stay upright (graceful).
+    if (!E::AttachActorToRagdollBody(actor_, body)) {
+        UE_LOGW("RemotePlayer::StartRagdollDisplay: pelvis-attach failed -- destroying body, puppet stays upright");
+        E::DestroyActor(body);
+        ragdollBody_ = nullptr; ragdollBodyIdx_ = -1;
+        return;
+    }
+    ragdollActive_ = true;
+    UE_LOGI("RemotePlayer::StartRagdollDisplay: spawned invisible ragdoll body=%p, pelvis-attached the puppet -- it tumbles along", body);
+}
+
+void RemotePlayer::StopRagdollDisplay() {
+    // Detach the puppet (KeepWorld -- it stays where the flop left it; the next pose
+    // drives it back to the streamed pose) BEFORE destroying the body it's attached to.
+    if (actor_ && R::IsLiveByIndex(actor_, internalIdx_)) E::DetachActorFromRagdollBody(actor_);
+    // Destroy the invisible physics body (IsLiveByIndex-guarded against a recycled addr).
+    if (ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) E::DestroyActor(ragdollBody_);
+    ragdollBody_ = nullptr;
+    ragdollBodyIdx_ = -1;
+    ragdollActive_ = false;
+    UE_LOGI("RemotePlayer::StopRagdollDisplay: detached puppet + destroyed ragdoll body");
+}
+
 void RemotePlayer::ApplyToEngine() {
-    // v20 (Inc2b): while the puppet is RAGDOLLED, do NOT drive its transform. The
-    // puppet's skeletal mesh is an active PhysX ragdoll (ragdollMode spawned
-    // AplayerRagdoll_C); SetActorLocation-teleporting a simulating physics body
-    // every tick fights PhysX -> penetration/contact explosion -> unbounded solver
-    // allocation (+5 GB host RSS in ~5 s, root-caused 2026-05-31). Let the ragdoll
-    // own the body until the falling edge clears ragdollDispatched_; SetTargetPose
-    // keeps updating curPos_ meanwhile, so the first post-recover ApplyToEngine
-    // snaps the puppet to the owner's current pose. (The actor pivot stays put while
-    // ragdolled, which also keeps the nameplate anchored over the fallen body.)
-    // NOTE 2026-05-31: while flopped the actor pivot stays put (no follow -- a
-    // root-follow strobed the puppet). The double-image from the OTHER visible body
-    // (native ACharacter::Mesh @0x0280, the animated parent of the simulating
-    // mesh_playerVisible @0x4F8) is handled in StartPuppetMeshRagdoll, which CLEARS
-    // @0x0280's mesh asset during the flop so only the limp @0x4F8 renders (restored
-    // on recover). See [[project-ragdoll-sync]].
-    if (ragdollDispatched_) return;
+    // While the puppet is RAGDOLLED it is PELVIS-ATTACHED to the invisible ragdoll body
+    // (StartRagdollDisplay), so the engine syncs its transform per-frame -- do NOT
+    // pose-drive it here (a SetActorLocation would fight the attachment). SetTargetPose
+    // keeps updating curPos_ from the wire meanwhile, so the first post-recover
+    // ApplyToEngine resumes from the owner's current pose. Self-heal (audit 2026-06-01):
+    // if the body was GC-killed mid-ragdoll (e.g. a level transition reaped it), recover
+    // NOW (detach + clear) so the puppet isn't stuck attached to a dead component -- then
+    // fall through to normal pose-drive this tick. See [[project-ragdoll-sync]].
+    if (ragdollActive_) {
+        if (ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) return;
+        StopRagdollDisplay();  // body died under us -- detach, clear, resume pose-drive below
+    }
 
     // Wire convention + per-tick Z/yaw recipe (post-2026-05-25 puppet rework):
     //

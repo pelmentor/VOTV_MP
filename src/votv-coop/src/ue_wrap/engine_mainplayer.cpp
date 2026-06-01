@@ -114,99 +114,6 @@ void ResolveAddPlayerDamageFn() {
     g_addPlayerDamageFn = R::FindFunction(cls, P::name::MainPlayerAddPlayerDamageFn);
 }
 
-// Cached physics-disable UFunctions (SetAllBodiesSimulatePhysics on
-// USkeletalMeshComponent; SetSimulatePhysics on UPrimitiveComponent -- resolved
-// from their own classes since FindFunction does not climb super-classes).
-void* g_setAllBodiesSimFn = nullptr;
-void* g_setSimulatePhysicsFn = nullptr;
-void* g_setCollisionEnabledFn = nullptr;
-
-// Cached player-ragdoll PhysicsAsset + SetPhysicsAsset UFunction. The puppet's
-// visible skin has no physics asset of its own, so we borrow the player body's
-// ragdoll asset (kerfurOmegaV1_PhysicsAsset) and assign it before simulating.
-void* g_playerRagdollPA = nullptr;
-void* g_setPhysicsAssetFn = nullptr;
-
-void* ResolvePlayerRagdollPA() {
-    if (g_playerRagdollPA && R::IsLive(g_playerRagdollPA)) return g_playerRagdollPA;
-    g_playerRagdollPA = R::FindObject(P::name::PlayerRagdollPhysicsAssetName,
-                                      P::name::PhysicsAssetClass);
-    if (!g_playerRagdollPA) {
-        // One-shot WARN: a VOTV recook that renamed the asset would otherwise fail
-        // the puppet flop SILENTLY (audit 2026-05-31). FindObject is re-attempted
-        // each call (adapts to load timing) but has no name fallback, so a rename
-        // surfaces here -- the caller then keeps pose-driving (graceful degradation).
-        static bool sWarned = false;
-        if (!sWarned) { sWarned = true;
-            UE_LOGW("ragdoll: player ragdoll PhysicsAsset '%ls' not found -- puppet faint will "
-                    "show no flop (VOTV recook renamed it? update sdk_profile.h)",
-                    P::name::PlayerRagdollPhysicsAssetName);
-        }
-    }
-    return g_playerRagdollPA;
-}
-
-// Assign a PhysicsAsset to a skeletal-mesh component (builds the rigid bodies the
-// subsequent SetAllBodiesSimulatePhysics(true) then drives). bForceReInit=true so
-// the bodies are (re)created immediately. Null-check only (puppet mesh is live).
-void SetMeshPhysicsAsset(void* meshComp, void* physAsset) {
-    if (!meshComp || !physAsset) return;
-    if (!g_setPhysicsAssetFn) {
-        // SetPhysicsAsset is owned by USkinnedMeshComponent (the parent), NOT
-        // USkeletalMeshComponent -- FindFunction doesn't climb super-classes.
-        if (void* c = R::FindClass(L"SkinnedMeshComponent"))
-            g_setPhysicsAssetFn = R::FindFunction(c, P::name::SetPhysicsAssetFn);
-    }
-    if (!g_setPhysicsAssetFn) return;
-    ParamFrame f(g_setPhysicsAssetFn);
-    f.Set<void*>(L"NewPhysicsAsset", physAsset);
-    f.Set<bool>(L"bForceReInit", true);
-    Call(meshComp, f);
-}
-
-void ResolveSimFns() {
-    if (!g_setAllBodiesSimFn) {
-        if (void* c = R::FindClass(L"SkeletalMeshComponent"))
-            g_setAllBodiesSimFn = R::FindFunction(c, L"SetAllBodiesSimulatePhysics");
-    }
-    if (!g_setSimulatePhysicsFn) {
-        if (void* c = R::FindClass(L"PrimitiveComponent"))
-            g_setSimulatePhysicsFn = R::FindFunction(c, L"SetSimulatePhysics");
-    }
-}
-
-// Enable/disable PhysX simulation on a skeletal-mesh component (the puppet's own
-// mesh_playerVisible). SetAllBodiesSimulatePhysics walks the skin's physics-asset
-// bodies; passing true makes them flop from the current pose, false snaps them
-// back to AnimBP control. Null-check only (the puppet mesh is live).
-void SetMeshSimulation(void* meshComp, bool simulate) {
-    if (!meshComp) return;
-    ResolveSimFns();
-    if (!g_setCollisionEnabledFn) {
-        if (void* c = R::FindClass(L"PrimitiveComponent"))
-            g_setCollisionEnabledFn = R::FindFunction(c, L"SetCollisionEnabled");
-    }
-    // The puppet's mesh is set up for rendering only (the puppet design strips
-    // collision/physics); a physics ragdoll needs collision enabled or
-    // SetSimulatePhysics has no body to drive. Enable QueryAndPhysics(3) before
-    // simulating; restore NoCollision(0) on recover so the puppet doesn't block
-    // the world while animated.
-    if (g_setCollisionEnabledFn) {
-        ParamFrame f(g_setCollisionEnabledFn);
-        f.Set<uint8_t>(L"NewType", simulate ? uint8_t{3} : uint8_t{0});
-        Call(meshComp, f);
-    }
-    if (g_setAllBodiesSimFn) {
-        ParamFrame f(g_setAllBodiesSimFn);
-        f.Set<bool>(L"bNewSimulate", simulate);
-        Call(meshComp, f);
-    }
-    if (g_setSimulatePhysicsFn) {
-        ParamFrame f(g_setSimulatePhysicsFn);
-        f.Set<bool>(L"bSimulate", simulate);
-        Call(meshComp, f);
-    }
-}
 
 // Inc3 damage body-pulse: cached solid-red material + the UPrimitiveComponent
 // material UFunctions (GetNumMaterials / GetMaterial / SetMaterial).
@@ -508,16 +415,6 @@ bool ForceMainPlayerGetUp(void* mainPlayer) {
     return Call(mainPlayer, f);
 }
 
-bool WriteMainPlayerIsRagdoll(void* mainPlayer, bool isRagdoll) {
-    // TEST DRIVER ONLY -- flips isRagdoll @0x87F without invoking ragdollMode, so a
-    // remote peer's puppet flops over the wire WITHOUT spawning the leaky
-    // playerRagdoll_C on this possessed player. Not a production path.
-    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
-    const int32_t off = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
-    if (off < 0) return false;
-    *reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(mainPlayer) + off) = isRagdoll;
-    return true;
-}
 
 bool InvokeAddPlayerDamage(void* mainPlayer, float damage) {
     if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
@@ -526,57 +423,6 @@ bool InvokeAddPlayerDamage(void* mainPlayer, float damage) {
     ParamFrame f(g_addPlayerDamageFn);
     f.Set<float>(L"Damage", damage);  // damageLocation/fullBody/blood/Source zero-init
     return Call(mainPlayer, f);
-}
-
-bool StartPuppetMeshRagdoll(void* puppet, void*& outSavedCharMeshAsset) {
-    outSavedCharMeshAsset = nullptr;
-    if (!puppet || !R::IsLive(puppet)) return false;
-    auto* base = reinterpret_cast<uint8_t*>(puppet);
-    // Ragdoll the puppet's OWN mesh (we own it; no leaky playerRagdoll_C actor).
-    void* mesh = *reinterpret_cast<void**>(base + P::off::AmainPlayer_mesh_playerVisible);
-    if (!mesh) return false;
-    // The skin (kerfurOmega_KelSkin) carries no physics asset, so borrow the
-    // player body's ragdoll asset (kerfurOmegaV1_PhysicsAsset -- same kerfurOmega
-    // skeleton) to give the mesh rigid bodies, THEN simulate them. If the asset
-    // can't resolve (VOTV recook renamed it), report failure so the caller keeps
-    // pose-driving the puppet upright instead of freezing it (audit 2026-05-31).
-    void* pa = ResolvePlayerRagdollPA();
-    if (!pa) return false;
-    SetMeshPhysicsAsset(mesh, pa);
-    SetMeshSimulation(mesh, true);
-    // Sim engaged. Suppress the OTHER visible body: the puppet renders TWO
-    // overlapping meshes sharing the skin -- the native ACharacter::Mesh @0x0280
-    // (AnimBP-animated) and this mesh_playerVisible @0x4F8. Left visible, @0x0280
-    // stays upright/animated and double-images over the limp ragdoll (2026-05-31
-    // hands-on "тэпало по корам"). CLEAR @0x0280's mesh asset (renders nothing) so
-    // only the limp @0x4F8 shows -- we CAN'T hide @0x0280 (IsVisible cascades to
-    // its child @0x4F8 = the 2026-05-25 "no visible model" regression). Save the
-    // asset for restore on recover. Done AFTER the sim engages so a failed flop
-    // above never vanishes the body.
-    if (void* charMesh = *reinterpret_cast<void**>(base + P::off::ACharacter_Mesh)) {
-        outSavedCharMeshAsset = *reinterpret_cast<void**>(
-            reinterpret_cast<uint8_t*>(charMesh) + P::off::USkinnedMesh_SkeletalMesh);
-        ClearSkeletalMesh(charMesh);
-    }
-    // State marker the host observer / any AnimBP ragdoll-awareness reads.
-    const int32_t offRag = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
-    if (offRag >= 0) *reinterpret_cast<bool*>(base + offRag) = true;
-    return true;
-}
-
-bool StopPuppetMeshRagdoll(void* puppet, void* savedCharMeshAsset) {
-    if (!puppet || !R::IsLive(puppet)) return false;
-    auto* base = reinterpret_cast<uint8_t*>(puppet);
-    void* mesh = *reinterpret_cast<void**>(base + P::off::AmainPlayer_mesh_playerVisible);
-    SetMeshSimulation(mesh, false);  // mesh snaps back to AnimBP-driven animation
-    // Restore the native ACharacter::Mesh @0x0280 body cleared at flop start.
-    if (savedCharMeshAsset) {
-        if (void* charMesh = *reinterpret_cast<void**>(base + P::off::ACharacter_Mesh))
-            SetSkeletalMesh(charMesh, savedCharMeshAsset);
-    }
-    const int32_t offRag = ue_wrap::reflected_offset::MainPlayer_isRagdoll();
-    if (offRag >= 0) *reinterpret_cast<bool*>(base + offRag) = false;
-    return true;
 }
 
 }  // namespace ue_wrap::engine

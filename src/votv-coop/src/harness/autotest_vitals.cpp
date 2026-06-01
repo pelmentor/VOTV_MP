@@ -72,55 +72,31 @@ bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
     return d->load() != 0;
 }
 
-// Read whether the slot-1 puppet's mesh has any awake rigid body == it is
-// physically ragdolling (flopping). IsAnyRigidBodyAwake (UPrimitiveComponent) is
-// the reliable signal -- IsSimulatingPhysics(emptyBone) false-negatives on a
-// skeletal ragdoll. Returns false on a missing/unreadable puppet.
-bool PuppetMeshIsFlopping() {
+// Read whether the slot-1 puppet has a LIVE ragdoll display body whose mesh is
+// physically simulating (2026-06-01 xray-actor rework: the visible flop is a
+// SEPARATE playerRagdoll_C body, not the puppet's own mesh). IsAnyRigidBodyAwake on
+// the body's SkeletalMesh @0x0230 confirms it is actually flopping (true while
+// falling; goes false once it settles at rest). Returns false on a missing/dead body.
+bool PuppetHasFloppingRagdollBody() {
     auto done = std::make_shared<std::atomic<int>>(0);
-    auto awake = std::make_shared<int>(0);
-    GT::Post([done, awake] {
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
-        if (puppet && R::IsLive(puppet)) {
-            void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
+    auto ok = std::make_shared<int>(0);
+    GT::Post([done, ok] {
+        coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+        void* body = rp.RagdollBody();
+        if (body && R::IsLiveByIndex(body, rp.RagdollBodyIdx())) {  // recycle-proof (audit 2026-06-01)
+            // Aragdoll_C::SkeletalMesh @0x0230 -- the body mesh component.
+            void* mesh = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(body) + 0x0230);
             if (mesh && R::IsLive(mesh)) {
                 if (void* awakeFn = R::FindFunction(R::FindClass(L"PrimitiveComponent"), L"IsAnyRigidBodyAwake")) {
                     ue_wrap::ParamFrame f(awakeFn);
-                    if (ue_wrap::Call(mesh, f) && f.Get<bool>(L"ReturnValue")) *awake = 1;
+                    if (ue_wrap::Call(mesh, f) && f.Get<bool>(L"ReturnValue")) *ok = 1;
                 }
             }
         }
         done->store(1);
     });
     WaitDone(done, 8000);
-    return *awake != 0;
-}
-
-// Read whether the slot-1 puppet's VISIBLE mesh (mesh_playerVisible @0x4F8) is
-// still IsVisible() == true. The 2026-05-31 visual fix CLEARS the OTHER body mesh
-// (native ACharacter::Mesh @0x0280, which is @0x4F8's AttachParent) during the
-// flop so only the limp sim mesh renders; the load-bearing risk is that this
-// cascade-hides the child. IsVisible() walks the AttachParent bHiddenInGame chain,
-// so calling it on @0x4F8 proves NO cascade -- ClearSkeletalMesh touches only the
-// mesh asset (not visibility), so this must stay true. Returns false if unreadable.
-bool PuppetVisMeshIsVisible() {
-    auto done = std::make_shared<std::atomic<int>>(0);
-    auto vis = std::make_shared<int>(0);
-    GT::Post([done, vis] {
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
-        if (puppet && R::IsLive(puppet)) {
-            void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
-            if (mesh && R::IsLive(mesh)) {
-                if (void* visFn = R::FindFunction(R::FindClass(L"SceneComponent"), L"IsVisible")) {
-                    ue_wrap::ParamFrame f(visFn);
-                    if (ue_wrap::Call(mesh, f) && f.Get<bool>(L"ReturnValue")) *vis = 1;
-                }
-            }
-        }
-        done->store(1);
-    });
-    WaitDone(done, 8000);
-    return *vis != 0;
+    return *ok != 0;
 }
 
 // Aim the HOST player's camera at the slot-1 puppet's body, so an autonomous
@@ -224,16 +200,14 @@ void ObserveOnHost() {
     int settle = 0;           // poll ticks waited for the puppet to converge
     for (int attempt = 0; attempt < 120 && phase < 3; ++attempt) {
         auto done = std::make_shared<std::atomic<int>>(0);
-        auto isRag = std::make_shared<int>(-1);  // -1 = puppet not live / unreadable
+        auto isRag = std::make_shared<int>(-1);  // -1 = no puppet, 0 = up, 1 = ragdoll-displayed
         GT::Post([done, isRag] {
-            void* puppet = coop::net_pump::Puppet(1).GetActor();
-            if (!puppet || !R::IsLive(puppet)) { *isRag = -1; done->store(1); return; }
-            bool isRagdoll = false, dead = false;
-            if (E::ReadMainPlayerRagdollState(puppet, isRagdoll, dead)) {
-                *isRag = isRagdoll ? 1 : 0;
-            } else {
-                *isRag = -1;  // offsets not resolved yet
-            }
+            coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+            if (!rp.valid()) { *isRag = -1; done->store(1); return; }
+            // The xray-actor rework state: a spawned playerRagdoll_C display body
+            // (IsRagdollDisplayed) is the authoritative "this puppet is ragdolled"
+            // signal -- the puppet's own isRagdoll field is no longer driven.
+            *isRag = rp.IsRagdollDisplayed() ? 1 : 0;
             done->store(1);
         });
         WaitDone(done, 8000);
@@ -260,32 +234,29 @@ void ObserveOnHost() {
         } else if (phase == 1 && positioned) {
             AimHostAtPuppet();  // keep the standing puppet framed until it flops
             if (r == 1) {
-                // Confirm the puppet mesh is PHYSICALLY flopping (not just the flag).
-                sawFlop = PuppetMeshIsFlopping();
-                // Cascade-proof for the visual fix: the limp sim mesh must STAY
-                // visible after ClearSkeletalMesh suppresses the other body mesh.
-                const bool visMeshVisible = PuppetVisMeshIsVisible();
-                UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet isRagdoll 0->1 over the wire; "
-                        "puppet mesh physically flopping=%d, sim-mesh IsVisible=%d (1=no cascade-hide -> "
-                        "single clean limp body)", sawFlop ? 1 : 0, visMeshVisible ? 1 : 0);
+                // Confirm the SEPARATE playerRagdoll_C display body is PHYSICALLY
+                // flopping (not just the display latch) -- IsAnyRigidBodyAwake on the
+                // body mesh @0x0230 (true while it falls, false once it settles).
+                sawFlop = PuppetHasFloppingRagdollBody();
+                UE_LOGI("ragdoll_test[host]: observed RISING edge -- puppet ragdoll-displayed over the "
+                        "wire; separate playerRagdoll_C body physically flopping=%d", sawFlop ? 1 : 0);
                 phase = 2;
             }
         }
         if (phase == 2 && r == 1) {
-            AimHostAtPuppet();  // track the falling body through the capture window
-            ProbePuppetRagdollGeometry("flop");  // does the body actually drop?
+            AimHostAtPuppet();  // track the puppet (anchored over the flopping body)
         }
         if (phase == 2 && r == 0) {
-            UE_LOGI("ragdoll_test[host]: observed FALLING edge -- puppet isRagdoll 1->0 (recovered)");
+            UE_LOGI("ragdoll_test[host]: observed FALLING edge -- puppet ragdoll body destroyed (recovered)");
             phase = 3;
         }
         ::Sleep(1000);
     }
 
     if (phase >= 3) {
-        UE_LOGI("ragdoll_test[host]: VERDICT Inc2b e2e %s -- a client's local ragdoll "
-                "propagated to its host puppet (rising + falling) purely via the pose stream; "
-                "puppet mesh physically flopped=%d (own-mesh sim, leak-free)",
+        UE_LOGI("ragdoll_test[host]: VERDICT ragdoll e2e %s -- a client's local ragdoll "
+                "propagated to its host puppet (rising + falling) purely via the pose stream; the puppet "
+                "spawned a SEPARATE playerRagdoll_C body that physically flopped=%d (death-free, no host kill)",
                 sawFlop ? "PASS" : "PARTIAL (no flop)", sawFlop ? 1 : 0);
     } else if (!sawPuppet) {
         UE_LOGW("ragdoll_test[host]: VERDICT INCONCLUSIVE -- slot-1 puppet never resolved "
@@ -335,13 +306,18 @@ void DriveOnClient() {
         auto done = std::make_shared<std::atomic<int>>(0);
         void* mp = *local;
         GT::Post([mp, done] {
-            // TEST-SAFE driver: flip isRagdoll DIRECTLY instead of VOTV's real
-            // ragdollMode. ragdollMode spawns a playerRagdoll_C that leaks +5GB on
-            // the possessed player (the ship-blocker under separate RE); the wire
-            // bit kStateBitRagdoll reads isRagdoll, so a direct write still flops
-            // the HOST puppet -- without OOMing this driving client.
-            const bool ok = E::WriteMainPlayerIsRagdoll(mp, /*isRagdoll=*/true);
-            UE_LOGI("ragdoll_test[client]: wrote isRagdoll=1 DIRECTLY -> ok=%d (test-safe, no playerRagdoll_C; host puppet should flop now)", ok ? 1 : 0);
+            // FAITHFUL driver (2026-06-01): VOTV's REAL ragdollMode on the local
+            // possessed player -- exactly what the C-key faint does, so the CLIENT
+            // ragdolls LOCALLY too (the test now matches real play). The old direct
+            // isRagdoll write was a leak-era workaround; the +5GB was the prop
+            // re-snapshot leak (fixed 999708a), and the SP probe confirmed real
+            // ragdollMode is leak-free. The isRagdoll flip rides the wire's
+            // kStateBitRagdoll to the host, which pelvis-attaches its puppet to a
+            // playerRagdoll_C body. (true,false,false) = ragdoll, no faint screen,
+            // no death.
+            const bool ok = E::SetMainPlayerRagdollMode(mp, /*ragdoll=*/true, /*passOut=*/false, /*death=*/false);
+            UE_LOGI("ragdoll_test[client]: ragdollMode(true,false,false) on the LOCAL player -> ok=%d "
+                    "(real VOTV ragdoll -- client ragdolls locally; the flag rides the wire to the host puppet)", ok ? 1 : 0);
             done->store(1);
         });
         if (!WaitDone(done, 8000)) {
@@ -371,8 +347,9 @@ void DriveOnClient() {
         auto done = std::make_shared<std::atomic<int>>(0);
         void* mp = *local;
         GT::Post([mp, done] {
-            const bool ok = E::WriteMainPlayerIsRagdoll(mp, /*isRagdoll=*/false);
-            UE_LOGI("ragdoll_test[client]: wrote isRagdoll=0 DIRECTLY -> ok=%d (test-safe; host puppet should recover now)", ok ? 1 : 0);
+            const bool ok = E::ForceMainPlayerGetUp(mp);
+            UE_LOGI("ragdoll_test[client]: forceGetUp on the LOCAL player -> ok=%d (real recover; the cleared "
+                    "isRagdoll rides the wire so the host puppet detaches + destroys its ragdoll body)", ok ? 1 : 0);
             done->store(1);
         });
         WaitDone(done, 8000);

@@ -113,6 +113,14 @@ public:
     // True while the damage hurt-flash window is active (test/diagnostic seam).
     bool IsHurtFlashing() const { return hurtFlashActive_; }
 
+    // True while a ragdoll display body is spawned (test/diagnostic seam -- the
+    // ragdoll e2e observer checks this instead of the old own-mesh flop).
+    bool IsRagdollDisplayed() const { return ragdollActive_; }
+    // The spawned playerRagdoll_C body + its GUObjectArray index (for an
+    // IsLiveByIndex-guarded deref). For test verification only.
+    void* RagdollBody() const { return ragdollBody_; }
+    int32_t RagdollBodyIdx() const { return ragdollBodyIdx_; }
+
     void* actor() const { return actor_; }
 
 private:
@@ -120,6 +128,12 @@ private:
     // Tick() once per frame (whether or not interp is active -- avoids drift if
     // some other system moved the actor between frames; cheap).
     void ApplyToEngine();
+
+    // Ragdoll display lifecycle (xray-actor rework). StartRagdollDisplay: hide the
+    // puppet's two kel meshes + spawn a playerRagdoll_C body that flops locally.
+    // StopRagdollDisplay: destroy the body + restore the meshes. Both game-thread.
+    void StartRagdollDisplay();
+    void StopRagdollDisplay();
 
     // Linear LERP window. At 60 Hz send (~16.7 ms interval) this is ~4.5x the
     // interval -- a generous jitter buffer that handles LAN noise instantly
@@ -233,22 +247,24 @@ private:
     // clear -> MOVE_Walking=1. The kerfur AnimBP reads MovementMode
     // natively to gate the foot-IK alpha (useLegIK/rise).
     uint8_t          curStateBits_ = 0;
-    // v20 (Inc2b) ragdoll latches (both reset in Destroy()):
-    //   ragdollWireState_  -- the last WIRE-bit value we acted on (the edge
-    //                         detector; fires the flop/recover dispatch once per
-    //                         transition, no per-pose retry).
-    //   ragdollDispatched_ -- whether the flop ACTUALLY engaged -> pauses
-    //                         pose-driving (ApplyToEngine early-returns) so physics
-    //                         owns the body. Stays false if StartPuppetMeshRagdoll
-    //                         failed, so the puppet keeps pose-driving (graceful
-    //                         degradation, audit 2026-05-31) instead of freezing.
+    // Ragdoll display (2026-06-01 xray-actor rework, [[project-ragdoll-sync]]):
+    // when a remote player ragdolls we spawn an INVISIBLE playerRagdoll_C physics body
+    // (VOTV's own ragdoll, its "plushy" mesh hidden) and PELVIS-ATTACH the visible Dr.
+    // Kel puppet to it, so the kel tumbles WITH the physics -- a funny visual that is
+    // DEATH-FREE (ragdollMode kills the host) and needs no shared skeleton. All reset in
+    // Destroy().
+    //   ragdollWireState_ -- last WIRE-bit value acted on (edge detector; fires the
+    //                        spawn/recover dispatch once per transition, no retry).
+    //   ragdollActive_    -- the puppet is currently pelvis-attached to a body ->
+    //                        ApplyToEngine lets the attachment drive the transform
+    //                        instead of pose-driving it.
     bool             ragdollWireState_ = false;
-    bool             ragdollDispatched_ = false;
-    // The native ACharacter::Mesh @0x0280 skeletal mesh asset, saved when the flop
-    // CLEARS it (so only the limp mesh_playerVisible @0x4F8 renders -- no upright
-    // double-image) and restored on recover. null when not flopped. The puppet has
-    // TWO visible body meshes sharing the skin; see ue_wrap StartPuppetMeshRagdoll.
-    void*            savedCharMeshAsset_ = nullptr;
+    bool             ragdollActive_ = false;
+    // The spawned (invisible) playerRagdoll_C body (+ its GUObjectArray index for
+    // IsLiveByIndex safety across ticks). null/-1 when not ragdolled. The puppet is
+    // pelvis-attached to it; both are torn down on recover / Destroy().
+    void*            ragdollBody_ = nullptr;
+    int32_t          ragdollBodyIdx_ = -1;
     ue_wrap::FVector targetPos_{};
     float            targetYaw_ = 0.f;
     float            targetPitch_ = 0.f;

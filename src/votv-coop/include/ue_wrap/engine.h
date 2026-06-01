@@ -503,14 +503,6 @@ bool SetMainPlayerRagdollMode(void* mainPlayer, bool ragdoll, bool passOut, bool
 // relies on can't run on a tickless orphan).
 bool ForceMainPlayerGetUp(void* mainPlayer);
 
-// TEST DRIVER ONLY: write mainPlayer.isRagdoll @0x87F directly. The pose stream's
-// kStateBitRagdoll is derived from this field, so a direct write makes a REMOTE
-// peer's puppet flop WITHOUT invoking VOTV's real ragdollMode -- i.e. without
-// spawning the leaky AplayerRagdoll_C on this possessed player. NOT the production
-// faint/KO/C-key path (that is VOTV's own BP). Used by the autonomous ragdoll test
-// so the host-puppet visual smoke doesn't OOM the driving client. Game thread.
-bool WriteMainPlayerIsRagdoll(void* mainPlayer, bool isRagdoll);
-
 // AmainPlayer_C::"Add Player Damage"(Damage, damageLocation, fullBody, blood, Source)
 // -- the primary player-damage entry. vitals Inc3-WIRE: the OWNER peer invokes this on
 // its OWN POSSESSED mainPlayer_C when the host relays an enemy hit, so the damage runs
@@ -559,23 +551,24 @@ void WarmupHurtFlashCache();
 // then base Material, then any class). Returns nullptr if not loaded. Game thread.
 void* ResolveMaterialByName(const wchar_t* name);
 
-// Make the puppet flop: SetAllBodiesSimulatePhysics(true) on mesh_playerVisible
-// (@0x04F8) so the skin's physics asset simulates from its current pose, + set
-// isRagdoll=true as a state marker. ALSO clears the native ACharacter::Mesh
-// @0x0280's mesh asset (saved into outSavedCharMeshAsset) so ONLY the limp
-// simulating @0x4F8 renders during the flop -- @0x0280 is a SECOND visible body
-// sharing the skin and, left animated/upright, double-images over the ragdoll.
-// The caller pauses pose-driving while active so physics owns the body, and must
-// pass outSavedCharMeshAsset back to StopPuppetMeshRagdoll. Clears @0x0280 only
-// AFTER the sim engages, so a failed flop leaves the body visible (graceful).
-// Returns false on null/dead pawn or if the sim couldn't engage.
-bool StartPuppetMeshRagdoll(void* puppet, void*& outSavedCharMeshAsset);
+// Spawn VOTV's playerRagdoll_C ragdoll body for `ownerPlayer` (the puppet orphan) at
+// `location`/`rotation` as an INVISIBLE PHYSICS DRIVER: deferred spawn -> stamp Player
+// @0x248 (Expose-On-Spawn) -> Finish (BeginPlay self-configures the ragdoll skeleton)
+// -> StartBodySim -> HIDE its own mesh (the "plushy" the user rejected). DEATH-FREE:
+// never touches the owner's dead/isRagdoll (unlike ragdollMode, which is globally
+// scoped and kills the host). The visible Dr. Kel puppet is then pelvis-attached to it
+// (AttachActorToRagdollBody) so it tumbles along. Returns the spawned AActor*
+// (DestroyActor it on recover), or nullptr. See ue_wrap/engine_playerragdoll.cpp +
+// [[project-ragdoll-sync]]. Recipe proven by harness/autotest_ragdoll_spawn_probe.cpp.
+// Game thread only.
+void* SpawnPlayerRagdollBody(void* ownerPlayer, const FVector& location, const FRotator& rotation);
 
-// Recover: SetAllBodiesSimulatePhysics(false) on mesh_playerVisible so the mesh
-// snaps back to AnimBP-driven animation, restore the native ACharacter::Mesh
-// @0x0280 body (savedCharMeshAsset from StartPuppetMeshRagdoll), + clear isRagdoll.
-// The caller resumes pose-driving. Returns false on null/dead pawn. Game thread.
-bool StopPuppetMeshRagdoll(void* puppet, void* savedCharMeshAsset);
+// Attach `actor` (its RootComponent) to ragdoll `body`'s mesh at the PELVIS bone so it
+// rigidly follows the flopping pelvis per-frame ("pelvis to pelvis"). KeepWorld rules
+// (keeps the spawn-time co-location, then follows deltas). Returns false on failure.
+// DetachActorFromRagdollBody detaches it (KeepWorld). Game thread only.
+bool AttachActorToRagdollBody(void* actor, void* body);
+bool DetachActorFromRagdollBody(void* actor);
 
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the

@@ -986,16 +986,6 @@ inline constexpr const wchar_t* MainPlayerForceGetUpFn  = L"forceGetUp";
 // FName has spaces (a BP "Add Player Damage" event keeps them).
 inline constexpr const wchar_t* MainPlayerAddPlayerDamageFn = L"Add Player Damage";
 
-// The player body's ragdoll PhysicsAsset (the protagonist is a kerfurOmega; its
-// visible skin `kerfurOmega_KelSkin` carries NO physics asset of its own --
-// VOTV's real ragdoll is a separate physics-enabled actor). The puppet-own-mesh
-// faint (Inc2b) borrows this asset: SetPhysicsAsset on the puppet's
-// mesh_playerVisible, then SetAllBodiesSimulatePhysics(true) flops it. Resolved by
-// name via FindObject (probe 2026-05-31 enumerated the 14 loaded PhysicsAssets).
-inline constexpr const wchar_t* PlayerRagdollPhysicsAssetName = L"kerfurOmegaV1_PhysicsAsset";
-inline constexpr const wchar_t* PhysicsAssetClass             = L"PhysicsAsset";
-inline constexpr const wchar_t* SetPhysicsAssetFn             = L"SetPhysicsAsset";
-
 // Inc3 damage body-pulse: the puppet's skin (inst_kel4_*) exposes no drivable
 // tint param (probe 2026-05-31), so the hurt-flash SWAPS the body mesh materials
 // to an EXISTING pak material (no asset edit -- Principle 1), then restores the
