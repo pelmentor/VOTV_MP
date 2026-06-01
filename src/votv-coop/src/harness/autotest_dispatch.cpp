@@ -83,6 +83,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // Menu-travel command probe: solo, finds which command travels gameplay->menu
     // (for the client-death flee-to-menu fix). No connection needed.
     SpawnIf("VOTVCOOP_RUN_MENUTRAVEL_PROBE", "menu-travel probe", &MenuTravelProbeThread, role);
+
+    // Fog ON/OFF model + clear-path probe: solo. Forces fog on, samples
+    // finalFogDensity/thickFog/actors, then runs the RE'd clear sequence -- gates
+    // the host-authoritative weather fix (client mist while host clear). No connection.
+    SpawnIf("VOTVCOOP_RUN_FOG_PROBE", "fog probe", &FogProbeThread, role);
 }
 
 }  // namespace harness::autotest

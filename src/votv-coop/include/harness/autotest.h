@@ -173,4 +173,18 @@ DWORD WINAPI RagdollSpawnProbeThread(LPVOID arg);
 void RunMenuTravelProbe();
 DWORD WINAPI MenuTravelProbeThread(LPVOID arg);
 
+// Fog ON/OFF model + clear-path PROBE (2026-06-01, harness/autotest_fog_probe.cpp).
+// SINGLE instance, role-agnostic (plain single-player; NO connection). Gates the
+// host-authoritative weather fix (hands-on bug: client STRONG MIST while host
+// CLEAR). Forces fog ON via the cycle's own spawnFog()/superFogEvent() verbs,
+// samples finalFogDensity/thickFog/fogEventObject/superFog_C-count for ~12 s (=
+// the density-vs-target model that decides the wire design), then runs the RE'd
+// CLEAR sequence (destroy the rolling-fog + super-fog actors + zero density +
+// SetFogDensity()) and confirms the density stays ~0 with no fog actors. Proves
+// the clear-path mechanics + answers the thickFog-target question autonomously
+// before any protocol change. Gated by env VOTVCOOP_RUN_FOG_PROBE=1; launch via
+// `mp.py fogprobe` (solo). Emits FOG-FORCED READY / FOG-CLEARED READY markers.
+void RunFogProbe();
+DWORD WINAPI FogProbeThread(LPVOID arg);
+
 }  // namespace harness::autotest

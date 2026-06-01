@@ -1313,6 +1313,71 @@ def cmd_menutravel(args) -> None:
     sys.exit(0)
 
 
+def cmd_fogprobe(args) -> None:
+    """SOLO SP fog ON/OFF model + clear-path probe. Launches ONE host instance with
+    VOTVCOOP_RUN_FOG_PROBE=1 (no client). The probe forces fog ON via the cycle's own
+    spawnFog()/superFogEvent() verbs, samples finalFogDensity/thickFog/actor-presence
+    for ~12 s (the density-vs-target model that gates the wire design), then runs the
+    RE'd CLEAR sequence (destroy the rolling-fog + super-fog actors + zero density +
+    SetFogDensity()) and confirms it stays cleared. Captures a FOGGY then a CLEARED
+    screenshot; the decisive verdict (density evolution + 'VERDICT cleared=N') is in
+    the log tail. Confirms the clear-path mechanics + the thickFog-target question
+    before any protocol change is written."""
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "fog_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+
+    if kill_all() > 0:
+        log("note: pre-existing VotV instances killed before fogprobe")
+    deploy_all()
+
+    os.environ["VOTVCOOP_RUN_FOG_PROBE"] = "1"
+
+    log("--- HOST LAUNCH (solo fog probe) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb)
+
+    host_log = HOST_DIR / "votv-coop.log"
+    shots: list[Path] = []
+
+    # FOGGY shot -- fog forced on (rolling + super).
+    if _wait_for_log(host_log, "FOG-FORCED READY", args.probe_timeout, "HOST"):
+        time.sleep(1)
+        pf = shots_dir / "host_fog_forced.png"
+        if _capture_window(host_pid, pf):
+            shots.append(pf)
+            log(f"  FOGGY shot: {pf.name}")
+    else:
+        log("WARN: never saw FOG-FORCED READY -- check the host log tail below")
+        tail_log(host_log, 30, "HOST")
+
+    # CLEARED shot -- after the clear sequence.
+    if _wait_for_log(host_log, "FOG-CLEARED READY", args.clear_timeout, "HOST"):
+        time.sleep(1)
+        pc = shots_dir / "host_fog_cleared.png"
+        if _capture_window(host_pid, pc):
+            shots.append(pc)
+            log(f"  CLEARED shot: {pc.name}")
+    else:
+        log("WARN: never saw FOG-CLEARED READY")
+
+    # Let the probe finish so the VERDICT + sample evolution are in the log.
+    _wait_for_log(host_log, "fogprobe: DONE", 40, "HOST")
+    tail_log(host_log, 44, "HOST")
+
+    log("--- KILLING ---")
+    kill_all()
+
+    log("--- FOGPROBE VERDICT ---")
+    for p in shots:
+        log(f"  screenshot: {p}")
+    log("Read the [active #N] samples in the tail: if thickFog holds a stable high target "
+        "while finalFogDensity ramps toward it, the wire streams thickFog (single broadcast). "
+        "The 'VERDICT cleared=1' line proves destroy-actors+SetFogDensity is the host-auth clear.")
+    log(f"DONE: {len(shots)} screenshot(s) -> {shots_dir}")
+    sys.exit(0 if len(shots) >= 1 else 2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="VOTV coop orchestrator")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1465,6 +1530,17 @@ def main() -> None:
                               help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_menutravel.add_argument(flag, **kw)
     p_menutravel.set_defaults(func=cmd_menutravel)
+
+    p_fogprobe = sub.add_parser("fogprobe",
+                                help="SOLO SP probe: force fog on, sample density/target/actors, run the RE'd clear sequence -- gates the host-authoritative weather fix")
+    p_fogprobe.add_argument("--probe-timeout", type=int, default=150,
+                            help="seconds to wait for FOG-FORCED READY (covers boot into gameplay)")
+    p_fogprobe.add_argument("--clear-timeout", type=int, default=60,
+                            help="seconds to wait for FOG-CLEARED READY after the foggy shot")
+    p_fogprobe.add_argument("--memory-limit-gb", type=float, default=12.0,
+                            help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_fogprobe.add_argument(flag, **kw)
+    p_fogprobe.set_defaults(func=cmd_fogprobe)
 
     args = ap.parse_args()
     args.func(args)

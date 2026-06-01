@@ -470,6 +470,20 @@ inline constexpr size_t AdaynightCycle_enable_fog           = 0x0449;  // bool
 inline constexpr size_t AdaynightCycle_enable_superfog      = 0x044A;  // bool
 inline constexpr size_t AdaynightCycle_enable_rain          = 0x044B;  // bool
 
+// Phase 5W fog (2026-06-01, 4-agent RE workflow): fog is NOT the enable_* bits
+// -- those are persistent CONFIG gates ("rolls allowed"), NOT active-state. The
+// ACTIVE fog is (a) the rolling-fog event ACTOR AweatherFogController_C held in
+// fogEventObject, (b) any live AsuperFog_C, or (c) the height-fog DENSITY the
+// cycle's SetFogDensity() pushes from finalFogDensity into ExponentialHeightFog.
+// Host-authoritative clear = destroy the actors + zero finalFogDensity/thickFog +
+// SetFogDensity(). See research/findings/votv-weather-RE-* + the workflow output.
+inline constexpr size_t AdaynightCycle_ExponentialHeightFog = 0x0270;  // UExponentialHeightFogComponent*
+inline constexpr size_t AdaynightCycle_thickFog             = 0x0330;  // float (per-tick density TARGET)
+inline constexpr size_t AdaynightCycle_fogEventObject       = 0x0338;  // AweatherFogController_C* (rolling fog; presence == active)
+inline constexpr size_t AdaynightCycle_finalFogDensity      = 0x0418;  // float (active height-fog density pushed via SetFogDensity)
+inline constexpr size_t AdaynightCycle_fogProbability       = 0x0428;  // float (scheduler roll weight; host-side only)
+inline constexpr size_t AdaynightCycle_permanentFog         = 0x042D;  // bool (sticky-fog gamerule; re-arms the scheduler)
+
 // Phase 5W Inc-fix-2: AmainGamemode_C::redSky stash pointer for the
 // red-sky discrete event. Lazily filled by the gamemode's first
 // spawnRedSky call. Receiver reads this to find the existing
@@ -1121,6 +1135,12 @@ inline constexpr const wchar_t* DaynightCycleClass = L"daynightCycle_C";
 // Receiver spawns via BeginDeferredActorSpawnFromClass + FinishSpawningActor
 // (same pattern as remote_prop.cpp for inventory drops).
 inline constexpr const wchar_t* LightningStrikeClass = L"lightningStrike_C";
+
+// Phase 5W fog (2026-06-01): AsuperFog_C is the dense "super fog" event actor.
+// Unlike the rolling fog (held in fogEventObject@0x0338), the super-fog actor is
+// NOT stored on the cycle -- its existence IS its active state, so the receiver
+// finds + destroys live instances via FindObjectByClass / CountObjectsByClass.
+inline constexpr const wchar_t* SuperFogClass = L"superFog_C";
 
 // Scheduler UFunctions -- client INTERCEPTS these (PRE-cancel via the
 // multi-slot interceptor) so the client side never decides "rain now" / etc.
