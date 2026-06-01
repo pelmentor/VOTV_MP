@@ -74,6 +74,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // applies it to its own player; the streamed health drop flashes the host's slot-1
     // puppet -- proving the full reliable host->owner damage relay (no real enemy).
     SpawnIf("VOTVCOOP_RUN_PLAYERDMG_TEST", "PlayerDamage relay e2e", &PlayerDamageTestThread, role);
+    // Xray-ragdoll feasibility probe: SINGLE instance (plain SP, role-agnostic).
+    // Spawns playerRagdoll_C MANUALLY (no ragdollMode) + dumps it vs a real
+    // ragdollMode body -- decides whether the manual spawn is visible/simulating
+    // AND death-free (the whole xray-ragdoll direction hinges on it).
+    SpawnIf("VOTVCOOP_RUN_RAGDOLL_SPAWN_PROBE", "xray-ragdoll spawn probe", &RagdollSpawnProbeThread, role);
 }
 
 }  // namespace harness::autotest

@@ -1169,6 +1169,69 @@ def cmd_ragdollshot(args) -> None:
     sys.exit(0)
 
 
+def cmd_ragdollspawn(args) -> None:
+    """SP-SOLO xray-ragdoll feasibility probe. Launches ONE host instance with
+    VOTVCOOP_RUN_RAGDOLL_SPAWN_PROBE=1 (no client). In plain single-player the
+    probe spawns playerRagdoll_C MANUALLY (deferred spawn + set Player, NO
+    ragdollMode) then triggers a REAL ragdollMode body for comparison. Captures a
+    host screenshot of each so we can SEE whether the manual body is visible +
+    ragdolling AND whether the screen stays un-faded (no death). The decisive
+    verdict is in the log tail ([manual] vs [real] dumps + the Q1b death check)."""
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "ragdoll_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+
+    if kill_all() > 0:
+        log("note: pre-existing VotV instances killed before ragdollspawn")
+    deploy_all()
+
+    os.environ["VOTVCOOP_RUN_RAGDOLL_SPAWN_PROBE"] = "1"
+
+    log("--- HOST LAUNCH (solo xray-ragdoll probe) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb)
+
+    host_log = HOST_DIR / "votv-coop.log"
+    shots: list[Path] = []
+
+    # REAL body shot FIRST -- ground truth from VOTV's own ragdollMode (the probe
+    # runs the real experiment first to force-load the playerRagdoll_C BP class).
+    if _wait_for_log(host_log, "REAL-SHOT READY", args.probe_timeout, "HOST"):
+        time.sleep(1)  # let the camera aim settle
+        pr = shots_dir / "host_ragdoll_real.png"
+        if _capture_window(host_pid, pr):
+            shots.append(pr)
+            log(f"  REAL body shot: {pr.name}")
+    else:
+        log("WARN: never saw REAL-SHOT READY -- check the host log tail below")
+        tail_log(host_log, 30, "HOST")
+
+    # MANUAL body shot -- the playerRagdoll_C we spawned ourselves (no ragdollMode).
+    if _wait_for_log(host_log, "MANUAL-SHOT READY", args.real_timeout, "HOST"):
+        time.sleep(1)
+        pm = shots_dir / "host_ragdoll_manual.png"
+        if _capture_window(host_pid, pm):
+            shots.append(pm)
+            log(f"  MANUAL body shot: {pm.name}")
+    else:
+        log("WARN: never saw MANUAL-SHOT READY")
+
+    # Let the probe finish so the verdict (manual-vs-real dumps) is in the log.
+    _wait_for_log(host_log, "ragdollspawn: DONE", 40, "HOST")
+    tail_log(host_log, 44, "HOST")
+
+    log("--- KILLING ---")
+    kill_all()
+
+    log("--- RAGDOLLSPAWN VERDICT ---")
+    for p in shots:
+        log(f"  screenshot: {p}")
+    log("Read the [manual] vs [real] dumps in the tail above: manual is viable iff its body "
+        "IsVisible=1 + IsAnyRigidBodyAwake=1 + lowestBoneZ falls AND Q1b says DEATH-FREE.")
+    log(f"DONE: {len(shots)} screenshot(s) -> {shots_dir}")
+    sys.exit(0 if len(shots) >= 1 else 2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="VOTV coop orchestrator")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1301,6 +1364,17 @@ def main() -> None:
     p_rag.add_argument("--memory-limit-gb", type=float, default=12.0, help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_rag.add_argument(flag, **kw)
     p_rag.set_defaults(func=cmd_ragdollshot)
+
+    p_ragspawn = sub.add_parser("ragdollspawn",
+                                help="SOLO SP probe: spawn playerRagdoll_C manually (no ragdollMode) vs real ragdollMode -- decide xray-ragdoll feasibility")
+    p_ragspawn.add_argument("--probe-timeout", type=int, default=150,
+                            help="seconds to wait for MANUAL-SHOT READY (covers the save-load into gameplay)")
+    p_ragspawn.add_argument("--real-timeout", type=int, default=45,
+                            help="seconds to wait for REAL-SHOT READY after the manual shot")
+    p_ragspawn.add_argument("--memory-limit-gb", type=float, default=12.0,
+                            help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_ragspawn.add_argument(flag, **kw)
+    p_ragspawn.set_defaults(func=cmd_ragdollspawn)
 
     args = ap.parse_args()
     args.func(args)

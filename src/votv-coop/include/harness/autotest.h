@@ -148,4 +148,15 @@ DWORD WINAPI DmgHazardTestThread(LPVOID arg);
 void RunAutonomousPlayerDamageTest();
 DWORD WINAPI PlayerDamageTestThread(LPVOID arg);
 
+// Xray-ragdoll feasibility PROBE (2026-06-01, harness/autotest_ragdoll_spawn_probe.cpp).
+// SINGLE instance, role-agnostic (plain single-player; NO connection). Answers, by
+// observing live objects, whether VOTV's playerRagdoll_C can be spawned MANUALLY
+// (deferred spawn + set Player @0x248, NO ragdollMode) into a VISIBLE, PHYSICALLY
+// SIMULATING body WITHOUT triggering the player death/faint that ragdollMode's
+// global path causes -- then dumps a REAL ragdollMode-spawned body as the target
+// config to match. Decides the xray-ragdoll-actor implementation. Gated by env
+// VOTVCOOP_RUN_RAGDOLL_SPAWN_PROBE="1"; launch via `mp.py ragdollspawn` (solo).
+void RunRagdollSpawnProbe();
+DWORD WINAPI RagdollSpawnProbeThread(LPVOID arg);
+
 }  // namespace harness::autotest
