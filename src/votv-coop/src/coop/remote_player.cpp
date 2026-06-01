@@ -607,7 +607,16 @@ void RemotePlayer::ApplyToEngine() {
     // NOW (detach + clear) so the puppet isn't stuck attached to a dead component -- then
     // fall through to normal pose-drive this tick. See [[project-ragdoll-sync]].
     if (ragdollActive_) {
-        if (ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) return;
+        if (ragdollBody_ && R::IsLiveByIndex(ragdollBody_, ragdollBodyIdx_)) {
+            // The pelvis attach follows the body's POSITION, but the puppet is a
+            // character so its capsule stays UPRIGHT (kel slides + yaws but never
+            // tumbles). Drive the pelvis WORLD rotation onto the puppet each frame so
+            // the Dr. Kel skin tumbles WITH the flop too (user 2026-06-01). One cheap
+            // socket read + SetActorRotation; only while ragdolled.
+            ue_wrap::FRotator pr;
+            if (E::GetRagdollBodyPelvisRotation(ragdollBody_, pr)) E::SetActorRotation(actor_, pr);
+            return;
+        }
         StopRagdollDisplay();  // body died under us -- detach, clear, resume pose-drive below
     }
 

@@ -570,6 +570,11 @@ void* SpawnPlayerRagdollBody(void* ownerPlayer, const FVector& location, const F
 bool AttachActorToRagdollBody(void* actor, void* body);
 bool DetachActorFromRagdollBody(void* actor);
 
+// Read ragdoll `body`'s pelvis bone WORLD rotation so the caller can drive the kel
+// puppet's TUMBLE each frame -- the pelvis attach follows position but a character keeps
+// its capsule upright, so rotation must be applied explicitly. false on failure. GT only.
+bool GetRagdollBodyPelvisRotation(void* body, FRotator& outRot);
+
 // A long-lived UObject suitable as a WorldContextObject for the deferred-spawn
 // pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor). Tries the
 // GameInstance first (lives across map loads) and falls back to the World.

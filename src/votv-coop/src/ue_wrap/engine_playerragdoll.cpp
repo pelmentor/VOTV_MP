@@ -47,6 +47,12 @@ void* g_ragdollClass     = nullptr;
 void* g_setAllBodiesSimFn = nullptr;
 void* g_setSimPhysFn      = nullptr;
 void* g_setCollisionFn    = nullptr;
+// Per-frame pelvis-rotation read (the attach keeps the character capsule upright, so
+// we drive the tumble ourselves). The "pelvis" FName is stable across all ragdoll
+// bodies (one GNames entry), so cache the 8 bytes once + the GetSocketRotation fn.
+void* g_getSocketRotFn   = nullptr;
+uint8_t g_pelvisFName[8] = {};
+bool g_havePelvisFName   = false;
 
 void* ResolveRagdollClass() {
     if (g_ragdollClass && R::IsLive(g_ragdollClass)) return g_ragdollClass;
@@ -178,6 +184,29 @@ bool DetachActorFromRagdollBody(void* actor) {
     f.Set<uint8_t>(L"RotationRule", uint8_t{1});       // KeepWorld
     f.Set<uint8_t>(L"ScaleRule",    uint8_t{1});       // KeepWorld
     return Call(actor, f);
+}
+
+// Read ragdoll `body`'s PELVIS bone WORLD rotation. The pelvis attach follows the
+// body's POSITION but a character keeps its capsule UPRIGHT (so the kel only slides +
+// yaws, never tumbles) -- the caller drives this rotation onto the puppet each frame to
+// make the Dr. Kel skin tumble WITH the flop. Caches the pelvis FName (one GNames entry,
+// stable across bodies) + GetSocketRotation. Returns false if unresolved. Game thread.
+bool GetRagdollBodyPelvisRotation(void* body, FRotator& outRot) {
+    outRot = FRotator{};
+    if (!body || !R::IsLive(body)) return false;
+    void* mesh = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(body) + kAragdoll_SkeletalMesh);
+    if (!mesh || !R::IsLive(mesh)) return false;
+    if (!g_havePelvisFName) g_havePelvisFName = FindBoneFName(mesh, L"pelvis", g_pelvisFName);
+    if (!g_havePelvisFName) return false;
+    if (!g_getSocketRotFn) {
+        if (void* sc = R::FindClass(L"SceneComponent")) g_getSocketRotFn = R::FindFunction(sc, L"GetSocketRotation");
+    }
+    if (!g_getSocketRotFn) return false;
+    ParamFrame f(g_getSocketRotFn);
+    f.SetRaw(L"InSocketName", g_pelvisFName, sizeof(g_pelvisFName));
+    if (!Call(mesh, f)) return false;
+    outRot = f.Get<FRotator>(L"ReturnValue");
+    return true;
 }
 
 }  // namespace ue_wrap::engine
