@@ -8,6 +8,7 @@
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/prop_echo_suppress.h"
+#include "coop/prop_element_tracker.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -281,7 +282,7 @@ int FindSlotByKey(const coop::net::WireKey& k) {
 
 void ResolveAndStartDrive(int slot, const coop::net::WireKey& k) {
     const std::wstring keyW = KeyToWString(k);
-    void* prop = ue_wrap::prop::FindByKeyString(keyW);
+    void* prop = coop::prop_element_tracker::ResolveLiveActorByKey(keyW);
     if (!prop) {
         UE_LOGW("remote_prop: slot %d incoming PropPose key '%ls' (len=%d) -- no local match in GUObjectArray",
                 slot, keyW.c_str(), static_cast<int>(k.len));
@@ -419,7 +420,7 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         }
     }
     if (releasedSlot < 0) {
-        if (void* prop = ue_wrap::prop::FindByKeyString(keyW)) {
+        if (void* prop = coop::prop_element_tracker::ResolveLiveActorByKey(keyW)) {
             // Release arrived without a matching drive cache entry --
             // resolve fresh from the live world.
             propActor = prop;
@@ -627,7 +628,7 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
     // for unknown eids (legacy senders with elementId==0, or pre-A2
     // PropDestroy packets that never registered a mirror).
     UnregisterPropMirror(payload.elementId);
-    void* actor = ue_wrap::prop::FindByKeyString(keyW);
+    void* actor = coop::prop_element_tracker::ResolveLiveActorByKey(keyW);
     if (!actor) {
         UE_LOGI("remote_prop::OnDestroy: key '%ls' has no local actor (already destroyed or never spawned here)",
                 keyW.c_str());

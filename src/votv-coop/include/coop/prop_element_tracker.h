@@ -88,6 +88,52 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
 // not tracked.
 coop::element::ElementId GetPropElementIdForActor(void* actor);
 
+// ---- Key -> live-actor index --------------------------------------------
+// O(1) resolution of a wire Key string to the live local Aprop_C* (and the
+// chipPile/clump/trashBits keyed-interactable families). THE replacement for the
+// per-call ue_wrap::prop::FindByKeyString GUObjectArray walk that made the
+// connect-time re-snapshot de-dupe O(N_props x N_objects) -- ~2316 incoming
+// PropSpawns x a ~150k-object scan-with-wstring-alloc each ballooned the client
+// to multi-GB on connect (the [[project-bug-prop-resnapshot-leak]] ship-blocker).
+//
+// The index is maintained automatically by MarkPropElement (insert) +
+// UnmarkKnownKeyedProp / ReapDeadLocalPropElements (evict), so every keyed prop
+// that has a Prop Element is resolvable here.
+
+// Resolve `key` to a LIVE local actor via the maintained index ONLY (no scan).
+// Returns nullptr on a miss. Validates liveness via IsLiveByIndex (no deref of a
+// possibly-freed pointer) and lazily evicts a stale entry it finds.
+void* FindLiveActorByKey(const std::wstring& key);
+
+// Resolve `key` to a LIVE local actor: O(1) index first, then a cold
+// ue_wrap::prop::FindByKeyString GUObjectArray scan on an index miss so behavior
+// is identical to the pre-index path for not-yet-indexed props. This is the
+// drop-in replacement the wire receivers (remote_prop OnSpawn / drive / destroy)
+// call instead of FindByKeyString directly. Game-thread + worker safe.
+//
+// outFellBackToScan (optional): set true iff the index MISSED but the cold scan
+// FOUND a live actor -- i.e. the index was STALE for an existing prop (a
+// world-change purged the indexed actors faster than the steady-state re-seed
+// rebuilt the index). The snapshot de-dupe site passes this and calls
+// ReconcileIndexThrottled() on a true result so the rest of an in-flight de-dupe
+// burst resolves O(1) instead of each falling back to the O(N) scan (the
+// [[project-bug-prop-resnapshot-leak]] balloon). Left false on an index hit or a
+// genuine miss (prop absent -> nothing to re-seed).
+void* ResolveLiveActorByKey(const std::wstring& key, bool* outFellBackToScan = nullptr);
+
+// Self-heal for a stale key index detected mid-de-dupe: throttled (>=200 ms)
+// drain-dead + re-seed so the index reflects the CURRENT loaded world. Returns
+// true if it actually reconciled (false if throttled out). Game-thread only.
+// Called by the snapshot receiver when ResolveLiveActorByKey reports a stale
+// fallback; idempotent vs the net_pump world-change re-seed episode path.
+bool ReconcileIndexThrottled();
+
+// Refresh the index for `actor` to `key` (e.g. after a fuzzy-match rekey that
+// changed the actor's Key without re-running MarkPropElement). Idempotent;
+// no-op for empty/None keys. Keeps the index hot so a rekeyed held prop's
+// per-grab resolution stays O(1) instead of perpetually falling back to scan.
+void IndexActorKey(void* actor, const std::wstring& key);
+
 // ---- One-shot seed -------------------------------------------------------
 // GUObjectArray walk that populates KnownKeyedProps + creates Prop Element
 // shadows for every live keyed-interactable. Internal latch; safe to

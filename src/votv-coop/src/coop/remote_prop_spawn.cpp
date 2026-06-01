@@ -15,6 +15,7 @@
 #include "coop/element/element.h"
 #include "coop/net/protocol.h"
 #include "coop/prop_echo_suppress.h"
+#include "coop/prop_element_tracker.h"
 #include "coop/remote_prop.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
@@ -156,7 +157,19 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot) {
     // corrects mushroom-desync (each peer's spawner placed the same-Key
     // mushroom at a different position; snapshot bootstrap teleports
     // client's to match host's). 2026-05-24.
-    if (void* existing = ue_wrap::prop::FindByKeyString(keyW)) {
+    bool dedupeFellBack = false;
+    void* existing = coop::prop_element_tracker::ResolveLiveActorByKey(keyW, &dedupeFellBack);
+    if (dedupeFellBack) {
+        // The key index was STALE for this prop (a world-change purged the indexed
+        // actors and the slow steady-state re-seed hasn't caught up) -- this
+        // de-dupe paid an O(N) GUObjectArray scan. During the connect snapshot
+        // ~2300 PropSpawns arrive in a burst; without intervention EACH would scan
+        // -> O(N_props x N_objects) -> the client RSS balloons multi-GB. Self-heal:
+        // drain dead + re-seed the index NOW (throttled to once / 200 ms) so the
+        // rest of this same-tick burst resolves O(1). [[project-bug-prop-resnapshot-leak]]
+        coop::prop_element_tracker::ReconcileIndexThrottled();
+    }
+    if (existing) {
         // Skip the convergence write if THIS prop
         // is currently under active kinematic drive by the PropPose stream
         // (host is holding it). Otherwise the SetActorLocation here would
@@ -259,6 +272,16 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot) {
         } else {
             UE_LOGW("remote_prop::OnSpawn: Gap-I-1 rekey skipped -- setKey UFunction unresolved");
         }
+        // Index the fuzzy-matched actor under the WIRE key, unconditionally --
+        // resolution binds via our key->actor index, independent of whether the
+        // engine-level setKey write above succeeded. The fuzzy match (same class
+        // within 30 cm) already established this actor IS the host's prop, so the
+        // host's subsequent PropPose/PropDestroy under the wire key must resolve
+        // here O(1). Doing this only on setKey success (the prior placement) left
+        // a rare setKey failure falling back to a per-frame GUObjectArray scan for
+        // every packet on that held prop. keyW is validated non-empty/non-None at
+        // OnSpawn entry; fuzzy is live.
+        coop::prop_element_tracker::IndexActorKey(fuzzy, keyW);
         // 2026-05-25 mushroom fall-through fix (Gap-I-1 path): same reason as
         // exact-key. The fuzzy-matched local actor came from client's own
         // AmushroomSpawner_C::Spawn -> spawnedNaturally() -> NoCollision.
