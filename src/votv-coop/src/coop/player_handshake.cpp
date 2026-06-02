@@ -127,6 +127,8 @@ void SetLocalNickname(const std::wstring& nick) {
     if (!nick.empty()) g_localNick = SanitizeNickname(nick);
 }
 
+const std::wstring& LocalNickname() { return g_localNick; }
+
 void Reset() {
     for (auto& nick : g_remoteNickBySlot) nick = L"Remote player";
     g_joinSentBySlot.fill(false);

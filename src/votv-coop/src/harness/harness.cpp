@@ -16,6 +16,7 @@
 #include "coop/item_activate.h"
 #include "coop/players_registry.h"
 #include "coop/nameplate.h"
+#include "coop/roster.h"
 #include "coop/net/session.h"
 #include "coop/net_pump.h"
 #include "coop/npc_sync.h"
@@ -516,7 +517,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
 
             int tick = 0;
             while (!coop::shutdown::IsShuttingDown()) {
-                Post([] { coop::net_pump::Tick(g_session, 0.f); coop::nameplate::Update(); TickShutdownHooks(); });
+                Post([] { coop::net_pump::Tick(g_session, 0.f); coop::nameplate::Update(); coop::roster::Refresh(); TickShutdownHooks(); });
                 // Z-trace tick: every ~500 ms log the local actor.Z AND the
                 // local mesh_playerVisible.world.Z (the value the source now
                 // streams). This catches the "puppet jumps afloat after init"
@@ -608,7 +609,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             while (!coop::shutdown::IsShuttingDown()) {
                 Post([] {
                     coop::net_pump::InstallObservers(g_session);  // idempotent; net branch calls the same fn from net_pump::Tick
-                    coop::nameplate::Update();
+                    coop::nameplate::Update(); coop::roster::Refresh();
                     TickShutdownHooks();
                 });
                 ::Sleep(50);
@@ -639,7 +640,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
         int tick = 0;
         while (!coop::shutdown::IsShuttingDown()) {
-            Post([] { coop::net_pump::Tick(g_session, 250.f); coop::nameplate::Update(); TickShutdownHooks(); });
+            Post([] { coop::net_pump::Tick(g_session, 250.f); coop::nameplate::Update(); coop::roster::Refresh(); TickShutdownHooks(); });
             if (++tick % 120 == 0) {  // ~every 2 s at 60 Hz
                 Post([] {
                     UE_LOGI("netloopback: state=%d sent=%llu recv=%llu puppet=%d",
@@ -731,6 +732,9 @@ void Start() {
     // overlay installs the DXGI present hook (ImGui brings up on the first frame).
     // Visible to all players; dev categories gate on [dev] devkeys inside the menu.
     ui::dev_menu::Init();
+    // TAB player-list scoreboard (a second overlay surface, shown to everyone). The
+    // roster snapshot reads this session; Refresh() runs in the game-thread ticks.
+    coop::roster::SetSession(&g_session);
     if (!ui::imgui_overlay::Init()) {
         UE_LOGW("harness: imgui_overlay::Init failed -- F1 menu unavailable this run");
     }

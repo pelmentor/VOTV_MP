@@ -18,11 +18,18 @@
 //      the cursor back to the window center, and we force-hide the OS cursor on
 //      WM_SETCURSOR so it can never become a second cursor. ONE visible cursor.
 //      Keyboard nav (arrows + Enter) via ImGuiConfigFlags_NavEnableKeyboard.
+//   4. Surfaces: the overlay hosts TWO surfaces -- the F1 dev menu (ui::dev_menu,
+//      interactive) and the TAB player list (ui::scoreboard). The scoreboard is
+//      PASSIVE for clients (hold TAB, no cursor, keep playing) and INTERACTIVE for
+//      the host (toggle TAB, cursor, clickable -- the action board). "Capture"
+//      (cursor + input swallow + SetCursorPos no-op) follows whichever interactive
+//      surface is up (the menu always; the scoreboard only for the host).
 // DX12 is detected (GetDevice for ID3D11Device fails) and logged but not yet drawn.
 
 #include "ui/imgui_overlay.h"
 
 #include "ui/dev_menu.h"
+#include "ui/scoreboard.h"
 #include "ue_wrap/hook.h"
 #include "ue_wrap/log.h"
 
@@ -70,8 +77,23 @@ WNDPROC                 g_origWndProc = nullptr;
 std::atomic<bool> g_installed{false};   // hooks installed
 std::atomic<bool> g_imguiReady{false};  // first-present init done (DX11)
 std::atomic<bool> g_dx12Logged{false};  // logged the DX12-unsupported notice once
-std::atomic<bool> g_visible{false};     // menu shown (F1)
-std::atomic<bool> g_inFrame{false};     // render-thread inside the ImGui pass (shutdown waits on this)
+std::atomic<bool> g_visible{false};        // F1 dev menu shown
+std::atomic<bool> g_scoreboard{false};     // TAB player-list scoreboard shown (real TAB)
+std::atomic<bool> g_scoreboardForced{false};  // VOTVCOOP_SCOREBOARD_OPEN test override (survives focus reset)
+std::atomic<bool> g_inFrame{false};        // render-thread inside the ImGui pass (shutdown waits on this)
+
+// ---- surface state -----------------------------------------------------------
+// Two surfaces share this overlay: the F1 dev menu (always interactive) and the
+// TAB player list. The scoreboard is INTERACTIVE only for the host (the clickable
+// action board, Phase 2); clients peek passively. "Capture" = take the cursor +
+// swallow input + no-op UE4's recenter -- on whenever an interactive surface is up.
+inline bool MenuOpen()  { return g_visible.load(std::memory_order_relaxed); }
+inline bool ScoreOpen() { return g_scoreboard.load(std::memory_order_relaxed) ||
+                                 g_scoreboardForced.load(std::memory_order_relaxed); }
+inline bool AnyOpen()   { return MenuOpen() || ScoreOpen(); }
+inline bool CaptureActive() {
+    return MenuOpen() || (ScoreOpen() && ui::scoreboard::LocalIsHost());
+}
 
 void CreateRTV(IDXGISwapChain* sc) {
     if (g_rtv || !g_device) return;
@@ -89,14 +111,18 @@ void ReleaseRTV() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
 }
 
-// While the menu owns input, swallow UE4's per-tick cursor recenter so the single
-// real OS cursor tracks the mouse instead of being snapped to the window center.
+// While an interactive surface owns input, swallow UE4's per-tick cursor recenter
+// so the single real OS cursor tracks the mouse instead of snapping to the center.
 BOOL WINAPI SetCursorPosDetour(int x, int y) {
-    if (g_visible.load(std::memory_order_relaxed)) return TRUE;
+    if (CaptureActive()) return TRUE;
     return g_origSetCursorPos(x, y);
 }
 
 LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // Losing focus (Alt-Tab) must drop the scoreboard: a background window never
+    // receives the TAB WM_KEYUP, so the client hold-to-peek would stick open (and a
+    // host's interactive board would keep input captured). Fall through to the game.
+    if (msg == WM_KILLFOCUS) g_scoreboard.store(false, std::memory_order_relaxed);
     // F1 edge -> toggle the menu (consume the key so the game never sees F1). No
     // ShowCursor: VOTV already shows the OS cursor during play (it's the one that was
     // stuck at center); io.MouseDrawCursor=false + the SetCursorPos no-op simply lets
@@ -107,7 +133,24 @@ LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         g_visible.store(!g_visible.load(std::memory_order_relaxed), std::memory_order_relaxed);
         return 0;
     }
-    if (g_visible.load(std::memory_order_relaxed) && g_imguiReady.load(std::memory_order_acquire)) {
+    // TAB -> player list. HOST: press toggles the interactive (clickable) board.
+    // CLIENT: hold to peek (down shows, up hides). Either way swallow TAB so the
+    // game never acts on it. (Swallowed from ImGui too -- it's our surface key, not
+    // ImGui's focus-cycle key.)
+    if (msg == WM_KEYDOWN && wParam == VK_TAB) {
+        if (ui::scoreboard::LocalIsHost()) {
+            if ((lParam & (1 << 30)) == 0)  // ignore auto-repeat while held
+                g_scoreboard.store(!g_scoreboard.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        } else {
+            g_scoreboard.store(true, std::memory_order_relaxed);
+        }
+        return 0;
+    }
+    if (msg == WM_KEYUP && wParam == VK_TAB) {
+        if (!ui::scoreboard::LocalIsHost()) g_scoreboard.store(false, std::memory_order_relaxed);
+        return 0;
+    }
+    if (CaptureActive() && g_imguiReady.load(std::memory_order_acquire)) {
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
         // Force-hide the OS cursor over the client area: ImGui draws its own, so a
         // visible OS cursor would be a second one. SetCursor(NULL) wins regardless of
@@ -190,9 +233,13 @@ void RenderFrameGuarded() {
     __try {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();  // sets io.MousePos from the real OS cursor (WM_MOUSEMOVE / GetCursorPos)
+        // Draw the ImGui software cursor only for interactive surfaces (F1 menu, or
+        // the host scoreboard). The passive client scoreboard shows no cursor.
+        ImGui::GetIO().MouseDrawCursor = CaptureActive();
         ImGui::NewFrame();
 
-        ui::dev_menu::Render();
+        if (MenuOpen())  ui::dev_menu::Render();
+        if (ScoreOpen()) ui::scoreboard::Render();
 
         ImGui::Render();
         if (g_rtv) {
@@ -200,8 +247,9 @@ void RenderFrameGuarded() {
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        UE_LOGE("imgui_overlay: SEH in render frame -- hiding menu to protect the render thread");
+        UE_LOGE("imgui_overlay: SEH in render frame -- hiding surfaces to protect the render thread");
         g_visible.store(false, std::memory_order_relaxed);
+        g_scoreboard.store(false, std::memory_order_relaxed);
     }
 }
 
@@ -220,7 +268,7 @@ HRESULT STDMETHODCALLTYPE PresentDetour(IDXGISwapChain* sc, UINT sync, UINT flag
         // else: DX12 / not-ready -> just present normally.
     }
 
-    if (g_imguiReady.load(std::memory_order_acquire) && g_visible.load(std::memory_order_relaxed)) {
+    if (g_imguiReady.load(std::memory_order_acquire) && AnyOpen()) {
         g_inFrame.store(true, std::memory_order_release);
         if (!g_rtv) CreateRTV(sc);  // recreate after a resize
         RenderFrameGuarded();
@@ -325,6 +373,16 @@ bool Init() {
         g_visible.store(true, std::memory_order_relaxed);
         UE_LOGI("imgui_overlay: VOTVCOOP_MENU_OPEN=1 -- menu starts visible (screenshot test)");
     }
+    // VOTVCOOP_SCOREBOARD_OPEN=1 starts the TAB player list visible (the smoke can't
+    // hold/press TAB) -- autonomous screenshot of the roster.
+    char sbEnv[8] = {};
+    if (::GetEnvironmentVariableA("VOTVCOOP_SCOREBOARD_OPEN", sbEnv, sizeof(sbEnv)) > 0 &&
+        sbEnv[0] == '1') {
+        // Forced (not g_scoreboard) so it survives the host losing focus to the
+        // launching client window -- the WM_KILLFOCUS reset only clears real TAB.
+        g_scoreboardForced.store(true, std::memory_order_relaxed);
+        UE_LOGI("imgui_overlay: VOTVCOOP_SCOREBOARD_OPEN=1 -- scoreboard starts visible (screenshot test)");
+    }
     UE_LOGI("imgui_overlay: present hook installed (present=%p resize=%p) -- ImGui brings up "
             "on the first frame; press F1 in-game for the menu", g_presentTarget, g_resizeTarget);
     return true;
@@ -337,6 +395,8 @@ void Shutdown() {
     if (!g_installed.exchange(false)) return;
     // Stop new ImGui work + remove the hooks so no new Present/WndProc routes to us.
     g_visible.store(false, std::memory_order_relaxed);
+    g_scoreboard.store(false, std::memory_order_relaxed);
+    g_scoreboardForced.store(false, std::memory_order_relaxed);
     const bool wasReady = g_imguiReady.exchange(false);
     if (g_presentTarget) ue_wrap::hook::Uninstall(g_presentTarget);
     if (g_resizeTarget)  ue_wrap::hook::Uninstall(g_resizeTarget);

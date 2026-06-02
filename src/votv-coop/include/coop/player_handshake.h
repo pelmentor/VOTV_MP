@@ -43,6 +43,10 @@ namespace coop::player_handshake {
 // inbound peer nicknames, so both ends agree on the displayable form).
 void SetLocalNickname(const std::wstring& nick);
 
+// Read the local player's (sanitized) display name. Game thread only (returns a
+// reference to the game-thread-owned string). Used by the roster snapshot.
+const std::wstring& LocalNickname();
+
 // Reset per-slot caches. Called from event_feed::OnSessionStart so a
 // Session::Stop()/Start() in the same process sees clean state.
 void Reset();

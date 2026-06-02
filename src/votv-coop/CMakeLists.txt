@@ -175,6 +175,8 @@ add_library(votv-coop SHARED
     src/coop/dev/teleport_client.cpp
     src/ui/imgui_overlay.cpp
     src/ui/dev_menu.cpp
+    src/ui/scoreboard.cpp
+    src/coop/roster.cpp
     src/harness/harness.cpp
     src/harness/autotest.cpp
     src/harness/autotest_dispatch.cpp

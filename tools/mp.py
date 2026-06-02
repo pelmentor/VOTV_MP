@@ -1418,6 +1418,68 @@ def cmd_menushot(args) -> None:
     sys.exit(0 if shot else 2)
 
 
+def cmd_scoreshot(args) -> None:
+    """2-PEER screenshot proof of the TAB player list. Launches host + client with
+    VOTVCOOP_SCOREBOARD_OPEN=1 (an autonomous run can't hold/press TAB), waits for the
+    client to connect + announce its nick over the Join reliable, then captures the
+    HOST window -- the shot should show the roster table with BOTH rows ('Host (You)'
+    + 'Client'). Proves the roster snapshot reads real per-peer connection + nick
+    state and renders as a second overlay surface."""
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "menu_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    if kill_all() > 0:
+        log("note: pre-existing VotV instances killed before scoreshot")
+    deploy_all()
+    os.environ["VOTVCOOP_SCOREBOARD_OPEN"] = "1"
+
+    log("--- HOST LAUNCH (2-peer scoreboard shot) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb)
+    host_log = HOST_DIR / "votv-coop.log"
+    log(f"waiting up to {args.boot_timeout}s for host to bind UDP {args.port}...")
+    bound = False
+    for i in range(args.boot_timeout):
+        time.sleep(1)
+        if host_owns_udp(host_pid, args.port):
+            log(f"host bound UDP {args.port} after {i+1}s"); bound = True; break
+        if not any(p["PID"] == host_pid for p in list_votv()):
+            log("HOST DIED before binding UDP"); tail_log(host_log, 30, "HOST"); sys.exit(1)
+    if not bound:
+        log(f"FAIL: host did not bind UDP within {args.boot_timeout}s")
+        tail_log(host_log, 30, "HOST"); kill_all(); sys.exit(1)
+
+    log("--- CLIENT LAUNCH ---")
+    client_pid = launch_peer("client", args.port, "Client", peer="127.0.0.1",
+                             res_x=1280, res_y=720, monitor=2, tile_index=0,
+                             memory_limit_gb=args.memory_limit_gb)
+    client_log = CLIENT_DIR / "votv-coop.log"
+
+    log(f"waiting up to {args.probe_timeout}s for the client to connect...")
+    connected = False
+    for i in range(args.probe_timeout):
+        time.sleep(1)
+        if parse_log_markers(client_log)["assigned_slot"] is not None:
+            log(f"client connected after {i+1}s"); connected = True; break
+        if not any(p["PID"] == client_pid for p in list_votv()):
+            log("CLIENT DIED before connecting"); break
+    if not connected:
+        log("WARN: client never reached connected -- roster may show host only")
+    time.sleep(4)  # let the Join nickname + a roster refresh reach the host
+
+    shot = shots_dir / "host_scoreboard.png"
+    captured = _capture_window(host_pid, shot)
+    if captured:
+        log(f"  scoreboard shot: {shot.name}")
+    tail_log(host_log, 20, "HOST")
+    log("--- KILLING ---")
+    kill_all()
+    log("--- SCORESHOT VERDICT ---")
+    if captured and shot.exists():
+        log(f"Inspect {shot}: it should show 'Players  (2)' with rows 'Host (You)' and 'Client'.")
+    sys.exit(0 if captured else 2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="VOTV coop orchestrator")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1590,6 +1652,17 @@ def main() -> None:
                             help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_menushot.add_argument(flag, **kw)
     p_menushot.set_defaults(func=cmd_menushot)
+
+    p_scoreshot = sub.add_parser("scoreshot",
+                                 help="2-PEER: screenshot proof the TAB player list shows the server roster (VOTVCOOP_SCOREBOARD_OPEN=1)")
+    p_scoreshot.add_argument("--probe-timeout", type=int, default=150,
+                             help="seconds to wait for the client to connect")
+    p_scoreshot.add_argument("--boot-timeout", type=int, default=90,
+                             help="seconds to wait for host UDP bind")
+    p_scoreshot.add_argument("--memory-limit-gb", type=float, default=12.0,
+                             help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_scoreshot.add_argument(flag, **kw)
+    p_scoreshot.set_defaults(func=cmd_scoreshot)
 
     args = ap.parse_args()
     args.func(args)
