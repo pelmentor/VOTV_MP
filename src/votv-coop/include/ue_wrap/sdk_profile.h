@@ -1158,13 +1158,17 @@ inline constexpr const wchar_t* DaynightCycle_permaRainTimerFn  = L"permaRain_ti
 // block + drives setRainParameters internally (RE doc). intComs_triggerSnow
 // fans out to 53 BP listeners -- direct field write would miss them.
 // setWindParameters() is no-arg; reads cycle state, propagates to
-// AdirectionalWind_C. spawnFog/SetFogDensity are the fog applies.
+// AdirectionalWind_C. spawnFog spawns the rolling-fog actor (used by
+// coop/weather_fog for the host-authoritative mirror-spawn + suppressed on the
+// client). SetFogDensity is NOT used by the shipping fog path (the clear is a
+// plain K2_DestroyActor; density settles to the shared ambient via the cycle's
+// own ReceiveTick) -- the constant remains only for the dev fogprobe.
 inline constexpr const wchar_t* DaynightCycle_causeRainFn          = L"causeRain";
 inline constexpr const wchar_t* DaynightCycle_setRainPropertiesFn  = L"setRainProperties";
 inline constexpr const wchar_t* DaynightCycle_setWindParametersFn  = L"setWindParameters";
 inline constexpr const wchar_t* DaynightCycle_intComsTriggerSnowFn = L"intComs_triggerSnow";
 inline constexpr const wchar_t* DaynightCycle_spawnFogFn           = L"spawnFog";
-inline constexpr const wchar_t* DaynightCycle_setFogDensityFn      = L"SetFogDensity";
+inline constexpr const wchar_t* DaynightCycle_setFogDensityFn      = L"SetFogDensity";  // dev fogprobe only
 // 2026-05-27 Inc1 fix: setRainParticles is the BP function that DIRECTLY
 // activates / deactivates the UParticleSystemComponent rainEffect on the
 // cycle. causeRain triggers the BP transition (audio + ambient + bool flip)

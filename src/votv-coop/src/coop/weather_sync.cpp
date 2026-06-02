@@ -7,6 +7,7 @@
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/ini_config.h"
+#include "coop/weather_fog.h"
 #include "coop/weather_lightning.h"
 #include "coop/weather_redsky.h"
 #include "ue_wrap/call.h"
@@ -39,9 +40,10 @@ void* g_causeRainFn          = nullptr;
 void* g_setRainPropertiesFn  = nullptr;
 void* g_setWindParametersFn  = nullptr;
 void* g_intComsTriggerSnowFn = nullptr;
-void* g_spawnFogFn           = nullptr;
-void* g_setFogDensityFn      = nullptr;
 void* g_setRainParticlesFn   = nullptr;
+// Fog UFunctions (spawnFog / SetFogDensity) + all fog state moved to
+// coop/weather_fog.{h,cpp} (2026-06-01 host-authoritative fog). They were
+// resolved-but-dead here before; weather_fog now owns the fog substrate (P7).
 
 // Phase 5W Inc2 lightning lives in coop/weather_lightning.{h,cpp}.
 // Install() below calls coop::weather_lightning::TryResolve +
@@ -158,6 +160,9 @@ bool ReadCycleState(void* cycle, coop::net::WeatherStatePayload& out) {
     out.rainLightningChance  = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainLightningChance);
     out.rainDeactivateChance = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainDeactivateChance);
     out.rainWindSpeed        = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainWindSpeed);
+    // v23: stamp the host's active-fog bits (flags2). Fog is driven by event
+    // ACTORS, not the enable_* config bits, so the wire carries live actor presence.
+    coop::weather_fog::ReadHostFogState(cycle, out);
     return true;
 }
 
@@ -169,6 +174,8 @@ uint64_t SignaturePayload(const coop::net::WeatherStatePayload& p) {
     uint64_t h = 0xcbf29ce484222325ULL;
     auto mix = [&](uint64_t v) { h ^= v; h *= 0x100000001b3ULL; };
     mix(p.flags);
+    mix(p.flags2);   // v23: fog active-actor bits -- MUST be in the sig or a fog
+                     // on<->off that doesn't change rain is deduped away (silent-fail).
     mix(reinterpret_cast<const uint32_t&>(p.rainStrength));
     mix(reinterpret_cast<const uint32_t&>(p.rainLightningChance));
     mix(reinterpret_cast<const uint32_t&>(p.rainDeactivateChance));
@@ -277,10 +284,9 @@ bool TryResolveAllFunctions() {
         { P::name::DaynightCycle_setRainPropertiesFn,  &g_setRainPropertiesFn  },
         { P::name::DaynightCycle_setWindParametersFn,  &g_setWindParametersFn  },
         { P::name::DaynightCycle_intComsTriggerSnowFn, &g_intComsTriggerSnowFn },
-        { P::name::DaynightCycle_spawnFogFn,           &g_spawnFogFn           },
-        { P::name::DaynightCycle_setFogDensityFn,      &g_setFogDensityFn      },
         { P::name::DaynightCycle_setRainParticlesFn,   &g_setRainParticlesFn   },
     };
+    // (fog mutators spawnFog/SetFogDensity moved to weather_fog -- resolved there.)
 
     int sResolved = 0, mResolved = 0;
     for (auto& e : sched) {
@@ -292,8 +298,9 @@ bool TryResolveAllFunctions() {
         if (void* fn = R::FindFunction(cls, e.name)) { *e.out = fn; ++mResolved; }
     }
     // All 5 schedulers required for host broadcasts + client suppression.
-    // All 7 mutators required so the client can apply every state delta.
-    return sResolved == 5 && mResolved == 7;
+    // All 5 rain/snow/wind mutators required so the client can apply every state
+    // delta (fog spawnFog/SetFogDensity moved to weather_fog::Install).
+    return sResolved == 5 && mResolved == 5;
 }
 
 // [probe] eff_rain particle active-state read (UActorComponent::IsActive).
@@ -443,6 +450,13 @@ void Install(coop::net::Session* session) {
         // BeginDeferred + FinishSpawning on receive. Resolve lazily.
         coop::weather_lightning::TryResolve();
     }
+
+    // Host-authoritative FOG (2026-06-01). Resolves spawnFog + registers the
+    // echo-suppressed, role-gated spawnFog interceptor so the client can never make
+    // uncommanded fog. Gate our latch on its success: if the interceptor failed to
+    // register (table full) or the fog UFunction isn't resolved yet, do NOT latch --
+    // retry next NetPumpTick rather than leave the client unsuppressed.
+    if (!coop::weather_fog::Install(isHost)) return;
 
     g_installed = true;
 }
@@ -656,6 +670,31 @@ void TickConnect() {
         }
         // else: cycle still loading; retry next tick.
     }
+
+    // HOST fog-edge detector. The rolling-fog actor self-destructs on its Duration
+    // via its OWN ReceiveTick -- NO scheduler UFunction fires, so OnSchedulerPost
+    // MISSES the fog-END. Detect the fog-bit edge (HostFogStateChanged throttles to
+    // ~3 Hz internally; the super-fog probe walks GUObjectArray) and re-broadcast so
+    // the client clears its mirror. Host-only + cheap when nothing changed.
+    {
+        auto* s = g_session.load(std::memory_order_acquire);
+        if (s && s->connected() && s->role() == coop::net::Role::Host && g_installed) {
+            void* cycle = ResolveCycle();
+            if (cycle && coop::weather_fog::HostFogStateChanged(cycle)) {
+                coop::net::WeatherStatePayload p{};
+                if (ReadCycleState(cycle, p)) {
+                    const uint64_t sig = SignaturePayload(p);
+                    const uint64_t storeSig = (sig == kNoSendYet) ? (kNoSendYet - 1) : sig;
+                    if (g_lastSentSig.load(std::memory_order_acquire) != storeSig) {
+                        s->SendReliable(coop::net::ReliableKind::WeatherState, &p, sizeof(p));
+                        g_lastSentSig.store(storeSig, std::memory_order_release);
+                        UE_LOGI("weather: host fog-edge re-broadcast flags=0x%02X flags2=0x%02X",
+                                p.flags, p.flags2);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void OnDisconnect() {
@@ -684,6 +723,7 @@ void OnDisconnect() {
     // run-time role check.
     coop::weather_lightning::OnDisconnect();
     coop::weather_redsky::OnDisconnect();
+    coop::weather_fog::OnDisconnect();
     // Clear g_installed so the next session's Install() call can re-enter
     // and re-register lightning + red-sky observers. The other per-feature
     // flags (g_observersRegistered, g_interceptorsRegistered) stay set --
@@ -766,15 +806,11 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
     // Step A: config-bit direct writes (static config bools; no BP
     // listeners that need fan-out -- the dump shows no Set* UFunctions
     // for these bits, so this is the canonical write path, not a bypass).
+    // (enable_fog / enable_superfog moved to weather_fog::ApplyFromHost below --
+    // fog is actor-driven, so those bits ride with the actor assert, not here.)
     if (((curFlags ^ newFlags) & kEnableRain) != 0)
         *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enable_rain) =
             (newFlags & kEnableRain) != 0;
-    if (((curFlags ^ newFlags) & kEnableFog) != 0)
-        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enable_fog) =
-            (newFlags & kEnableFog) != 0;
-    if (((curFlags ^ newFlags) & kEnableSuperfog) != 0)
-        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enable_superfog) =
-            (newFlags & kEnableSuperfog) != 0;
     if (((curFlags ^ newFlags) & kEnableSunlight) != 0)
         *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enableSunlight) =
             (newFlags & kEnableSunlight) != 0;
@@ -843,9 +879,16 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
         ue_wrap::Call(cycle, f);
     }
 
-    UE_LOGI("weather: applied flags 0x%02X -> 0x%02X rain=%.2f lc=%.2f "
+    // v23 host-authoritative FOG: assert the host's fog-ACTOR presence -- destroy a
+    // stray rolling/super fog actor on host-clear, mirror-spawn on host-fog -- and
+    // mirror the enable_fog/enable_superfog/permanentFog config bits. UNCONDITIONAL
+    // (MTA DoPulse, NOT diff-gated): the connect-edge apply must clear a pre-existing
+    // client fog even when the enable bits already match the host.
+    coop::weather_fog::ApplyFromHost(cycle, payload);
+
+    UE_LOGI("weather: applied flags 0x%02X -> 0x%02X flags2=0x%02X rain=%.2f lc=%.2f "
             "dc=%.2f ws=%.2f (rain-tx=%d snow-tx=%d scalars-changed=%d)",
-            curFlags, newFlags,
+            curFlags, newFlags, payload.flags2,
             payload.rainStrength, payload.rainLightningChance,
             payload.rainDeactivateChance, payload.rainWindSpeed,
             (newRain != curRain) ? 1 : 0,

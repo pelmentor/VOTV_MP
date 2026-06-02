@@ -260,7 +260,13 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // fused into one per-frame ragdoll packet). ParseHeader rejects pre-v22 peers so a
 // v21 host (which has no RagdollPose dispatch) is a visible version mismatch rather
 // than a silently-dropped packet.
-inline constexpr uint16_t kProtocolVersion = 22;
+// v23 (2026-06-01): WeatherStatePayload gains a fog flags2 byte (active-fog bits
+// kFogActive/kSuperFogActive/kPermanentFog) for host-authoritative fog. Fog is
+// driven by event ACTORS (AweatherFogController_C / AsuperFog_C), not the config
+// enable_* bits -- the wire now carries actor PRESENCE so the client can destroy a
+// stray fog actor on host-clear + mirror-spawn on host-fog. No wire-size change
+// (the byte reuses a former _pad slot); ParseHeader rejects pre-v23 peers.
+inline constexpr uint16_t kProtocolVersion = 23;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -1032,14 +1038,15 @@ struct WeatherStatePayload {
     // Registry::Get(senderElementId) -> Player::PeerSlot() == 0 for the
     // host trust-boundary; drops if mirror missing OR PeerSlot != 0.
     uint32_t senderElementId;
-    uint8_t  flags;              // see bit layout above
-    uint8_t  _pad[3];            // (v16: senderContext byte removed; coalesced into pad) 4-byte align the float block
+    uint8_t  flags;              // see weather_flags bit layout above
+    uint8_t  flags2;             // v23: fog_flags2 (active-fog actor presence; see below)
+    uint8_t  _pad[2];            // (v23: flags2 reused 1 of the 3 v16 pad bytes) 4-byte align the float block
     float    rainStrength;        // AdaynightCycle_C::rainStrength @0x0404
     float    rainLightningChance; // AdaynightCycle_C::rainLightningChance @0x0408
     float    rainDeactivateChance;// AdaynightCycle_C::rainDeactivateChance @0x040C
     float    rainWindSpeed;       // AdaynightCycle_C::rainWindSpeed @0x041C
 };
-static_assert(sizeof(WeatherStatePayload) == 24, "WeatherStatePayload must be 24 bytes (v16)");
+static_assert(sizeof(WeatherStatePayload) == 24, "WeatherStatePayload must be 24 bytes (v23: flags2 reuses a pad byte)");
 static_assert(sizeof(WeatherStatePayload) <= 256 - 20 - 8,
               "WeatherStatePayload must fit in one reliable datagram");
 
@@ -1053,6 +1060,18 @@ inline constexpr uint8_t kEnableSunlight  = 0x20;
 inline constexpr uint8_t kEnableMoonlight = 0x40;
 inline constexpr uint8_t kPermanentRain   = 0x80;
 }  // namespace weather_flags
+
+// v23 fog active-state bits (WeatherStatePayload::flags2). Distinct from the
+// kEnableFog/kEnableSuperfog CONFIG bits in `flags` above: those are persistent
+// "rolls allowed" gates, NOT active fog. Fog is rendered by event ACTORS, so the
+// host stamps the ACTORS' live presence here and the client asserts it (destroy a
+// stray fog actor on host-clear; mirror-spawn on host-fog). See
+// research/findings/votv-weather-RE-* + coop/weather_fog.{h,cpp}.
+namespace fog_flags2 {
+inline constexpr uint8_t kFogActive      = 0x01;  // host has a live rolling-fog actor (AweatherFogController_C @ cycle->fogEventObject)
+inline constexpr uint8_t kSuperFogActive = 0x02;  // host has a live AsuperFog_C
+inline constexpr uint8_t kPermanentFog   = 0x04;  // host's permanentFog gamerule (re-arms the scheduler)
+}  // namespace fog_flags2
 
 // Phase 5W Inc-fix-2 (2026-05-27): red sky one-shot/toggle event. Lives on
 // AmainGamemode_C; receiver invokes the same UFunction chain (spawnRedSky
