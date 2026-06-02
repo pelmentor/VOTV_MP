@@ -20,10 +20,12 @@
 // existing grabbing_actor pose stream carries the item into the collector's
 // hands, and PropRelease/PropDestroy unwind it like any held prop.
 //
-// CRASH-SAFE: Aprop_C ONLY. The transient self-morphing chip/clump
-// (non-Aprop_C) are never broadcast/driven here -- driving them is the
-// reverted-2a use-after-free ([[project-bug-trash-chippile-uaf-crash]]); they
-// need the MTA attach model instead, a separate follow-up.
+// CRASH-SAFE for the non-Aprop_C garbageClump/chipPile (the actual trash): we
+// DO broadcast them, but the receiver never runs physics on them. GetStaticMesh
+// returns null for non-Aprop_C, so the clump mirror spawns physics-free and is
+// driven KINEMATICALLY (per-tick SetActorLocation, no mesh) -- the inverse of
+// the reverted-2a use-after-free, which resolved their real mesh and physics-
+// drove a self-morphing actor. [[project-bug-trash-chippile-uaf-crash]]
 
 #pragma once
 

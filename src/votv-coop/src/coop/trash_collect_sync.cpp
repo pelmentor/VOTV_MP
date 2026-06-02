@@ -32,10 +32,13 @@ namespace PT = coop::prop_element_tracker;
 bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     if (!heldActor || !s || !s->connected()) return false;
     if (!R::IsLive(heldActor)) return false;
-    // Aprop_C ONLY. The transient self-morphing chip/clump (non-Aprop_C) must
-    // never be broadcast/driven here -- that is the reverted-2a use-after-free
-    // ([[project-bug-trash-chippile-uaf-crash]]). They need the attach model.
-    if (!ue_wrap::prop::IsDescendantOfProp(heldActor)) return false;
+    // Any KEYED interactable: Aprop_C trash items AND the non-Aprop_C
+    // garbageClump/chipPile (the actual trash the player carries). CRASH-SAFETY
+    // is enforced on the RECEIVER, not by excluding them here: GetStaticMesh
+    // returns null for non-Aprop_C, so the peer never runs physics on the clump
+    // mirror -- it spawns physics-free and is driven KINEMATICALLY (the inverse
+    // of the reverted-2a UAF). [[project-bug-trash-chippile-uaf-crash]]
+    if (!ue_wrap::prop::IsKeyedInteractable(heldActor)) return false;
 
     // Only freshly-spawned UNKEYED items need a mint + spawn broadcast. An
     // already-keyed held actor is a normal world prop the peer already has (the
@@ -72,8 +75,13 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
     p.scaleX = p.scaleY = p.scaleZ = 1.f;
     p.physFlags = coop::net::propspawn_flags::kSimulatePhysics;
-    if (ue_wrap::prop::IsHeavy(heldActor))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
-    if (ue_wrap::prop::IsFrozen(heldActor)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
+    // IsHeavy/IsFrozen read Aprop_C struct offsets -- only meaningful on Aprop_C.
+    // For a non-Aprop_C clump the receiver ignores physFlags (kinematic mirror),
+    // so don't read stray bytes off it.
+    if (ue_wrap::prop::IsDescendantOfProp(heldActor)) {
+        if (ue_wrap::prop::IsHeavy(heldActor))  p.physFlags |= coop::net::propspawn_flags::kIsHeavy;
+        if (ue_wrap::prop::IsFrozen(heldActor)) p.physFlags |= coop::net::propspawn_flags::kFrozen;
+    }
     p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
     p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
     {

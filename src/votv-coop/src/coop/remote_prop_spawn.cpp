@@ -431,6 +431,13 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot) {
     // resolves to this actor; PropDestroy with the same eid drains the
     // mirror + destroys the actor.
     coop::remote_prop::RegisterPropMirror(payload.elementId, spawned, keyW, classW, senderSlot);
+    // Index the mirror's key so a PropPose drive can resolve it O(1). Essential
+    // for NON-Aprop_C mirrors (garbageClump/chipPile): the cold FindByKeyString
+    // fallback in ResolveLiveActorByKey walks IsDescendantOfProp (Aprop_C only),
+    // so a clump mirror that isn't indexed here would never resolve -> the
+    // kinematic drive could never start and the clump would appear but not
+    // follow the collector's hand. Harmless + faster for Aprop_C mirrors too.
+    coop::prop_element_tracker::IndexActorKey(spawned, keyW);
 }
 
 }  // namespace coop::remote_prop_spawn

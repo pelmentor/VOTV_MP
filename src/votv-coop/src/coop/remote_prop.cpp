@@ -288,15 +288,20 @@ void ResolveAndStartDrive(int slot, const coop::net::WireKey& k) {
                 slot, keyW.c_str(), static_cast<int>(k.len));
         return;
     }
+    // GetStaticMesh returns null for non-Aprop_C keyed interactables
+    // (garbageClump/chipPile) by design -- they are driven KINEMATICALLY (mesh
+    // null, no physics, just the per-tick SetActorLocation below). Only a true
+    // Aprop_C with a missing mesh is an error worth bailing on.
     void* mesh = ue_wrap::prop::GetStaticMesh(prop);
-    if (!mesh) {
-        UE_LOGW("remote_prop: slot %d prop %p has null StaticMesh -- cannot drive", slot, prop);
+    if (!mesh && ue_wrap::prop::IsDescendantOfProp(prop)) {
+        UE_LOGW("remote_prop: slot %d prop %p (Aprop_C) has null StaticMesh -- cannot drive", slot, prop);
         return;
     }
-    UE_LOGI("remote_prop: slot %d GRAB-IN '%ls' -> local Aprop_C=%p mesh=%p (SetSimulatePhysics false)",
-            slot, keyW.c_str(), prop, mesh);
-    // Disable PhysX simulation so SetActorLocation we drive per packet sticks
-    // (otherwise PhysX would yank the body back to its falling trajectory).
+    UE_LOGI("remote_prop: slot %d GRAB-IN '%ls' -> local actor=%p mesh=%p (%s)",
+            slot, keyW.c_str(), prop, mesh,
+            mesh ? "physics; SetSimulatePhysics false" : "kinematic (non-Aprop_C)");
+    // Disable PhysX simulation so the per-packet SetActorLocation sticks. No-op
+    // when mesh is null -- the kinematic non-Aprop_C path drives by position only.
     DriveSimulate(mesh, false);
     g_drives[slot].actor = prop;
     g_drives[slot].mesh  = mesh;

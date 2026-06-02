@@ -239,6 +239,15 @@ bool IsFrozen(void* prop) {
 
 void* GetStaticMesh(void* prop) {
     if (!prop) return nullptr;
+    // Aprop_C ONLY. The fixed Aprop_StaticMesh offset (0x0238) is meaningless on
+    // a non-Aprop_C keyed interactable (garbageClump/chipPile keep their mesh at
+    // a DIFFERENT offset; 0x0238 is a stray byte there) -- reading it as a mesh
+    // pointer and running physics on it is the reverted-2a use-after-free
+    // ([[project-bug-trash-chippile-uaf-crash]]). Return null for non-Aprop_C so
+    // EVERY caller treats them as physics-free / kinematic. We deliberately do
+    // NOT resolve their real mesh per-class (that was 2a) -- these are transient
+    // self-morphing actors; driving them via physics frees-then-derefs.
+    if (!IsDescendantOfProp(prop)) return nullptr;
     return ReadField<void*>(prop, P::off::Aprop_StaticMesh);
 }
 
