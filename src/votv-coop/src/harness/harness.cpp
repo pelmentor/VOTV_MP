@@ -27,6 +27,8 @@
 #include "coop/save_guard.h"
 #include "coop/shutdown.h"
 #include "coop/weather_sync.h"
+#include "ui/dev_menu.h"
+#include "ui/imgui_overlay.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/engine.h"
@@ -720,13 +722,21 @@ void Start() {
     // Dev pos + camera-rotation overlay (F2 toggle). No-op unless ini enables it.
     coop::dev::pos_hud::Init();
 
-    // Dev F3 (restore stamina/hunger) + F4 (teleport client to host) + F5
-    // (toggle snow on host). All gated by [dev] devkeys=1; no-op otherwise.
-    // SetSession was already called above for the play / netloopback paths
-    // -- the hotkey threads just acquire it atomically and broadcast on press.
+    // Dev F3 (restore stamina/hunger) + F4 (teleport client to host). Gated by
+    // [dev] devkeys=1; no-op otherwise. (F5 snow RETIRED -- it moved into the F1
+    // ImGui menu; restore_vitals/teleport migrate next.) SetSession was already
+    // called above; force_weather::SetSession too (its menu action needs the role).
     coop::dev::restore_vitals::Init();
     coop::dev::teleport_client::Init();
-    coop::dev::force_weather::Init();
+
+    // Dear ImGui overlay -- the F1 menu host (dev features + future MP server
+    // browser). dev_menu::Init reads the dev switch off the render thread; the
+    // overlay installs the DXGI present hook (ImGui brings up on the first frame).
+    // Visible to all players; dev categories gate on [dev] devkeys inside the menu.
+    ui::dev_menu::Init();
+    if (!ui::imgui_overlay::Init()) {
+        UE_LOGW("harness: imgui_overlay::Init failed -- F1 menu unavailable this run");
+    }
 
     // Dev F7 (spawn a kerfurOmega NPC in front of the local player) + the
     // VOTVCOOP_SPAWN_TRIGGER file watcher (the only programmatic NPC-spawn path;

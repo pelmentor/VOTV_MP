@@ -1378,6 +1378,46 @@ def cmd_fogprobe(args) -> None:
     sys.exit(0 if len(shots) >= 1 else 2)
 
 
+def cmd_menushot(args) -> None:
+    """SOLO screenshot proof of the Dear ImGui F1 menu. Launches ONE host with
+    VOTVCOOP_MENU_OPEN=1 so the menu starts visible (an autonomous run can't press
+    F1), waits for the overlay's DX11 bring-up, and captures the window -- the shot
+    should show the nested category menu drawn over the game (even the VOTV main
+    menu, since the overlay hooks Present). Proves the DXGI present hook renders
+    ImGui WITHOUT crashing the game's render thread (the riskiest part)."""
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "menu_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    if kill_all() > 0:
+        log("note: pre-existing VotV instances killed before menushot")
+    deploy_all()
+    os.environ["VOTVCOOP_MENU_OPEN"] = "1"
+
+    log("--- HOST LAUNCH (solo ImGui menu shot) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb)
+    host_log = HOST_DIR / "votv-coop.log"
+    shot = None
+    if _wait_for_log(host_log, "imgui_overlay: DX11 bring-up OK", args.probe_timeout, "HOST"):
+        time.sleep(3)  # let a few menu frames render
+        p = shots_dir / "host_menu.png"
+        if _capture_window(host_pid, p):
+            shot = p
+            log(f"  menu shot: {p.name}")
+    else:
+        log("WARN: never saw 'imgui_overlay: DX11 bring-up OK' -- DX12 RHI or a hook failure; see tail")
+    tail_log(host_log, 30, "HOST")
+    log("--- KILLING ---")
+    kill_all()
+    log("--- MENUSHOT VERDICT ---")
+    if shot and shot.exists():
+        log(f"Inspect {shot}: it should show the 'VOTV Coop  -  Menu (F1)' window with the "
+            "nested category tree (Player/Game/Network/Cosmetics) over the game.")
+    else:
+        log("No screenshot -- overlay didn't bring up (DX12 RHI, or a hook fault -- read the tail).")
+    sys.exit(0 if shot else 2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="VOTV coop orchestrator")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1541,6 +1581,15 @@ def main() -> None:
                             help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_fogprobe.add_argument(flag, **kw)
     p_fogprobe.set_defaults(func=cmd_fogprobe)
+
+    p_menushot = sub.add_parser("menushot",
+                                help="SOLO: screenshot proof the Dear ImGui F1 menu renders over the game (VOTVCOOP_MENU_OPEN=1)")
+    p_menushot.add_argument("--probe-timeout", type=int, default=150,
+                            help="seconds to wait for the overlay DX11 bring-up")
+    p_menushot.add_argument("--memory-limit-gb", type=float, default=12.0,
+                            help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_menushot.add_argument(flag, **kw)
+    p_menushot.set_defaults(func=cmd_menushot)
 
     args = ap.parse_args()
     args.func(args)

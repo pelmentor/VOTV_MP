@@ -44,6 +44,24 @@ add_library(minhook STATIC
 )
 target_include_directories(minhook PUBLIC ${MINHOOK_DIR}/include)
 
+# Dear ImGui (MIT, vendored as git submodule, pinned v1.91.5) -- OUR OWN copy for
+# the in-game dev menu + (future) main-menu MP server browser. NEVER UE4SS's ImGui
+# (RULE 3, no UE4SS at runtime). Compiled into our own static target so it picks up
+# the same static-CRT as the mod (like minhook). Backends: DX11 + DX12 (we
+# auto-detect the RHI at the swapchain) + Win32 (input). Source in third_party/imgui.
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui)
+add_library(imgui STATIC
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+)
+target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+
 # --- GameNetworkingSockets (BSD-3, vendored as git submodule, pinned v1.5.1) ---
 #
 # Wire-layer substrate for the 4-PR GNS migration plan in
@@ -155,6 +173,8 @@ add_library(votv-coop SHARED
     src/coop/dev/restore_vitals.cpp
     src/coop/dev/spawn_npc.cpp
     src/coop/dev/teleport_client.cpp
+    src/ui/imgui_overlay.cpp
+    src/ui/dev_menu.cpp
     src/harness/harness.cpp
     src/harness/autotest.cpp
     src/harness/autotest_dispatch.cpp
@@ -176,6 +196,9 @@ set_target_properties(votv-coop PROPERTIES OUTPUT_NAME "votv-coop")
 target_link_libraries(votv-coop PRIVATE
     version
     minhook
+    imgui
+    d3d11    # dummy-swapchain creation to read the IDXGISwapChain vtable (ImGui present hook)
+    dxgi
     gdiplus
     ws2_32
     # PR-1 GNS link (vendored static lib, BSD-3). bcrypt: Windows SDK provides
@@ -231,6 +254,9 @@ if (MSVC)
 
     # MinHook must match the mod's static CRT or the link fails.
     set_property(TARGET minhook PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # Dear ImGui likewise (created before the global CMAKE_MSVC_RUNTIME_LIBRARY).
+    set_property(TARGET imgui PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
     set_property(TARGET xinput1_3 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(xinput1_3 PRIVATE /W4 /permissive-)
