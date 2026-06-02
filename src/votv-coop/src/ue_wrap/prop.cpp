@@ -44,41 +44,6 @@ inline T ReadField(void* base, size_t off) {
     return *reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(base) + off);
 }
 
-// Per-class byte offset of the `StaticMesh` UStaticMeshComponent property.
-//
-// The mesh sits at a DIFFERENT offset on each actor class: Aprop_C 0x0238,
-// prop_garbageClump_C 0x0230, actorChipPile_C 0x0228, trashBitsPile_C 0x0250.
-// The old GetStaticMesh used the single fixed Aprop_StaticMesh (0x0238) offset,
-// which on the non-Aprop_C trash entities reads a stray byte (chipType / Shape),
-// so the mirror's physics-setup AND the entire pose/drive path got a null/garbage
-// "mesh" and silently no-op'd for the WHOLE trash family -- the root cause of
-// "trash interactions don't mirror" (2026-06-02). Resolve it per-CLASS via
-// reflection (FindPropertyOffset on the instance's real UClass) instead -- one
-// recook-proof source of truth that covers Aprop_C and every trash class alike.
-//
-// Cached per UClass*: GetStaticMesh is called at prop spawn / grab / drive-START
-// (the per-frame drive caches the resolved mesh pointer in ActiveDrive), so this
-// is off the per-tick path; the map lookup makes the steady-state cost one hash
-// probe. The key is the live class of a live instance at call time (consistent
-// with g_propBaseCls's pointer-cache tolerance); -1 misses are left uncached so a
-// pre-resolution call retries.
-int32_t StaticMeshOffsetForClass(void* cls) {
-    if (!cls) return -1;
-    static std::mutex sMtx;
-    static std::unordered_map<void*, int32_t> sCache;  // UClass* -> offset (>=0)
-    {
-        std::lock_guard<std::mutex> lk(sMtx);
-        auto it = sCache.find(cls);
-        if (it != sCache.end()) return it->second;
-    }
-    const int32_t off = R::FindPropertyOffset(cls, L"StaticMesh");
-    if (off >= 0) {
-        std::lock_guard<std::mutex> lk(sMtx);
-        sCache.emplace(cls, off);
-    }
-    return off;
-}
-
 }  // namespace
 
 bool IsDescendantOfProp(void* obj) {
@@ -274,14 +239,7 @@ bool IsFrozen(void* prop) {
 
 void* GetStaticMesh(void* prop) {
     if (!prop) return nullptr;
-    const int32_t off = StaticMeshOffsetForClass(R::ClassOf(prop));
-    // Fall back to the Aprop_C fixed offset ONLY if reflection can't find a
-    // "StaticMesh" property (no regression for a hypothetical class that lacks
-    // it; the trash classes DO have it, so they take the reflected per-class
-    // offset and stop reading a stray byte as a mesh pointer).
-    const size_t useOff = (off >= 0) ? static_cast<size_t>(off)
-                                     : static_cast<size_t>(P::off::Aprop_StaticMesh);
-    return ReadField<void*>(prop, useOff);
+    return ReadField<void*>(prop, P::off::Aprop_StaticMesh);
 }
 
 std::wstring GetClassName(void* prop) {
