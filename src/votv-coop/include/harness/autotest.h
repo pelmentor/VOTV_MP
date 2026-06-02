@@ -25,6 +25,13 @@ void RunAutonomousGrabTest();
 // Pass to ::CreateThread as the start routine.
 DWORD WINAPI GrabTestThread(LPVOID arg);
 
+// Autonomous clump-mirror e2e test (env VOTVCOOP_RUN_CLUMP_TEST=1). HOST spawns
+// a prop_garbageClump_C, writes it to grabbing_actor so net_pump's held-prop
+// send broadcasts it (trash_collect_sync v3), then sweeps it; CLIENT mirrors it
+// kinematically via the wire. Verifies the non-Aprop_C kinematic path + no crash.
+void RunAutonomousClumpTest();
+DWORD WINAPI ClumpTestThread(LPVOID arg);
+
 // Phase 5F: autonomous flashlight-toggle test. Calls
 // AmainPlayer_C::`Flashlight Update` via reflection 4 times with 2 s
 // spacing. The POST observer detour catches each call + sends the

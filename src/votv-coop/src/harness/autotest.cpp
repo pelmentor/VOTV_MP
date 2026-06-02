@@ -30,6 +30,7 @@
 #include "harness/autotest.h"
 
 #include "coop/item_activate.h"
+#include "coop/players_registry.h"
 #include "coop/prop_element_tracker.h"
 #include "coop/weather_sync.h"
 #include "coop/dev/flashlight_setup.h"
@@ -395,6 +396,86 @@ void RunAutonomousGrabTest() {
 
 DWORD WINAPI GrabTestThread(LPVOID /*arg*/) {
     RunAutonomousGrabTest();
+    return 0;
+}
+
+// --- Autonomous clump-mirror e2e test (VOTVCOOP_RUN_CLUMP_TEST=1) -------------
+//
+// Verifies the v3 NON-Aprop_C kinematic mirror path on a real LAN pair. The
+// actual trash-collect (trashBitsPile::playerTryToCollect) is BP-internal so a
+// UFunction call can't trigger it; instead the HOST spawns a prop_garbageClump_C
+// and writes it to the LOCAL player's grabbing_actor -- net_pump's held-prop
+// send then force-mints a Key + broadcasts it (trash_collect_sync), exactly as a
+// real collect would. The host then sweeps the clump's world position so the
+// CLIENT's kinematic mirror visibly follows. CLIENT is scan-only (mirror spawn +
+// kinematic drive arrive via the wire). PASS = the client logs
+// remote_prop::OnSpawn cls='prop_garbageClump_C' + "GRAB-IN ... kinematic" +
+// drive #N, and NEITHER peer crashes (the whole point after the 2a UAF).
+void RunAutonomousClumpTest() {
+    const bool isHost = (ReadEnv("VOTVCOOP_NET_ROLE") != "client");
+    if (!isHost) {
+        UE_LOGI("clump_test: CLIENT scan-only -- verify in THIS log: remote_prop::OnSpawn "
+                "cls='prop_garbageClump_C', 'GRAB-IN ... kinematic', 'drive #N', and NO crash");
+        return;
+    }
+    UE_LOGI("clump_test: HOST starting (waiting 20 s for world + client connect)");
+    ::Sleep(20000);
+
+    struct Resolved { void* player = nullptr; void* clump = nullptr;
+                      ue_wrap::FVector base{}; bool ok = false; };
+    auto rsv  = std::make_shared<Resolved>();
+    auto done = std::make_shared<std::atomic<int>>(0);
+    GT::Post([rsv, done] {
+        void* player = coop::players::Registry::Get().Local();  // the SAME player the send reads
+        if (!player || !R::IsLive(player)) { UE_LOGW("clump_test: no live local player"); done->store(2); return; }
+        void* cls = R::FindClass(L"prop_garbageClump_C");
+        if (!cls) { UE_LOGW("clump_test: prop_garbageClump_C class not loaded -- aborting"); done->store(2); return; }
+        const ue_wrap::FVector pLoc = ue_wrap::engine::GetActorLocation(player);
+        const ue_wrap::FVector fwd  = ue_wrap::engine::GetActorForwardVector(player);
+        rsv->base = ue_wrap::FVector{ pLoc.X + fwd.X * 120.f, pLoc.Y + fwd.Y * 120.f, pLoc.Z + 60.f };
+        void* clump = ue_wrap::engine::SpawnActor(cls, rsv->base);
+        if (!clump) { UE_LOGW("clump_test: SpawnActor(prop_garbageClump_C) returned null"); done->store(2); return; }
+        rsv->player = player;
+        rsv->clump  = clump;
+        ue_wrap::engine::WriteMainPlayerGrabbingPair(player, clump, nullptr);
+        rsv->ok = true;
+        UE_LOGI("clump_test: HOST spawned clump=%p at (%.0f,%.0f,%.0f) + wrote grabbing_actor -- "
+                "expect 'NEW held actor cls=prop_garbageClump_C ... trash-mirror=BROADCAST' next",
+                clump, rsv->base.X, rsv->base.Y, rsv->base.Z);
+        done->store(1);
+    });
+    while (done->load() == 0) ::Sleep(5);
+    if (done->load() != 1 || !rsv->ok) { UE_LOGW("clump_test: setup failed -- aborting"); return; }
+
+    UE_LOGI("clump_test: holding + sweeping the clump for 20 s (client mirror should track it)");
+    for (int i = 0; i < 200; ++i) {
+        auto step = std::make_shared<std::atomic<int>>(0);
+        GT::Post([rsv, i, step] {
+            if (rsv->clump && R::IsLive(rsv->clump) && rsv->player && R::IsLive(rsv->player)) {
+                // Re-assert grabbing_actor (a cold-written grab can be cleared by
+                // the BP) + sweep the clump in a triangle so the follow is visible.
+                ue_wrap::engine::WriteMainPlayerGrabbingPair(rsv->player, rsv->clump, nullptr);
+                const int phase = i % 40;
+                const float dx = (phase < 20 ? phase : 40 - phase) * 6.f;  // 0..120..0
+                ue_wrap::FVector p = rsv->base;
+                p.X += dx;
+                ue_wrap::engine::SetActorLocation(rsv->clump, p);
+            }
+            step->store(1);
+        });
+        while (step->load() == 0) ::Sleep(2);
+        ::Sleep(100);
+    }
+    GT::Post([rsv] {
+        if (rsv->player && R::IsLive(rsv->player))
+            ue_wrap::engine::WriteMainPlayerGrabbingPair(rsv->player, nullptr, nullptr);
+    });
+    UE_LOGI("clump_test: DONE -- released. PASS if the CLIENT logged OnSpawn 'prop_garbageClump_C' "
+            "+ kinematic drives and neither peer crashed.");
+}
+
+DWORD WINAPI ClumpTestThread(LPVOID /*arg*/) {
+    RunAutonomousClumpTest();
     return 0;
 }
 
