@@ -275,8 +275,8 @@ void InstallObservers(coop::net::Session& session) {
     coop::weather_sync::Install(&session);   // Phase 5W weather
     coop::garbage_sync::SetSession(&session);
     coop::garbage_sync::Install();           // Phase 5G garbage
-    coop::trash_collect_sync::SetSession(&session);
-    coop::trash_collect_sync::Install();     // trash-stack press-E collect mirror
+    // (trash_collect_sync has no observer to install -- playerTryToCollect is
+    // BP-internal; it acts on the held-prop edge below, see EnsureHeldItemBroadcast.)
     // PR-FOUNDATION-2 (B): client world-save block (host-only persistence).
     // No-op on the host; on the client installs the SaveGameToSlot detour once.
     coop::save_block::Install(&session);
@@ -685,6 +685,26 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             }
         }
         if (heldActor && R::IsLive(heldActor)) {
+            // New-held edge: if this is a freshly-spawned UNKEYED Aprop_C (a
+            // trash-pile collect auto-grabs one with Key=None), force-mint a Key
+            // + broadcast a PropSpawn so the peer spawns a mirror this stream can
+            // then drive into our hands. playerTryToCollect is BP-internal so no
+            // UFunction observer fires -- grabbing_actor is the reliable detect
+            // point. Aprop_C ONLY (the helper gates it); the transient chip/clump
+            // are never broadcast/driven (the reverted-2a UAF). Idempotent: once
+            // the Key is minted the helper returns false, so it fires once/grab.
+            if (heldActor != g_lastHeldProp) {
+                const bool mirrored =
+                    coop::trash_collect_sync::EnsureHeldItemBroadcast(heldActor, &session);
+                // One line per NEW grab so a "didn't mirror" hands-on is
+                // conclusive: shows the held actor's class + key + whether we
+                // force-minted+broadcast it (mirrored) or left it (already
+                // keyed normal prop, or non-Aprop_C transient).
+                UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' -> trash-mirror=%s",
+                        heldActor, R::ClassNameOf(heldActor).c_str(),
+                        ue_wrap::prop::GetInteractableKeyString(heldActor).c_str(),
+                        mirrored ? "BROADCAST" : "no");
+            }
             const std::wstring keyW = ue_wrap::prop::GetInteractableKeyString(heldActor);
             coop::net::PropPoseSnapshot pp{};
             pp.key.len = 0;

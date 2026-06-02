@@ -1,35 +1,29 @@
-// coop/trash_collect_sync.h -- replicate the trash-pile COLLECT interaction.
+// coop/trash_collect_sync.h -- mirror a freshly-spawned-and-grabbed item
+// (the VOTV trash-pile collect).
 //
-// VOTV: pressing E on a trashBitsPile_C ("trash stack") runs its BP
-// playerTryToCollect(Player), which spawns ONE Aprop_C trash item AND
-// auto-grabs it into the player's hands the SAME frame (PHC grab mode),
-// repeatable until the pile's amountA/amountB are exhausted (then it
-// self-destructs).
+// Pressing E on a trashBitsPile_C ("trash stack") spawns one Aprop_C trash
+// item and auto-grabs it into the player's hands the same frame. The item is
+// born with Key == None (its BP UCS hasn't minted a NewGuid yet), so our
+// held-prop pose stream emitted unmatchable PropPose key='None' AND the
+// Init-POST broadcast skipped it -> the held item never mirrored to peers.
 //
-// The held item never mirrored because it is born with Key == None (the
-// Aprop_C BP UCS hasn't minted a NewGuid yet at the instant it's grabbed),
-// so our held-prop pose stream emitted PropPose key='None' (unmatchable on
-// the peer) AND the Init-POST broadcast skipped it (None-key guard). Net:
-// the collector held an item the other peer never saw.
+// We CANNOT catch the collect via a UFunction observer: trashBitsPile_C::
+// playerTryToCollect is dispatched BP->BP (ProcessInternal), which bypasses
+// our ProcessEvent detour entirely (verified hands-on: a POST observer
+// installed but NEVER fired while the item was clearly held). So detection
+// happens where the engine state IS visible -- net_pump's held-prop send,
+// which already resolves the grabbing_actor every tick.
 //
-// Fix (this module): a POST observer on trashBitsPile_C::playerTryToCollect
-// reads the freshly-grabbed item, FORCE-mints a stable synth Key on it (the
-// item's setKey accepts it exactly as the clump/chip classes do), and
-// broadcasts a PropSpawn under that Key. From there the EXISTING held-prop
-// pose stream (net_pump grabbing_actor path) carries the item into the
-// collector's hands on every peer, and PropRelease / PropDestroy unwind it
-// like any other held prop. No new wire message; reuses the proven path.
+// EnsureHeldItemBroadcast is called on the NEW-held edge from that send: if
+// the held actor is a freshly-spawned UNKEYED Aprop_C, it force-mints a stable
+// Key and broadcasts a PropSpawn so every peer spawns a mirror. From there the
+// existing grabbing_actor pose stream carries the item into the collector's
+// hands, and PropRelease/PropDestroy unwind it like any held prop.
 //
-// The collected items are stable Aprop_C props (cans/bottles/etc.), NOT the
-// transient self-morphing chipPile/clump -- so driving them on the peer is
-// safe (the chipPile drive UAF, [[project-bug-trash-chippile-uaf-crash]], does
-// not apply here).
-//
-// Authority (first increment): each peer collects its own local pile copy and
-// broadcasts the item it made, so the held item mirrors regardless of who
-// collects. The shared pile's amountA/B COUNT is not yet host-authoritative
-// (two peers collecting the SAME pile can diverge) -- a follow-up; MTA
-// CPickup.cpp is the host-authoritative-count shape when we get there.
+// CRASH-SAFE: Aprop_C ONLY. The transient self-morphing chip/clump
+// (non-Aprop_C) are never broadcast/driven here -- driving them is the
+// reverted-2a use-after-free ([[project-bug-trash-chippile-uaf-crash]]); they
+// need the MTA attach model instead, a separate follow-up.
 
 #pragma once
 
@@ -37,15 +31,13 @@ namespace coop::net { class Session; }
 
 namespace coop::trash_collect_sync {
 
-// Store the live session pointer (atomic; the POST observer can fire on a
-// parallel-anim worker). Mirrors garbage_sync::SetSession.
-void SetSession(coop::net::Session* session);
-
-// Install the trashBitsPile_C::playerTryToCollect POST observer. Idempotent;
-// retries internally until the BP class + UFunction resolve (they load lazily
-// on first world encounter -- e.g. the player nearing a trash area). Called
-// per-tick from net_pump::InstallObservers (the same idempotent-retry site as
-// garbage_sync), so the latch fires whenever trashBitsPile_C loads in-session.
-void Install();
+// Game thread. If `heldActor` is a live, UNKEYED (Key=None) Aprop_C, force-mint
+// a stable Key on it and broadcast a PropSpawn under that Key (so peers spawn a
+// mirror the held-pose stream can then drive into the collector's hands).
+// Returns true iff it minted + broadcast. No-op (returns false) for: null/dead
+// actors, non-Aprop_C (transient chip/clump -- crash safety), and already-keyed
+// actors (a normal world-prop grab -- the peer already has it). Idempotent:
+// once minted the Key is non-None, so a repeat call returns false.
+bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* session);
 
 }  // namespace coop::trash_collect_sync
