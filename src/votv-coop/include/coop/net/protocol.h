@@ -266,7 +266,15 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // enable_* bits -- the wire now carries actor PRESENCE so the client can destroy a
 // stray fog actor on host-clear + mirror-spawn on host-fog. No wire-size change
 // (the byte reuses a former _pad slot); ParseHeader rejects pre-v23 peers.
-inline constexpr uint16_t kProtocolVersion = 23;
+// v24 (2026-06-02): late-joiner WEATHER-LEVEL SNAP. WeatherStatePayload grows
+// 24->40 (+rain target, +finalFogDensity, +fogAlpha, +fogStrength) so a joining
+// client snaps to the host's CURRENT fog/rain levels instead of ramping up over
+// ~3 min (the rolling-fog actor ramps its density from 0; a fresh client mirror
+// did the same). The host copies its rolling-fog actor's Alpha+Strength onto the
+// client mirror (fogprobe-proven the actor accepts the write + keeps ramping in
+// lockstep) + the cycle's finalFogDensity, and anchors the rain ease target.
+// ParseHeader rejects pre-v24 peers (the 16-byte payload growth would misparse).
+inline constexpr uint16_t kProtocolVersion = 24;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -1045,8 +1053,30 @@ struct WeatherStatePayload {
     float    rainLightningChance; // AdaynightCycle_C::rainLightningChance @0x0408
     float    rainDeactivateChance;// AdaynightCycle_C::rainDeactivateChance @0x040C
     float    rainWindSpeed;       // AdaynightCycle_C::rainWindSpeed @0x041C
+    // v24 (2026-06-02): late-joiner WEATHER-LEVEL SNAP. Carries the host's CURRENT
+    // interpolated levels so a joining client SNAPS to them instead of letting its
+    // local sim ramp up over minutes (the fog "warm-up" the user reported). These
+    // ride the existing connect-broadcast + continuous-broadcast payload but are NOT
+    // in the dedup signature (they change continuously; SignaturePayload hashes only
+    // flags + the 4 rain scalars). See research/findings/votv-weather-RE-* + the
+    // 2026-06-02 fogprobe runtime confirmation.
+    float    rain;            // AdaynightCycle_C::rain @0x02E0 -- the rainStrength EASE
+                              //   TARGET. Anchored on apply so ReceiveTick doesn't drag
+                              //   the synced rainStrength back to the client's local target.
+    float    finalFogDensity; // AdaynightCycle_C::finalFogDensity @0x0418 -- the visible
+                              //   height-fog density (pushed via SetFogDensity). Snapped +
+                              //   SetFogDensity so the joiner's fog is instant, not eased up.
+    float    fogAlpha;        // AweatherFogController_C::Alpha @0x023C -- the rolling-fog
+                              //   actor's ramp intensity. THE DRIVER (thickFog = Alpha*Strength,
+                              //   fogprobe-confirmed). Copied onto the client mirror actor so it
+                              //   renders at the host's fog level + keeps ramping in lockstep (the
+                              //   actor ACCEPTS the write -- a plain accumulator, not Timeline-locked,
+                              //   snaptest-proven). 0 when the host has no rolling-fog actor.
+    float    fogStrength;     // AweatherFogController_C::Strength @0x024C -- the per-spawn
+                              //   density scale. Snapped WITH Alpha (Strength is randomized per
+                              //   fog event, so Alpha alone wouldn't reproduce the host's thickFog).
 };
-static_assert(sizeof(WeatherStatePayload) == 24, "WeatherStatePayload must be 24 bytes (v23: flags2 reuses a pad byte)");
+static_assert(sizeof(WeatherStatePayload) == 40, "WeatherStatePayload must be 40 bytes (v24: +rain +finalFogDensity +fogAlpha +fogStrength)");
 static_assert(sizeof(WeatherStatePayload) <= 256 - 20 - 8,
               "WeatherStatePayload must fit in one reliable datagram");
 

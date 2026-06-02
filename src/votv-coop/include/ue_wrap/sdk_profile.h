@@ -484,6 +484,18 @@ inline constexpr size_t AdaynightCycle_finalFogDensity      = 0x0418;  // float 
 inline constexpr size_t AdaynightCycle_fogProbability       = 0x0428;  // float (scheduler roll weight; host-side only)
 inline constexpr size_t AdaynightCycle_permanentFog         = 0x042D;  // bool (sticky-fog gamerule; re-arms the scheduler)
 
+// AweatherFogController_C (the rolling-fog actor held in fogEventObject@0x0338).
+// Its OWN ReceiveTick ramps the height-fog density over its Duration -- a fresh
+// actor ramps from 0, which is the late-joiner fog "warm-up". To SNAP a joiner to
+// the host's CURRENT fog, copy the host actor's ramp state onto the mirror actor.
+// Offsets from research/findings/votv-weather-RE-effect-actors-2026-05-26.md §5c
+// (CXX header dump weatherFogController.hpp). Confirmed at runtime by the fog probe.
+inline constexpr size_t WeatherFogController_Time     = 0x0238;  // float (elapsed lifetime clock)
+inline constexpr size_t WeatherFogController_Alpha    = 0x023C;  // float (current ramp intensity)
+inline constexpr size_t WeatherFogController_Duration = 0x0240;  // float (total lifetime)
+inline constexpr size_t WeatherFogController_fogPhase = 0x0244;  // float (eased progress 0..1)
+inline constexpr size_t WeatherFogController_Strength = 0x024C;  // float (max density scale)
+
 // Phase 5W Inc-fix-2: AmainGamemode_C::redSky stash pointer for the
 // red-sky discrete event. Lazily filled by the gamemode's first
 // spawnRedSky call. Receiver reads this to find the existing

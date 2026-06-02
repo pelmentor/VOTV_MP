@@ -23,11 +23,11 @@ namespace GT = ue_wrap::game_thread;
 namespace E  = ue_wrap::engine;
 
 // Resolved-once. spawnFog spawns AweatherFogController_C into fogEventObject and
-// drives the height-fog density; it is the ONLY fog UFunction we drive -- the
-// clear is a plain K2_DestroyActor and the density settles to the shared ToD
-// ambient via the cycle's own (un-suppressed) ReceiveTick, so no SetFogDensity /
-// density write is needed (and the user rejected direct density pokes as crutches).
-void* g_spawnFogFn = nullptr;
+// drives the height-fog density. SetFogDensity pushes finalFogDensity into the
+// cycle's ExponentialHeightFog component (the visible height fog) -- used by the
+// v24 late-joiner snap to make a written density take effect on the apply frame.
+void* g_spawnFogFn      = nullptr;
+void* g_setFogDensityFn = nullptr;  // v24: cycle's SetFogDensity() (push finalFogDensity -> ExpHeightFog)
 bool  g_installed  = false;
 bool  g_clientInterceptorReg = false;
 
@@ -93,6 +93,10 @@ bool Install(bool isHost) {
     if (!cls) return false;  // cycle class not loaded yet -- retry next tick.
     if (!g_spawnFogFn) g_spawnFogFn = R::FindFunction(cls, P::name::DaynightCycle_spawnFogFn);
     if (!g_spawnFogFn) return false;
+    // v24: SetFogDensity for the late-joiner density snap (best-effort -- if it
+    // doesn't resolve, the snapped finalFogDensity still takes effect on the next
+    // cycle ReceiveTick, just one frame later).
+    if (!g_setFogDensityFn) g_setFogDensityFn = R::FindFunction(cls, P::name::DaynightCycle_setFogDensityFn);
 
     // Register the spawnFog PRE interceptor ONCE (for both roles -- it self-gates
     // on g_isClient, a pass-through on the host). Do NOT latch g_installed until
@@ -117,6 +121,19 @@ bool Install(bool isHost) {
 void ReadHostFogState(void* cycle, coop::net::WeatherStatePayload& out) {
     if (!cycle || !R::IsLive(cycle)) return;
     out.flags2 = ComputeHostFogBits(cycle);
+    // v24 late-joiner snap: stamp the host's CURRENT fog level so a joiner can match
+    // it instantly instead of ramping from 0. finalFogDensity is the visible (eased)
+    // height-fog density; the rolling-fog actor's Alpha is the ramp driver + Strength
+    // its per-spawn scale (thickFog = Alpha*Strength). fogAlpha/fogStrength stay 0
+    // when there's no rolling-fog actor (the receiver then skips the actor snap).
+    auto* b = reinterpret_cast<uint8_t*>(cycle);
+    out.finalFogDensity = *reinterpret_cast<float*>(b + P::off::AdaynightCycle_finalFogDensity);
+    void* actor = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_fogEventObject);
+    if (actor && R::IsLive(actor)) {
+        auto* ab = reinterpret_cast<uint8_t*>(actor);
+        out.fogAlpha    = *reinterpret_cast<float*>(ab + P::off::WeatherFogController_Alpha);
+        out.fogStrength = *reinterpret_cast<float*>(ab + P::off::WeatherFogController_Strength);
+    }
 }
 
 void ApplyFromHost(void* cycle, const coop::net::WeatherStatePayload& payload) {
@@ -139,19 +156,42 @@ void ApplyFromHost(void* cycle, const coop::net::WeatherStatePayload& payload) {
         E::DestroyActor(*slot);
         *slot = nullptr;
         UE_LOGI("weather_fog: host CLEAR -> destroyed client rolling-fog actor");
-    } else if (hostFogActive && !clientHasRolling) {
-        // Host fog -> client spawns its OWN rolling fog (echo-suppressed past the
-        // client interceptor). It ramps naturally, like the lightning spawn-on-
-        // command pattern; the host's later kFogActive=0 ends it via the branch above.
-        // Use the cached g_spawnFogFn (resolved once in Install) -- never re-resolve
-        // on the apply path.
-        if (g_spawnFogFn) {
+    } else if (hostFogActive) {
+        // Host fog -> ensure the client's OWN rolling-fog actor exists (echo-
+        // suppressed past the client interceptor), then SNAP it to the host's
+        // CURRENT fog level. Without the snap a fresh mirror actor ramps its density
+        // from 0 over its Duration (minutes) -- the late-joiner "warm-up" the user
+        // reported. fogprobe-confirmed (2026-06-02): writing the actor's Alpha is
+        // accepted (a plain accumulator, NOT Timeline-locked) and the actor keeps
+        // ramping from the written value, so the mirror tracks the host in lockstep.
+        if (!clientHasRolling && g_spawnFogFn) {
             g_spawnFogEchoSuppress.store(true, std::memory_order_release);
             ue_wrap::ParamFrame f(g_spawnFogFn);
             ue_wrap::Call(cycle, f);
             g_spawnFogEchoSuppress.store(false, std::memory_order_release);
             UE_LOGI("weather_fog: host FOG -> mirror-spawned client rolling-fog actor");
         }
+        // Copy the host actor's ramp state (Alpha = intensity, Strength = per-spawn
+        // density scale; thickFog = Alpha*Strength is then recomputed by the actor's
+        // own tick). Re-read the slot -- spawnFog above just populated it. Guard on
+        // non-zero so a host with no actor (race) doesn't zero the client's.
+        void* actor = *slot;
+        if (actor && R::IsLive(actor) &&
+            (payload.fogAlpha != 0.f || payload.fogStrength != 0.f)) {
+            auto* ab = reinterpret_cast<uint8_t*>(actor);
+            *reinterpret_cast<float*>(ab + P::off::WeatherFogController_Alpha)    = payload.fogAlpha;
+            *reinterpret_cast<float*>(ab + P::off::WeatherFogController_Strength) = payload.fogStrength;
+        }
+        // Snap the visible height-fog density + push it into the ExponentialHeightFog
+        // NOW (the cycle's ReceiveTick would otherwise ease finalFogDensity toward the
+        // freshly-set thickFog over several frames). Both peers then ease in lockstep.
+        *reinterpret_cast<float*>(b + P::off::AdaynightCycle_finalFogDensity) = payload.finalFogDensity;
+        if (g_setFogDensityFn) {
+            ue_wrap::ParamFrame f(g_setFogDensityFn);
+            ue_wrap::Call(cycle, f);
+        }
+        UE_LOGI("weather_fog: host FOG snap -> Alpha=%.4f Strength=%.4f finalFogDensity=%.4f",
+                payload.fogAlpha, payload.fogStrength, payload.finalFogDensity);
     }
 
     // ---- super fog: clear-only in v1 (destroy stray when host has none). Spawn

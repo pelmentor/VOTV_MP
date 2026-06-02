@@ -66,6 +66,9 @@ struct FogSample {
     bool  permanentFog  = false;  // permanentFog @0x042D
     bool  rollingActor  = false;  // fogEventObject @0x0338 != null (rolling fog live)
     int   superFogCount = 0;      // live AsuperFog_C instances
+    // AweatherFogController_C ramp state (read when rollingActor) -- to design the
+    // late-joiner SNAP (copy host actor state onto the mirror so it doesn't ramp from 0).
+    float fogTime = 0.f, fogAlpha = 0.f, fogDuration = 0.f, fogPhase = 0.f, fogStrength = 0.f;
 };
 
 // Read the cycle fog state on the game thread. Returns ok=false if no live cycle.
@@ -81,7 +84,16 @@ FogSample ReadFogGT() {
             out->enableFog      = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_fog);
             out->enableSuperfog = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_superfog);
             out->permanentFog   = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_permanentFog);
-            out->rollingActor   = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_fogEventObject) != nullptr;
+            void* fogActor = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_fogEventObject);
+            out->rollingActor   = fogActor != nullptr;
+            if (fogActor && R::IsLive(fogActor)) {
+                auto* fb = reinterpret_cast<uint8_t*>(fogActor);
+                out->fogTime     = *reinterpret_cast<float*>(fb + P::off::WeatherFogController_Time);
+                out->fogAlpha    = *reinterpret_cast<float*>(fb + P::off::WeatherFogController_Alpha);
+                out->fogDuration = *reinterpret_cast<float*>(fb + P::off::WeatherFogController_Duration);
+                out->fogPhase    = *reinterpret_cast<float*>(fb + P::off::WeatherFogController_fogPhase);
+                out->fogStrength = *reinterpret_cast<float*>(fb + P::off::WeatherFogController_Strength);
+            }
             out->superFogCount  = R::CountObjectsByClass(P::name::SuperFogClass);
             out->ok = true;
         }
@@ -103,10 +115,12 @@ bool CallCycleFn(void* cycle, const wchar_t* fnName) {
 void LogSample(const char* tag, int i, const FogSample& s) {
     if (!s.ok) { UE_LOGW("fogprobe: [%s #%d] no live cycle", tag, i); return; }
     UE_LOGI("fogprobe: [%s #%d] finalFogDensity=%.4f thickFog=%.4f rollingActor=%d "
-            "superFogCount=%d enable_fog=%d enable_superfog=%d permanentFog=%d",
+            "superFogCount=%d enable_fog=%d enable_superfog=%d permanentFog=%d "
+            "| actor: Time=%.3f Alpha=%.4f Duration=%.3f fogPhase=%.4f Strength=%.4f",
             tag, i, s.finalDensity, s.thickFog, s.rollingActor ? 1 : 0,
             s.superFogCount, s.enableFog ? 1 : 0, s.enableSuperfog ? 1 : 0,
-            s.permanentFog ? 1 : 0);
+            s.permanentFog ? 1 : 0,
+            s.fogTime, s.fogAlpha, s.fogDuration, s.fogPhase, s.fogStrength);
 }
 
 void RunProbe() {

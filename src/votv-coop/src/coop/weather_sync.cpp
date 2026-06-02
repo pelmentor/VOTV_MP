@@ -160,8 +160,15 @@ bool ReadCycleState(void* cycle, coop::net::WeatherStatePayload& out) {
     out.rainLightningChance  = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainLightningChance);
     out.rainDeactivateChance = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainDeactivateChance);
     out.rainWindSpeed        = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainWindSpeed);
-    // v23: stamp the host's active-fog bits (flags2). Fog is driven by event
-    // ACTORS, not the enable_* config bits, so the wire carries live actor presence.
+    // v24: the rainStrength EASE TARGET. rainStrength (above) is the interpolated
+    // CURRENT value; ReceiveTick eases it toward `rain`. A late joiner that only got
+    // rainStrength would see it decay back toward its local (unsynced) target -- so
+    // carry the target too and anchor it on apply.
+    out.rain                 = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rain);
+    // v23: stamp the host's active-fog bits (flags2). Fog is driven by event ACTORS,
+    // not the enable_* config bits, so the wire carries live actor presence. v24 also
+    // stamps the host's current fog DENSITY + the rolling-fog actor's ramp state so a
+    // joiner snaps to the host's fog level instead of ramping from 0.
     coop::weather_fog::ReadHostFogState(cycle, out);
     return true;
 }
@@ -838,6 +845,16 @@ void ApplyFromHost(const coop::net::WeatherStatePayload& payload) {
         f.Set<float>(L"rainDeactivateChance",payload.rainDeactivateChance);
         f.Set<float>(L"rainWindSpeed",       payload.rainWindSpeed);
         ue_wrap::Call(cycle, f);
+    }
+
+    // v24: anchor the rain ease TARGET (rain@0x02E0). setRainProperties above wrote
+    // rainStrength (the CURRENT value), but ReceiveTick eases rainStrength toward
+    // `rain` every frame -- so a late joiner whose local `rain` is 0 would watch the
+    // synced rainStrength decay back to 0. Pin the target to the host's whenever it
+    // differs (gating on rainStateChanged alone would miss a target-only drift during
+    // a continuous-rain episode -- audit 2026-06-02).
+    if (cur.rain != payload.rain) {
+        *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rain) = payload.rain;
     }
 
     // Step C: causeRain triggers the BP rain-transition. ITS BODY HAS
