@@ -200,4 +200,27 @@ void ClearAllNameDiagnostics();
 void SetCallTrace(bool enabled);
 bool GetCallTrace();
 
+// ---- Perf instrumentation (MEASURE-first; coop/dev/perf_probe drives it) -----
+// The ProcessEvent detour is the hottest path in the program (it fires on EVERY
+// blueprint dispatch). To quantify how much our layer costs per frame without
+// adding cost when OFF, the detour keeps two gated counters:
+//   - dispatch count: incremented per dispatch only while counting is enabled
+//     (when disabled the detour pays one relaxed bool load -- the default).
+//   - self-time: on 1 dispatch in 256 (when self-timing is enabled), QPC brackets
+//     the detour body EXCLUDING the original ProcessEvent call, so the sample is
+//     OUR overhead only, with the QPC cost amortized 1/256.
+// SetPerfCounting(count, sampleSelfTime) arms them; the *Total() getters return
+// monotonic running totals (perf_probe diffs them per second). Lock-free.
+void SetPerfCounting(bool countDispatches, bool sampleSelfTime);
+unsigned long long PeDispatchCountTotal();   // dispatches observed (all threads) since counting was armed
+unsigned long long PeDispatchCountGTTotal(); // game-thread subset of the above
+unsigned long long PeSelfNsTotal();          // summed detour self-time (ns) over sampled dispatches
+unsigned long long PeSelfSampleTotal();      // number of self-time samples taken
+unsigned long long PeObserverBodyNsTotal();  // summed observer+interceptor cb-body time (ns)
+unsigned long long PeObserverWorstNs();      // worst single cb-body call (ns)
+void*              PeObserverWorstFn();       // the UFunction* of that worst call (resolve name via reflection)
+int PostObserverCount();                     // live POST-observer slots (the per-dispatch walk length)
+int PreObserverCount();                      // live PRE-observer slots
+int InterceptorCount();                      // live interceptor slots
+
 }  // namespace ue_wrap::game_thread

@@ -22,7 +22,7 @@ void Init();
 void Render();
 
 // The dev switch state ([dev] devkeys AND master enabled), latched by Init().
-// Lock-free read of a boot-set bool. Other overlay surfaces (the TAB scoreboard)
+// Lock-free read of a boot-set bool. Other overlay surfaces (the player-list scoreboard)
 // use this to gate dev-only actions (e.g. the host's "Teleport to me" entry).
 bool DevMode();
 

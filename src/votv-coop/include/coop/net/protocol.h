@@ -295,7 +295,45 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // HeldClumpRelease(22) are RETIRED (RULE 2); their slots stay reserved. The clump is
 // visible on its own (a bare spawn renders the 'dirtball' mesh), so no mesh transfer
 // is needed. ParseHeader rejects pre-v26 peers (PropPosePacket grew 76->80).
-inline constexpr uint16_t kProtocolVersion = 26;
+// v27 (2026-06-03): Phase 5D keyed-interactable state sync -- base doors, light
+// switches, and storage-container lids, all driven by ONE generic
+// coop::interactable_sync Channel (no per-feature duplication, RULE 2). Three new
+// ReliableKinds share KeyedTogglePayload (WireKey instance Key + action on/off):
+//   DoorState (=9)      -- Adoor_C::doorOpen/doorClose
+//   LightState (=10)    -- Atrigger_lightRoot_C::SetActive
+//   ContainerState (=11)-- Aprop_swinger_C::Open/Close (cabinet/fridge/safe lids)
+// All SYMMETRIC (any peer's local edge broadcasts; host relays client<->client)
+// + a host connect-snapshot of every OPEN instance to a late joiner. Identity =
+// the instance's cross-peer-stable Key (AtriggerBase_C::Key for doors+lights;
+// Aprop_C::Key for swinger lids). RE:
+// research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md. ParseHeader
+// rejects pre-v27 peers. [[project-coop-doors-lights-sync]]
+// v28 (2026-06-03): trash-clump DESPAWN + VARIANT fix. (a) PropDestroy is now
+// EID-ROUTABLE: the non-keyable clump (prop_garbageClump_C, key=None) rides our eid
+// for spawn (v26) but its morph-destroy is UNOBSERVABLE (native/BP-internal, bypasses
+// the K2_DestroyActor observer -- proven hands-on), so the owner death-WATCHES each
+// clump it broadcast and sends PropDestroy{key=None, elementId} the tick its actor
+// dies; OnDestroy resolves the target by eid when the key is empty (symmetric with the
+// eid-spawn; MTA Packet_EntityRemove resolves by element ID only). (b) PropSpawnPayload
+// steals one _pad byte for `chipType` (the 14-value trash-variant enum at struct 0x0238
+// on chipPile/clump) so a mirrored clump shows the SAME variant the owner grabbed
+// (a bare spawn defaulted to variant 0 = the wrong-type bug). Struct size UNCHANGED
+// (168 B). [[project-bug-trash-chippile-uaf-crash]]
+// v29 (2026-06-03): trash LANDING SOUND. The owner-authoritative landed pile (the
+// chipPile the owner's clump re-piled into, broadcast by trash_collect_sync's death-
+// watcher) is a bare SpawnActor on the peer -- silent, because the flying mirror is
+// despawned, never physically landed. Now BroadcastLandedPileNear stamps physFlags
+// kFreshLanded + carries the clump's landing velocity in initLinVel, and the receiver
+// dispatches AactorChipPile_C::turnToPile(Velocity) -- the SAME BP entry the real
+// clump->pile landing calls (sets spwnd + fires impact dust+sound; operates on `this`,
+// spawns nothing -> no dupe). Gated on kFreshLanded so the connect path can't replay it.
+// Struct size UNCHANGED (168 B; reuses initLinVel). [[project-bug-trash-chippile-uaf-crash]]
+// v30 (2026-06-04): SHARED HOST-AUTHORITATIVE BALANCE. New ReliableKinds BalanceSync (23,
+// host->client absolute-total mirror, broadcast on Points change + connect-edge) +
+// BalanceDelta (24, client->host signed-delta request, host applies via AddPoints). New
+// 4-byte BalancePayload. Both peers now MIRROR the host's saveSlot.Points; client-side
+// credits (the +1000 dev button) route to the host. [[project-coop-shared-balance]]
+inline constexpr uint16_t kProtocolVersion = 33;
 
 // Default LAN port (overridable via votv-coop.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -392,6 +430,46 @@ enum class ReliableKind : uint8_t {
                        //     applies via K2_TeleportTo on its local mainPlayer.
                        //     Host->client only; no echo. Payload:
                        //     TeleportClientPayload (24 bytes).
+    DoorState = 9,     // Phase 5D (2026-06-03, v27): base door open/close sync.
+                       //     SYMMETRIC -- any peer who runs Adoor_C::doorOpen /
+                       //     doorClose locally (E-press OR NPC sensor auto-open)
+                       //     broadcasts the resulting isOpened state keyed by the
+                       //     door's AtriggerBase_C::Key (FName, deterministic +
+                       //     save-persistent). Host relays client-originated edges
+                       //     to the other clients (IsClientRelayableReliableKind).
+                       //     Receiver resolves the door by Key (door_sync index
+                       //     w/ GUObjectArray-scan self-heal) + idempotently
+                       //     applies doorOpen/doorClose(bypassCheck=true) only if
+                       //     not already in the target state -- so a simultaneous
+                       //     double-open can't double-animate, and an apply is
+                       //     echo-suppressed so it doesn't bounce back. On a new
+                       //     client's connect edge the host snapshots EVERY door's
+                       //     current state to the joiner (same idempotent apply --
+                       //     only doors that diverge actually animate). Payload:
+                       //     KeyedTogglePayload (40 bytes). RE: research/findings/
+                       //     votv-doors-and-lightswitches-RE-2026-05-25.md.
+    LightState = 10,   // Phase 5D (2026-06-03, v27): light-switch group on/off
+                       //     sync. SYMMETRIC. Sender POST-observes
+                       //     Atrigger_lightRoot_C::SetActive(bool) -- the group
+                       //     controller that fires for any source (wall switch,
+                       //     power board, script). Identity = the root's
+                       //     AtriggerBase_C::Key. Receiver resolves the lightRoot
+                       //     by Key + idempotently calls SetActive(on) (which
+                       //     fans out to every AceilingLamp_C / AambientLight_C in
+                       //     the group). Same generic Channel as DoorState.
+                       //     Payload: KeyedTogglePayload.
+    ContainerState = 11, // Phase 5D (2026-06-03, v27): storage container / cabinet
+                       //     LID open/close sync. SYMMETRIC. Sender POST-observes
+                       //     Aprop_swinger_C::Open(bool)/Close() -- the generic
+                       //     openable-lid prop base (fridge/safe/microwave/cabinet
+                       //     doors all inherit it). Identity = Aprop_C::Key @0x02E0
+                       //     (NOTE: child-actor lids may carry a per-peer NewGuid
+                       //     Key -- the install-time keysHash diagnostic confirms
+                       //     cross-peer stability; if a class proves unstable it
+                       //     simply won't resolve + the apply expires harmlessly).
+                       //     Receiver resolves the swinger by Key + idempotently
+                       //     calls Open(false)/Close(). Same generic Channel.
+                       //     Payload: KeyedTogglePayload.
     WeatherState = 13, // Phase 5W (2026-05-26): host-authoritative continuous
                        //     weather state push. Sender = host only; client
                        //     SUPPRESSES its own 5 scheduler UFunctions on
@@ -457,9 +535,8 @@ enum class ReliableKind : uint8_t {
                        //     routing; actorKeyHash carries the Aprop_C::Key
                        //     hash for Case-a world props (radio, torch, lamp)
                        //     and is 0 for Case-b player-equipment items.
-                       //     Reserved IDs 9-11 are queued for Phase 5D
-                       //     DoorState/LightState/LockState (RE doc landed
-                       //     earlier; impl pending).
+                       //     (DoorState=9 SHIPPED v27 2026-06-03; IDs 10/11 stay
+                       //     reserved for the LightState/LockState follow-ups.)
                        //     Payload: ItemActivatePayload (28 bytes -- v13).
     AssignPeerSlot = 18, // v11: host-only send right after the Connected
                        //     callback fires on the host. Tells the
@@ -526,6 +603,59 @@ enum class ReliableKind : uint8_t {
                        //     PlayerDamagePayload (8 bytes). DETECTION (the real
                        //     enemy->puppet hook) is deferred behind a runtime probe;
                        //     the relay path is e2e-tested via DebugForceHitPuppet.
+    BalanceSync = 23,  // 2026-06-04 (v30): host-authoritative SHARED BALANCE. The host
+                       //     owns the canonical saveSlot.Points; it POLLS Points each
+                       //     game-thread tick (catches every writer -- orders, sells,
+                       //     task rewards, the +1000 dev button) and broadcasts this on
+                       //     CHANGE (+ to a new client on its connect edge) so every peer
+                       //     MIRRORS the host's balance. Receiver (client) writes
+                       //     saveSlot.Points = value DIRECTLY (no AddPoints side-effects
+                       //     -- the laptop shop reads Points live, so no "ka-ching"/email
+                       //     spam on a mirror sync). HOST->client only; not relayable.
+                       //     Payload: BalancePayload (4 bytes).
+    BalanceDelta = 24, // 2026-06-04 (v30): CLIENT->host balance-change REQUEST. A
+                       //     client-side credit (the +1000 dev button; a future shop buy)
+                       //     can't write its own mirror -- the next BalanceSync overwrites
+                       //     it -- so it sends the signed delta to the host, which applies
+                       //     it via mainGamemode::AddPoints(amount); the host's poll then
+                       //     re-broadcasts the new total to all. CLIENT->host only; not
+                       //     relayable. Payload: BalancePayload.
+    KeypadState = 25,  // 2026-06-04 (v33): password-keypad mirror (ApasswordLock_C).
+                       //     SYMMETRIC. REDESIGNED from v31 (which polled isAcc + replayed
+                       //     Open(want) -> fail-cycle, because Open is a SUBMIT verb whose
+                       //     accept path is unreachable by us -- 3 autonomous synth rounds
+                       //     2026-06-04 proved Open/open2/SetActive/isButtonUsed/processKeys
+                       //     are ALL inert even with inPassword==password+focusOn). The verbs
+                       //     are BP-internal (bypass our ProcessEvent detour), so the SENDER
+                       //     POLLS each keypad's (inPassword,isAcc,isDeny) each tick and
+                       //     broadcasts on change keyed by AtriggerBase_C::Key. The RECEIVER
+                       //     mirrors: REPLAY inputNumber(digit) for the typed-buffer delta
+                       //     (native display+beep -- proven to fill inPassword) + Reset() on a
+                       //     clear; DIRECT-WRITE isAcc/isDeny (the accept verb is unreachable,
+                       //     the writes stick -- proven); best-effort upd() to repaint. `Active`
+                       //     is NOT mirrored (it drives a light -> purple-light bug 2026-06-04).
+                       //     NEVER calls a submit verb -> the v31 fail-cycle is
+                       //     structurally gone. The gated door converges via the (separate)
+                       //     DoorState channel. Host relays client edges + connect-snapshots.
+                       //     Payload: KeypadSyncPayload (56 B). Own module coop/keypad_sync
+                       //     (NOT the toggle Channel -- input-edge mirror is a different shape).
+                       //     RE: research/findings/votv-keypad-passwordlock-accept-RE-and-coop-sync-2026-06-04.md.
+    DoorOpenRequest = 26, // 2026-06-04 (v32): CLIENT->host door open/close REQUEST.
+                       //     Doors are now HOST-AUTHORITATIVE (MTA single-syncer model):
+                       //     a door's isOpened is re-driven each tick by its LOCAL sensor +
+                       //     autoclose, so a SYMMETRIC poll oscillates (host's real player
+                       //     holds a door open; the client's door, whose sensor the host-
+                       //     player puppet doesn't trip, autocloses -> infinite fight). FIX:
+                       //     only the HOST polls + broadcasts DoorState; the CLIENT renders
+                       //     it (autoclose suppressed so it sticks) and, when ITS local
+                       //     player opens/closes a door, sends THIS request instead of state.
+                       //     The host applies it (real lock/jam guards run) -> the host's
+                       //     poll picks up the isOpened change -> broadcasts authoritative
+                       //     DoorState back to everyone. CLIENT->host only; NOT relayed
+                       //     (absent from IsClientRelayableReliableKind); receiver gates
+                       //     senderPeerSlot!=0. Payload: KeyedTogglePayload (40 B). MTA
+                       //     precedent: CUnoccupiedVehicleSync Packet_UnoccupiedVehiclePush
+                       //     -> OverrideSyncer. [[project-coop-interactable-state-sync]].
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -819,8 +949,12 @@ struct PropSpawnPayload {
     float         rotPitch, rotYaw, rotRoll;   // 12 -- FRotator (matches PropPose shape)
     float         scaleX, scaleY, scaleZ;      // 12 -- usually (1,1,1)
     uint8_t       physFlags;        // 1
-    uint8_t       _pad[3];          // 3 (v16: senderContext byte removed, coalesced into pad)
-    float         initLinVelX, initLinVelY, initLinVelZ;  // 12 -- usually (0,0,0)
+    uint8_t       chipType;         // 1 (v28: trash-clump variant selector enum_chipPileType; 0 for non-trash props)
+    uint8_t       _pad[2];          // 2 (v16: senderContext byte removed; v28: 1 byte -> chipType)
+    float         initLinVelX, initLinVelY, initLinVelZ;  // 12 -- usually (0,0,0); v29: the
+                                  //     clump's landing velocity (cm/s) when physFlags has
+                                  //     kFreshLanded, fed to turnToPile for impact dust direction
+    // (initAngVel follows; unused by the landed-pile path)
     float         initAngVelX, initAngVelY, initAngVelZ;  // 12
     // v12: ElementId of the prop in the SENDER's allocation range.
     //   Host sender -> elementId in host range [1, kHostRangeSize).
@@ -844,6 +978,12 @@ namespace propspawn_flags {
 inline constexpr uint8_t kSimulatePhysics = 0x01;
 inline constexpr uint8_t kIsHeavy         = 0x02;
 inline constexpr uint8_t kFrozen          = 0x04;
+// v29: this PropSpawn is a freshly-landed trash pile (the owner's thrown clump just
+// re-piled into it). The receiver dispatches AactorChipPile_C::turnToPile(initLinVel)
+// on the spawned mirror so it plays the impact dust+sound (the bare spawn is otherwise
+// silent). Set ONLY by trash_collect_sync::BroadcastLandedPileNear; never on a connect
+// snapshot (so a late joiner can't replay a landing-sound storm). [[project-bug-trash-chippile-uaf-crash]]
+inline constexpr uint8_t kFreshLanded     = 0x08;
 }  // namespace propspawn_flags
 
 // v5 Phase 5S0 Inc2: prop-destroy reliable payload. WireKey identifies the
@@ -867,6 +1007,47 @@ struct PropDestroyPayload {
 static_assert(sizeof(PropDestroyPayload) == 40, "PropDestroyPayload must be 40 bytes");
 static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,
               "PropDestroyPayload must fit in one reliable datagram");
+
+// KeyedTogglePayload -- the SHARED payload for every "keyed interactable open/
+// close/on-off state" reliable kind: DoorState (9), LightState (10),
+// ContainerState (11). Phase 5D (2026-06-03, v27). A peer toggled an
+// interactable (a base door, a light-switch group, or a container/cabinet lid);
+// broadcast the resulting boolean state so every peer's matching instance agrees.
+// Identity = the instance's cross-peer-stable Key FName (AtriggerBase_C::Key for
+// doors + light-roots; Aprop_C::Key for swinger lids). The receiver resolves the
+// live actor by Key and idempotently applies. coop::interactable_sync drives all
+// three via one generic Channel (no per-feature duplication, RULE 2). RE:
+// research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+struct KeyedTogglePayload {
+    WireKey  key;        // 32 -- the instance's Key FName (string)
+    uint8_t  action;     // 1  -- 0 = closed/off, 1 = open/on (the state AFTER the edge)
+    uint8_t  _pad[7];    // 7  -- 8-byte alignment / reserved
+};
+static_assert(sizeof(KeyedTogglePayload) == 40, "KeyedTogglePayload must be 40 bytes");
+static_assert(sizeof(KeyedTogglePayload) <= 256 - 20 - 8,
+              "KeyedTogglePayload must fit in one reliable datagram");
+
+// KeypadSyncPayload -- the password-keypad mirror (KeypadState=25, v33). Carries the
+// full mirror state of ONE keypad: the typed digit buffer + the accept/deny/lock bools.
+// The sender (any peer) polls every indexed ApasswordLock_C each tick and broadcasts
+// this on change; the receiver REPLAYS the buffer via inputNumber(digit) (native
+// display) and DIRECT-WRITES the bools (the accept verb is unreachable -- 3 synth probe
+// rounds 2026-06-04). Identity = AtriggerBase_C::Key. Relayed by the host (symmetric);
+// the connect-snapshot seeds a joiner. RE: votv-keypad-passwordlock-accept-RE-and-coop-
+// sync-2026-06-04.md.
+struct KeypadSyncPayload {
+    WireKey  key;        // 32 -- the keypad's Key FName (string)
+    uint8_t  bufLen;     // 1  -- digits in `buf` (0..16; codes are short)
+    uint8_t  buf[16];    // 16 -- the typed digits, one per byte (each 0..9)
+    uint8_t  isAcc;      // 1  -- accepted (green) -- 0/1
+    uint8_t  isDeny;     // 1  -- denied (red) -- 0/1
+    uint8_t  _pad[5];    // 5  -- 8-byte alignment / reserved
+    // NOTE: `Active` is deliberately NOT on the wire -- it drives a light (powerChanged) and
+    // mirroring it turned a host light purple (2026-06-04). We mirror isAcc/isDeny only.
+};
+static_assert(sizeof(KeypadSyncPayload) == 56, "KeypadSyncPayload must be 56 bytes");
+static_assert(sizeof(KeypadSyncPayload) <= 256 - 20 - 8,
+              "KeypadSyncPayload must fit in one reliable datagram");
 
 // Phase 5N1 Inc2 (2026-05-25, updated 2026-05-28 Tier 3 PoC): NPC spawn
 // reliable payload. Host detects an NPC instantiation via the host-side
@@ -1019,6 +1200,14 @@ static_assert(sizeof(PlayerDamagePayload) == 8,
               "PlayerDamagePayload must be exactly 8 bytes (v21 wire-format)");
 static_assert(sizeof(PlayerDamagePayload) <= 256 - 20 - 8,
               "PlayerDamagePayload must fit in one reliable datagram");
+
+// BalanceSync (23) / BalanceDelta (24) -- shared host-authoritative Points balance
+// (2026-06-04, v30). One int32: the absolute TOTAL (BalanceSync, host->client mirror)
+// OR a signed DELTA to apply (BalanceDelta, client->host request).
+struct BalancePayload {
+    int32_t value;
+};
+static_assert(sizeof(BalancePayload) == 4, "BalancePayload must be exactly 4 bytes");
 
 // (v25 HeldClumpGrabPayload / HeldClumpReleasePayload RETIRED 2026-06-03 / v26,
 // RULE 2 -- the hand-attach clump model was replaced by the prop pose pipeline

@@ -2,6 +2,7 @@
 
 #include "coop/remote_prop.h"
 
+#include "coop/clump_throw_sound.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
 #include "coop/element/registry.h"
@@ -492,16 +493,30 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
                     localPlayer, linSpeed, coop::net::kThrownLinVelThreshold);
         }
     } else if (propActor && R::IsLive(propActor)) {
-        // Non-Aprop_C clump (null mesh): re-enable physics + apply the throw velocity
-        // via the GENERIC root-component path so it flies + lands like the mannequin
-        // (the user's "physics like the mannequin"). [[project-bug-trash-chippile-uaf-crash]]
+        // Non-Aprop_C clump (null mesh): re-enable physics + throw velocity via the GENERIC
+        // root path so the mirror flies. Enable QueryAndPhysics collision so it LANDS
+        // (doesn't sink through the floor -- the bare mirror lacks a real clump's collision)
+        // during its brief flight; the actual landed PILE is spawned authoritatively by the
+        // owner's landed-pile broadcast when its clump re-piles (trash_collect_sync), so the
+        // mirror itself just needs to look right until it's despawned. (We do NOT prime the
+        // mirror to self-convert: the BP impulse/slope gates made that unreliable ~3/10.)
+        // [[project-bug-trash-chippile-uaf-crash]]
+        ue_wrap::engine::SetActorRootCollisionEnabled(propActor, 3 /*QueryAndPhysics*/);
         ue_wrap::engine::SetActorSimulatePhysics(propActor, true);
         ue_wrap::engine::SetActorRootPhysicsVelocity(
             propActor,
             ue_wrap::FVector{payload.linVelX, payload.linVelY, payload.linVelZ},
             ue_wrap::FVector{payload.angVelX, payload.angVelY, payload.angVelZ});
-        UE_LOGI("remote_prop: clump RELEASE -> generic physics on + velocity |v|=%.1f cm/s (actor=%p)",
+        UE_LOGI("remote_prop: clump RELEASE -> collision on + physics + velocity |v|=%.1f cm/s (actor=%p)",
                 linSpeed, propActor);
+        // Throw WHOOSH: the clump is a plain AActor with no Aprop_C.thrown() to
+        // fire (so the Aprop_C DrivePropThrown path above can't apply). Play VOTV's
+        // object-throw sound at it -- the same whoosh the hand-grabbed mannequin
+        // makes (user req 2026-06-03). Same speed gate as the Aprop_C branch so a
+        // passive drop is silent. [[project-bug-trash-chippile-uaf-crash]]
+        if (linSpeed > coop::net::kThrownLinVelThreshold) {
+            coop::clump_throw_sound::PlayThrowWhoosh(propActor);
+        }
     }
     // Clear only the matching slot's drive state -- other slots' active
     // drives (if any) stay intact.
@@ -673,30 +688,41 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
     // Dispatched from event_feed::Update on the game thread (PropDestroy case).
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDestroy)");
     const std::wstring keyW = KeyToWString(payload.key);
-    if (keyW.empty()) {
-        UE_LOGW("remote_prop::OnDestroy: empty key -- dropping");
-        return;
+    // Resolve the doomed actor BEFORE draining the mirror. KEYED props resolve by Key (a
+    // separate key->actor index). The NON-KEYABLE trash clump rides key=None + an eid and
+    // resolves THROUGH the mirror Registry (ResolveLiveActorByEid -> Registry::Get(eid)),
+    // so UnregisterPropMirror MUST come AFTER this lookup -- draining first makes the eid
+    // resolve null and the mirror is never destroyed (the 2026-06-03 clump-dupe
+    // regression: "OnDestroy: eid=N has no local actor" while the ball kept piling up).
+    // Symmetric with the v26 eid-SPAWN; MTA Packet_EntityRemove resolves by element ID
+    // only. [[project-bug-trash-chippile-uaf-crash]]
+    void* actor = nullptr;
+    if (!keyW.empty()) {
+        actor = coop::prop_element_tracker::ResolveLiveActorByKey(keyW);
+    } else if (payload.elementId != 0 && payload.elementId != coop::element::kInvalidId) {
+        actor = ResolveLiveActorByEid(payload.elementId);
     }
-    // A2 (2026-05-29): drain the wire-received mirror Element FIRST,
-    // before any actor lookup. The mirror is wire-identity bookkeeping;
-    // it must vacate the Registry regardless of whether the local actor
-    // still exists (e.g. echo bounce where we initiated the destroy and
-    // the actor is already gone). UnregisterPropMirror is silent no-op
-    // for unknown eids (legacy senders with elementId==0, or pre-A2
-    // PropDestroy packets that never registered a mirror).
+    // Now drain the wire-received mirror Element. It must vacate the Registry regardless
+    // of whether the local actor still exists (echo bounce where we initiated the destroy
+    // and the actor is already gone). Done AFTER the eid resolution above so that lookup
+    // could still see it. Silent no-op for unknown eids (legacy elementId==0 senders).
     UnregisterPropMirror(payload.elementId);
-    void* actor = coop::prop_element_tracker::ResolveLiveActorByKey(keyW);
     if (!actor) {
-        UE_LOGI("remote_prop::OnDestroy: key '%ls' has no local actor (already destroyed or never spawned here)",
-                keyW.c_str());
+        if (keyW.empty() &&
+            (payload.elementId == 0 || payload.elementId == coop::element::kInvalidId)) {
+            UE_LOGW("remote_prop::OnDestroy: empty key AND no eid -- dropping");
+        } else {
+            UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u has no local actor (already destroyed or never spawned here)",
+                    keyW.c_str(), payload.elementId);
+        }
         return;
     }
     if (!ResolveDestroyFn()) {
         UE_LOGW("remote_prop::OnDestroy: K2_DestroyActor UFunction unresolved -- dropping");
         return;
     }
-    UE_LOGI("remote_prop::OnDestroy: key '%ls' -> destroying local actor %p",
-            keyW.c_str(), actor);
+    UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u -> destroying local actor %p",
+            keyW.c_str(), payload.elementId, actor);
     // If any slot was kinematically driving this prop, clear that slot's
     // cache so we don't try to drive a destroyed actor next tick.
     for (auto& d : g_drives) {
@@ -724,6 +750,23 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
     R::CallFunction(actor, g_destroyActorFn, nullptr);
 }
 
+void ConsumeLocalActor(void* actor) {
+    // Echo-suppressed local destroy. Used by OnSpawn to consume THIS peer's own copy of a
+    // shared world chipPile when the other peer grabbed theirs (the pile is a separate
+    // local UObject with no cross-peer id; we destroy it directly, by position). The
+    // MarkIncomingDestroy makes our own K2_DestroyActor PRE observer skip re-broadcasting
+    // it -- this is a local consume, not a new authoritative destroy to fan out.
+    // [[project-bug-trash-chippile-uaf-crash]]
+    UE_ASSERT_GAME_THREAD("ConsumeLocalActor (K2_DestroyActor)");
+    if (!actor || !R::IsLive(actor)) return;
+    if (!ResolveDestroyFn()) {
+        UE_LOGW("remote_prop::ConsumeLocalActor: K2_DestroyActor unresolved -- cannot consume %p", actor);
+        return;
+    }
+    coop::prop_echo_suppress::MarkIncomingDestroy(actor);
+    R::CallFunction(actor, g_destroyActorFn, nullptr);
+}
+
 void ForceRelease() {
     // Clears every slot's g_drives state (T-10, GT-only). Called from
     // remote_prop::Tick on disconnect and from aggregate teardown (game thread).
@@ -733,7 +776,11 @@ void ForceRelease() {
     int released = 0;
     for (auto& d : g_drives) {
         if (!d.actor) continue;
+        // Normal prop -> release to physics (persists). Null-mesh clump mirror -> destroy
+        // it (transient; the holder's death-watcher is gone on teardown -> would leak).
+        // [[project-bug-trash-chippile-uaf-crash]]
         if (d.mesh) DriveSimulate(d.mesh, true);
+        else        ConsumeLocalActor(d.actor);
         d.actor = nullptr;
         d.mesh = nullptr;
         d.lastKey.clear();
@@ -779,9 +826,20 @@ void OnDisconnectForSlot(int peerSlot) {
     }
     ActiveDrive& d = g_drives[peerSlot];
     if (!d.actor) return;
-    if (d.mesh) DriveSimulate(d.mesh, true);
-    UE_LOGI("remote_prop: peer slot %d disconnected -- releasing held prop (key='%s')",
-            peerSlot, d.lastKey.c_str());
+    if (d.mesh) {
+        // Normal world prop: release to physics -- it persists (convergent world object).
+        DriveSimulate(d.mesh, true);
+        UE_LOGI("remote_prop: peer slot %d disconnected -- releasing held prop (key='%s')",
+                peerSlot, d.lastKey.c_str());
+    } else {
+        // Null-mesh = the transient CLUMP mirror. The holder vanished mid-carry, so the
+        // death-watcher that would despawn it (it lives on the HOLDER) is gone -- destroy
+        // the mirror here or it leaks as a frozen floating ball on this peer.
+        // ConsumeLocalActor is echo-suppressed + IsLive-gated. [[project-bug-trash-chippile-uaf-crash]]
+        ConsumeLocalActor(d.actor);
+        UE_LOGI("remote_prop: peer slot %d disconnected mid-carry -- destroyed held clump mirror %p (no leak)",
+                peerSlot, d.actor);
+    }
     d.actor = nullptr;
     d.mesh = nullptr;
     d.lastKey.clear();

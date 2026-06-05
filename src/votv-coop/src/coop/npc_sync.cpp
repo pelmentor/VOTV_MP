@@ -34,6 +34,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace coop::npc_sync {
 namespace {
@@ -534,6 +535,47 @@ void OnDisconnect() {
     }
 
     g_incomingNpcSpawnClass.store(nullptr, std::memory_order_release);
+}
+
+void QueueConnectBroadcastForSlot(int peerSlot) {
+    // HOST-only: re-send EntitySpawn (class + CURRENT transform) for every already-spawned NPC
+    // to the freshly-connected client `peerSlot`, so a joiner mirrors NPCs that spawned BEFORE it
+    // joined (user 2026-06-04). The client's npc_mirror::OnEntitySpawn materializes each; the
+    // MirrorManager::Install is idempotent so a re-send to an already-mirroring peer is a no-op.
+    auto* s = LoadSession();
+    if (!s || s->role() != coop::net::Role::Host) return;
+    if (peerSlot < 1) return;  // SendReliableToSlot range-validates the upper bound
+
+    std::vector<coop::element::Npc*> elems;
+    NpcMirrors().Snapshot(elems);
+    int sent = 0, unbound = 0;
+    for (coop::element::Npc* el : elems) {
+        if (!el) continue;
+        void* actor = el->GetActor();
+        // Skip elements with no bound actor (a dev-spawned NPC whose POST observer didn't fire --
+        // see npc_sync.h follow-up) or a GC-purged actor; a real game-spawned NPC binds in POST.
+        if (!actor || !R::IsLiveByIndex(actor, el->GetInternalIdx())) { ++unbound; continue; }
+        coop::net::EntitySpawnPayload p{};
+        const std::string& tn = el->GetTypeName();
+        p.className.len = 0;
+        for (size_t i = 0; i < tn.size() && i < 63; ++i)
+            p.className.data[p.className.len++] = tn[i];
+        p.elementId = static_cast<uint32_t>(el->GetId());
+        const auto loc = ue_wrap::engine::GetActorLocation(actor);
+        const auto rot = ue_wrap::engine::GetActorRotation(actor);
+        p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
+        p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
+        if (s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::EntitySpawn, &p, sizeof(p)))
+            ++sent;
+    }
+    UE_LOGI("npc-sync: connect-snapshot -- sent %d existing NPC(s) to slot %d (%zu Npc Element(s), %d unbound-skipped)",
+            sent, peerSlot, elems.size(), unbound);
+}
+
+void TickPoseStream() {
+    // Increment 2 (next): host reads each live Npc Element's current world transform + publishes
+    // an EntityPose batch to the session for the net thread to fan out, so the client mirrors MOVE
+    // (they otherwise sit at the spawn pose). Stubbed until the EntityPose wire path lands.
 }
 
 void Install(coop::net::Session* session) {

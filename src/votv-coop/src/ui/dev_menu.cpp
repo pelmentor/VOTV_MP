@@ -5,6 +5,7 @@
 #include "coop/dev/force_weather.h"
 #include "coop/dev/freecam.h"
 #include "coop/dev/pos_hud.h"
+#include "coop/dev/add_points.h"
 #include "coop/dev/restore_vitals.h"
 #include "coop/dev/spawn_npc.h"
 #include "coop/dev/teleport_client.h"
@@ -66,6 +67,12 @@ void RenderSpawnNpc() {
     ImGui::TextDisabled("(host spawns + syncs)");
 }
 
+void RenderGivePoints() {
+    if (ImGui::Button("+1000 Points")) coop::dev::add_points::GivePoints(1000);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(local balance -- afford drone orders)");
+}
+
 // ---- the strict nested taxonomy (refined as features land) -------------------
 // Player > Movement/Vitals/HUD ; Game > Weather/Entities/Events ; Network >
 // Stats/Session ; Cosmetics > Skins. Network subs + Events + Cosmetics are still
@@ -81,6 +88,7 @@ const std::vector<Cat>& Tree() {
         { "Game", {
             { "Weather",  { { &RenderSnow, true } }, true },
             { "Entities", { { &RenderSpawnNpc, true } }, true },
+            { "Economy",  { { &RenderGivePoints, true } }, true },
             { "Events",   {}, true },
         }, true },
         { "Network", {

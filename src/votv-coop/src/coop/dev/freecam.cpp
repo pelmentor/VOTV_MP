@@ -240,14 +240,14 @@ DWORD WINAPI InputDriverThread(LPVOID) {
 
         // Drive movement on the GAME THREAD via Post (never touch UFunctions from
         // this worker thread). Collapse to AT MOST ONE queued tick: if the game is
-        // slower than this 125 Hz loop, posting unconditionally would back up the
+        // slower than this 60 Hz loop, posting unconditionally would back up the
         // queue (each task grabs the pump mutex). The pending flag keeps exactly one
         // in flight; the tick clears it. dt-scaling keeps motion correct.
         if (g_active.load() && !g_movePosted.exchange(true)) {
             GT::Post([] { g_movePosted.store(false); MovementTick(); });
         }
 
-        ::Sleep(8);
+        ::Sleep(16);  // 60 Hz (user-set 2026-06-04, was 125)
     }
     // Audit H11 (2026-05-27): shutdown observed; wake the wheel hook thread.
     // It's blocked in GetMessageW; without WM_QUIT it would hang until process

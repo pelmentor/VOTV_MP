@@ -1,6 +1,6 @@
-// coop/moderation.h -- host-side player-admin actions (Phase 2 TAB action menu).
+// coop/moderation.h -- host-side player-admin actions (player-list action menu).
 //
-// The host's interactive TAB scoreboard (ui::scoreboard) calls these when the
+// The host's interactive scoreboard (ui::scoreboard) calls these when the
 // host clicks a player row. This module is the single entry point for the three
 // actions: KICK + BAN are always available to the host; TELEPORT-TO-ME is the
 // dev-gated one (the scoreboard only shows it when [dev] devkeys is on -- this

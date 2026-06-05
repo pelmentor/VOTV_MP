@@ -1,0 +1,177 @@
+// coop/multiplayer_menu.cpp -- see coop/multiplayer_menu.h.
+//
+// Injects a "MULTIPLAYER" UButton above NEW GAME in VOTV's main menu and opens the
+// ImGui server browser when clicked. Mirrors coop::save_button_disable: a POST
+// observer on ui_menu_C::Tick (self IS the menu), FindPropertyOffset for the field
+// reads, isPause to target the MAIN menu (not the pause menu). The button is built
+// by ue_wrap::engine::InjectCanvasButton (engine substrate); this file owns the
+// feature: which menu, where, and that the click opens the browser.
+
+#include "coop/multiplayer_menu.h"
+
+#include "coop/ini_config.h"
+#include "ui/server_browser.h"
+#include "ue_wrap/engine.h"
+#include "ue_wrap/game_thread.h"
+#include "ue_wrap/log.h"
+#include "ue_wrap/reflection.h"
+#include "ue_wrap/sdk_profile.h"
+
+#include <windows.h>
+
+#include <atomic>
+#include <cstdint>
+
+namespace coop::multiplayer_menu {
+
+namespace R = ue_wrap::reflection;
+namespace GT = ue_wrap::game_thread;
+namespace E = ue_wrap::engine;
+namespace prof = ue_wrap::profile;
+
+namespace {
+
+std::atomic<bool> g_installed{false};   // observer registered
+std::atomic<bool> g_retrying{false};    // a retry thread is already running
+
+// Resolved once at install (UClass + UFunction + field offsets never move).
+void* g_tickFn = nullptr;               // ui_menu_C::Tick (observer anchor)
+int32_t g_buttonStartOff = -1;          // ui_menu_C -> button_start (UButton*, NEW GAME)
+int32_t g_texBtnStartOff = -1;          // ui_menu_C -> tex_btnStart (UTextBlock*)
+int32_t g_isPauseOff = -1;              // ui_menu_C -> isPause (bool)
+
+// Injected-button tracking (game-thread only -- touched solely in the Tick observer).
+void* g_injectedMenu = nullptr;         // the menu instance we last injected into
+void* g_button = nullptr;               // our MULTIPLAYER UButton
+bool  g_prevLmb = false;                // VK_LBUTTON state last tick (click-edge detect)
+bool  g_lmbPrimed = false;             // first-tick guard: seed g_prevLmb without firing an edge
+uint64_t g_lastInjectMs = 0;            // throttle inject attempts on failure / self-heal
+
+inline void* ReadPtr(void* base, int32_t off) {
+    return (base && off >= 0) ? *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(base) + off)
+                              : nullptr;
+}
+
+// Inject the MULTIPLAYER button into `menu`'s NEW GAME list (above NEW GAME).
+// Idempotent per instance (no-op if our button is already live in this menu).
+// Returns true if our button is present afterward. Game thread only.
+bool DoInject(void* menu) {
+    if (menu == g_injectedMenu && g_button && R::IsLive(g_button)) return true;  // already done
+    void* buttonStart = ReadPtr(menu, g_buttonStartOff);
+    void* texBtnStart = ReadPtr(menu, g_texBtnStartOff);
+    if (!buttonStart) return false;  // menu not fully constructed yet
+    g_button = nullptr;
+    if (E::InjectCanvasButton(buttonStart, L"MULTIPLAYER", texBtnStart, &g_button)) {
+        g_injectedMenu = menu;
+        UE_LOGI("multiplayer_menu: MULTIPLAYER button injected into menu=%p (button=%p)", menu, g_button);
+        return true;
+    }
+    return false;
+}
+
+// POST observer on ui_menu_C::Tick. `self` IS the menu (zero scan). Game thread.
+void OnMenuTickPost(void* self, void* /*function*/, void* /*params*/) {
+    if (!self) return;
+    // MAIN menu only -- the pause menu (isPause==true) shares ui_menu_C but has no
+    // NEW GAME button to sit above.
+    if (g_isPauseOff >= 0 && *(reinterpret_cast<uint8_t*>(self) + g_isPauseOff) != 0) return;
+
+    // Inject once per menu instance; self-heal if VOTV ever tore our button out
+    // (throttled to 1 attempt/s so a persistent failure never hammers SpawnObject).
+    const bool needInject = (self != g_injectedMenu) || !g_button || !R::IsLive(g_button);
+    if (needInject) {
+        const uint64_t now = ::GetTickCount64();
+        if (now - g_lastInjectMs >= 1000) { g_lastInjectMs = now; DoInject(self); }
+    }
+
+    // Click poll: a global LBUTTON press edge while hovering our button opens the
+    // browser. IsHovered() (a UFunction) is called ONLY on the press edge, not per
+    // frame. Suppressed while the browser is already up (it owns input then).
+    const bool down = (::GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    // Seed the edge state on the very first tick so a mouse button already held
+    // when the observer installs can't synthesize a phantom click on the button.
+    if (!g_lmbPrimed) { g_lmbPrimed = true; g_prevLmb = down; }
+    const bool pressEdge = down && !g_prevLmb;
+    g_prevLmb = down;
+    if (pressEdge && g_button && R::IsLive(g_button) && !ui::server_browser::IsOpen() &&
+        coop::ini_config::IsOurWindowForeground() && E::WidgetIsHovered(g_button)) {
+        UE_LOGI("multiplayer_menu: MULTIPLAYER clicked -> opening server browser");
+        ui::server_browser::Open();
+    }
+}
+
+// Resolve ui_menu_C + register the Tick observer. Returns true once installed.
+// Idempotent. Runs on the game thread (reflection + observer registration).
+bool TryInstall() {
+    if (g_installed.load(std::memory_order_acquire)) return true;
+
+    void* uiMenuCls = R::FindClass(prof::name::UiMenuClass);
+    if (!uiMenuCls) return false;  // menu BP not loaded yet -- caller retries
+
+    g_tickFn         = R::FindFunction(uiMenuCls, prof::name::UiMenuTickFn);
+    g_buttonStartOff = R::FindPropertyOffset(uiMenuCls, prof::name::UiMenuButtonStartProp);
+    g_texBtnStartOff = R::FindPropertyOffset(uiMenuCls, prof::name::UiMenuTexBtnStartProp);
+    g_isPauseOff     = R::FindPropertyOffset(uiMenuCls, prof::name::UiMenuIsPauseProp);
+    // button_start is the only field the inject NEEDS (we derive its VerticalBox);
+    // isPause gates main-vs-pause; tex_btnStart is optional (style only).
+    if (!g_tickFn || g_buttonStartOff < 0 || g_isPauseOff < 0) {
+        UE_LOGW("multiplayer_menu: resolve incomplete (tick=%p button_start=%d tex_btnStart=%d "
+                "isPause=%d) -- retry",
+                g_tickFn, g_buttonStartOff, g_texBtnStartOff, g_isPauseOff);
+        return false;
+    }
+    if (!GT::RegisterPostObserver(g_tickFn, &OnMenuTickPost)) {
+        UE_LOGE("multiplayer_menu: RegisterPostObserver(Tick) failed -- observer table full?");
+        return false;
+    }
+    g_installed.store(true, std::memory_order_release);
+    UE_LOGI("multiplayer_menu: INSTALLED (tickFn=%p button_start@+0x%X tex_btnStart@+0x%X isPause@+0x%X)",
+            g_tickFn, static_cast<unsigned>(g_buttonStartOff),
+            static_cast<unsigned>(g_texBtnStartOff), static_cast<unsigned>(g_isPauseOff));
+    return true;
+}
+
+// Bounded retry: ui_menu_C may not be loaded the instant Init() runs at boot. Post
+// TryInstall to the game thread every 500 ms until it succeeds (or ~60 s elapses).
+// One thread, self-exits on success. Mirrors freecam's lazy driver-thread pattern.
+DWORD WINAPI RetryThread(LPVOID) {
+    for (int i = 0; i < 120 && !g_installed.load(std::memory_order_acquire); ++i) {
+        GT::Post([] { TryInstall(); });
+        ::Sleep(500);
+    }
+    g_retrying.store(false, std::memory_order_release);
+    return 0;
+}
+
+}  // namespace
+
+void Init() {
+    // Opt-out kill switch (default ON -- this is a shipping feature, not a dev one,
+    // so it is NOT gated by the [dev] master switch). `[coop] multiplayer_menu_off=1`
+    // disables it.
+    if (coop::ini_config::IsIniKeyTrue("multiplayer_menu_off")) {
+        UE_LOGI("multiplayer_menu: disabled via [coop] multiplayer_menu_off=1");
+        return;
+    }
+    // Try immediately (the menu is usually already up when we boot); else retry.
+    GT::Post([] {
+        if (!TryInstall() && !g_retrying.exchange(true)) {
+            if (HANDLE t = ::CreateThread(nullptr, 0, &RetryThread, nullptr, 0, nullptr))
+                ::CloseHandle(t);
+            else
+                g_retrying.store(false, std::memory_order_release);
+        }
+    });
+}
+
+void ForceInjectNow() {
+    // TEST hook (coop::dev::menu_proceed): inject deterministically on the live menu,
+    // bypassing the observer-timing race in the brief post-bypass screenshot window.
+    // Ignores isPause (the caller has already reached the main menu). Game thread only.
+    if (!g_installed.load(std::memory_order_acquire)) TryInstall();
+    void* menu = R::FindObjectByClass(prof::name::UiMenuClass);
+    if (!menu || !R::IsLive(menu)) { UE_LOGW("multiplayer_menu: ForceInjectNow -- no live ui_menu_C"); return; }
+    UE_LOGW("multiplayer_menu: ForceInjectNow on menu=%p -> %s", menu, DoInject(menu) ? "injected" : "FAILED");
+}
+
+}  // namespace coop::multiplayer_menu

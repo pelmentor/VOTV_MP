@@ -59,29 +59,16 @@ void PlayIfStateChanged(void* puppetActor, uint8_t peerSlot, bool newState) {
     }
     if (!stateChanged) return;
 
-    // 2) Lazy-resolve UFunction + asset + attenuation pointers. Each
-    //    retried until non-null so we don't permanently cache nullptr if
-    //    an early packet arrives before asset load.
-    //
-    //    sGameplayStatics here is the CDO used by section 5
-    //    (PlaySoundAtLocation Call target). Post A-3 (2026-05-29) the
-    //    SpawnSoundAttenuation wrapper resolves its OWN GameplayStatics
-    //    CDO internally (see ResolveAttSpawn in engine.cpp), so the
-    //    !sAttenuation block no longer depends on this static being
-    //    populated first. Order kept stable for readability.
-    static void* sGameplayStatics = nullptr;
-    static void* sPlaySoundFn     = nullptr;
-    static void* sSoundAsset      = nullptr;
-    static void* sAttenuation     = nullptr;
+    // 2) Lazy-resolve the sound asset + attenuation. Each retried until
+    //    non-null so we don't permanently cache nullptr if an early packet
+    //    arrives before asset load. The GameplayStatics CDO + the
+    //    PlaySoundAtLocation UFunction are resolved + cached INSIDE
+    //    ue_wrap::engine::PlaySoundAtLocation (section 5) now, so they no
+    //    longer live here (RULE 2 -- one dispatch, shared with the trash-clump
+    //    throw whoosh in coop::clump_throw_sound).
+    static void* sSoundAsset  = nullptr;
+    static void* sAttenuation = nullptr;
 
-    if (!sGameplayStatics) {
-        sGameplayStatics = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
-    }
-    if (!sPlaySoundFn && sGameplayStatics) {
-        if (void* gsCls = R::ClassOf(sGameplayStatics)) {
-            sPlaySoundFn = R::FindFunction(gsCls, P::name::PlaySoundAtLocationFn);
-        }
-    }
     if (!sSoundAsset) {
         sSoundAsset = R::FindObject(P::name::FlashlightClickSoundName,
                                     P::name::SoundWaveClass);
@@ -94,49 +81,45 @@ void PlayIfStateChanged(void* puppetActor, uint8_t peerSlot, bool newState) {
     //    AddToRoot now live behind ue_wrap::engine::SpawnSoundAttenuation;
     //    gameplay code holds only the cached pointer.
     //
-    //    Sphere shape, 20m audible radius, 200m falloff. User feedback
-    //    2026-05-26: 2m/20m was too short -- bumped 10x so the click is
-    //    audible across a meaningful traversal distance on VOTV's
-    //    outdoor map. Defaults of SoundAttenuationConfig match exactly.
+    //    Sphere shape. History: 2m/20m (initial) was too short -> bumped
+    //    10x to 20m full-volume / 200m falloff (2026-05-26) so the click
+    //    carried across VOTV's outdoor map. User feedback 2026-06-03: that
+    //    is too FAR for a REMOTE player's toggle ("радиус звука включения
+    //    фонарика у puppet понизить в 3 раза") -- reduce the radius 3x. We
+    //    scale BOTH the full-volume sphere radius AND the falloff distance
+    //    by 1/3 so the whole envelope shrinks uniformly (6.67m full-volume
+    //    -> ~73m silence, was 20m -> 220m = exactly 1/3 the reach).
+    //
+    //    Puppet-only by construction: PlayIfStateChanged is ONLY ever
+    //    called from item_activate::ApplyToPuppet (the receiver path); the
+    //    local player's own flashlight click is VOTV's native sound, which
+    //    this code never touches. So this 1/3 only affects how far OTHERS
+    //    hear a remote player's flashlight toggle.
     if (!sAttenuation) {
-        ue_wrap::engine::SoundAttenuationConfig cfg{};  // VOTV flashlight defaults
+        ue_wrap::engine::SoundAttenuationConfig cfg{};  // generic baseline
+        cfg.extents[0]      /= 3.f;   // 2000cm (20m)   -> 667cm  (6.67m)
+        cfg.falloffDistance /= 3.f;   // 20000cm (200m) -> 6667cm (66.7m)
         sAttenuation = ue_wrap::engine::SpawnSoundAttenuation(cfg);
         if (sAttenuation) {
             UE_LOGI("flashlight: constructed native USoundAttenuation %p "
-                    "(sphere r=20m, falloff=200m, inverse)", sAttenuation);
+                    "(sphere r=6.67m, falloff=66.7m, inverse; radius/3 per "
+                    "2026-06-03 puppet-volume req)", sAttenuation);
         }
     }
 
-    // 4) Read puppet world location via the existing GetActorLocation
-    //    wrapper (replaces the prior local ActorClass + UFunction cache
-    //    duplicate). Rotation stays at zero (PlaySoundAtLocation does
-    //    not use orientation for a non-cone spatialised source).
+    // 4) Read puppet world location via the existing GetActorLocation wrapper.
     const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(puppetActor);
-    const ue_wrap::FRotator rot{};
 
-    // 5) Fire PlaySoundAtLocation. Tolerates nullptr attenuation -- plays
-    //    2D in that case (e.g. SpawnObject failed at startup). Per-call
-    //    transient UAudioComponent is engine-managed (auto-destroy when
-    //    playback finishes).
-    if (sSoundAsset && sGameplayStatics && sPlaySoundFn) {
-        ue_wrap::ParamFrame f(sPlaySoundFn);
-        f.Set<void*>(L"WorldContextObject", puppetActor);
-        f.Set<void*>(L"Sound", sSoundAsset);
-        f.SetRaw(L"Location", &loc, sizeof(loc));
-        f.SetRaw(L"Rotation", &rot, sizeof(rot));
-        f.Set<float>(L"VolumeMultiplier", 1.f);
-        f.Set<float>(L"PitchMultiplier", 1.f);
-        f.Set<float>(L"StartTime", 0.f);
-        f.Set<void*>(L"AttenuationSettings", sAttenuation);
-        f.Set<void*>(L"ConcurrencySettings", nullptr);
-        f.Set<void*>(L"OwningActor", puppetActor);
-        ue_wrap::Call(sGameplayStatics, f);
+    // 5) Fire the click via the shared PlaySoundAtLocation wrapper (resolves +
+    //    caches the GameplayStatics CDO + UFunction internally; tolerates a
+    //    null attenuation -> 2D). Owned by the puppet so it plays in its world.
+    if (sSoundAsset) {
+        ue_wrap::engine::PlaySoundAtLocation(puppetActor, sSoundAsset, loc, sAttenuation);
         UE_LOGI("flashlight: click sound played at puppet pos (%.0f, %.0f, %.0f) "
-                "attenuation=%p (sphere r=20m falloff=200m)",
+                "attenuation=%p (sphere r=6.67m falloff=66.7m)",
                 loc.X, loc.Y, loc.Z, sAttenuation);
     } else {
-        UE_LOGW("flashlight: click sound NOT played -- asset=%p gs=%p fn=%p",
-                sSoundAsset, sGameplayStatics, sPlaySoundFn);
+        UE_LOGW("flashlight: click sound NOT played -- asset unresolved (%p)", sSoundAsset);
     }
 }
 

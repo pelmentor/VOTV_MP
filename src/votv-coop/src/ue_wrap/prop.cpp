@@ -251,6 +251,83 @@ void* GetStaticMesh(void* prop) {
     return ReadField<void*>(prop, P::off::Aprop_StaticMesh);
 }
 
+// ---- chipType (trash variant) ------------------------------------------
+// Resolved via reflection, NOT a fixed offset: chipType lives at 0x0238 on the
+// chipPile/clump family but that SAME offset is StaticMesh on an Aprop_C, so a
+// fixed-offset write would corrupt an Aprop_C mesh pointer. FindPropertyOffset
+// returns -1 for any class lacking the property -> GetChipType returns 0 +
+// SetChipType no-ops -> safe on ANY actor. Per-class offset + setTex cached
+// (these run on the game thread from the spawn receiver / held-edge sender;
+// the mutex mirrors g_getKeyFnMutex's parallel-anim-worker safety).
+namespace {
+std::mutex g_chipTypeMutex;
+std::unordered_map<void*, int32_t> g_chipTypeOffByClass;  // UClass* -> offset (-1 = none)
+std::unordered_map<void*, void*>   g_setTexFnByClass;      // UClass* -> setTex UFunction*
+std::unordered_map<void*, void*>   g_turnToPileFnByClass;  // UClass* -> turnToPile UFunction* (chipPile only)
+
+int32_t ResolveChipTypeOffset(void* cls) {
+    if (!cls) return -1;
+    std::lock_guard<std::mutex> lk(g_chipTypeMutex);
+    auto it = g_chipTypeOffByClass.find(cls);
+    if (it != g_chipTypeOffByClass.end()) return it->second;
+    const int32_t off = R::FindPropertyOffset(cls, L"chipType");
+    g_chipTypeOffByClass[cls] = off;  // cache even -1 so we don't re-walk
+    return off;
+}
+
+void* ResolveSetTexFn(void* cls) {
+    if (!cls) return nullptr;
+    std::lock_guard<std::mutex> lk(g_chipTypeMutex);
+    auto it = g_setTexFnByClass.find(cls);
+    if (it != g_setTexFnByClass.end()) return it->second;
+    void* fn = R::FindFunction(cls, L"setTex");  // garbageClump has it; chipPile may not
+    g_setTexFnByClass[cls] = fn;
+    return fn;
+}
+
+void* ResolveTurnToPileFn(void* cls) {
+    if (!cls) return nullptr;
+    std::lock_guard<std::mutex> lk(g_chipTypeMutex);
+    auto it = g_turnToPileFnByClass.find(cls);
+    if (it != g_turnToPileFnByClass.end()) return it->second;
+    void* fn = R::FindFunction(cls, L"turnToPile");  // chipPile family only (clump has no turnToPile)
+    g_turnToPileFnByClass[cls] = fn;  // cache even null so we don't re-walk a non-chipPile
+    return fn;
+}
+}  // namespace
+
+uint8_t GetChipType(void* actor) {
+    if (!actor) return 0;
+    const int32_t off = ResolveChipTypeOffset(R::ClassOf(actor));
+    if (off < 0) return 0;
+    return *reinterpret_cast<const uint8_t*>(reinterpret_cast<const uint8_t*>(actor) + off);
+}
+
+void SetChipType(void* actor, uint8_t chipType) {
+    if (!actor) return;
+    void* cls = R::ClassOf(actor);
+    const int32_t off = ResolveChipTypeOffset(cls);
+    if (off < 0) return;  // not a chip-type actor (Aprop_C etc.) -- 0x0238 is StaticMesh there
+    *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(actor) + off) = chipType;
+    // Repaint the mesh from the new variant. setTex() -> getChipPileType picks the
+    // round-in-hand clump mesh for this chipType. No-op if the class has no setTex.
+    if (void* fn = ResolveSetTexFn(cls)) {
+        ue_wrap::ParamFrame f(fn);
+        ue_wrap::Call(actor, f);
+    }
+}
+
+void TurnChipPileToPile(void* chipPile, const FVector& velocity) {
+    if (!chipPile || !R::IsLive(chipPile)) return;
+    void* fn = ResolveTurnToPileFn(R::ClassOf(chipPile));
+    if (!fn) return;  // not a chipPile (clump/Aprop/other have no turnToPile) -- safe no-op
+    // turnToPile(FVector Velocity): the chipPile's "I just landed from a clump" entry
+    // (sets spwnd=true + fires impact dust+sound). Velocity drives the dust direction.
+    ue_wrap::ParamFrame f(fn);
+    f.SetRaw(L"Velocity", &velocity, sizeof(velocity));
+    ue_wrap::Call(chipPile, f);
+}
+
 std::wstring GetClassName(void* prop) {
     if (!prop) return {};
     return R::ClassNameOf(prop);
@@ -429,6 +506,40 @@ void* FindNearbySameClass(const std::wstring& className,
         if (dx * dx + dy * dy + dz * dz <= r2) return obj;
     }
     return nullptr;
+}
+
+void* FindNearestChipPile(const FVector& anchor, float radiusCm, float* outDist) {
+    if (outDist) *outDist = -1.f;
+    if (radiusCm <= 0.f) return nullptr;
+    ResolveExtraBases();
+    void* chipBase = ActorChipPileCls();
+    if (!chipBase) return nullptr;  // chipPile class not loaded yet
+    const float r2 = radiusCm * radiusCm;
+    float bestD2 = r2;
+    void* best = nullptr;
+    const int32_t n = R::NumObjects();
+    for (int32_t i = 0; i < n; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj) continue;
+        // IsLive FIRST -- it reads only the GUObjectArray slot flags; ClassOf below
+        // dereferences obj's OWN memory, which a GC pass could have freed between the
+        // null check and here (AV on a dying actor). Matches FindNearbySameClass's order.
+        // (audit fix 2026-06-03, [[feedback-islive-unsafe-on-freed-cached-pointer]])
+        if (!R::IsLive(obj)) continue;
+        // chipPile family ONLY (NON-Aprop_C, so IsDescendantOfProp can't gate it).
+        // WalksToBase is a few pointer compares; cheaper than the wstring CDO check.
+        if (!WalksToBase(R::ClassOf(obj), chipBase)) continue;
+        const std::wstring nm = R::ToString(R::NameOf(obj));
+        if (nm.rfind(L"Default__", 0) == 0) continue;  // skip CDOs
+        const FVector loc = engine::GetActorLocation(obj);
+        const float dx = loc.X - anchor.X;
+        const float dy = loc.Y - anchor.Y;
+        const float dz = loc.Z - anchor.Z;
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 <= bestD2) { bestD2 = d2; best = obj; }
+    }
+    if (best && outDist) *outDist = std::sqrt(bestD2);
+    return best;
 }
 
 void* FindByKeyString(const std::wstring& keyString) {

@@ -229,6 +229,31 @@ bool ResolveScreenWidgetFns() {
     return g_addToVpFn && g_widgetSetVisFn;
 }
 
+// ---- Runtime UMG button injection (MULTIPLAYER menu, P1) ----------------------
+// UClasses + UFunctions for inserting a UButton into a UVerticalBox. Resolved lazily
+// on the first InjectCanvasButton / WidgetIsHovered call (classes never move).
+// (AddChildToVerticalBox itself is resolved by ResolveNameplateFns -> g_npAddChildVBoxFn.)
+void* g_biButtonClass = nullptr, *g_biContentWidgetClass = nullptr;
+void* g_biSetContentFn = nullptr, *g_biIsHoveredFn = nullptr;
+void* g_biClearChildrenFn = nullptr;  // UPanelWidget::ClearChildren (insert-at-top reorder)
+
+bool ResolveButtonInjectFns() {
+    if (!ResolveNameplateFns()) return false;  // SpawnObject + UMG text classes + text fns + AddChildToVerticalBox
+    if (!g_biButtonClass) g_biButtonClass = R::FindClass(P::name::ButtonClass);
+    if (!g_biContentWidgetClass) g_biContentWidgetClass = R::FindClass(P::name::ContentWidgetClass);
+    if (g_biContentWidgetClass && !g_biSetContentFn)
+        g_biSetContentFn = R::FindFunction(g_biContentWidgetClass, P::name::SetContentFn);
+    if (void* pwc = R::FindClass(P::name::PanelWidgetClass)) {
+        if (!g_biClearChildrenFn) g_biClearChildrenFn = R::FindFunction(pwc, P::name::ClearChildrenFn);
+    }
+    // IsHovered + SetVisibility are owned by UWidget (FindFunction = owning class).
+    if (void* wc = R::FindClass(P::name::WidgetClass)) {
+        if (!g_biIsHoveredFn) g_biIsHoveredFn = R::FindFunction(wc, P::name::WidgetIsHoveredFn);
+        if (!g_widgetSetVisFn) g_widgetSetVisFn = R::FindFunction(wc, P::name::WidgetSetVisibilityFn);
+    }
+    return g_biButtonClass && g_biSetContentFn && g_biIsHoveredFn;
+}
+
 }  // namespace
 
 void* SpawnNameplateWidget(const FVector& location,
@@ -389,6 +414,131 @@ bool SpawnScreenTextWidget(void* outer, int zOrder, FVector2D alignment, FVector
     UE_LOGI("engine: SpawnScreenTextWidget root=%p txt=%p z=%d align=(%.1f,%.1f) pos=(%.0f,%.0f)",
             bt.root, bt.txt, zOrder, alignment.X, alignment.Y, position.X, position.Y);
     return true;
+}
+
+bool InjectCanvasButton(void* refButton, const wchar_t* label, void* refText,
+                        void** outButton) {
+    if (outButton) *outButton = nullptr;
+    if (!refButton || !label) return false;
+    if (!ResolveButtonInjectFns()) {
+        UE_LOGE("engine: InjectCanvasButton unresolved (btnCls=%p setContentFn=%p hoverFn=%p "
+                "clearChildrenFn=%p addVBoxFn=%p)",
+                g_biButtonClass, g_biSetContentFn, g_biIsHoveredFn, g_biClearChildrenFn,
+                g_npAddChildVBoxFn);
+        return false;
+    }
+
+    // refButton (e.g. NEW GAME) lives in a list panel -- a UVerticalBox. We add our
+    // button INTO that VerticalBox so it auto-positions exactly like the other menu
+    // items (the VBox owns layout/spacing -- no fragile canvas-anchor math), then
+    // reorder it to the TOP (above NEW GAME).
+    void* refSlot = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(refButton) + P::off::UWidget_Slot);
+    void* listBox = refSlot ? *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(refSlot) + P::off::UPanelSlot_Parent) : nullptr;
+    if (!listBox || !g_npAddChildVBoxFn) {
+        UE_LOGE("engine: InjectCanvasButton -- no list box / AddChildToVerticalBox (refSlot=%p listBox=%p addVBox=%p)",
+                refSlot, listBox, g_npAddChildVBoxFn);
+        return false;
+    }
+
+    void* button = SpawnObject(g_biButtonClass, listBox);
+    void* txt = button ? SpawnObject(g_npTbClass, button) : nullptr;
+    if (!button || !txt) {
+        UE_LOGE("engine: InjectCanvasButton SpawnObject failed (button=%p txt=%p)", button, txt);
+        return false;
+    }
+
+    // Label styling: clone the reference label's FSlateFontInfo + colour so our text
+    // matches NEW GAME exactly; else fall back to the nameplate's outlined default.
+    if (refText) {
+        auto* d = reinterpret_cast<uint8_t*>(txt);
+        auto* s = reinterpret_cast<uint8_t*>(refText);
+        std::memcpy(d + P::off::UTextBlock_Font, s + P::off::UTextBlock_Font,
+                    P::off::FSlateFontInfo_StructSize);
+        *reinterpret_cast<FLinearColor*>(d + P::off::UTextBlock_ColorAndOpacity) =
+            *reinterpret_cast<FLinearColor*>(s + P::off::UTextBlock_ColorAndOpacity);
+        *(d + P::off::UTextBlock_ColorAndOpacity + P::off::FSlateColor_ColorUseRule) =
+            *(s + P::off::UTextBlock_ColorAndOpacity + P::off::FSlateColor_ColorUseRule);
+        SetTextOnBlock(txt, label);
+    } else {
+        ConfigureTextBlock(txt, label, FLinearColor{1.f, 1.f, 1.f, 1.f}, 24, /*Center*/ 1);
+    }
+
+    // Nest the label inside the button (UContentWidget::SetContent).
+    { ParamFrame f(g_biSetContentFn); f.Set<void*>(L"Content", txt); Call(button, f); }
+
+    // Clone the reference button's visual style (brushes + tint) so ours matches.
+    if (refButton) {
+        auto* d = reinterpret_cast<uint8_t*>(button);
+        auto* s = reinterpret_cast<uint8_t*>(refButton);
+        std::memcpy(d + P::off::UButton_WidgetStyle, s + P::off::UButton_WidgetStyle,
+                    P::off::FButtonStyle_Size);
+        // FButtonStyle's two FSlateSound members each hold an unreflected
+        // TSharedPtr<FSlateSoundResource>; the raw memcpy shallow-aliased that
+        // refcounted pointer (no AddRef). Zero them so our button carries no
+        // aliased sound (it stays silent -- the click is driven by our poll, not
+        // the UButton's own OnClicked, so the press sound is irrelevant).
+        std::memset(d + P::off::UButton_WidgetStyle + P::off::FButtonStyle_PressedSlateSound, 0,
+                    P::off::FSlateSound_Size);
+        std::memset(d + P::off::UButton_WidgetStyle + P::off::FButtonStyle_HoveredSlateSound, 0,
+                    P::off::FSlateSound_Size);
+        *reinterpret_cast<FLinearColor*>(d + P::off::UButton_ColorAndOpacity) =
+            *reinterpret_cast<FLinearColor*>(s + P::off::UButton_ColorAndOpacity);
+        *reinterpret_cast<FLinearColor*>(d + P::off::UButton_BackgroundColor) =
+            *reinterpret_cast<FLinearColor*>(s + P::off::UButton_BackgroundColor);
+    }
+
+    // Insert at the TOP of the VerticalBox. UMG has no insert-at-index, so the
+    // canonical reorder is: snapshot the current children, ClearChildren (DETACHES
+    // them -- the widget OBJECTS survive, still referenced by ui_menu_C's fields), then
+    // re-add OUR button first + the originals after. If the snapshot fails (or the list
+    // is bigger than our buffer) we DELIBERATELY fall back to a plain append (bottom) so
+    // we NEVER ClearChildren without being able to fully restore the menu.
+    constexpr int kMaxList = 128;  // VOTV's menu VBox has ~13 children; generous headroom
+    void* prev[kMaxList]; int prevN = 0;
+    {
+        auto* sp = reinterpret_cast<uint8_t*>(listBox) + P::off::UPanelWidget_Slots;
+        void* data = *reinterpret_cast<void**>(sp);
+        const int32_t n = *reinterpret_cast<int32_t*>(sp + 0x8);
+        if (data && n > 0 && n <= kMaxList) {
+            auto** slots = reinterpret_cast<void**>(data);
+            for (int i = 0; i < n; ++i) {
+                if (void* sl = slots[i])
+                    prev[prevN++] = *reinterpret_cast<void**>(
+                        reinterpret_cast<uint8_t*>(sl) + P::off::UPanelSlot_Content);
+            }
+        } else if (n > kMaxList) {
+            UE_LOGW("engine: InjectCanvasButton -- VerticalBox has %d children (> cap %d); "
+                    "appending at bottom instead of inserting at top (no ClearChildren)", n, kMaxList);
+        }
+    }
+    auto addToVBox = [&](void* child) {
+        ParamFrame f(g_npAddChildVBoxFn); f.Set<void*>(L"Content", child); Call(listBox, f);
+    };
+    if (prevN > 0 && g_biClearChildrenFn) {
+        { ParamFrame cf(g_biClearChildrenFn); Call(listBox, cf); }
+        addToVBox(button);                                   // MULTIPLAYER -> index 0 (top)
+        for (int i = 0; i < prevN; ++i) addToVBox(prev[i]);  // originals re-added below
+        UE_LOGI("engine: InjectCanvasButton inserted at TOP of VerticalBox (%d items re-added below)", prevN);
+    } else {
+        addToVBox(button);
+        UE_LOGW("engine: InjectCanvasButton -- list snapshot empty (n=%d); appended at bottom", prevN);
+    }
+
+    // Force Visible (input-receiving) so the hover/click poll sees it.
+    if (g_widgetSetVisFn) {
+        ParamFrame f(g_widgetSetVisFn); f.Set<uint8_t>(L"InVisibility", 0); Call(button, f);
+    }
+
+    if (outButton) *outButton = button;
+    UE_LOGI("engine: InjectCanvasButton '%ls' button=%p listBox=%p", label, button, listBox);
+    return true;
+}
+
+bool WidgetIsHovered(void* widget) {
+    if (!widget || !ResolveButtonInjectFns() || !g_biIsHoveredFn) return false;
+    ParamFrame f(g_biIsHoveredFn);
+    if (!Call(widget, f)) return false;
+    return f.Get<bool>(L"ReturnValue");
 }
 
 }  // namespace ue_wrap::engine

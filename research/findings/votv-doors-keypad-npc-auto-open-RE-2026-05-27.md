@@ -1,4 +1,19 @@
 # RE: VOTV Doors + Keypads + NPC Auto-Open — Phase 5D extension
+
+> **2026-06-04 UPDATE — the hook strategy in this doc is SUPERSEDED.** This doc
+> proposes POST observers on `Open` / `inputNumber` / `falseEnterEvent` /
+> `SetActive`. IDA-proven 2026-06-04: those verbs are BP-internal (CallFunction ->
+> ProcessInternal @0x141302dc0, bypassing our ProcessEvent detour @0x141465930), so
+> a POST observer NEVER fires on them — the exact same trap that broke doors. The
+> SHIPPED design instead POLLS the state each tick (see `coop::interactable_sync`):
+> the keypad channel polls `isAcc@0x037C` and REPLAYS `Open(want)` on the receiver
+> (Open is BP-internal but CALLABLE). Field map (Sec 2.2), the Open verb (Sec 2.4
+> #1), keypad->door linkage (Sec 2.3), paired locks (Sec 2.3), and NPC-auto-open
+> (Sec 3) all remain VALID. Increment 1 SHIPPED v31 2026-06-04: green/red isAcc +
+> door unlock; keysHash cross-peer STABLE (0xF75D…/14). Digit-by-digit `inPassword`
+> mirror (Sec 5.5) is the deferred increment 2. See
+> `memory/project_coop_interactable_state_sync.md`.
+
 **Date**: 2026-05-27
 **Target**: Alpha 0.9.0-n
 **Method**: CXXHeaderDump static analysis. Builds on the 2026-05-25 doors+lights doc

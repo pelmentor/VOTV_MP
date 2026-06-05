@@ -123,6 +123,10 @@ add_library(votv-coop SHARED
     src/ue_wrap/engine_mainplayer.cpp
     src/ue_wrap/engine_playerragdoll.cpp
     src/ue_wrap/engine_attach.cpp
+    src/ue_wrap/door.cpp
+    src/ue_wrap/lightswitch.cpp
+    src/ue_wrap/passwordlock.cpp
+    src/ue_wrap/swinger.cpp
     src/ue_wrap/engine_pawn.cpp
     src/ue_wrap/engine_widget.cpp
     src/ue_wrap/reflected_offset.cpp
@@ -130,20 +134,26 @@ add_library(votv-coop SHARED
     src/ue_wrap/fname_utils.cpp
     src/ue_wrap/puppet.cpp
     src/ue_wrap/hud_feed.cpp
+    src/ue_wrap/economy.cpp
     src/ue_wrap/prop.cpp
     src/ue_wrap/vitals.cpp
     src/coop/remote_player.cpp
     src/coop/remote_prop.cpp
     src/coop/save_guard.cpp
+    src/coop/balance_sync.cpp
     src/coop/save_block.cpp
     src/coop/save_button_disable.cpp
+    src/coop/multiplayer_menu.cpp
     src/coop/nameplate.cpp
     src/coop/event_feed.cpp
+    src/coop/interactable_sync.cpp
+    src/coop/keypad_sync.cpp
     src/coop/player_handshake.cpp
     src/coop/grab_observer.cpp
     src/coop/item_activate.cpp
     src/coop/player_damage.cpp
     src/coop/flashlight_click_sound.cpp
+    src/coop/clump_throw_sound.cpp
     src/coop/shutdown.cpp
     src/coop/players_registry.cpp
     src/coop/npc_mirror.cpp
@@ -168,6 +178,12 @@ add_library(votv-coop SHARED
     src/coop/net/session_status.cpp
     src/coop/net/session_relay.cpp
     src/coop/net_pump.cpp
+    src/coop/dev/add_points.cpp
+    src/coop/dev/perf_probe.cpp
+    src/coop/dev/drone_probe.cpp
+    src/coop/dev/lightswitch_probe.cpp
+    src/coop/dev/keypad_probe.cpp
+    src/coop/dev/door_probe.cpp
     src/coop/dev/force_weather.cpp
     src/coop/dev/freecam.cpp
     src/coop/dev/flashlight_setup.cpp
@@ -175,9 +191,11 @@ add_library(votv-coop SHARED
     src/coop/dev/restore_vitals.cpp
     src/coop/dev/spawn_npc.cpp
     src/coop/dev/teleport_client.cpp
+    src/coop/dev/menu_proceed.cpp
     src/ui/imgui_overlay.cpp
     src/ui/dev_menu.cpp
     src/ui/scoreboard.cpp
+    src/ui/server_browser.cpp
     src/coop/roster.cpp
     src/coop/ban_list.cpp
     src/coop/moderation.cpp

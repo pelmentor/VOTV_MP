@@ -285,6 +285,13 @@ bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out) {
     return true;
 }
 
+void* ReadMainPlayerLookAtActor(void* mainPlayer) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return nullptr;
+    const int32_t off = ue_wrap::reflected_offset::MainPlayer_lookAtActor();
+    if (off < 0) return nullptr;
+    return *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(mainPlayer) + off);
+}
+
 bool WriteMainPlayerGrabbingPair(void* mainPlayer, void* actor, void* component) {
     if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
     auto* base = reinterpret_cast<uint8_t*>(mainPlayer);

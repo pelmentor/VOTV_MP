@@ -31,6 +31,8 @@
 #include "coop/weather_sync.h"
 #include "ui/dev_menu.h"
 #include "ui/imgui_overlay.h"
+#include "coop/multiplayer_menu.h"
+#include "coop/dev/menu_proceed.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/hud_feed.h"
 #include "ue_wrap/engine.h"
@@ -281,23 +283,33 @@ void SpawnSecondPlayerWhenReady() {
 // dropped -> must retry) and returns true once gameplay is reached; ~1.5 s/tick
 // throttles the opens. Blocks (worker thread) until loaded or the ~120 s cap.
 bool BootStorySaveBlocking() {
+    // FRESH-BOOT test gate (2026-06-04, project-ephemeral-client-host-authoritative-world):
+    // `fresh_boot=1` boots a BLANK New Game (StartFreshGame) instead of loading the save slot --
+    // the deterministic baseline for the ephemeral-client world snapshot. Off by default (loads
+    // the save). Isolated test: run a single instance with fresh_boot=1 and confirm gameplay is
+    // reached (no day-0 intro stall) + read the world.
+    const bool freshBoot = (cfg::ReadIniValue("fresh_boot", "0") == "1");
     // STORY save slot, from votv-coop.ini "save=<slot>" (defaults s_may2026). Coop
     // targets story mode, so we never boot the sandbox map fresh.
     const std::string slotA = cfg::ReadIniValue("save", "s_may2026");
     const std::wstring slot(slotA.begin(), slotA.end());  // ASCII slot name
-    UE_LOGI("harness: target STORY save '%ls'", slot.c_str());
+    UE_LOGI("harness: target %s '%ls'", freshBoot ? "FRESH New Game (blank save)" : "STORY save", slot.c_str());
     for (int i = 0; i < 80; ++i) {  // ~120 s cap (boot + omega + level load)
         if (coop::shutdown::IsShuttingDown()) {
             UE_LOGI("harness: BootStorySaveBlocking aborting -- shutdown signaled");
             return false;
         }
         auto st = std::make_shared<std::atomic<int>>(0);  // 0 pending,1 retry,2 ok
-        Post([slot, st] { st->store(ue_wrap::engine::LoadStorySave(slot.c_str()) ? 2 : 1); });
+        Post([slot, st, freshBoot] {
+            const bool inGame = freshBoot ? ue_wrap::engine::StartFreshGame(/*storyMode=*/true)
+                                          : ue_wrap::engine::LoadStorySave(slot.c_str());
+            st->store(inGame ? 2 : 1);
+        });
         while (st->load() == 0) ::Sleep(5);
         if (st->load() == 2) return true;
         ::Sleep(1500);
     }
-    UE_LOGW("harness: did not reach story gameplay in time for '%ls'", slot.c_str());
+    UE_LOGW("harness: did not reach gameplay in time (fresh_boot=%d, '%ls')", freshBoot ? 1 : 0, slot.c_str());
     return false;
 }
 
@@ -467,24 +479,12 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                             ax, ay, az, ayaw, apitch, cur.X, cur.Y, cur.Z, teleported ? 1 : 0);
                 });
                 ::Sleep(100);
-            } else if (netCfg.role == coop::net::Role::Client) {
-                Post([] {
-                    void* local = coop::players::Registry::Get().Local();
-                    if (!local) {
-                        UE_LOGW("client KPP teleport: local mainPlayer not in world yet");
-                        return;
-                    }
-                    const ue_wrap::FVector kpp{
-                        P::name::kKPPSpawnX,
-                        P::name::kKPPSpawnY,
-                        P::name::kKPPSpawnZ,
-                    };
-                    ue_wrap::engine::SetActorLocation(local, kpp);
-                    UE_LOGI("client KPP teleport: mainPlayer -> (%.0f,%.0f,%.0f)",
-                            kpp.X, kpp.Y, kpp.Z);
-                });
-                ::Sleep(100);  // let the posted task run before session.Start
             }
+            // NOTE: a CLIENT no longer teleports to a fixed КПП checkpoint here. A joining client
+            // appears at the HOST's position (user 2026-06-04): on the connect edge the HOST sends
+            // its own player pose to the joiner (net_pump -> teleport_client::TeleportSlotToHost,
+            // ReliableKind::TeleportClient -- the existing teleport-to-host mechanism, reused), and
+            // the client applies it on its local player. No КПП constant, no puppet-polling crutch.
             coop::event_feed::SetLocalNickname(cfg::ReadNickname());
             coop::event_feed::OnSessionStart();
             // Reset net_pump edge-detector state (g_wasConnected[BySlot] +
@@ -600,18 +600,14 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                         }
                     });
                 }
-                // 125 Hz pump for MAX SMOOTHNESS: RemotePlayer::Tick advances the
-                // interp at game-frame rate (up to ~120 fps), so the 50 ms LERP
-                // window resolves to ~6 micro-steps -- no visible stepping. The
-                // earlier 60 Hz cap was a workaround for 2-instance same-machine
-                // LAN-test CPU starvation; HANDS-ON play is a single host instance
-                // (the client runs in a separate game folder = separate process =
-                // its own CPU/GPU budget), so the 2-process contention scenario
-                // doesn't apply here. Tick is cheap (~3 UFunction writes per call,
-                // dirty-gated; SetLocalPose lock + 20-byte copy). If a future
-                // multi-instance test surfaces starvation again, the proper fix
-                // is a per-frame engine hook -- not dropping the rate.
-                ::Sleep(8);
+                // 60 Hz pump (user-set 2026-06-04): the earlier 125 Hz bump assumed
+                // "separate process = separate GPU/CPU budget", but two UE4 instances
+                // still share ONE machine's GPU, so 125 Hz just doubled per-tick work +
+                // self-induced ProcessEvent re-entry for no real smoothness gain (the
+                // 15-FPS perf audit measured the mod ~100 FPS regardless; the rate was
+                // not the win it was assumed to be). RemotePlayer::Tick still advances
+                // interp at game-frame rate, so the 50 ms LERP window is smooth at 60 Hz.
+                ::Sleep(16);
             }
         } else {
             SpawnSecondPlayerWhenReady();
@@ -756,12 +752,24 @@ void Start() {
     // overlay installs the DXGI present hook (ImGui brings up on the first frame).
     // Visible to all players; dev categories gate on [dev] devkeys inside the menu.
     ui::dev_menu::Init();
-    // TAB player-list scoreboard (a second overlay surface, shown to everyone). The
+    // Player-list scoreboard (a second overlay surface, shown to everyone, on tilde). The
     // roster snapshot reads this session; Refresh() runs in the game-thread ticks.
     coop::roster::SetSession(&g_session);
     if (!ui::imgui_overlay::Init()) {
         UE_LOGW("harness: imgui_overlay::Init failed -- F1 menu unavailable this run");
     }
+
+    // MULTIPLAYER entry point: inject the native button above NEW GAME in VOTV's
+    // main menu; clicking it opens the ImGui server browser (a third overlay
+    // surface). Resolves ui_menu_C lazily (bounded retry if the BP isn't loaded
+    // yet at boot). Shipping feature -- default on; [coop] multiplayer_menu_off=1
+    // disables it.
+    coop::multiplayer_menu::Init();
+
+    // TEST-ONLY (VOTVCOOP_MENU_PROCEED=1): auto-advance past the begin/OMEGA
+    // content-warning screen so an autonomous run reaches the MAIN MENU for the
+    // button screenshot. Never on by default (the warning is a real gate).
+    coop::dev::menu_proceed::Init();
 
     // The VOTVCOOP_SPAWN_TRIGGER file watcher (autonomous NPC-spawn path that
     // exercises host AllocAndInstall + broadcast + client mirror Install). Hands-on

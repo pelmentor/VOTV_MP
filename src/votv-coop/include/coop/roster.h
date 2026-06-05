@@ -1,6 +1,6 @@
-// coop/roster.h -- thread-safe player-roster snapshot for the TAB scoreboard.
+// coop/roster.h -- thread-safe player-roster snapshot for the player-list scoreboard.
 //
-// Gameplay/network layer (principle 7). The TAB scoreboard renders on the RENDER
+// Gameplay/network layer (principle 7). The scoreboard renders on the RENDER
 // thread but the roster facts live in game-thread-owned state (Session connection
 // slots + player_handshake's std::wstring nicknames). Reading those directly off
 // the render thread would race the game thread, so this module snapshots them on

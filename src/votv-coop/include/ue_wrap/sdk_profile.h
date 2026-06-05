@@ -113,6 +113,27 @@ inline constexpr size_t FFontOutlineSettings_OutlineSize  = 0x00; // int32 withi
 inline constexpr size_t FFontOutlineSettings_OutlineColor = 0x10; // FLinearColor within FFontOutlineSettings. SlateCore.hpp:165
 inline constexpr size_t FSlateColor_ColorUseRule = 0x10;       // within UTextBlock_ColorAndOpacity (0=UseColor_Specified)
 
+// MULTIPLAYER menu-button inject (P1, 2026-06-04): insert a UButton at the TOP of
+// the UVerticalBox that holds button_start (NEW GAME), inside ui_menu_C. All UMG.hpp /
+// SlateCore.hpp cited.
+inline constexpr size_t UWidget_Slot = 0x0028;                 // UWidget::Slot (UPanelSlot*) -- the layout-slot back-pointer. UMG.hpp:1742
+inline constexpr size_t UPanelSlot_Parent = 0x0028;            // UPanelSlot::Parent (UPanelWidget*) -- the containing panel. UMG.hpp:1009
+inline constexpr size_t UPanelSlot_Content = 0x0030;           // UPanelSlot::Content (UWidget*). UMG.hpp:1010
+inline constexpr size_t UPanelWidget_Slots = 0x0108;           // UPanelWidget::Slots (TArray<UPanelSlot*>). UMG.hpp:1016
+inline constexpr size_t UButton_WidgetStyle = 0x0128;          // FButtonStyle (size 0x278). UMG.hpp:287
+inline constexpr size_t UButton_ColorAndOpacity = 0x03A0;      // FLinearColor. UMG.hpp:288
+inline constexpr size_t UButton_BackgroundColor = 0x03B0;      // FLinearColor. UMG.hpp:289
+inline constexpr size_t FButtonStyle_Size = 0x278;             // clone size for the button-style copy (matches NEW GAME)
+// FButtonStyle carries two FSlateSound members; each holds an UNREFLECTED
+// TSharedPtr<FSlateSoundResource> (0x10 past the 0x8 ResourceObject). A raw
+// FButtonStyle memcpy would shallow-alias that refcounted ptr -- so the clone
+// ZEROES these two fields (our button is silent; no aliased TSharedPtr). Offsets
+// are WITHIN FButtonStyle. SlateCore.hpp:18-19,320-324.
+inline constexpr size_t FButtonStyle_PressedSlateSound = 0x248;  // FSlateSound (0x18) within FButtonStyle
+inline constexpr size_t FButtonStyle_HoveredSlateSound = 0x260;  // FSlateSound (0x18) within FButtonStyle
+inline constexpr size_t FSlateSound_Size = 0x18;                 // SlateCore.hpp:324
+inline constexpr size_t FSlateFontInfo_StructSize = 0x58;      // full FSlateFontInfo clone size (font object + size + outline + spacing)
+
 // UStruct / UFunction / FField / FProperty layout (UE4.27, 4.25+ FField system).
 // Derived from the shipping UObject::ProcessEvent decompile (rva 0x1465930):
 // it allocs PropertiesSize, memcpy's ParmsSize from the caller params, walks the
@@ -822,6 +843,20 @@ inline constexpr const wchar_t* UiMenuClass = L"ui_menu_C";                   //
 inline constexpr const wchar_t* UiMenuTickFn = L"Tick";                       // ui_menu_C::Tick(FGeometry,float) -- engine ProcessEvent-dispatched while visible (self-heal anchor)
 inline constexpr const wchar_t* UiMenuButtonSaveProp = L"button_Save";        // UButton* @ ui_menu_C+0x2D0 (the "Save Game" button)
 inline constexpr const wchar_t* UiMenuIsPauseProp = L"isPause";               // bool @ ui_menu_C+0x4C0 (true => the in-game pause menu, not the main menu)
+
+// MULTIPLAYER menu button (P1, 2026-06-04): UMG classes + UFunctions to construct a
+// UButton at runtime inside the live menu. Class names are UE FNames (no U-prefix,
+// like UserWidget/TextBlock/Widget above). Each UFunction resolves on its OWNING
+// class (FindFunction does not super-walk).
+inline constexpr const wchar_t* ButtonClass = L"Button";                      // UButton
+inline constexpr const wchar_t* PanelWidgetClass = L"PanelWidget";            // UPanelWidget (owns Slots/ClearChildren; base of CanvasPanel/HBox/VBox)
+inline constexpr const wchar_t* ContentWidgetClass = L"ContentWidget";        // UContentWidget (owns SetContent; UButton is-a ContentWidget)
+inline constexpr const wchar_t* SetContentFn = L"SetContent";                 // UContentWidget::SetContent(UWidget*)->UPanelSlot*
+inline constexpr const wchar_t* WidgetIsHoveredFn = L"IsHovered";             // UWidget::IsHovered()->bool ReturnValue
+inline constexpr const wchar_t* ClearChildrenFn = L"ClearChildren";           // UPanelWidget::ClearChildren() -- detach all children (objects survive); for the insert-at-top reorder
+// ui_menu_C fields for the inject (resolved by FindPropertyOffset -- recook-robust).
+inline constexpr const wchar_t* UiMenuButtonStartProp = L"button_start";      // UButton*  @ +0x2E0 (NEW GAME -- the inject derives its VerticalBox + clones its style)
+inline constexpr const wchar_t* UiMenuTexBtnStartProp = L"tex_btnStart";      // UTextBlock* @ +0x3A8 (NEW GAME label -- font/color template)
 inline constexpr const wchar_t* MainPlayerEscapeFn = L"InpActEvt_Escape_K2Node_InputKeyEvent_0";  // engine input event that opens the pause menu (ProcessEvent-dispatched, same class as the flashlight InpActEvt_* we already observe)
 // Head-bone anchoring (USceneComponent::GetSocketLocation world; enumerate bones to find head).
 inline constexpr const wchar_t* GetSocketLocationFn = L"GetSocketLocation";  // (FName)->FVector (world)

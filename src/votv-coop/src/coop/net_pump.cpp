@@ -6,7 +6,16 @@
 
 #include "coop/net_pump.h"
 
+#include "coop/balance_sync.h"
+#include "coop/dev/drone_probe.h"
+#include "coop/dev/teleport_client.h"  // TeleportSlotToHost: spawn a joiner at the host pose (connect edge)
+#include "coop/dev/keypad_probe.h"
+#include "coop/dev/door_probe.h"
+#include "coop/dev/lightswitch_probe.h"
+#include "coop/dev/perf_probe.h"
 #include "coop/element/element_deleter.h"
+#include "coop/interactable_sync.h"
+#include "coop/keypad_sync.h"
 #include "coop/event_feed.h"
 #include "coop/garbage_sync.h"
 #include "coop/trash_collect_sync.h"
@@ -273,8 +282,11 @@ void InstallObservers(coop::net::Session& session) {
     coop::item_activate::Install(&session);  // Phase 5F flashlight
     coop::player_damage::Install(&session);  // vitals Inc3-WIRE damage relay (send + owner-apply)
     coop::weather_sync::Install(&session);   // Phase 5W weather
+    coop::interactable_sync::Install(&session);  // Phase 5D doors + lights + container lids
+    coop::keypad_sync::Install(&session);    // v33 password-keypad mirror (its own module)
     coop::garbage_sync::SetSession(&session);
     coop::garbage_sync::Install();           // Phase 5G garbage
+    coop::balance_sync::SetSession(&session); // v30 shared host-authoritative balance
     // (trash_collect_sync has no observer to install -- playerTryToCollect is
     // BP-internal; it acts on the held-prop edge below, see EnsureHeldItemBroadcast.)
     // PR-FOUNDATION-2 (B): client world-save block (host-only persistence).
@@ -315,6 +327,14 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // invariant for everything below it.
     UE_ASSERT_GAME_THREAD("net_pump::Tick (g_puppets + ElementDeleter::Flush)");
 
+    // Perf probe (MEASURE-first 15-FPS audit; ini perf_probe=1). Init self-latches;
+    // Sample self-throttles to ~1 Hz. The whole-Tick Scope brackets the body so the
+    // 1 Hz report shows net_pump::Tick's own ms/frame against the per-subsystem buckets.
+    namespace PP = coop::dev::perf_probe;
+    PP::Init();
+    PP::Sample();
+    PP::Scope _tickScope{PP::Bucket::NetPumpTick};
+
     // Deferred-element destruction flush (MTA CElementDeleter shape; see
     // coop/element/element_deleter.h). Drains, on the game thread at one
     // controlled point, any Elements parked for destruction by owner-map
@@ -336,6 +356,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // (each peer maintains its OWN local props). Game-thread (this Tick) -- the
     // reaper Enqueues to the deleter, flushed at the top of the NEXT tick.
     {
+        PP::Scope _s{PP::Bucket::Reaper};
         using ReapClock = std::chrono::steady_clock;
         static ReapClock::time_point sNextReap{};
         // The reaper evicts up to this many dead Prop Elements per 4s scan (bounds
@@ -483,6 +504,17 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                 coop::prop_snapshot::TriggerForSlot(slot);
                 coop::item_activate::QueueConnectBroadcastForSlot(slot);
                 coop::weather_sync::QueueConnectBroadcastForSlot(slot);
+                coop::interactable_sync::QueueConnectBroadcastForSlot(slot);  // door/light/container states
+                coop::keypad_sync::QueueConnectBroadcastForSlot(slot);        // v33 keypad states
+                coop::npc_sync::QueueConnectBroadcastForSlot(slot);           // existing NPCs -> joiner (mirror NPCs that spawned before the join)
+                coop::balance_sync::OnClientConnect(slot);  // v30: send the host's current balance to the joiner
+                // v34: spawn the joiner AT THE HOST (not a fixed КПП). Reuse the existing
+                // host->client "teleport to host pose" mechanism (ReliableKind::TeleportClient) --
+                // the host snapshots its own player pose (game thread) + sends it to this slot; the
+                // client applies it. RULE 2: no new message, the teleport-to-host pose payload
+                // already exists. The client applies on its local player once in world (the connect
+                // handshake takes long enough that the client's local player is ready by now).
+                coop::dev::teleport_client::TeleportSlotToHost(slot);
                 // T2-4: also catch the new client up to EXISTING peers'
                 // current item state (the lines above replay only the HOST's
                 // own state + host-authoritative weather/props).
@@ -509,6 +541,10 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         coop::npc_sync::OnDisconnect();
         coop::item_activate::OnDisconnect();
         coop::weather_sync::OnDisconnect();
+        coop::interactable_sync::OnDisconnect();
+        coop::keypad_sync::OnDisconnect();
+        coop::trash_collect_sync::OnDisconnect();
+        coop::balance_sync::OnDisconnect();  // v30: reset the balance broadcast dedup
         UE_LOGI("net: all peers gone -- cleared %zu un-enumerated snapshot candidate(s) + %zu Init-processed entries; takeObjInFlight=0",
                 snapPending, propStats.initProcessedDropped);
 
@@ -534,14 +570,26 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
 
     // Process up to ~100 snapshot candidates per tick if a snapshot enumeration
     // is in progress (no-op on empty vector).
-    if (isConnected) coop::prop_snapshot::DrainChunk();
+    if (isConnected) { PP::Scope _s{PP::Bucket::SnapshotDrain}; coop::prop_snapshot::DrainChunk(); }
 
     // Per-tick drains for subsystems that internally retry until the reliable
     // channel accepts a queued connect-time broadcast (item_activate +
     // weather_sync) and apply any per-peer payloads that arrived BEFORE the
     // corresponding puppet was spawned. Cheap early-return when no pending state.
-    coop::item_activate::TickConnect();
-    coop::weather_sync::TickConnect();
+    { PP::Scope _s{PP::Bucket::ItemConnect};   coop::item_activate::TickConnect(); }
+    { PP::Scope _s{PP::Bucket::WeatherConnect}; coop::weather_sync::TickConnect(); }
+    { PP::Scope _s{PP::Bucket::Interactable};  coop::interactable_sync::Tick(); }  // retry deferred door/light/container applies (still streaming in)
+    { PP::Scope _s{PP::Bucket::Interactable};  coop::keypad_sync::Tick(); }        // v33 keypad poll + deferred-apply retry
+    { PP::Scope _s{PP::Bucket::TrashWatch};    coop::trash_collect_sync::TickWatchReleasedClumps(&session); }  // despawn clumps whose unobservable morph-destroy fired
+    { PP::Scope _s{PP::Bucket::Balance};       coop::balance_sync::Tick(); }       // v30: host polls saveSlot.Points + broadcasts on change; client retries the pending mirror apply
+    coop::dev::drone_probe::Install();  // dev-only delivery-drone RE probe (ini drone_probe=1; self-latches + retries until the BP class loads)
+    coop::dev::drone_probe::Tick();     // polls drone state + saveSlot order/economy + radar membership; reports which verbs are ProcessEvent-observable
+    coop::dev::lightswitch_probe::Install();  // dev-only light-switch sync RE probe (ini lightswitch_probe=1)
+    coop::dev::lightswitch_probe::Tick();     // one-shot synthetic flip -> is SetActive BP-internal + does use() flip both switch+lights
+    coop::dev::keypad_probe::Install();        // dev-only keypad digit-entry RE probe (ini keypad_probe=1)
+    coop::dev::keypad_probe::Tick();           // synthetic inputNumber sequence -> does it append inPassword + flip isAcc (increment-2 design)
+    coop::dev::door_probe::Install();          // dev-only door state-machine RE probe (ini door_probe=1)
+    coop::dev::door_probe::Tick();             // scripted doorOpen/suppress/settime experiment -> what re-closes a host door?
 
     // (The local-death flee to the main menu now happens SYNCHRONOUSLY on the death
     // frame in the teardown block below -- arm the held bypass + engine::ReturnToMainMenu
@@ -605,7 +653,11 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                 coop::prop_snapshot::OnDisconnect();
                 coop::npc_sync::OnDisconnect();
                 coop::item_activate::OnDisconnect();
-                        coop::weather_sync::OnDisconnect();
+                coop::weather_sync::OnDisconnect();
+                coop::interactable_sync::OnDisconnect();
+                coop::keypad_sync::OnDisconnect();
+                coop::trash_collect_sync::OnDisconnect();
+                coop::balance_sync::OnDisconnect();  // v30: reset balance dedup on death teardown too (else a permadeath-rejoin skips the opening BalanceSync)
                 // Flee to the MAIN MENU and HOLD our layer dormant (shared with the
                 // host-close eject). The balloon is VOTV's own possessed-ragdoll leak in
                 // the GAMEPLAY world (only cure: leave it); FleeToMainMenu resets the edge
@@ -624,9 +676,10 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         if (g_netLocalController && !R::IsLive(g_netLocalController)) g_netLocalController = nullptr;
         if (!g_netLocalController) g_netLocalController = ue_wrap::engine::GetController(g_netLocal);
         // One-shot install of the per-subsystem observers (idempotent).
-        InstallObservers(session);
+        { PP::Scope _s{PP::Bucket::InstallObs}; InstallObservers(session); }
         coop::net::PoseSnapshot mine;
-        if (ReadLocalPose(g_netLocal, g_netLocalController, mine)) session.SetLocalPose(mine);
+        { PP::Scope _s{PP::Bucket::LocalSend};
+          if (ReadLocalPose(g_netLocal, g_netLocalController, mine)) session.SetLocalPose(mine); }
 
         // Held-prop replication. Read mainPlayer.grabbing_actor; if non-null,
         // build a PropPoseSnapshot from the prop's current world transform and
@@ -819,6 +872,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // is a harmless no-op at those slots.) Each slot has its own RemotePlayer
     // puppet + spawn-retry backoff.
     {
+        PP::Scope _s{PP::Bucket::Puppets};
         using namespace std::chrono;
         // Per-slot spawn retry timer (static-local: harmless across session
         // restarts because the timer is monotonic and a stale "wait until X"
@@ -905,13 +959,13 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // Receiver-side held-prop driver. Drains the latest PropPose from the
     // session and applies it (lookup-by-Key on first arrival, transform writes
     // thereafter). Stream-stop timeout (>500 ms) treated as implicit release.
-    coop::remote_prop::Tick(session);
+    { PP::Scope _s{PP::Bucket::RemoteProp}; coop::remote_prop::Tick(session); }
 
     // Surface session events (joins/disconnects) to the feed + send our Join.
     // Pass g_netLocal so remote_prop::OnRelease can call Aprop_C.thrown(player)
     // for the natural throw-sound dispatch (Path B in
     // research/findings/votv-throw-sound-path-2026-05-24.md).
-    coop::event_feed::Update(session, g_netLocal);
+    { PP::Scope _s{PP::Bucket::EventFeed}; coop::event_feed::Update(session, g_netLocal); }
 
     // Expire old chat-feed lines (10 s TTL) so a "X joined the game" line
     // doesn't linger forever.

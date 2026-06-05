@@ -5,8 +5,10 @@
 // puppet's world location via UGameplayStatics::PlaySoundAtLocation, with
 // a RUNTIME-CONSTRUCTED USoundAttenuation override (RULE 1 native path --
 // no borrowing of VOTV's cooked `att_*` content assets). Sphere shape:
-// 20m inner radius (full volume) -> 200m falloff to silence, inverse
-// distance algorithm. The attenuation object is `R::AddToRoot`ed so UE4
+// 6.67m inner radius (full volume) -> ~73m to silence, inverse distance
+// algorithm (radius reduced 3x on 2026-06-03 per user req -- a remote
+// player's toggle carried too far; the whole envelope was scaled 1/3 from
+// the prior 20m/220m). The attenuation object is `R::AddToRoot`ed so UE4
 // GC never collects it (a C++ static void* is invisible to the GC reach
 // scan; without rooting the object dangles on the next GC pass and
 // PlaySoundAtLocation crashes on rapid toggle).

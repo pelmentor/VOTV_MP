@@ -129,4 +129,12 @@ void OnDisconnectForSlot(int peerSlot);
 // for the common case where the destroyed prop isn't grabbed.
 void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer);
 
+// Echo-suppressed local destroy of an actor we OWN a copy of. Used to CONSUME
+// this peer's own copy of a shared world chipPile when the other peer grabbed
+// theirs (the pile is loaded independently per peer, key=None, no cross-peer id,
+// so it's resolved by POSITION and destroyed directly -- not via a wire eid).
+// MarkIncomingDestroy ensures our K2_DestroyActor PRE observer doesn't re-broadcast
+// it. Game-thread only. No-op for null/dead. [[project-bug-trash-chippile-uaf-crash]]
+void ConsumeLocalActor(void* actor);
+
 }  // namespace coop::remote_prop

@@ -50,21 +50,48 @@ std::atomic<bool> g_isClient{false};
 uint8_t   g_lastHostFogBits = 0xFF;
 long long g_lastDetectMs    = 0;
 
+// Super-fog presence cache (perf 2026-06-04). The 3 Hz fog-edge detector used to
+// call CountObjectsByClass(SuperFogClass) -- a FULL ~1M-entry GUObjectArray walk
+// with a wstring alloc PER entry -- which measured ~90-150 ms/s on the host (the
+// single biggest mod cost; perf_probe weatherConn bucket). Super-fog is a rare,
+// minutes-long UFO encounter, so: cache the actor + revalidate by index (O(1),
+// catches the DESPAWN edge every detection) and only WALK to find a freshly-spawned
+// one on a coarse throttle (5 s edge latency is fine for a multi-minute event, and
+// the apply path is clear-only anyway). Drops the walk from 3 Hz to <=0.2 Hz.
+void*     g_superFogActor   = nullptr;
+int32_t   g_superFogIdx     = -1;
+long long g_lastSuperScanMs = 0;
+
 long long NowMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-// Compute the host's active-fog bits from the live cycle. fogEventObject is a
-// cheap pointer read; the super-fog probe walks GUObjectArray (CountObjectsByClass)
-// so this must only run on the occasional broadcast path / the throttled detector.
+// True iff a live AsuperFog_C exists in the world. O(1) when one is cached (index
+// revalidate); a single FindObjectByClass walk at most once per 5 s when none is
+// cached. Replaces the per-detection full GUObjectArray Count walk.
+bool HostHasSuperFog() {
+    if (g_superFogActor && R::IsLiveByIndex(g_superFogActor, g_superFogIdx)) return true;
+    g_superFogActor = nullptr;
+    g_superFogIdx   = -1;
+    const long long now = NowMs();
+    if (now - g_lastSuperScanMs < 5000) return false;  // coarse rescan (super-fog is minutes-long)
+    g_lastSuperScanMs = now;
+    void* sf = R::FindObjectByClass(P::name::SuperFogClass);
+    if (sf && R::IsLive(sf)) { g_superFogActor = sf; g_superFogIdx = R::InternalIndexOf(sf); return true; }
+    return false;
+}
+
+// Compute the host's active-fog bits from the live cycle. All reads are cheap now:
+// fogEventObject is a pointer read, super-fog goes through the cached HostHasSuperFog
+// (no per-call GUObjectArray walk), permanentFog is a bool read.
 uint8_t ComputeHostFogBits(void* cycle) {
     using namespace coop::net::fog_flags2;
     auto* b = reinterpret_cast<uint8_t*>(cycle);
     uint8_t f2 = 0;
     if (*reinterpret_cast<void**>(b + P::off::AdaynightCycle_fogEventObject) != nullptr)
         f2 |= kFogActive;
-    if (R::CountObjectsByClass(P::name::SuperFogClass) > 0)
+    if (HostHasSuperFog())
         f2 |= kSuperFogActive;
     if (*reinterpret_cast<bool*>(b + P::off::AdaynightCycle_permanentFog))
         f2 |= kPermanentFog;
@@ -230,6 +257,9 @@ void OnDisconnect() {
     g_spawnFogEchoSuppress.store(false, std::memory_order_release);
     g_lastHostFogBits = 0xFF;
     g_lastDetectMs    = 0;
+    g_superFogActor   = nullptr;  // session-scoped; a reconnect re-scans
+    g_superFogIdx     = -1;
+    g_lastSuperScanMs = 0;
     // g_installed + g_clientInterceptorReg STAY set across sessions: g_spawnFogFn
     // is stable (same UClass) and the interceptor self-gates at runtime on
     // g_isClient -- which Install() refreshes every call -- so a reconnect with a

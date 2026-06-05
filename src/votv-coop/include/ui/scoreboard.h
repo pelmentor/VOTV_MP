@@ -1,9 +1,9 @@
-// ui/scoreboard.h -- the TAB player-list overlay surface.
+// ui/scoreboard.h -- the tilde-key player-list overlay surface.
 //
 // A second UI surface on ui::imgui_overlay (the same generic ImGui host as the F1
-// dev menu). Shown to EVERYONE on TAB (no dev gate) -- the server roster. Clients
-// peek (hold TAB, passive, no cursor); the host gets an interactive board (toggle
-// TAB, cursor) for the per-player action menu (Phase 2: KICK / BAN / TP TO ME).
+// dev menu). Shown to EVERYONE on the tilde key (no dev gate) -- the server roster.
+// Clients peek (hold tilde, passive, no cursor); the host gets an interactive board
+// (toggle tilde, cursor) for the per-player action menu (KICK / BAN / TP TO ME).
 //
 // Principle 7: pure presentation. The roster facts come from coop::roster (a
 // game-thread snapshot); this file only draws them.

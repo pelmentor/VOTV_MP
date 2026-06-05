@@ -283,6 +283,93 @@ bool LoadStorySave(const wchar_t* slot) {
     return false;  // not in gameplay yet -> caller keeps retrying
 }
 
+// FRESH New-Game boot: identical to LoadStorySave but with a BLANK saveSlot
+// (GameplayStatics::CreateSaveGameObject(saveSlot_C)) instead of a disk slot -> drops into
+// a fresh New Game in untitled_1. This is the deterministic baseline for the ephemeral-client
+// world snapshot (project-ephemeral-client-host-authoritative-world): a fresh client has only
+// the level-default props, so the host's existing prop/trigger connect-snapshot mirrors the
+// host's whole world onto it cleanly, with NO reconcile-remove (no client dynamic props to dedup).
+// Polled like LoadStorySave (returns true once in gameplay). Game thread.
+// NOTE (2026-06-04): this is the EMPIRICAL test of whether a fresh story New Game drops straight
+// into gameplay or stalls on a day-0 intro -- run via the `fresh_boot` ini gate + read the log.
+bool StartFreshGame(bool storyMode) {
+    auto makeFStr = [](std::wstring& b) {
+        R::FString fs{};
+        fs.Data = b.data();
+        fs.Num = static_cast<int32_t>(b.size()) + 1;
+        fs.Max = fs.Num;
+        return fs;
+    };
+
+    // (a) Already in gameplay? mainPlayer_C placed in the real level (non-origin).
+    if (void* lp = R::FindObjectByClass(P::name::MainPlayerClass)) {
+        const FVector p = GetActorLocation(lp);
+        if (std::abs(p.X) + std::abs(p.Y) + std::abs(p.Z) > 100.f) {
+            UE_LOGI("engine: StartFreshGame -- in gameplay (mainPlayer @ %.0f,%.0f,%.0f)", p.X, p.Y, p.Z);
+            return true;
+        }
+    }
+    // (b) Gameplay map already loading? Don't re-open; wait for the player to spawn.
+    if (void* w = R::FindObjectByClass(P::name::WorldClass)) {
+        if (R::ToString(R::NameOf(w)).find(L"ntitled") != std::wstring::npos) return false;
+    }
+
+    // (c) Still at preLoad / menu: create a blank saveSlot + register + travel.
+    if (!g_storyGsCdo) g_storyGsCdo = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
+    void* gi = R::FindObjectByClass(P::name::GameInstanceClass);
+    if (!g_storyGsCdo || !gi) {
+        UE_LOGW("engine: StartFreshGame -- not up yet (cdo=%p gi=%p); retry", g_storyGsCdo, gi);
+        return false;
+    }
+    void* gsCls = R::ClassOf(g_storyGsCdo);
+    void* createFn = gsCls ? R::FindFunction(gsCls, L"CreateSaveGameObject") : nullptr;
+    void* saveCls  = R::FindClass(L"saveSlot_C");
+    if (!createFn || !saveCls) {
+        UE_LOGW("engine: StartFreshGame -- CreateSaveGameObject=%p saveSlot_C=%p not resolved; retry", createFn, saveCls);
+        return false;
+    }
+    if (!g_setSaveSlotFn) {
+        if (void* gicls = R::ClassOf(gi)) g_setSaveSlotFn = R::FindFunction(gicls, P::name::SetSaveSlotObjectFn);
+    }
+
+    // Create the blank saveSlot ONCE (cached in g_storySave like the loaded path).
+    if (!g_storySave) {
+        ParamFrame f(createFn);
+        f.Set<void*>(L"SaveGameClass", saveCls);
+        if (!Call(g_storyGsCdo, f)) { UE_LOGE("engine: StartFreshGame -- CreateSaveGameObject call failed"); return false; }
+        g_storySave = f.Get<void*>(L"ReturnValue");
+        if (!g_storySave) { UE_LOGW("engine: StartFreshGame -- CreateSaveGameObject returned null"); return false; }
+        UE_LOGI("engine: StartFreshGame -- created BLANK saveSlot_C = %p (fresh New Game baseline)", g_storySave);
+    }
+
+    // Register the blank save under a temp slot name. (Persistence suppression is a later
+    // increment; for the isolated test nothing writes it back.)
+    const wchar_t* freshSlot = L"coop_client_fresh";
+    if (g_setSaveSlotFn) {
+        std::wstring b(freshSlot);
+        R::FString fs = makeFStr(b);
+        ParamFrame f(g_setSaveSlotFn);
+        f.Set<void*>(L"save_gameInst", g_storySave);
+        f.SetRaw(L"SlotName", &fs, sizeof(fs));
+        Call(gi, f);
+    } else {
+        UE_LOGW("engine: StartFreshGame -- setSaveSlotObject unresolved");
+    }
+    // A blank save has empty objectsData/triggers -> "restoring" it yields the level defaults
+    // (a fresh New Game). loadObjects=1 runs the same load path as a real save.
+    *reinterpret_cast<uint8_t*>(reinterpret_cast<uint8_t*>(gi) + P::off::mainGameInstance_loadObjects) = 1;
+    // GameMode: drive it via the existing prefix logic -- 's_' => story (the coop target),
+    // 'b_' => sandbox/default. (Later: driven by the host-sent GameMode on the handshake.)
+    ApplyGameModeFromSlot(gi, storyMode ? L"s_coopFresh" : L"b_coopFresh");
+
+    std::wstring openCmd = L"open ";
+    openCmd += P::name::GameplayLevel;
+    UE_LOGI("engine: StartFreshGame -- at preLoad/menu; issuing '%ls' (BLANK save registered, mode=%s)",
+            openCmd.c_str(), storyMode ? "story" : "sandbox");
+    ExecuteConsoleCommand(openCmd.c_str());
+    return false;  // not in gameplay yet -> caller keeps retrying
+}
+
 // Travel to VOTV's MAIN MENU via the game's own level-travel verb,
 // AmainGamemode_C::transition(FName "/Game/menu"). The FULL package path is required
 // -- the short name "menu" does NOT resolve (probed 2026-06-01), unlike `open
@@ -728,6 +815,35 @@ void* SpawnSoundAttenuation(const SoundAttenuationConfig& cfg) {
     //    memory on the next call (2026-05-26 F-spam crash root cause).
     R::AddToRoot(obj);
     return obj;
+}
+
+void PlaySoundAtLocation(void* worldContext, void* sound, const FVector& location,
+                         void* attenuation, float volume, float pitch) {
+    if (!worldContext || !sound) return;
+    // UGameplayStatics::PlaySoundAtLocation CDO + UFunction, cached once.
+    static void* sGsCdo  = nullptr;
+    static void* sPlayFn = nullptr;
+    if (!sGsCdo) sGsCdo = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
+    if (!sPlayFn && sGsCdo) {
+        if (void* c = R::ClassOf(sGsCdo)) sPlayFn = R::FindFunction(c, P::name::PlaySoundAtLocationFn);
+    }
+    if (!sGsCdo || !sPlayFn) return;
+    // Non-cone source -> orientation unused; pass a zero rotator. Tolerates a
+    // null attenuation (plays 2D in that case). The per-call transient
+    // UAudioComponent is engine-managed (auto-destroy at playback end).
+    const FRotator rot{};
+    ParamFrame f(sPlayFn);
+    f.Set<void*>(L"WorldContextObject", worldContext);
+    f.Set<void*>(L"Sound", sound);
+    f.SetRaw(L"Location", &location, sizeof(location));
+    f.SetRaw(L"Rotation", &rot, sizeof(rot));
+    f.Set<float>(L"VolumeMultiplier", volume);
+    f.Set<float>(L"PitchMultiplier", pitch);
+    f.Set<float>(L"StartTime", 0.f);
+    f.Set<void*>(L"AttenuationSettings", attenuation);
+    f.Set<void*>(L"ConcurrencySettings", nullptr);
+    f.Set<void*>(L"OwningActor", worldContext);
+    Call(sGsCdo, f);
 }
 
 void RotatorToQuat(float pitchDeg, float yawDeg, float rollDeg,

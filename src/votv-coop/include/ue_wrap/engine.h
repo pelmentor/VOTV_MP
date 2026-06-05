@@ -38,6 +38,14 @@ bool ReturnToMainMenu();
 // Game thread only.
 bool LoadStorySave(const wchar_t* slot);
 
+// FRESH New-Game boot: like LoadStorySave but with a BLANK saveSlot
+// (GameplayStatics::CreateSaveGameObject(saveSlot_C)) instead of a disk slot -> a fresh New
+// Game in untitled_1. The deterministic baseline for the ephemeral-client world snapshot: a
+// fresh client has only level-default props, so the host's existing connect-snapshot mirrors
+// the host's whole world onto it with no reconcile-remove. `storyMode` picks story vs sandbox
+// GameMode (the coop target is story). Polled like LoadStorySave. Game thread only.
+bool StartFreshGame(bool storyMode);
+
 // Spawn an actor of `actorClass` (a UClass*) at `location` via the deferred
 // GameplayStatics pair (BeginDeferredActorSpawnFromClass + FinishSpawningActor)
 // -- the same path the K2 SpawnActorFromClass node uses. Always spawns
@@ -243,6 +251,11 @@ struct MainPlayerGrabState {
 };
 bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out);
 
+// The actor the local player is aiming at (AmainPlayer_C::lookAtActor @0x0AA0). On an
+// E-press this is the door/interactable being used. Returns nullptr if unresolved / not
+// aiming at anything / mainPlayer dead. Game thread.
+void* ReadMainPlayerLookAtActor(void* mainPlayer);
+
 // Write both AmainPlayer_C::grabbing_actor + AmainPlayer_C::grabbing_component
 // in a single dispatch. Used by the autotest harness's synthetic grab path
 // where the test code drives UPhysicsHandleComponent.GrabComponentAtLocation
@@ -348,6 +361,30 @@ bool SetTextBlockColor(void* textBlock, const FLinearColor& color);
 // Slate viewport tree is torn down with the old world). Game thread only.
 bool AddWidgetToViewport(void* userWidget, int zOrder);
 bool RemoveWidgetFromViewport(void* userWidget);
+
+// ---- Runtime UMG button injection (MULTIPLAYER menu, P1 2026-06-04) ------------
+// Construct a UButton at runtime inside an existing UCanvasPanel and position it
+// relative to a reference widget already in that canvas. Engine substrate only
+// (principle 7): no coop/menu knowledge -- the caller (coop::multiplayer_menu)
+// resolves the VOTV menu's canvMenu/button_start/tex_btnStart and passes them in.
+//
+//   refButton   the menu UButton to sit ABOVE (e.g. button_start / NEW GAME). We
+//               derive its list panel (a UVerticalBox), insert our button into it at
+//               the TOP (above refButton), and clone refButton's FButtonStyle for the
+//               look. The VerticalBox owns layout, so spacing matches the other items.
+//   label       button text (e.g. L"MULTIPLAYER")
+//   refText     UTextBlock whose FSlateFontInfo + colour we clone for the label
+//               (e.g. tex_btnStart). May be null (then the nameplate's default style).
+//   outButton   receives the spawned UButton* (for the click poll). May be null.
+//
+// Returns true on success. Game thread only (SpawnObject + UFunction dispatch).
+bool InjectCanvasButton(void* refButton, const wchar_t* label, void* refText,
+                        void** outButton);
+
+// UWidget::IsHovered() -> bool. The mouse-over test for the menu click poll
+// (paired with a global VK_LBUTTON edge in coop::multiplayer_menu). Returns false
+// if the widget/UFunction is unresolved. Game thread only.
+bool WidgetIsHovered(void* widget);
 
 // World Z of the LOWEST bone on this skeletal mesh's currently-evaluated pose.
 // NOT suitable for "where the visible feet are" on a skeleton that mixes humanoid
@@ -591,6 +628,13 @@ bool DetachActorFromRagdollBody(void* actor);
 // Game thread only.
 bool SetActorSimulatePhysics(void* actor, bool simulate);
 
+// SetCollisionEnabled(collisionType) on `actor`'s root primitive component.
+// collisionType: 0=NoCollision 1=QueryOnly 2=PhysicsOnly 3=QueryAndPhysics. The
+// thrown clump MIRROR needs 3 so it collides + lands instead of sinking through the
+// floor (the bare-spawned mirror lacks the collision a real grabbed clump has). Generic
+// (root component, not the Aprop_C mesh offset). Game thread only.
+bool SetActorRootCollisionEnabled(void* actor, uint8_t collisionType);
+
 // Read/overwrite `actor`'s root primitive linear (cm/s) + angular (deg/s) velocity --
 // the throw-energy transfer on clump release ("physics like the mannequin"). Generic
 // (does NOT use the Aprop_C mesh offset, so it works on the non-Aprop_C clump). Returns
@@ -660,6 +704,16 @@ struct SoundAttenuationConfig {
 // 8 raw att:: offset writes block that lived in
 // coop::flashlight_click_sound::PlayIfStateChanged.
 void* SpawnSoundAttenuation(const SoundAttenuationConfig& cfg);
+
+// Fire UGameplayStatics::PlaySoundAtLocation -- a one-shot 3D positional sound at
+// `location`, owned by `worldContext` (the actor whose world it plays in; also the
+// OwningActor for concurrency/occlusion). `sound` is a USoundBase (SoundWave or
+// SoundCue). `attenuation` may be null (plays 2D then). The per-call transient
+// UAudioComponent is engine-managed. Game thread only. Shared by the flashlight
+// click (coop::flashlight_click_sound) and the trash-clump throw whoosh
+// (coop::clump_throw_sound) -- the dispatch lived inline in the former (RULE 2).
+void PlaySoundAtLocation(void* worldContext, void* sound, const FVector& location,
+                         void* attenuation, float volume = 1.f, float pitch = 1.f);
 
 // FRotator -> FQuat (UE4.27 stock formula, ZYX order, LEFT-HANDED coord
 // system). Matches EXACTLY the body of FRotator::Quaternion() from

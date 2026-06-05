@@ -3,6 +3,9 @@
 #include "coop/element/player.h"
 #include "coop/element/registry.h"
 
+#include "coop/balance_sync.h"
+#include "coop/interactable_sync.h"
+#include "coop/keypad_sync.h"
 #include "coop/item_activate.h"
 #include "coop/net/session.h"
 #include "coop/player_damage.h"
@@ -124,6 +127,9 @@ void Update(net::Session& session, void* localPlayer) {
             ue_wrap::hud_feed::Push(
                 coop::player_handshake::NicknameForSlot(slot) + L" left the game");
             coop::player_handshake::OnSlotDisconnected(slot);
+            // HostAuth doors: release any door this departing peer was holding open (a door
+            // still held by another peer stays open; one whose last holder just left closes).
+            coop::interactable_sync::OnPeerLeft(slot);
         }
         if (slotReady) {
             coop::player_handshake::MaybeSendJoinToSlot(
@@ -443,6 +449,38 @@ void Update(net::Session& session, void* localPlayer) {
             coop::player_damage::OnWireDamage(p);
             break;
         }
+        case net::ReliableKind::BalanceSync: {
+            // v30 shared balance: the host broadcast its canonical Points -- mirror it.
+            // Host-only origin (the host owns the balance); a client never sends it.
+            if (msg.senderPeerSlot != 0) {
+                UE_LOGW("event_feed: BalanceSync from non-host senderPeerSlot=%d -- dropping",
+                        msg.senderPeerSlot);
+                break;
+            }
+            if (msg.payloadLen < sizeof(net::BalancePayload)) {
+                UE_LOGW("event_feed: BalanceSync payload too short (%zu < %zu)",
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::BalancePayload));
+                break;
+            }
+            net::BalancePayload p{};
+            std::memcpy(&p, msg.payload, sizeof(p));
+            coop::balance_sync::ApplyFromHost(p.value);  // no-op on the host (authoritative)
+            break;
+        }
+        case net::ReliableKind::BalanceDelta: {
+            // v30 shared balance: a client requested a credit (the +1000 dev button) --
+            // the host applies it via AddPoints (its poll re-broadcasts the new total).
+            // Client->host; OnDeltaRequest no-ops unless we are the host.
+            if (msg.payloadLen < sizeof(net::BalancePayload)) {
+                UE_LOGW("event_feed: BalanceDelta payload too short (%zu < %zu)",
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::BalancePayload));
+                break;
+            }
+            net::BalancePayload p{};
+            std::memcpy(&p, msg.payload, sizeof(p));
+            coop::balance_sync::OnDeltaRequest(p.value);
+            break;
+        }
         case net::ReliableKind::TeleportClient: {
             // 2026-05-25 LATE +5h (F4 dev key): host snapshotted its pose and
             // sent it; client applies to local mainPlayer. Host echo is
@@ -642,6 +680,86 @@ void Update(net::Session& session, void* localPlayer) {
                 void* puppetNow = (rp && rp->valid()) ? rp->GetActor() : nullptr;
                 ::coop::item_activate::ApplyToPuppetOrDefer(peerSlotCopy, puppetNow, pCopy);
             });
+            break;
+        }
+        case net::ReliableKind::DoorState:
+        case net::ReliableKind::LightState:
+        case net::ReliableKind::ContainerState: {
+            // Phase 5D (v27): a peer toggled a keyed interactable (base door /
+            // light group / container lid). SYMMETRIC -- any peer can send; the host
+            // relays a client-originated edge to the other clients
+            // (IsClientRelayableReliableKind) before this drain runs.
+            // interactable_sync routes by kind to the right channel, resolves the
+            // instance by Key, + idempotently applies on the GT (echo-suppressed).
+            // (KeypadState is NOT here -- it carries a richer payload, its own case below.)
+            // RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+            if (msg.payloadLen < sizeof(net::KeyedTogglePayload)) {
+                UE_LOGW("event_feed: %d payload too short (%zu < %zu)",
+                        static_cast<int>(msg.kind),
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::KeyedTogglePayload));
+                break;
+            }
+            net::KeyedTogglePayload p{};
+            std::memcpy(&p, msg.payload, sizeof(p));
+            // Trust-boundary: action is a uint8 but only 0/1 are meaningful.
+            if (p.action != 0 && p.action != 1) {
+                UE_LOGW("event_feed: keyed-toggle action=%u out of range -- dropping",
+                        static_cast<unsigned>(p.action));
+                break;
+            }
+            const uint8_t senderSlot =
+                (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                    ? static_cast<uint8_t>(msg.senderPeerSlot)
+                    : static_cast<uint8_t>(0xFF);
+            coop::interactable_sync::OnReliable(static_cast<uint8_t>(msg.kind), p, senderSlot);
+            break;
+        }
+        case net::ReliableKind::KeypadState: {
+            // v33 (2026-06-04): password-keypad mirror (ApasswordLock_C). SYMMETRIC -- any
+            // peer polls (inPassword,isAcc,isDeny,Active) + broadcasts on change; the host
+            // relays a client edge (IsClientRelayableReliableKind). The receiver replays
+            // inputNumber for the buffer delta + direct-writes the bools (the accept verb is
+            // unreachable -- 3 synth probe rounds). Own module, richer payload than the toggle.
+            // RE: research/findings/votv-keypad-passwordlock-accept-RE-and-coop-sync-2026-06-04.md.
+            if (msg.payloadLen < sizeof(net::KeypadSyncPayload)) {
+                UE_LOGW("event_feed: KeypadState payload too short (%zu < %zu)",
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::KeypadSyncPayload));
+                break;
+            }
+            net::KeypadSyncPayload kp{};
+            std::memcpy(&kp, msg.payload, sizeof(kp));
+            const uint8_t senderSlot =
+                (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                    ? static_cast<uint8_t>(msg.senderPeerSlot)
+                    : static_cast<uint8_t>(0xFF);
+            coop::keypad_sync::OnReliable(kp, senderSlot);
+            break;
+        }
+        case net::ReliableKind::DoorOpenRequest: {
+            // v32 (2026-06-04): client->host door open/close REQUEST. Doors are HOST-
+            // authoritative; only the host honors this. The host applies it (real lock/
+            // jam guards) and its poll broadcasts the authoritative DoorState back to all.
+            if (session.role() != net::Role::Host) {
+                UE_LOGW("event_feed: DoorOpenRequest received on a client -- dropping");
+                break;
+            }
+            if (msg.payloadLen < sizeof(net::KeyedTogglePayload)) {
+                UE_LOGW("event_feed: DoorOpenRequest payload too short (%zu < %zu)",
+                        static_cast<size_t>(msg.payloadLen), sizeof(net::KeyedTogglePayload));
+                break;
+            }
+            net::KeyedTogglePayload p{};
+            std::memcpy(&p, msg.payload, sizeof(p));
+            if (p.action != 0 && p.action != 1) {
+                UE_LOGW("event_feed: DoorOpenRequest action=%u out of range -- dropping",
+                        static_cast<unsigned>(p.action));
+                break;
+            }
+            const uint8_t senderSlot =
+                (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                    ? static_cast<uint8_t>(msg.senderPeerSlot)
+                    : static_cast<uint8_t>(0xFF);
+            coop::interactable_sync::OnDoorOpenRequest(p, senderSlot);
             break;
         }
         case net::ReliableKind::RedSky: {

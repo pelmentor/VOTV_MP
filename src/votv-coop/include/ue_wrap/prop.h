@@ -100,6 +100,34 @@ bool IsFrozen(void* prop);
 // GrabComponentAtLocation / SetConstrainedComponents).
 void* GetStaticMesh(void* prop);
 
+// chipType variant selector for the trash chip-pile / garbage-clump family
+// (`TEnumAsByte<enum_chipPileType::Type>`, 1 byte, 14 variants). It picks the
+// visual mesh via Ulib_getFunc_C::getChipPileType. The field lives on
+// AactorChipPile_C AND Aprop_garbageClump_C (+ subclasses) -- and at the SAME
+// struct offset (0x0238) that means StaticMesh on an Aprop_C, so these resolve
+// the offset via reflection (FindPropertyOffset "chipType") which returns -1 on
+// any class without the property: GetChipType then returns 0 and SetChipType is
+// a NO-OP, so they are SAFE to call on a non-chip actor (never corrupts an
+// Aprop_C mesh pointer). Per-class offset + setTex UFunction cached.
+// [[project-bug-trash-chippile-uaf-crash]]
+uint8_t GetChipType(void* actor);
+// Writes chipType + dispatches the class's setTex() (if any) to repaint the
+// mesh from the new variant. No-op for a class without a chipType property.
+// Game-thread only (dispatches a UFunction). Used by the wire receiver so a
+// mirrored clump shows the SAME trash variant the owner grabbed.
+void SetChipType(void* actor, uint8_t chipType);
+
+// Dispatch AactorChipPile_C::turnToPile(Velocity) on a freshly-spawned chipPile
+// mirror so it fires the impact dust + landing SOUND -- the same BP entry the real
+// clump->pile landing calls (RE: votv-chippile-clump-morph-RE-2026-05-27.md S2.1;
+// sets spwnd=true, operates on `this`, spawns nothing -> no dupe). `velocity` is the
+// clump's pre-landing velocity (cm/s) driving the dust direction. Per-class UFunction
+// cached (resolved on the actual spawned class, like setTex). No-op + safe on any class
+// without turnToPile (FindFunction null). Game-thread only (dispatches a UFunction).
+// Used by the wire receiver for the v29 owner-authoritative landed pile.
+// [[project-bug-trash-chippile-uaf-crash]]
+void TurnChipPileToPile(void* chipPile, const FVector& velocity);
+
 // Convenience: the prop's UClass name (e.g. "prop_container_suitcase_C")
 // via reflection::ClassNameOf. Used for diagnostics only.
 std::wstring GetClassName(void* prop);
@@ -195,6 +223,18 @@ VelocityState GetPhysicsVelocity(void* prop);
 void* FindNearbySameClass(const std::wstring& className,
                           const FVector& anchor,
                           float radiusCm);
+
+// Find the NEAREST chipPile-family actor (AactorChipPile_C + _erie/_leaves/
+// _wetConcrete subclasses) to `anchor` within `radiusCm`, or null. These are
+// NON-Aprop_C so the Aprop-only finders can't see them; this walks the chipPile
+// base lineage instead. Used by the wire receiver to CONSUME its own copy of a
+// shared world pile when the OTHER peer grabbed theirs: trash piles are loaded
+// independently on each peer (key=None, no cross-peer id), so POSITION is the
+// only cross-peer identity (same precedent as FindNearbySameClass's mushroom
+// dedup). `outDist` (optional) gets the match distance in cm (-1 if no match).
+// One-shot GUObjectArray walk; call on grab events only, not per-frame.
+// [[project-bug-trash-chippile-uaf-crash]]
+void* FindNearestChipPile(const FVector& anchor, float radiusCm, float* outDist = nullptr);
 
 // Restore the prop's StaticMesh component to QueryAndPhysics collision (the
 // default for movable physics props). Used by remote_prop::OnSpawn to undo

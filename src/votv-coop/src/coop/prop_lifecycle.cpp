@@ -322,13 +322,24 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
     }
     if (!ue_wrap::prop::IsKeyedInteractable(self)) return;
     const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(self);
-    // FName(NAME_None) stringifies to "None" -- symmetric with Init POST
-    // (unkeyed props are non-syncable; don't broadcast a destroy for one).
-    if (keyStr.empty() || keyStr == L"None") return;
+    // FName(NAME_None) stringifies to "None" -- a KEYED prop broadcasts by Key (the
+    // common path). The NON-KEYABLE trash clump (prop_garbageClump_C: setKey doesn't
+    // stick, key always reads None) instead rides OUR eid: broadcast key=None + eid so
+    // the receiver's eid-routable OnDestroy despawns its mirror (v26 spawn-by-eid
+    // symmetry). WITHOUT this the clump's morph-destroy (toClump/turnToPile call
+    // K2_DestroyActor -- IDA-confirmed, votv-chippile-clump-morph-RE-2026-05-27.md) was
+    // dropped here -> the mirror leaked -> the infinite grab/throw dupe. Only drop when
+    // there is NEITHER a Key NOR an eid (a genuinely unsyncable actor).
+    // [[project-bug-trash-chippile-uaf-crash]]
+    const bool keyless = (keyStr.empty() || keyStr == L"None");
+    const bool hasEid  = (destroyEid != coop::element::kInvalidId);
+    if (keyless && !hasEid) return;
     coop::net::WireKey wk{};
     wk.len = 0;
-    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
-        wk.data[wk.len++] = static_cast<char>(keyStr[i]);
+    if (!keyless) {
+        for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
+            wk.data[wk.len++] = static_cast<char>(keyStr[i]);
+        }
     }
     const char* roleStr =
         s->role() == coop::net::Role::Host ? "HOST" : "CLIENT";
@@ -345,8 +356,9 @@ void GrabObserver_Actor_K2DestroyActor_PRE(void* self, void* /*function*/, void*
     dp.elementId = (destroyEid == coop::element::kInvalidId) ? 0u : destroyEid;
     // (v15 stamped a senderContext byte here; v16 PR-FOUNDATION-1b
     // moved stale-gen defense to the header senderEpoch.)
-    UE_LOGI("grab_hook[K2_DestroyActor PRE]: %s broadcasting DESTROY actor=%p key='%ls' eid=%u",
-            roleStr, self, keyStr.c_str(), dp.elementId);
+    UE_LOGI("grab_hook[K2_DestroyActor PRE]: %s broadcasting DESTROY actor=%p key='%ls' eid=%u%s",
+            roleStr, self, keyless ? L"None" : keyStr.c_str(), dp.elementId,
+            keyless ? " (eid-only: trash clump)" : "");
     s->SendPropDestroy(dp);  // channel queues internally; always accepted
 }
 

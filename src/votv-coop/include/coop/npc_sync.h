@@ -76,6 +76,22 @@ bool IsAllowlistedClass(void* cls);
 // disconnect; only the running-session bookkeeping resets).
 void OnDisconnect();
 
+// HOST-only connect-snapshot (2026-06-04, user: "existing npcs mirrored when a fresh peer
+// joins"). Re-send an EntitySpawn (class + CURRENT world transform) for every already-spawned
+// Npc Element to the freshly-connected client `peerSlot`, so a joiner materializes mirrors of
+// NPCs that spawned BEFORE it joined (the spawn-time EntitySpawn only reaches peers connected
+// at spawn time). The client's existing npc_mirror::OnEntitySpawn path materializes each;
+// MirrorManager::Install is idempotent so a re-send to an already-mirroring peer is a no-op.
+// Reads each Element's bound actor for the current transform (skips elements whose actor is
+// not yet bound). Net-pump connect edge. Game thread.
+void QueueConnectBroadcastForSlot(int peerSlot);
+
+// HOST-only per-tick NPC pose stream driver: read each live Npc Element's current world
+// transform + publish the batch to the session for the net thread to fan out (EntityPose,
+// unreliable). Makes the client mirrors MOVE (they otherwise sit at spawn). Cheap no-op off
+// the host / when there are no NPCs. Call every net-pump tick. Game thread.
+void TickPoseStream();
+
 // Resolved GameplayStatics spawn refs (valid only AFTER Install completes +
 // the 12 NPC classes resolve). Exposed so the dev-spawn tool
 // (coop::dev::spawn_npc) can drive a BeginDeferredActorSpawnFromClass +

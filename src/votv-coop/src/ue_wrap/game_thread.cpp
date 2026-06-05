@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 
@@ -40,6 +41,90 @@ long long NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+// ---- Perf instrumentation (MEASURE-first 15-FPS audit; see coop/dev/perf_probe) --
+// g_peCountOn gates the per-dispatch counter: OFF (default/shipping) the detour
+// pays a single relaxed bool load; ON it adds one relaxed XADD per dispatch.
+// g_peSelfOn additionally arms the sampled self-timer (1 dispatch in
+// kSelfSampleMask+1) that brackets the detour body EXCLUDING g_originalPE -- i.e.
+// OUR per-dispatch overhead only. All totals are monotonic; perf_probe diffs them
+// per second. Defined here (before SafeCall*/the detour) so all users see it.
+std::atomic<bool> g_peCountOn{false};
+std::atomic<bool> g_peSelfOn{false};
+std::atomic<unsigned long long> g_peDispatchCount{0};    // all threads
+std::atomic<unsigned long long> g_peDispatchCountGT{0};  // game-thread subset (the per-dispatch substrate cost only applies here)
+std::atomic<unsigned long long> g_peSelfNs{0};
+std::atomic<unsigned long long> g_peSelfSamples{0};
+constexpr unsigned long long kSelfSampleMask = 0xFF;  // sample 1 dispatch in 256
+
+// Observer/interceptor CALLBACK-BODY timing. The audit's rank-2 suspect for the
+// 50 ms is not the table WALK but a callback BODY that secretly calls an uncached
+// reflection Find*/CountObjectsByClass (a ~1M-entry GUObjectArray walk + a wstring
+// alloc per entry) on a hot/common UFunction. SafeCallObserver/SafeCallInterceptor
+// bracket each cb with QPC when counting is armed and record the running total +
+// the single worst call (with its UFunction*, resolved to a name by perf_probe).
+std::atomic<unsigned long long> g_obsBodyNs{0};       // summed cb-body time across all fired observers+interceptors
+std::atomic<unsigned long long> g_obsWorstNs{0};      // worst single cb-body call seen (ns)
+std::atomic<void*>              g_obsWorstFn{nullptr}; // the UFunction* of that worst call
+
+// QPC ticks/sec, cached on first use (QueryPerformanceFrequency is constant for
+// the process lifetime). 0 until resolved.
+long long QpcFreq() {
+    static long long s_freq = [] {
+        LARGE_INTEGER f{};
+        return ::QueryPerformanceFrequency(&f) ? f.QuadPart : 0;
+    }();
+    return s_freq;
+}
+inline unsigned long long QpcDeltaToNs(long long ticks) {
+    const long long f = QpcFreq();
+    return f > 0 ? static_cast<unsigned long long>((ticks * 1000000000LL) / f) : 0ull;
+}
+// Record one observer/interceptor cb-body duration (ns). Updates total + worst.
+// Only called on the (rare) path where a dispatched UFunction matched a registrant.
+inline void RecordCbBodyNs(void* function, unsigned long long ns) {
+    g_obsBodyNs.fetch_add(ns, std::memory_order_relaxed);
+    if (ns > g_obsWorstNs.load(std::memory_order_relaxed)) {
+        g_obsWorstNs.store(ns, std::memory_order_relaxed);
+        g_obsWorstFn.store(function, std::memory_order_relaxed);
+    }
+}
+
+// ---- O(1) observer/interceptor presence probe (perf, 2026-06-04) --------------
+// The detour walked up to ~75 POST-observer slots PER game-thread dispatch
+// (measured: post=75) even though the dispatched UFunction matches a registrant on
+// far under 1% of dispatches. A per-table Bloom bitmask gives an O(1) reject: the
+// dispatched function's bit is tested first; if clear, NO registrant targets it and
+// the slot walk is skipped entirely (one word load + one bit test). Bits are only
+// ever SET (on register), never cleared on a single Unregister -- so a LIVE
+// registrant's bit is ALWAYS set => no false negatives (a missed observer fire is
+// impossible); an unregistered target may leave a stale bit (a harmless false
+// positive that just falls through to the now-no-match slot walk). ClearAll* zeroes
+// the mask (no readers during teardown). Lock-free: the detour fires on worker
+// threads too, and a Bloom load racing a register's fetch_or is benign (the acquire
+// load pairs with the release fetch_or; worst case is one dispatch's reject lag,
+// the same window the slot-walk's count-bounded read already tolerates).
+constexpr int kBloomWords = 64;                         // 4096 bits; ~75 entries => ~2% false positive
+constexpr unsigned kBloomBits = kBloomWords * 64u;
+std::atomic<uint64_t> g_postBloom[kBloomWords]{};
+std::atomic<uint64_t> g_preBloom[kBloomWords]{};
+std::atomic<uint64_t> g_intcBloom[kBloomWords]{};
+inline unsigned BloomBit(void* fn) {
+    // UFunction pointers are >= 16-aligned; drop the dead low bits before masking.
+    return static_cast<unsigned>((reinterpret_cast<uintptr_t>(fn) >> 4) & (kBloomBits - 1));
+}
+inline void BloomAdd(std::atomic<uint64_t>* bloom, void* fn) {
+    if (!fn) return;
+    const unsigned b = BloomBit(fn);
+    bloom[b >> 6].fetch_or(1ull << (b & 63), std::memory_order_release);
+}
+inline bool BloomMaybe(const std::atomic<uint64_t>* bloom, void* fn) {
+    const unsigned b = BloomBit(fn);
+    return (bloom[b >> 6].load(std::memory_order_acquire) & (1ull << (b & 63))) != 0;
+}
+inline void BloomClear(std::atomic<uint64_t>* bloom) {
+    for (int i = 0; i < kBloomWords; ++i) bloom[i].store(0, std::memory_order_release);
 }
 
 // Multi-slot UFunction-pre-dispatch interceptor table. Same atomic-slot shape
@@ -84,6 +169,7 @@ bool SetInterceptorSlot(void* targetFn, UFunctionInterceptor cb) {
             g_interceptors[i].cb.store(cb, std::memory_order_relaxed);
             g_interceptors[i].targetFn.store(targetFn, std::memory_order_release);
             g_interceptorActive.fetch_add(1, std::memory_order_release);
+            BloomAdd(g_intcBloom, targetFn);  // O(1) presence probe
             return true;
         }
     }
@@ -107,6 +193,7 @@ void ClearAllInterceptors() {
         g_interceptors[i].cb.store(nullptr, std::memory_order_relaxed);
     }
     g_interceptorActive.store(0, std::memory_order_release);
+    BloomClear(g_intcBloom);
 }
 
 // SEH-wrapped single-callback dispatch. MSVC disallows mixing C++ unwind
@@ -225,7 +312,12 @@ const char* FormatModuleRva(void* ip) {
 
 bool SafeCallInterceptor(UFunctionInterceptor cb, void* self, void* params, void* function) {
     bool intercept = false;
-    if (RunInterceptorSEH(cb, self, params, &intercept) != 0) {
+    const bool timed = g_peCountOn.load(std::memory_order_relaxed);
+    LARGE_INTEGER a{};
+    if (timed) ::QueryPerformanceCounter(&a);
+    const int rc = RunInterceptorSEH(cb, self, params, &intercept);
+    if (timed) { LARGE_INTEGER b{}; ::QueryPerformanceCounter(&b); RecordCbBodyNs(function, QpcDeltaToNs(b.QuadPart - a.QuadPart)); }
+    if (rc != 0) {
         LogObserverAv(function, self, "interceptor");
         return false;  // treat as "no interception" so original PE still runs
     }
@@ -234,7 +326,12 @@ bool SafeCallInterceptor(UFunctionInterceptor cb, void* self, void* params, void
 
 void SafeCallObserver(ProcessEventObserverFn cb, void* self, void* function, void* params,
                       const char* phase /* "PRE" or "POST" */) {
-    if (RunObserverSEH(cb, self, function, params) != 0) {
+    const bool timed = g_peCountOn.load(std::memory_order_relaxed);
+    LARGE_INTEGER a{};
+    if (timed) ::QueryPerformanceCounter(&a);
+    const int rc = RunObserverSEH(cb, self, function, params);
+    if (timed) { LARGE_INTEGER b{}; ::QueryPerformanceCounter(&b); RecordCbBodyNs(function, QpcDeltaToNs(b.QuadPart - a.QuadPart)); }
+    if (rc != 0) {
         LogObserverAv(function, self, phase);
     }
 }
@@ -254,6 +351,7 @@ void SafeCallObserver(ProcessEventObserverFn cb, void* self, void* function, voi
 inline bool FireInterceptors(void* self, void* function, void* params) {
     const int active = g_interceptorActive.load(std::memory_order_acquire);
     if (active <= 0) return false;
+    if (!BloomMaybe(g_intcBloom, function)) return false;  // O(1) reject: nothing intercepts `function`
     int found = 0;
     for (int i = 0; i < kMaxInterceptors && found < active; ++i) {
         void* tgt = g_interceptors[i].targetFn.load(std::memory_order_acquire);
@@ -303,7 +401,7 @@ std::atomic<int> g_preObserverActive{0};
 // `activeCounter` is bumped only when an empty slot is populated; an exact
 // (target, cb) re-register is an idempotent no-op (does not change the count).
 bool SetObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
-                     void* targetFn, ProcessEventObserverFn cb) {
+                     std::atomic<uint64_t>* bloom, void* targetFn, ProcessEventObserverFn cb) {
     if (!targetFn || !cb) return false;
     // First pass: idempotent re-register -- a slot already holding THIS EXACT
     // (target, cb) pair is a no-op. (Registration is serialized on the game
@@ -321,6 +419,7 @@ bool SetObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
             table[i].cb.store(cb, std::memory_order_relaxed);
             table[i].targetFn.store(targetFn, std::memory_order_release);
             activeCounter.fetch_add(1, std::memory_order_release);
+            BloomAdd(bloom, targetFn);  // O(1) presence probe
             return true;
         }
     }
@@ -355,10 +454,12 @@ void ClearObserverSlot(ObserverSlot table[], std::atomic<int>& activeCounter,
 // case ~30 observers -> 30 loads instead of 128 (or 0 loads when the table
 // is empty, e.g. for the pre-observer table during early boot).
 inline void FireObservers(const ObserverSlot table[], const std::atomic<int>& activeCounter,
+                          const std::atomic<uint64_t>* bloom,
                           void* self, void* function, void* params,
                           const char* phase) {
     const int active = activeCounter.load(std::memory_order_acquire);
     if (active <= 0) return;
+    if (!BloomMaybe(bloom, function)) return;  // O(1) reject: no observer targets `function`
     int found = 0;
     for (int i = 0; i < kMaxObservers && found < active; ++i) {
         void* tgt = table[i].targetFn.load(std::memory_order_acquire);
@@ -416,6 +517,18 @@ inline void FireNameDiagnostics(void* self, void* function, void* params) {
 std::mutex g_queueMutex;
 std::deque<Task> g_queue;
 
+// Lock-free emptiness probe (perf, 2026-06-04). The detour ran on EVERY game-
+// thread ProcessEvent dispatch (~85k/sec, measured) and took g_queueMutex JUST to
+// test g_queue.empty() -- a barriered LOCK-prefixed RMW on the hottest path in the
+// program, for a queue that is empty ~99.9% of the time (Post runs ~60-125x/sec).
+// g_queueDepth mirrors g_queue.size(), maintained under g_queueMutex by Post()/
+// Pump(); the detour reads it WITHOUT the lock and only locks+drains when it is
+// non-zero. A just-Posted task whose increment isn't yet visible to the detour's
+// relaxed-acquire read is drained on the next dispatch microseconds later (tasks
+// are not sub-millisecond-latency-critical). Writers stay under the mutex so depth
+// and the deque never diverge.
+std::atomic<int> g_queueDepth{0};
+
 // Re-entrancy guard: set while we are inside the pump, so a task that calls a
 // UFunction (re-entering ProcessEvent -> this detour) skips draining and just
 // forwards. Thread-local because only the game thread ever sets it, but a guard
@@ -430,6 +543,7 @@ void Pump() {
             if (g_queue.empty()) return;
             task = std::move(g_queue.front());
             g_queue.pop_front();
+            g_queueDepth.store(static_cast<int>(g_queue.size()), std::memory_order_release);
         }
         // The mod is compiled /EHa (CMakeLists.txt) -- so a STRUCTURED
         // exception (AV, div-by-zero) raised inside task() is both caught by
@@ -486,30 +600,45 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
                                                std::memory_order_relaxed, std::memory_order_relaxed);
     }
 
+    // Perf probe (MEASURE-first; off in shipping -> one relaxed bool load here).
+    // ord drives the 1/256 self-time sampling. t0 is captured BEFORE the queue-
+    // empty mutex check so the per-dispatch mutex cost is INCLUDED in the sample;
+    // a dispatch that actually drains the pump drops its sample (net_pump::Tick
+    // runs inside Pump() and would dwarf the ~150 ns we are trying to measure).
+    const bool countOn = g_peCountOn.load(std::memory_order_relaxed);
+    unsigned long long ord = 0;
+    if (countOn) {
+        ord = g_peDispatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (::GetCurrentThreadId() == g_gameThreadId.load(std::memory_order_relaxed))
+            g_peDispatchCountGT.fetch_add(1, std::memory_order_relaxed);
+    }
+    bool sampleSelf = countOn && g_peSelfOn.load(std::memory_order_relaxed) &&
+                      ((ord & kSelfSampleMask) == 0);
+    LARGE_INTEGER t0{}, t1{}, t2{}, t3{};
+    if (sampleSelf) ::QueryPerformanceCounter(&t0);
+
     // ProcessEvent is also called from task-graph WORKER threads (parallel anim,
     // etc.), not just the game thread. Posted tasks call engine UFunctions, which
     // are game-thread-only -- running them on a worker thread corrupts engine state
     // and crashes (seen as an AV on TaskGraphThreadHP). So drain the queue ONLY on
     // the recorded game thread (the first ProcessEvent caller, validated by the
     // self-test). Other threads just forward.
-    if (!t_inPump && ::GetCurrentThreadId() == g_gameThreadId.load(std::memory_order_relaxed)) {
-        bool hasWork;
-        {
-            std::lock_guard<std::mutex> lk(g_queueMutex);
-            hasWork = !g_queue.empty();
-        }
-        if (hasWork) {
-            // RAII so t_inPump is cleared on EVERY exit from Pump(), incl. an
-            // exception path. Under /EHa the dtor runs during a structured-
-            // exception unwind too -- so even if an AV ever escaped Pump's
-            // own catch (e.g. faulting in the queue lock itself), t_inPump
-            // cannot get stuck `true` and silently kill all future draining.
-            // The raw `t_inPump = false` it replaces was skipped on exactly
-            // that path -> the 2026-05-30 permanent host freeze.
-            struct InPumpGuard { ~InPumpGuard() { t_inPump = false; } } pumpGuard;
-            t_inPump = true;
-            Pump();
-        }
+    // Lock-free emptiness probe FIRST (perf): the depth load + the t_inPump check
+    // reject the empty common case without the per-dispatch mutex OR the TEB read.
+    // Only when there is queued work do we confirm the game thread and drain.
+    if (!t_inPump && g_queueDepth.load(std::memory_order_acquire) != 0 &&
+        ::GetCurrentThreadId() == g_gameThreadId.load(std::memory_order_relaxed)) {
+        // RAII so t_inPump is cleared on EVERY exit from Pump(), incl. an
+        // exception path. Under /EHa the dtor runs during a structured-
+        // exception unwind too -- so even if an AV ever escaped Pump's
+        // own catch (e.g. faulting in the queue lock itself), t_inPump
+        // cannot get stuck `true` and silently kill all future draining.
+        // The raw `t_inPump = false` it replaces was skipped on exactly
+        // that path -> the 2026-05-30 permanent host freeze.
+        struct InPumpGuard { ~InPumpGuard() { t_inPump = false; } } pumpGuard;
+        t_inPump = true;
+        Pump();
+        sampleSelf = false;  // pump drain time is not per-dispatch detour overhead
     }
 
     // UFunction interceptors: pre-dispatch hooks on a multi-slot table. If
@@ -517,7 +646,7 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
     // is SKIPPED -- the UFunction's body is replaced for this call. The walk
     // is kMaxInterceptors (16) acquire-loads of a function-pointer, with
     // the cb load only happening on a target match -- cheap empty-table case.
-    if (FireInterceptors(self, function, params)) return;
+    if (FireInterceptors(self, function, params)) return;  // intercepted -> drops the sample (rare)
 
     // PRE-observers: fire BEFORE the original. Used to snapshot state the BP
     // is about to clear (e.g. PHC.ReleaseComponent PRE reads handle+176
@@ -525,7 +654,7 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
     // D4-2: count-bounded walk -- pays N atomic loads where N is the active
     // observer count (typically <= 30) instead of kMaxObservers=128 per
     // dispatch. Empty-table case exits with a single acquire load.
-    FireObservers(g_preObservers, g_preObserverActive, self, function, params, "PRE");
+    FireObservers(g_preObservers, g_preObserverActive, g_preBloom, self, function, params, "PRE");
 
     // Diagnostic name-prefix sniffer (zero cost when no slot is set).
     FireNameDiagnostics(self, function, params);
@@ -541,13 +670,27 @@ void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params)
         UE_LOGI("trace: PE self=%p func=%ls", self, nameStr.c_str());
     }
 
+    if (sampleSelf) ::QueryPerformanceCounter(&t1);
     g_originalPE(self, function, params);
+    if (sampleSelf) ::QueryPerformanceCounter(&t2);
 
     // POST-observers: fire AFTER the original. Used to read state the BP just
     // wrote (e.g. PHC.GrabComponentAtLocation POST reads handle+176 to see
     // what was just grabbed; PHC.SetTargetLocation POST sees the per-tick
     // drive target). Count-bounded same as PRE.
-    FireObservers(g_postObservers, g_postObserverActive, self, function, params, "POST");
+    FireObservers(g_postObservers, g_postObserverActive, g_postBloom, self, function, params, "POST");
+
+    if (sampleSelf) {
+        ::QueryPerformanceCounter(&t3);
+        // OUR overhead = pre-original segment (incl. the empty-check mutex + the
+        // interceptor/PRE walks) + post-original segment (the POST walk). The
+        // engine's own ProcessEvent (t1..t2) is EXCLUDED.
+        const long long ours = (t1.QuadPart - t0.QuadPart) + (t3.QuadPart - t2.QuadPart);
+        if (ours > 0) {
+            g_peSelfNs.fetch_add(QpcDeltaToNs(ours), std::memory_order_relaxed);
+            g_peSelfSamples.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 }
 
 // SEH-only outer detour. No C++ destructors here so __try/__except is
@@ -652,6 +795,7 @@ void Post(Task task) {
     if (!task) return;
     std::lock_guard<std::mutex> lk(g_queueMutex);
     g_queue.push_back(std::move(task));
+    g_queueDepth.store(static_cast<int>(g_queue.size()), std::memory_order_release);
 }
 
 bool IsGameThread() {
@@ -678,11 +822,11 @@ void UnregisterInterceptor(void* targetUFunction, UFunctionInterceptor cb) {
 }
 
 bool RegisterPostObserver(void* targetUFunction, ProcessEventObserverFn cb) {
-    return SetObserverSlot(g_postObservers, g_postObserverActive, targetUFunction, cb);
+    return SetObserverSlot(g_postObservers, g_postObserverActive, g_postBloom, targetUFunction, cb);
 }
 
 bool RegisterPreObserver(void* targetUFunction, ProcessEventObserverFn cb) {
-    return SetObserverSlot(g_preObservers, g_preObserverActive, targetUFunction, cb);
+    return SetObserverSlot(g_preObservers, g_preObserverActive, g_preBloom, targetUFunction, cb);
 }
 
 void UnregisterObservers(void* targetUFunction, ProcessEventObserverFn cb) {
@@ -703,6 +847,8 @@ void ClearAllObservers() {
     }
     g_postObserverActive.store(0, std::memory_order_release);
     g_preObserverActive.store(0, std::memory_order_release);
+    BloomClear(g_postBloom);
+    BloomClear(g_preBloom);
     ClearAllNameDiagnostics();
 }
 
@@ -748,5 +894,22 @@ void SetCallTrace(bool enabled) {
 bool GetCallTrace() {
     return g_callTrace.load(std::memory_order_acquire);
 }
+
+void SetPerfCounting(bool countDispatches, bool sampleSelfTime) {
+    // Arm self-timing first so that the first counted dispatch can already sample.
+    g_peSelfOn.store(countDispatches && sampleSelfTime, std::memory_order_relaxed);
+    g_peCountOn.store(countDispatches, std::memory_order_relaxed);
+}
+
+unsigned long long PeDispatchCountTotal()   { return g_peDispatchCount.load(std::memory_order_relaxed); }
+unsigned long long PeDispatchCountGTTotal() { return g_peDispatchCountGT.load(std::memory_order_relaxed); }
+unsigned long long PeSelfNsTotal()          { return g_peSelfNs.load(std::memory_order_relaxed); }
+unsigned long long PeSelfSampleTotal()      { return g_peSelfSamples.load(std::memory_order_relaxed); }
+unsigned long long PeObserverBodyNsTotal()  { return g_obsBodyNs.load(std::memory_order_relaxed); }
+unsigned long long PeObserverWorstNs()      { return g_obsWorstNs.load(std::memory_order_relaxed); }
+void*              PeObserverWorstFn()      { return g_obsWorstFn.load(std::memory_order_relaxed); }
+int PostObserverCount() { return g_postObserverActive.load(std::memory_order_relaxed); }
+int PreObserverCount()  { return g_preObserverActive.load(std::memory_order_relaxed); }
+int InterceptorCount()  { return g_interceptorActive.load(std::memory_order_relaxed); }
 
 }  // namespace ue_wrap::game_thread

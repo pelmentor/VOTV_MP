@@ -40,6 +40,23 @@ namespace coop::trash_collect_sync {
 // actors, non-Aprop_C (transient chip/clump -- crash safety), and already-keyed
 // actors (a normal world-prop grab -- the peer already has it). Idempotent:
 // once minted the Key is non-None, so a repeat call returns false.
+//
+// For the non-keyable trash CLUMP (key=None, eid-only) it ALSO registers the clump
+// in the death-watch set (below) so its UNOBSERVABLE morph-destroy gets a despawn.
 bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* session);
+
+// Game thread, per-tick. The trash clump's destruction (re-pile on landing /
+// LifeSpan expiry) is dispatched natively/BP-internally and NEVER reaches our
+// K2_DestroyActor ProcessEvent observer (verified hands-on 2026-06-03: every grab
+// broadcast a fresh clump eid but ZERO destroys -> the peer's clump mirrors piled up
+// = the infinite grab/throw dupe). So the OWNER watches each clump it broadcast and,
+// the tick that clump's actor goes dead, broadcasts a PropDestroy(key=None, eid) for
+// the peer to despawn the mirror -- the MTA owner-authoritative destroy, driven by
+// liveness instead of an (unobservable) destroy edge. O(1)/tick over a tiny bounded
+// set. [[project-bug-trash-chippile-uaf-crash]]
+void TickWatchReleasedClumps(coop::net::Session* session);
+
+// Drop all watched clumps (full session teardown / aggregate disconnect).
+void OnDisconnect();
 
 }  // namespace coop::trash_collect_sync

@@ -139,7 +139,7 @@ DWORD WINAPI RefreshPumpThread(LPVOID) {
             refreshCounter = 0;
             GT::Post([] { if (g_active.load()) Refresh(); });
         }
-        ::Sleep(8);
+        ::Sleep(16);  // 60 Hz (user-set 2026-06-04, was 125)
     }
     return 0;
 }

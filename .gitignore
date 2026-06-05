@@ -112,3 +112,6 @@ CLAUDE.md
 # Agent-side test screenshots (capture-window.ps1 / shot.bat output)
 tools/shots/
 research/npctest_shots/
+research/menu_shots/
+research/clumpshot_shots/
+research/clumpvis_shots/

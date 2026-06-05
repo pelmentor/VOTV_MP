@@ -650,14 +650,20 @@ void TickConnect() {
                     const bool  enFog     = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_fog);
                     const bool  enSuper   = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_enable_superfog);
                     void*       effRain   = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_eff_rain);
+                    // Thick-fog signals: the rolling-fog ACTOR (fogEventObject -- the "жирный туман"
+                    // when present), the visible height-fog DENSITY (finalFogDensity), and permanentFog.
+                    // These are what distinguish a foggy peer from a clear one (rain/enable flags don't).
+                    void*       rollFog   = *reinterpret_cast<void**>(b + P::off::AdaynightCycle_fogEventObject);
+                    const float finalFog  = *reinterpret_cast<float*>(b + P::off::AdaynightCycle_finalFogDensity);
+                    const bool  permFog   = *reinterpret_cast<bool*>(b + P::off::AdaynightCycle_permanentFog);
                     bool ok = false;
                     const bool active = ReadComponentIsActive(effRain, &ok);
                     auto* s = g_session.load(std::memory_order_acquire);
                     const char* role = (s && s->role() == coop::net::Role::Host) ? "HOST" : "CLIENT";
-                    UE_LOGI("[probe weather] role=%s isRaining=%d rainStrength=%.2f enable_fog=%d "
-                            "enable_superfog=%d eff_rain=%p IsActive=%d(ok=%d)",
-                            role, isRaining ? 1 : 0, rainStr, enFog ? 1 : 0, enSuper ? 1 : 0,
-                            effRain, active ? 1 : 0, ok ? 1 : 0);
+                    UE_LOGI("[probe weather] role=%s rollFogActor=%p finalFogDensity=%.4f permanentFog=%d "
+                            "enable_fog=%d enable_superfog=%d | isRaining=%d rainStrength=%.2f eff_rain=%p IsActive=%d(ok=%d)",
+                            role, rollFog, finalFog, permFog ? 1 : 0, enFog ? 1 : 0, enSuper ? 1 : 0,
+                            isRaining ? 1 : 0, rainStr, effRain, active ? 1 : 0, ok ? 1 : 0);
                 }
             }
         }

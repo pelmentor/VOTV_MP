@@ -142,7 +142,7 @@ DWORD WINAPI FileTriggerThread(LPVOID) {
                 ::DeleteFileW(triggerPath);  // one-shot per file creation
             }
         }
-        ::Sleep(8);
+        ::Sleep(16);  // 60 Hz (user-set 2026-06-04, was 125)
     }
     return 0;
 }

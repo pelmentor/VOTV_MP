@@ -420,6 +420,53 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot) {
     }
     UE_LOGI("remote_prop::OnSpawn: spawned %p of '%ls' at (%.1f, %.1f, %.1f)",
             spawned, classW.c_str(), payload.locX, payload.locY, payload.locZ);
+    // v28: CONSUME the shared SOURCE PILE + stamp the trash VARIANT.
+    // A clump mirror means the OTHER peer just grabbed a ground chipPile. Those piles are
+    // SHARED WORLD OBJECTS (loaded independently per peer, key=None, NO cross-peer id), so
+    // THIS peer still has its OWN copy lying where the grab happened -> it must disappear
+    // like it did on the grabber. Resolve it by POSITION (the clump broadcasts its ground
+    // location; same cross-peer-position identity FindNearbySameClass uses for mushroom
+    // dedup) + consume it, and read the TRUE variant off our OWN pile (more reliable than
+    // the wire byte, which morph-timing can leave stale). [[project-bug-trash-chippile-uaf-crash]]
+    uint8_t variant = payload.chipType;  // wire fallback (used if no source pile resolves)
+    if (classW.find(L"garbageClump") != std::wstring::npos) {
+        float dist = -1.f;
+        void* srcPile = ue_wrap::prop::FindNearestChipPile(
+            ue_wrap::FVector{payload.locX, payload.locY, payload.locZ}, 300.f, &dist);
+        if (srcPile) {
+            const uint8_t pileVariant = ue_wrap::prop::GetChipType(srcPile);
+            if (pileVariant != 0) variant = pileVariant;  // authoritative: our own pile's variant
+            UE_LOGI("remote_prop::OnSpawn: clump -> CONSUME source chipPile %p at %.1f cm (variant=%u) -- shared world pile removed",
+                    srcPile, dist, static_cast<unsigned>(pileVariant));
+            coop::remote_prop::ConsumeLocalActor(srcPile);
+        } else {
+            UE_LOGI("remote_prop::OnSpawn: clump -> no source chipPile within 300 cm of (%.1f,%.1f,%.1f) "
+                    "(already gone / spawner-divergent / re-grabbed clump); wire chipType=%u",
+                    payload.locX, payload.locY, payload.locZ, static_cast<unsigned>(payload.chipType));
+        }
+    }
+    // Stamp the variant after FinishSpawningActor (actor fully constructed). No-op for
+    // non-trash classes (SetChipType reflection-gates on a chipType property, so it never
+    // touches an Aprop_C's StaticMesh ptr at the same 0x0238 offset). Repaints via setTex().
+    if (variant != 0) {
+        ue_wrap::prop::SetChipType(spawned, variant);
+        UE_LOGI("remote_prop::OnSpawn: applied chipType=%u variant to '%ls'",
+                static_cast<unsigned>(variant), classW.c_str());
+    }
+    // v29 landing SOUND: a freshly-landed trash pile (the owner's thrown clump re-piled
+    // into it, broadcast by trash_collect_sync's death-watcher) is a bare, SILENT spawn on
+    // the peer -- the flying mirror was despawned, never physically landed here. Dispatch
+    // turnToPile(landingVel) -- the SAME BP entry the real clump->pile landing calls -- so
+    // it fires the impact dust+sound (sets spwnd, operates on `this`, spawns nothing -> no
+    // dupe). Gated on kFreshLanded (only BroadcastLandedPileNear sets it; never a connect
+    // snapshot, so a late joiner can't replay a landing-sound storm) and no-op-safe on any
+    // class without turnToPile. [[project-bug-trash-chippile-uaf-crash]]
+    if (payload.physFlags & coop::net::propspawn_flags::kFreshLanded) {
+        ue_wrap::prop::TurnChipPileToPile(
+            spawned, ue_wrap::FVector{payload.initLinVelX, payload.initLinVelY, payload.initLinVelZ});
+        UE_LOGI("remote_prop::OnSpawn: landed pile '%ls' -> turnToPile(vel=(%.0f,%.0f,%.0f)) [impact sound]",
+                classW.c_str(), payload.initLinVelX, payload.initLinVelY, payload.initLinVelZ);
+    }
     // Phase 4: physics state. The mesh is Aprop_C.StaticMesh.
     void* mesh = ue_wrap::prop::GetStaticMesh(spawned);
     if (mesh) {

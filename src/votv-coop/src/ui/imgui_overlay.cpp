@@ -19,9 +19,9 @@
 //      WM_SETCURSOR so it can never become a second cursor. ONE visible cursor.
 //      Keyboard nav (arrows + Enter) via ImGuiConfigFlags_NavEnableKeyboard.
 //   4. Surfaces: the overlay hosts TWO surfaces -- the F1 dev menu (ui::dev_menu,
-//      interactive) and the TAB player list (ui::scoreboard). The scoreboard is
-//      PASSIVE for clients (hold TAB, no cursor, keep playing) and INTERACTIVE for
-//      the host (toggle TAB, cursor, clickable -- the action board). "Capture"
+//      interactive) and the tilde player list (ui::scoreboard). The scoreboard is
+//      PASSIVE for clients (hold tilde, no cursor, keep playing) and INTERACTIVE for
+//      the host (toggle tilde, cursor, clickable -- the action board). "Capture"
 //      (cursor + input swallow + SetCursorPos no-op) follows whichever interactive
 //      surface is up (the menu always; the scoreboard only for the host).
 // DX12 is detected (GetDevice for ID3D11Device fails) and logged but not yet drawn.
@@ -30,6 +30,8 @@
 
 #include "ui/dev_menu.h"
 #include "ui/scoreboard.h"
+#include "ui/server_browser.h"
+#include "coop/dev/perf_probe.h"
 #include "ue_wrap/hook.h"
 #include "ue_wrap/log.h"
 
@@ -78,21 +80,24 @@ std::atomic<bool> g_installed{false};   // hooks installed
 std::atomic<bool> g_imguiReady{false};  // first-present init done (DX11)
 std::atomic<bool> g_dx12Logged{false};  // logged the DX12-unsupported notice once
 std::atomic<bool> g_visible{false};        // F1 dev menu shown
-std::atomic<bool> g_scoreboard{false};     // TAB player-list scoreboard shown (real TAB)
+std::atomic<bool> g_scoreboard{false};     // player-list scoreboard shown (real tilde key)
 std::atomic<bool> g_scoreboardForced{false};  // VOTVCOOP_SCOREBOARD_OPEN test override (survives focus reset)
 std::atomic<bool> g_inFrame{false};        // render-thread inside the ImGui pass (shutdown waits on this)
 
 // ---- surface state -----------------------------------------------------------
 // Two surfaces share this overlay: the F1 dev menu (always interactive) and the
-// TAB player list. The scoreboard is INTERACTIVE only for the host (the clickable
+// tilde player list. The scoreboard is INTERACTIVE only for the host (the clickable
 // action board, Phase 2); clients peek passively. "Capture" = take the cursor +
 // swallow input + no-op UE4's recenter -- on whenever an interactive surface is up.
-inline bool MenuOpen()  { return g_visible.load(std::memory_order_relaxed); }
-inline bool ScoreOpen() { return g_scoreboard.load(std::memory_order_relaxed) ||
-                                 g_scoreboardForced.load(std::memory_order_relaxed); }
-inline bool AnyOpen()   { return MenuOpen() || ScoreOpen(); }
+inline bool MenuOpen()    { return g_visible.load(std::memory_order_relaxed); }
+inline bool ScoreOpen()   { return g_scoreboard.load(std::memory_order_relaxed) ||
+                                   g_scoreboardForced.load(std::memory_order_relaxed); }
+inline bool BrowserOpen() { return ui::server_browser::IsOpen(); }
+inline bool AnyOpen()     { return MenuOpen() || ScoreOpen() || BrowserOpen(); }
 inline bool CaptureActive() {
-    return MenuOpen() || (ScoreOpen() && ui::scoreboard::LocalIsHost());
+    // The MULTIPLAYER server browser is interactive (Connect / Host / type an IP),
+    // so it takes the cursor + input like the F1 menu does.
+    return MenuOpen() || BrowserOpen() || (ScoreOpen() && ui::scoreboard::LocalIsHost());
 }
 
 void CreateRTV(IDXGISwapChain* sc) {
@@ -120,7 +125,7 @@ BOOL WINAPI SetCursorPosDetour(int x, int y) {
 
 LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     // Losing focus (Alt-Tab) must drop the scoreboard: a background window never
-    // receives the TAB WM_KEYUP, so the client hold-to-peek would stick open (and a
+    // receives the tilde WM_KEYUP, so the client hold-to-peek would stick open (and a
     // host's interactive board would keep input captured). Fall through to the game.
     if (msg == WM_KILLFOCUS) g_scoreboard.store(false, std::memory_order_relaxed);
     // F1 edge -> toggle the menu (consume the key so the game never sees F1). No
@@ -133,11 +138,19 @@ LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         g_visible.store(!g_visible.load(std::memory_order_relaxed), std::memory_order_relaxed);
         return 0;
     }
-    // TAB -> player list. HOST: press toggles the interactive (clickable) board.
-    // CLIENT: hold to peek (down shows, up hides). Either way swallow TAB so the
-    // game never acts on it. (Swallowed from ImGui too -- it's our surface key, not
-    // ImGui's focus-cycle key.)
-    if (msg == WM_KEYDOWN && wParam == VK_TAB) {
+    // Tilde (`/~, VK_OEM_3 -- the physical key above TAB) -> player list. HOST:
+    // press toggles the interactive (clickable) board. CLIENT: hold to peek (down
+    // shows, up hides). Either way swallow tilde so the game never acts on it.
+    // (Swallowed from ImGui too -- it's our surface key, not ImGui's grave-accent.)
+    //
+    // Moved off TAB on 2026-06-03 (user req): VOTV binds TAB to the player
+    // inventory -- a core, constantly-used action -- and our unconditional TAB
+    // swallow took that key away. Tilde is free in VOTV (at most UE4's dev console,
+    // which we have no reason to surface; the F1 menu is our dev surface), so taking
+    // it costs nothing. VK_OEM_3 is the physical tilde-position key on every layout
+    // (the Russian layout puts Ё there -- still the same scancode), so this is the
+    // key left of "1" / above TAB regardless of the user's keyboard language.
+    if (msg == WM_KEYDOWN && wParam == VK_OEM_3) {
         if (ui::scoreboard::LocalIsHost()) {
             if ((lParam & (1 << 30)) == 0)  // ignore auto-repeat while held
                 g_scoreboard.store(!g_scoreboard.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -146,7 +159,7 @@ LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         }
         return 0;
     }
-    if (msg == WM_KEYUP && wParam == VK_TAB) {
+    if (msg == WM_KEYUP && wParam == VK_OEM_3) {
         if (!ui::scoreboard::LocalIsHost()) g_scoreboard.store(false, std::memory_order_relaxed);
         return 0;
     }
@@ -238,8 +251,9 @@ void RenderFrameGuarded() {
         ImGui::GetIO().MouseDrawCursor = CaptureActive();
         ImGui::NewFrame();
 
-        if (MenuOpen())  ui::dev_menu::Render();
-        if (ScoreOpen()) ui::scoreboard::Render();
+        if (MenuOpen())    ui::dev_menu::Render();
+        if (ScoreOpen())   ui::scoreboard::Render();
+        if (BrowserOpen()) ui::server_browser::Render();
 
         ImGui::Render();
         if (g_rtv) {
@@ -250,6 +264,7 @@ void RenderFrameGuarded() {
         UE_LOGE("imgui_overlay: SEH in render frame -- hiding surfaces to protect the render thread");
         g_visible.store(false, std::memory_order_relaxed);
         g_scoreboard.store(false, std::memory_order_relaxed);
+        ui::server_browser::Close();
     }
 }
 
@@ -263,6 +278,9 @@ bool BringUpGuarded(IDXGISwapChain* sc) {
 }
 
 HRESULT STDMETHODCALLTYPE PresentDetour(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    // Perf probe: count every presented frame (the frame anchor for ms/frame).
+    // Cheap relaxed increment when armed; a single bool load when off.
+    coop::dev::perf_probe::NoteFrame();
     if (!g_imguiReady.load(std::memory_order_acquire)) {
         if (BringUpGuarded(sc)) g_imguiReady.store(true, std::memory_order_release);
         // else: DX12 / not-ready -> just present normally.
@@ -373,15 +391,23 @@ bool Init() {
         g_visible.store(true, std::memory_order_relaxed);
         UE_LOGI("imgui_overlay: VOTVCOOP_MENU_OPEN=1 -- menu starts visible (screenshot test)");
     }
-    // VOTVCOOP_SCOREBOARD_OPEN=1 starts the TAB player list visible (the smoke can't
-    // hold/press TAB) -- autonomous screenshot of the roster.
+    // VOTVCOOP_SCOREBOARD_OPEN=1 starts the player list visible (the smoke can't
+    // hold/press the tilde key) -- autonomous screenshot of the roster.
     char sbEnv[8] = {};
     if (::GetEnvironmentVariableA("VOTVCOOP_SCOREBOARD_OPEN", sbEnv, sizeof(sbEnv)) > 0 &&
         sbEnv[0] == '1') {
         // Forced (not g_scoreboard) so it survives the host losing focus to the
-        // launching client window -- the WM_KILLFOCUS reset only clears real TAB.
+        // launching client window -- the WM_KILLFOCUS reset only clears the real tilde key.
         g_scoreboardForced.store(true, std::memory_order_relaxed);
         UE_LOGI("imgui_overlay: VOTVCOOP_SCOREBOARD_OPEN=1 -- scoreboard starts visible (screenshot test)");
+    }
+    // VOTVCOOP_BROWSER_OPEN=1 starts the MULTIPLAYER server browser visible (the
+    // boot-to-menu screenshot can't click the injected button) -- autonomous proof.
+    char brEnv[8] = {};
+    if (::GetEnvironmentVariableA("VOTVCOOP_BROWSER_OPEN", brEnv, sizeof(brEnv)) > 0 &&
+        brEnv[0] == '1') {
+        ui::server_browser::Open();
+        UE_LOGI("imgui_overlay: VOTVCOOP_BROWSER_OPEN=1 -- server browser starts visible (screenshot test)");
     }
     UE_LOGI("imgui_overlay: present hook installed (present=%p resize=%p) -- ImGui brings up "
             "on the first frame; press F1 in-game for the menu", g_presentTarget, g_resizeTarget);
@@ -397,6 +423,7 @@ void Shutdown() {
     g_visible.store(false, std::memory_order_relaxed);
     g_scoreboard.store(false, std::memory_order_relaxed);
     g_scoreboardForced.store(false, std::memory_order_relaxed);
+    ui::server_browser::Close();
     const bool wasReady = g_imguiReady.exchange(false);
     if (g_presentTarget) ue_wrap::hook::Uninstall(g_presentTarget);
     if (g_resizeTarget)  ue_wrap::hook::Uninstall(g_resizeTarget);

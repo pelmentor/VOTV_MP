@@ -24,7 +24,7 @@ void SetSession(coop::net::Session* session);
 // posted to it).
 void TeleportClientsToHost();
 
-// Phase 2 host action menu (TAB scoreboard): teleport ONE specific client (the
+// Host action menu (player-list scoreboard): teleport ONE specific client (the
 // peer at `peerSlot`, 1..kMaxPeers-1) to the host's pose. Same snapshot as
 // TeleportClientsToHost but a single-target SendReliableToSlot instead of a
 // broadcast, so only the clicked client moves. HOST-only; no-ops on a client or

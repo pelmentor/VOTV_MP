@@ -33,6 +33,7 @@ void* g_getLinFn  = nullptr;  // PrimitiveComponent::GetPhysicsLinearVelocity
 void* g_getAngFn  = nullptr;  // PrimitiveComponent::GetPhysicsAngularVelocityInDegrees
 void* g_setLinFn  = nullptr;  // PrimitiveComponent::SetPhysicsLinearVelocity
 void* g_setAngFn  = nullptr;  // PrimitiveComponent::SetPhysicsAngularVelocityInDegrees
+void* g_setCollFn = nullptr;  // PrimitiveComponent::SetCollisionEnabled
 
 void* ActorFn(void** cache, const wchar_t* name) {
     if (!*cache) {
@@ -82,6 +83,19 @@ bool GetActorRootPhysicsVelocity(void* actor, FVector& outLin, FVector& outAng) 
     { ParamFrame f(getLin); if (!Call(root, f)) return false; outLin = f.Get<FVector>(L"ReturnValue"); }
     { ParamFrame f(getAng); if (!Call(root, f)) return false; outAng = f.Get<FVector>(L"ReturnValue"); }
     return true;
+}
+
+bool SetActorRootCollisionEnabled(void* actor, uint8_t collisionType) {
+    // collisionType: 0=NoCollision 1=QueryOnly 2=PhysicsOnly 3=QueryAndPhysics.
+    // The thrown clump mirror needs 3 so it collides with the world + lands (the
+    // bare-spawned mirror otherwise sinks through the floor on release).
+    void* root = RootComponentOf(actor);
+    if (!root) return false;
+    void* fn = PrimFn(&g_setCollFn, L"SetCollisionEnabled");
+    if (!fn) { UE_LOGW("engine: SetCollisionEnabled unresolved"); return false; }
+    ParamFrame f(fn);
+    f.Set<uint8_t>(L"NewType", collisionType);
+    return Call(root, f);
 }
 
 bool SetActorRootPhysicsVelocity(void* actor, const FVector& lin, const FVector& ang) {

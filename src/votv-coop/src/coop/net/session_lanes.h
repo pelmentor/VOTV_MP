@@ -55,6 +55,9 @@ inline Lane LaneForKind(ReliableKind k) {
 //     destroy / throw must replicate to every peer (the Aprop_C lineage is
 //     host-authoritative for spawns the HOST detects, but a client's own
 //     takeObj-path drop originates client-side and needs cross-peer fan-out).
+//   - DoorState / LightState / ContainerState: keyed interactables are SYMMETRIC
+//     (any peer can toggle one locally), so a client-originated edge must reach
+//     the OTHER clients via the host.
 // NOT relayed:
 //   - Weather / RedSky / LightningStrike / EntitySpawn / EntityDestroy /
 //     RestoreVitals / TeleportClient / PlayerDamage: host-authoritative -- they
@@ -72,6 +75,10 @@ inline bool IsClientRelayableReliableKind(ReliableKind k) {
     case ReliableKind::PropSpawn:
     case ReliableKind::PropDestroy:
     case ReliableKind::PropRelease:
+    case ReliableKind::DoorState:
+    case ReliableKind::LightState:
+    case ReliableKind::ContainerState:
+    case ReliableKind::KeypadState:
         return true;
     default:
         return false;

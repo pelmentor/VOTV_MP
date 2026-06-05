@@ -45,6 +45,10 @@ int32_t MainPlayer_Heavy();
 // Probe-confirmed 2026-05-27; the PropPose-emit branch reads this as a
 // fallback when grabbing_actor is null.
 int32_t MainPlayer_holding_actor();
+// The actor the local player is currently aiming at (lookAtActor @0x0AA0). On an
+// E-press (InpActEvt_use) this is the door/interactable being used -- read it in the
+// proven-firing InpActEvt_use observer to identify the door for host-authoritative sync.
+int32_t MainPlayer_lookAtActor();
 // Ragdoll/faint DISPLAY state (vitals pillar Inc2b, 2026-05-31). isRagdoll is
 // the AnimBP gate flipped by ragdollMode() -- set by ANY ragdoll cause (manual
 // C-key InpActEvt_ragdoll_..._25, exhaustion faint(), KO). `dead` is the death
