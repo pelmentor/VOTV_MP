@@ -1,6 +1,20 @@
 # Live host-world save on join (root-cause kerfur save-transfer dupe fix) -- RE + AS BUILT (2026-06-15)
 
-Session 18 (post-compact). Shipped commit `de10514c`, deployed SHA `806699DB`.
+> **REVERTED 2026-06-15 (commit `68767d25`) -- a connect-snapshot TIMING regression, NOT a flaw
+> in the live capture itself.** On the live-save hands-on the client lost ~2979 props: the divergence
+> sweep fires on the CLIENT's load-tail quiescence, but the HOST's connect-snapshot streams ~3000
+> PropSpawns over many ticks. The live save loaded faster/fewer props (2900 vs the stale build's
+> 3316), so the client quiesced and the sweep FIRED before the host's snapshot finished -- only 88
+> props were claimed when it ran (vs 3050 in the stale build), so it destroyed the 2979 not-yet-
+> re-expressed locals. The host capture worked PERFECTLY (`objectsData repopulated 3287 -> 3319`,
+> 19MB, every prop converged `d=0.00cm`). **THE PROPER FIX before re-enabling: gate the divergence
+> sweep on the HOST's snapshot COMPLETION (all PropSpawns delivered + the SnapshotComplete signal),
+> not just client load-tail quiescence -- a latent bug the live save merely exposed (the stale build
+> also destroys ~1020, some likely timing-victims the host happens to re-mirror).** Section 5/6 below
+> describe the AS-BUILT-then-reverted live capture; it is correct and re-usable once the sweep gate
+> is fixed. The save_capture.{h,cpp} code lives in git at `de10514c`.
+
+Session 18 (post-compact). Shipped commit `de10514c`, deployed SHA `806699DB`, REVERTED `68767d25`.
 Supersedes the session-18 client-side reconcile (deferred divergence sweep, commit `52b1d94d`)
 as the PRIMARY fix for the kerfur save-transfer dupe -- that reconcile layer now survives as the
 fallback/safety-net, not the load-bearing fix. See also
