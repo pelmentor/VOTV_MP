@@ -226,9 +226,20 @@ void Tick() {
     }
 }
 
-void OnSnapshotComplete() {
+void OnSnapshotComplete(bool skipGhostSweep) {
     UE_ASSERT_GAME_THREAD("npc_adoption::OnSnapshotComplete");
     g_snapshotDelivered = true;
+    // LIVE-capture join (save_capture): the client loaded the host's exact current
+    // world, so every loaded NPC is legitimate -- there are NO untracked orphans to
+    // sweep, and a partial/chunked EntitySpawn replay would otherwise let the ghost
+    // sweep K2-destroy a just-loaded NPC the host simply hasn't re-expressed yet.
+    // Latch the sweep as already-done so it never fires; ADOPTION (ResolvePending,
+    // which BINDS the local kerfur twin) still runs normally above.
+    if (skipGhostSweep) {
+        g_ghostSwept = true;
+        UE_LOGI("npc-adopt: live-capture join -- skipping the post-snapshot NPC ghost sweep "
+                "(client loaded the host's authoritative world; nothing to reconcile)");
+    }
 }
 
 void OnClientWorldReady() {

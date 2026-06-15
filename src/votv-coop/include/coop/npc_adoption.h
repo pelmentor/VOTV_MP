@@ -60,7 +60,11 @@ void Tick();
 // drain before the NEXT net-pump Tick's ghost-sweep check, and the sweep is gated on g_pending
 // being empty -- so the sweep waits out the just-armed adoptions. (This is WHY the sweep lives in
 // Tick, never inline here -- see Tick.) Game thread.
-void OnSnapshotComplete();
+//
+// skipGhostSweep=true (a LIVE-capture save-transfer join, save_transfer::WasLiveCaptured):
+// the client loaded the host's exact current world, so the ghost sweep is suppressed
+// (latched done) -- only ADOPTION runs. False = stale/fresh join -> sweep as before.
+void OnSnapshotComplete(bool skipGhostSweep);
 
 // A fresh connect replay is starting for this client (net_pump, right after it announces
 // ClientWorldReady -- which the host answers with a fresh EntitySpawn replay + SnapshotComplete).

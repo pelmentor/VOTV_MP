@@ -110,6 +110,14 @@ void GetProgress(uint32_t& doneBytes, uint32_t& totalBytes);
 // The harness threads it into LoadStorySave's forceGameMode for the zcoop slot.
 uint8_t ReceivedGameMode();
 
+// True iff the host LIVE-captured the transferred blob (save_capture) for this
+// join: the client then loaded the host's exact current world, so there is NO
+// divergent baseline -> the connect-snapshot divergence sweep + NPC ghost sweep
+// MUST be skipped (running them over a chunked snapshot races the drain and
+// destroys the just-loaded world). False = stale-canonical fallback -> sweep as
+// before. Read by event_feed at SnapshotBegin/Complete.
+bool WasLiveCaptured();
+
 // Boot-time sweep: delete stale zcoop_*.sav older than ~1 h (crash leftovers),
 // NEVER a fresh one (a concurrent same-machine sibling may be mid-join).
 void CleanupStaleSlotsAtBoot();

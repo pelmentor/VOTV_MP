@@ -354,7 +354,19 @@ void Update(net::Session& session, void* localPlayer) {
             // strictly after this) claims the client actor it binds; the
             // SnapshotComplete sweep destroys the unclaimed RNG-divergent
             // locals so the client adopts the host's world layout.
-            coop::remote_prop_spawn::BeginClaimTracking();
+            //
+            // SKIP for a LIVE-capture join (save_transfer::WasLiveCaptured): the
+            // client loaded the host's exact current world, so there is no
+            // divergent baseline -- arming the claim set would only feed a sweep
+            // we must not run (it raced the chunked snapshot drain and destroyed
+            // ~2979 just-loaded props on the 2026-06-15 hands-on). No claim
+            // tracking armed -> ArmDivergenceSweep below also no-ops.
+            if (!coop::save_transfer::WasLiveCaptured()) {
+                coop::remote_prop_spawn::BeginClaimTracking();
+            } else {
+                UE_LOGI("event_feed: SnapshotBegin -- live-capture join, SKIPPING claim "
+                        "tracking + the divergence sweep (client loaded the host's world)");
+            }
             break;
         }
         case net::ReliableKind::SnapshotComplete: {
@@ -382,12 +394,21 @@ void Update(net::Session& session, void* localPlayer) {
             // a deferred, load-tail-quiescence-gated sweep (TickClientReconcile
             // fires it once keys have all minted) instead. localPlayer is
             // re-resolved at sweep time.
-            coop::remote_prop_spawn::ArmDivergenceSweep();
+            // SKIP both sweeps for a LIVE-capture join -- see the SnapshotBegin
+            // comment. The client loaded the host's authoritative current world via
+            // the game's own loadObjects; there is nothing divergent to reconcile,
+            // and the sweep over a still-draining chunked snapshot nukes the world.
+            const bool liveCapture = coop::save_transfer::WasLiveCaptured();
+            if (!liveCapture) {
+                coop::remote_prop_spawn::ArmDivergenceSweep();
+            }
             // v75: the connect snapshot is fully delivered, so every save-persisted EntitySpawn
             // (the kerfur) has arrived + armed its deferred adoption. Tell npc_adoption: once those
             // pending adoptions converge it may run its one-shot ghost sweep (the NPC analogue of
-            // the prop divergence sweep armed above) without risking a not-yet-armed local twin.
-            coop::npc_adoption::OnSnapshotComplete();
+            // the prop divergence sweep armed above) without risking a not-yet-armed local twin --
+            // UNLESS this is a live-capture join, where the ghost sweep is suppressed (adoption
+            // still binds the local kerfur twin).
+            coop::npc_adoption::OnSnapshotComplete(/*skipGhostSweep=*/liveCapture);
             break;
         }
 

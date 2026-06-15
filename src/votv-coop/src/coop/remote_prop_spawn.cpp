@@ -1043,6 +1043,29 @@ static void RunDivergenceSweep_(void* localPlayer) {
                 "mean the quiescence gate fired too early (regression tripwire)",
                 skippedTotal, keylessSkippedByClass.size(), topCnt, topCls.c_str());
     }
+    // SAFETY VALVE (2026-06-15, post-live-save regression). A legitimate divergence
+    // is a SMALL delta: the client loaded the host's save, so the host cannot have
+    // changed more than a fraction of the world between that save and this join. A
+    // sweep that wants to destroy MORE THAN HALF the in-universe props is therefore
+    // NOT divergence -- it is an incomplete snapshot (the host re-seeded mid-connect
+    // and sent a tiny first bracket, racing the chunked drain), and destroying on it
+    // wipes the just-loaded world (the 2026-06-15 hands-on: 2979 of 3229 destroyed).
+    // ABORT instead -- the claimed props stay converged; the unclaimed survive (a
+    // later fuller bracket re-expresses them, and the host's PropDestroy stream still
+    // removes genuine deletions). A few stale ghosts beat an empty world. The
+    // live-capture path skips the sweep entirely (event_feed); this guards every
+    // OTHER path (stale fallback / fresh boot) against the same class of bug.
+    if (inClass > 0 && static_cast<int>(doomed.size()) * 2 > inClass) {
+        UE_LOGW("remote_prop_spawn: claim sweep ABORTED -- would destroy %zu of %d in-universe "
+                "actor(s) (>50%%); the host snapshot is INCOMPLETE (partial/racing bracket), not a "
+                "divergence. Keeping the loaded world (%d claimed stay converged).",
+                doomed.size(), inClass, claimedCount);
+        g_claimedActors.clear();
+        g_claimTrackingActive = false;
+        ResetPileBindIndex();
+        return;
+    }
+
     // Phase 3: destroy with OnDestroy-parity teardown. Echo-suppressed
     // (MarkIncomingDestroy) so our K2_DestroyActor PRE observer does not
     // broadcast these local-only teardowns. deferred=false: we run from the
