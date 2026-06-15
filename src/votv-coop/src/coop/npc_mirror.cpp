@@ -14,6 +14,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
+#include "coop/kerfur_convert.h"  // FindParkedGhostNpcNear -- adopt the client's own turn-on result
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/npc_adoption.h"  // v75: deferred class-match adoption for save-persisted NPCs
@@ -176,9 +177,50 @@ void OnEntitySpawn(const coop::net::EntitySpawnPayload& payload) {
                                         payload.rotPitch, payload.rotYaw, payload.rotRoll);
         return;
     }
+    // CONVERSION ADOPT (2026-06-15 hands-on): a kerfur the THIS client just turned ON arrives here
+    // as a savePersisted=0 mid-session spawn. The client already spawned its own local kerfur via
+    // the un-hookable EX_CallMath conversion path; kerfur_convert's poll parked it. Bind THAT actor
+    // as the mirror instead of fresh-spawning a duplicate next to it (the "two kerfurs out of one
+    // object" dupe + the destroy/respawn flicker). Only the initiating client has a parked ghost
+    // near this pose -> other peers get nullptr here and fresh-spawn normally below.
+    if (void* ghost = coop::kerfur_convert::FindParkedGhostNpcNear(payload.locX, payload.locY, payload.locZ)) {
+        if (AdoptExistingNpcAsMirror(ghost, payload.elementId, classW)) return;
+        // Adopt failed (eid collision) -> fall through to a fresh mirror; the orphan ghost is
+        // reaped by kerfur_convert's cleanup.
+    }
     SpawnFreshNpcMirror(classW, actorClass, payload.elementId,
                         payload.locX, payload.locY, payload.locZ,
                         payload.rotPitch, payload.rotYaw, payload.rotRoll);
+}
+
+bool AdoptExistingNpcAsMirror(void* actor, uint32_t elementId, const std::wstring& classW) {
+    if (!actor || !R::IsLive(actor)) return false;
+    // Same Element build + Install + park as SpawnFreshNpcMirror's tail, but binding an EXISTING
+    // actor (no BeginDeferred/FinishSpawning). The actor is the client's own real game-spawned
+    // kerfur -> camera-safe, fully initialized.
+    auto mirror = std::make_unique<coop::element::Npc>();
+    std::string typeName8;
+    typeName8.reserve(classW.size());
+    for (wchar_t c : classW) typeName8.push_back(static_cast<char>(c));
+    mirror->SetTypeName(std::move(typeName8));
+    mirror->SetActor(actor, R::InternalIndexOf(actor));
+    const coop::element::ElementId eid = static_cast<coop::element::ElementId>(elementId);
+    if (!NpcMirrors().Install(eid, std::move(mirror))) {
+        UE_LOGW("npc-mirror[adopt]: Install(eid=%u) failed for existing actor %p -- leaving it for "
+                "kerfur_convert ghost cleanup", elementId, actor);
+        return false;
+    }
+    // Park host-driven (streamed pose authoritative): CMC + actor ticks off, kerfur AI timers off.
+    ue_wrap::puppet::DisableCharacterTicks(actor);
+    ue_wrap::kerfur::NeutralizeAiTimers(actor);
+    UE_LOGI("npc-mirror[adopt]: bound EXISTING local actor %p as host mirror eid=%u class='%ls' "
+            "(kerfur turn-on -- no respawn, no ghost)", actor, elementId, classW.c_str());
+    return true;
+}
+
+void DestroyLocalNpcActor(void* actor) {
+    if (!actor || !g_k2DestroyFn || !R::IsLive(actor)) return;
+    R::CallFunction(actor, g_k2DestroyFn, nullptr);  // K2_DestroyActor (game thread)
 }
 
 bool SpawnFreshNpcMirror(const std::wstring& classW, void* actorClass, uint32_t elementId,

@@ -318,6 +318,7 @@ add_library(votv-coop SHARED
     src/coop/dev/restore_vitals.cpp
     src/coop/dev/spawn_menu_unlock.cpp
     src/coop/dev/spawn_npc.cpp
+    src/coop/dev/kerfur_toggle.cpp
     src/coop/dev/teleport_client.cpp
     src/coop/dev/menu_proceed.cpp
     src/coop/dev/object_overlay.cpp

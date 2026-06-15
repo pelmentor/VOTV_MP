@@ -35,9 +35,11 @@
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
 #include "coop/remote_prop_spawn.h"  // HasLoadTailQuiesced -- gate the client poll past the join reconcile
-#include "ue_wrap/engine.h"      // GetActorLocation -- the conversion poll's ghost-sweep radius
+#include "ue_wrap/engine.h"      // GetActorLocation + SetActorSimulatePhysics (freeze a ghost prop)
 #include "ue_wrap/game_thread.h"
+#include "ue_wrap/kerfur.h"      // NeutralizeAiTimers -- park a claimed conversion-ghost NPC
 #include "ue_wrap/log.h"
+#include "ue_wrap/puppet.h"      // DisableCharacterTicks -- park a claimed conversion-ghost NPC
 #include "ue_wrap/reflection.h"
 
 #include <atomic>
@@ -389,18 +391,77 @@ void SendConvertRequestDirect(uint32_t eid, uint8_t toProp) {
             toProp ? "turn_off" : "turn-on", eid);
 }
 
-// Destroy any UNTRACKED live kerfur prop near `pos` -- the ghost the client's own
-// invisible dropKerfurProp just spawned. The host's authoritative prop arrives via
-// the wire WITH a wire Element (tracked), so an untracked kerfur prop at the dead
-// kerfur's transform IS the ghost. One GUObjectArray walk, only on a detected
-// turn_off (rare), cold path.
-void SweepGhostKerfurProp(float x, float y, float z) {
-    if (!g_kerfurPropClass) return;
-    void* bases[2] = {g_kerfurPropClass, g_floppyClass};
-    const size_t nBases = g_floppyClass ? 2u : 1u;
+// ---- conversion-ghost CLAIM + ADOPT (2026-06-15 hands-on) ---------------------
+// The client's own toggle spawns the NEW-form actor through the PE-invisible
+// EX_CallMath path -- a live UNTRACKED ghost we cannot prevent. DESTROYING it (the
+// earlier sweep) only traded the dupe for a destroy/respawn pop AND still lost the
+// race to a grab: an untracked ghost, once grabbed, is broadcast as a NEW client
+// entity the host mirrors -> the cascade behind "A LOT of dupes on host" (proven by
+// eid 44116: a turn-off ghost prop, grabbed, broadcast client-range, then toggled).
+// ROOT FIX: never leave an untracked ghost. The instant the poll detects our toggle,
+// CLAIM the ghost (park NPC / freeze prop so it stays put + stops local AI/physics),
+// then ADOPT it as the host mirror when the authoritative entity arrives:
+//   - NPC (turn-on):  npc_mirror::OnEntitySpawn calls FindParkedGhostNpcNear + binds
+//                     THAT actor (AdoptExistingNpcAsMirror) -- no respawn pop.
+//   - PROP (turn-off): the EXISTING Gap-I-1 fuzzy match (remote_prop_spawn::OnSpawn)
+//                     binds the frozen prop. Freezing is the enabler: the dropped prop
+//                     used to FALL out of Gap-I-1's 30 cm window before the host's
+//                     PropSpawn arrived; frozen, it stays put and the match lands.
+// A ghost the host never confirms (sentient-kerfur reject / dropped request) is
+// destroyed by CleanupParkedGhosts after a timeout, so it can never be grabbed.
+struct ParkedGhost {
+    void*   actor;
+    int32_t idx;
+    uint8_t toProp;  // 1 = prop ghost (turn-off result), 0 = NPC ghost (turn-on result)
+    std::chrono::steady_clock::time_point armed;
+};
+std::vector<ParkedGhost> g_parkedGhosts;  // GT-only (poll + OnEntitySpawn are both game thread)
+
+// Collect the actors bound to WIRE MIRROR Elements (IsMirror()==true) of the requested type(s).
+// THIS is the authoritative "the host owns this actor" signal -- NOT the per-actor
+// prop_element_tracker / npc_sync reverse maps. A Gap-I-1 fuzzy-match rekey (prop adopt) and an
+// npc_mirror Install (NPC adopt) bind the ghost as a MIRROR Element but do NOT update those reverse
+// maps, so the maps falsely read a just-adopted ghost as untracked. (That exact staleness made the
+// cleanup destroy a freshly Gap-I-1-adopted prop -> the poll saw the prop "die" -> a SPURIOUS
+// turn-on -> churn; caught by the 2026-06-15 kerfurtoggle autonomous test.) Built once per caller
+// (small vector-pointer copy under the manager's leaf mutex), then O(1) lookups.
+void CollectMirrorActors(bool wantProp, bool wantNpc, std::unordered_set<void*>& out) {
+    if (wantProp) {
+        std::vector<coop::element::Prop*> v;
+        coop::element::MirrorManager<coop::element::Prop>::Instance().Snapshot(v);
+        for (auto* el : v)
+            if (el && el->IsMirror() && el->GetActor()) out.insert(el->GetActor());
+    }
+    if (wantNpc) {
+        std::vector<coop::element::Npc*> v;
+        coop::element::MirrorManager<coop::element::Npc>::Instance().Snapshot(v);
+        for (auto* el : v)
+            if (el && el->IsMirror() && el->GetActor()) out.insert(el->GetActor());
+    }
+}
+
+// Find + park/freeze the client's own just-spawned conversion ghost(s): UNTRACKED live
+// kerfur(s) of the new form near `pos`. NPC turn-on spawns one kerfurOmega; prop
+// turn-off can drop the prop AND its carried floppy -> claim all near. One cold-path
+// GUObjectArray walk, only on a detected client toggle.
+void ClaimConversionGhosts(bool wantNpc, float x, float y, float z) {
+    void* bases[2];
+    size_t nBases = 0;
+    if (wantNpc) {
+        if (g_kerfurNpcClass) { bases[0] = g_kerfurNpcClass; nBases = 1; }
+    } else if (g_kerfurPropClass) {
+        bases[0] = g_kerfurPropClass; nBases = 1;
+        if (g_floppyClass) { bases[1] = g_floppyClass; nBases = 2; }
+    }
+    if (nBases == 0) return;
+    // The host's authoritative kerfurs of this form are WIRE MIRRORS -- skip them; the only
+    // non-mirror kerfur of the new form at the conversion site is our own local ghost.
+    std::unordered_set<void*> mirrors;
+    CollectMirrorActors(/*wantProp=*/!wantNpc, /*wantNpc=*/wantNpc, mirrors);
+    const auto now = std::chrono::steady_clock::now();
     const int32_t n = R::NumObjects();
-    constexpr float kR2 = 400.f * 400.f;  // the drop is at the kerfur's own transform
-    int swept = 0;
+    constexpr float kR2 = 500.f * 500.f;  // the new form spawns at the kerfur's own transform
+    int claimed = 0;
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
@@ -408,16 +469,55 @@ void SweepGhostKerfurProp(float x, float y, float z) {
         if (!cls || !R::IsDescendantOfAny(cls, bases, nBases)) continue;
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;
-        if (PT::GetPropElementIdForActor(obj) != coop::element::kInvalidId) continue;  // tracked = host's, keep
+        if (mirrors.count(obj)) continue;  // a host wire mirror -- not our ghost
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
         const float dx = loc.X - x, dy = loc.Y - y, dz = loc.Z - z;
         if (dx * dx + dy * dy + dz * dz > kR2) continue;
-        coop::prop_lifecycle::DestroyLocalProp(obj, /*deferred=*/false);
-        ++swept;
+        if (wantNpc) {
+            ue_wrap::puppet::DisableCharacterTicks(obj);  // park: the streamed pose becomes authoritative
+            ue_wrap::kerfur::NeutralizeAiTimers(obj);      // stop the kerfur AI timers on the ghost
+        } else {
+            ue_wrap::engine::SetActorSimulatePhysics(obj, false);  // freeze -> stays inside Gap-I-1's 30 cm
+        }
+        g_parkedGhosts.push_back(ParkedGhost{obj, R::InternalIndexOf(obj),
+                                             wantNpc ? uint8_t(0) : uint8_t(1), now});
+        ++claimed;
     }
-    if (swept)
-        UE_LOGI("kerfur_convert[client]: POLL swept %d local ghost kerfur prop(s) near (%.0f,%.0f,%.0f)",
-                swept, x, y, z);
+    if (claimed)
+        UE_LOGI("kerfur_convert[client]: claimed %d local conversion ghost(s) (%s) near (%.0f,%.0f,%.0f) -- parked for host adoption",
+                claimed, wantNpc ? "NPC turn-on" : "prop turn-off", x, y, z);
+}
+
+// Reap parked ghosts each poll: drop ones that DIED or got ADOPTED (now tracked by the
+// host's authoritative entity), and destroy ones the host never confirmed after the
+// timeout (a rejected sentient-kerfur / dropped request) so they cannot be grabbed into
+// a client-eid dupe. Cheap no-op when the list is empty. Game thread.
+void CleanupParkedGhosts() {
+    if (g_parkedGhosts.empty()) return;
+    bool haveProp = false, haveNpc = false;
+    for (const auto& g : g_parkedGhosts) { if (g.toProp) haveProp = true; else haveNpc = true; }
+    // "Adopted" == bound as a WIRE MIRROR (Gap-I-1 RegisterPropMirror / npc_mirror Install). The
+    // per-actor reverse maps do NOT reflect that, so we ask the MirrorManager directly.
+    std::unordered_set<void*> mirrors;
+    CollectMirrorActors(haveProp, haveNpc, mirrors);
+    const auto now = std::chrono::steady_clock::now();
+    constexpr long kOrphanTimeoutMs = 4000;  // host replies within ~RTT; 4 s un-adopted == orphan
+    for (auto it = g_parkedGhosts.begin(); it != g_parkedGhosts.end();) {
+        void* actor = it->actor;
+        if (!actor || !R::IsLiveByIndex(actor, it->idx)) { it = g_parkedGhosts.erase(it); continue; }
+        if (mirrors.count(actor)) { it = g_parkedGhosts.erase(it); continue; }  // adopted as a wire mirror -> success
+        const long ageMs = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - it->armed).count());
+        if (ageMs >= kOrphanTimeoutMs) {
+            UE_LOGI("kerfur_convert[client]: orphan conversion ghost actor=%p (%s) un-adopted after %ldms -- destroying (host rejected/dropped the toggle)",
+                    actor, it->toProp ? "prop" : "NPC", ageMs);
+            if (it->toProp) coop::prop_lifecycle::DestroyLocalProp(actor, /*deferred=*/false);
+            else coop::npc_mirror::DestroyLocalNpcActor(actor);
+            it = g_parkedGhosts.erase(it);
+            continue;
+        }
+        ++it;
+    }
 }
 
 // One ALIVE->DEAD transition pass over the kerfur mirror Elements (NPC = turn_off,
@@ -432,6 +532,10 @@ void PollKerfurConversions() {
         std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastConvPoll).count() < 200)
         return;  // ~5 Hz
     g_lastConvPoll = now;
+
+    // Reap claimed conversion ghosts (drop adopted/dead, destroy un-confirmed orphans). Runs at
+    // the poll cadence for both roles; a no-op on the host (it never claims ghosts).
+    CleanupParkedGhosts();
 
     const bool isHost   = s->role() == coop::net::Role::Host;
     const bool isClient = s->role() == coop::net::Role::Client;
@@ -471,8 +575,14 @@ void PollKerfurConversions() {
         const float lx = it->second.x, ly = it->second.y, lz = it->second.z;
         UE_LOGI("kerfur_convert: POLL turn_off (kerfur NPC eid=%u died invisibly) -> %s",
                 eid, isClient ? "client requests host" : "host broadcasts destroy+prop");
-        if (isClient) { SendConvertRequestDirect(eid, 1); SweepGhostKerfurProp(lx, ly, lz); }
-        else if (isHost)
+        if (isClient) {
+            SendConvertRequestDirect(eid, 1);
+            // The local turn-off dropped a kerfur prop (+ maybe its floppy) via the un-hookable
+            // path. FREEZE it (do not destroy) so the host's authoritative prop ADOPTS it through
+            // the Gap-I-1 fuzzy match -- freezing keeps it inside the 30 cm window (it used to
+            // FALL out before the host's PropSpawn arrived, which broke the match -> dupe + pop).
+            ClaimConversionGhosts(/*wantNpc=*/false, lx, ly, lz);
+        } else if (isHost)
             ConvergeAfterConversion(actor, el->GetInternalIdx(),
                                     static_cast<coop::element::ElementId>(eid), /*toProp=*/1);
         it->second.handled = true;
@@ -494,22 +604,17 @@ void PollKerfurConversions() {
         }
         auto it = g_kerfurWatch.find(eid);
         if (it == g_kerfurWatch.end() || it->second.handled) continue;
+        const float lx = it->second.x, ly = it->second.y, lz = it->second.z;
         UE_LOGI("kerfur_convert: POLL turn-on (kerfur prop eid=%u died invisibly) -> %s",
                 eid, isClient ? "client requests host" : "host broadcasts destroy+npc");
         if (isClient) {
             SendConvertRequestDirect(eid, 0);
-            // SYMPTOM-2 FIX (turn-on dupe, 2026-06-15 hands-on). The local turn-on spawned a
-            // kerfur NPC through the PE-invisible EX_CallMath BeginDeferred -- npc-suppress never
-            // saw it, so it is a live UNTRACKED ghost sitting next to the host's authoritative
-            // mirror ("two kerfurs out of one lying object"); left alive it gets toggled/grabbed
-            // and cascades into the multi-dupe the user hit. Enforce the client NPC invariant
-            // ("the only allowlisted NPCs on a client are host mirrors") with the EXISTING host-
-            // auth reconcile: it destroys every untracked allowlisted NPC and KEEPS tracked
-            // mirrors, order-independent of when the host's mirror arrives -- so it also clears
-            // any ghosts that already accumulated. (The symmetric turn_off ghost PROP is swept by
-            // SweepGhostKerfurProp: props can be client-OWNED, so they get a targeted radius sweep
-            // rather than a blanket one. NPCs are always host-authoritative -- blanket is correct.)
-            coop::npc_mirror::DestroyUntrackedClientNpcs();
+            // The local turn-on spawned a kerfur NPC via the un-hookable EX_CallMath path -- a
+            // live UNTRACKED ghost beside the host's incoming mirror ("two kerfurs out of one
+            // object"). CLAIM it (park) instead of destroying it: npc_mirror::OnEntitySpawn adopts
+            // THAT exact actor as the host mirror (FindParkedGhostNpcNear), so no destroy/respawn
+            // pop and no untracked ghost that a grab could cascade into a dupe.
+            ClaimConversionGhosts(/*wantNpc=*/true, lx, ly, lz);
         } else if (isHost) {
             ConvergeAfterConversion(actor, el->GetInternalIdx(),
                                     static_cast<coop::element::ElementId>(eid), /*toProp=*/0);
@@ -717,12 +822,32 @@ void Tick() {
     }
 }
 
+void* FindParkedGhostNpcNear(float x, float y, float z) {
+    // The actor of the parked turn-on conversion-ghost NPC nearest (x,y,z), or nullptr.
+    // npc_mirror::OnEntitySpawn calls this for a host kerfur EntitySpawn to ADOPT the client's
+    // own local conversion result (the kerfur it just turned on) instead of fresh-spawning a
+    // duplicate beside it. Only the INITIATING client has a parked ghost -- other peers get
+    // nullptr and fresh-spawn normally. Game thread (poll + OnEntitySpawn share the GT).
+    void* best = nullptr;
+    float bestD2 = 500.f * 500.f;
+    for (const auto& g : g_parkedGhosts) {
+        if (g.toProp) continue;  // NPC (turn-on) ghosts only
+        if (!g.actor || !R::IsLiveByIndex(g.actor, g.idx)) continue;
+        const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(g.actor);
+        const float dx = loc.X - x, dy = loc.Y - y, dz = loc.Z - z;
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; best = g.actor; }
+    }
+    return best;
+}
+
 void OnDisconnect() {
     {
         std::lock_guard<std::mutex> lk(g_pendingMutex);
         g_pendingCount = 0;
     }
-    g_kerfurWatch.clear();  // GT-only; Tick is the sole toucher
+    g_kerfurWatch.clear();   // GT-only; Tick is the sole toucher
+    g_parkedGhosts.clear();  // GT-only conversion-ghost claim list
     g_lastConvPoll = {};
 }
 

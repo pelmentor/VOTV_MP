@@ -85,6 +85,15 @@ void OnConvertRequest(const coop::net::KerfurConvertPayload& payload,
 // empty. Game thread (net-pump tick).
 void Tick();
 
+// CLIENT: the actor of the parked turn-on conversion-ghost NPC nearest (x,y,z), or nullptr.
+// The client's own turn-on spawns a local kerfur NPC via the un-hookable EX_CallMath path; the
+// poll PARKS it (AI off) pending the host's authoritative EntitySpawn rather than destroying it.
+// npc_mirror::OnEntitySpawn calls this to ADOPT that exact actor as the host mirror instead of
+// fresh-spawning a duplicate (no destroy/respawn pop; no untracked ghost a grab could cascade
+// into a dupe). Returns nullptr for a peer that did not initiate the toggle -> it fresh-spawns.
+// Game thread.
+void* FindParkedGhostNpcNear(float x, float y, float z);
+
 // Clear per-session state (the pending queue). Net disconnect.
 void OnDisconnect();
 

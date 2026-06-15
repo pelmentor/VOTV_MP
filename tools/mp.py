@@ -1364,6 +1364,137 @@ def cmd_npctest(args) -> None:
     sys.exit(0)
 
 
+def cmd_kerfurtoggle(args) -> None:
+    """Verify the CLIENT kerfur conversion-adopt fix end-to-end. Both peers boot FRESH
+    (so the spawned kerfur is the ONLY one -> 'nearest kerfur' is unambiguous); the host
+    dev-spawns one kerfur, it mirrors to the client, then the client toggles it OFF then
+    ON via the kerfur_toggle trigger (a reflection stand-in for the radial menu). PASS
+    requires the client to CLAIM its own local conversion ghost + ADOPT it as the host
+    mirror -- prop via the Gap-I-1 fuzzy match, NPC via npc-mirror[adopt] 'bound EXISTING'
+    -- with NO orphan-destroy and NO 'outside the host range' / untracked-held cascade.
+    That combination = no dupe + no destroy/respawn pop (the exact bug)."""
+    spawn_trigger = str(HOST_DIR / "spawn_npc.trigger")
+    toggle_trigger = str(CLIENT_DIR / "kerfur_toggle.trigger")
+    for t in (spawn_trigger, toggle_trigger):
+        try:
+            Path(t).unlink()
+        except OSError:
+            pass
+    if kill_all() > 0:
+        log("note: pre-existing VotV killed before kerfurtoggle")
+    deploy_all()
+
+    log("--- HOST LAUNCH (FRESH, spawn trigger armed) ---")
+    host_pid = launch_peer("host", args.port, "Host", peer=None,
+                           res_x=args.res_x, res_y=args.res_y, monitor=1, center=True,
+                           memory_limit_gb=args.memory_limit_gb, trigger_file=spawn_trigger,
+                           extra_env={"VOTVCOOP_FRESH": "1"})
+    bound = False
+    for i in range(args.boot_timeout):
+        time.sleep(1)
+        if host_owns_udp(host_pid, args.port):
+            log(f"host bound UDP after {i+1}s"); bound = True; break
+        if not any(p["PID"] == host_pid for p in list_votv()):
+            log("HOST DIED before binding UDP"); tail_log(HOST_DIR / "votv-coop.log", 30, "HOST"); sys.exit(1)
+    if not bound:
+        log("FAIL: host did not bind UDP"); kill_all(); sys.exit(1)
+
+    log("--- CLIENT LAUNCH (FRESH, kerfur-toggle trigger armed) ---")
+    client_pid = launch_peer("client", args.port, "Client", peer="127.0.0.1",
+                             res_x=1280, res_y=720, peer_slot=1, monitor=2, tile_index=0,
+                             memory_limit_gb=args.memory_limit_gb,
+                             extra_env={"VOTVCOOP_KERFUR_TOGGLE_TRIGGER": toggle_trigger})
+    slot = wait_for_client_connect(CLIENT_DIR, args.client_boot_timeout, "CLIENT", client_pid)
+    if slot is None:
+        log("FAIL: client never connected"); kill_all(); sys.exit(1)
+
+    host_log = HOST_DIR / "votv-coop.log"
+    client_log = CLIENT_DIR / "votv-coop.log"
+    _wait_for_log(host_log, "npc-suppress: installed interceptor", args.install_timeout, "HOST")
+    # The client poll is gated on load-tail quiescence -- it will not detect a toggle until
+    # the join reconcile settles. Wait for it so a later 'no detection' is a real failure.
+    _wait_for_log(client_log, "load tail quiesced", 60, "CLIENT")
+    log(f"--- settling {args.settle}s, then spawning the kerfur on the host ---")
+    time.sleep(args.settle)
+    Path(spawn_trigger).write_text("spawn")
+    _wait_for_log(host_log, "spawn_npc: spawned 'kerfurOmega_C'", 20, "HOST")
+    _wait_for_log(client_log, "materialized mirror eid=", 20, "CLIENT")
+    log("--- kerfur mirrored; settling 4s so the client poll baselines it ALIVE ---")
+    time.sleep(4)
+
+    log("--- CLIENT TOGGLE #1 (turn_off: NPC mirror -> prop) ---")
+    Path(toggle_trigger).write_text("toggle")
+    _wait_for_log(client_log, "kerfur_toggle: TEST-toggling", 15, "CLIENT")
+    _wait_for_log(client_log, "POLL turn_off", 15, "CLIENT")
+    _wait_for_log(host_log, "HOST executing turn_off", 15, "HOST")
+    log("--- settling 6s for the prop ADOPT (Gap-I-1 fuzzy match) + ghost cleanup ---")
+    time.sleep(6)
+
+    log("--- CLIENT TOGGLE #2 (turn_on: prop mirror -> NPC) ---")
+    Path(toggle_trigger).write_text("toggle")
+    _wait_for_log(client_log, "POLL turn-on", 15, "CLIENT")
+    _wait_for_log(host_log, "HOST executing turn-on", 15, "HOST")
+    log("--- settling 6s for the NPC ADOPT (bound EXISTING) + ghost cleanup ---")
+    time.sleep(6)
+
+    shots_dir = Path(__file__).resolve().parent.parent / "research" / "npctest_shots"
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    _capture_window(host_pid, shots_dir / "kerfurtoggle_host.png")
+    _capture_window(client_pid, shots_dir / "kerfurtoggle_client.png")
+
+    # Verdict markers (read before kill).
+    c_toggled = _log_count(client_log, "kerfur_toggle: TEST-toggling")
+    c_off = _log_count(client_log, "POLL turn_off")
+    c_on = _log_count(client_log, "POLL turn-on")
+    c_claim_prop = _log_count(client_log, "(prop turn-off)")
+    c_claim_npc = _log_count(client_log, "(NPC turn-on)")
+    c_fuzzy = _log_count(client_log, "Gap-I-1 FUZZY MATCH 'prop_kerfurOmega")
+    c_adopt = _log_count(client_log, "npc-mirror[adopt]: bound EXISTING")
+    c_orphan = _log_count(client_log, "orphan conversion ghost")
+    c_cascade = _log_count(client_log, "BROADCAST held untracked")
+    h_off = _log_count(host_log, "HOST executing turn_off")
+    h_on = _log_count(host_log, "HOST executing turn-on")
+    h_outofrange = _log_count(host_log, "outside the host range")
+    tail_log(client_log, 28, "CLIENT")
+    tail_log(host_log, 14, "HOST")
+    log("--- KILLING ---"); kill_all()
+
+    log("--- KERFURTOGGLE VERDICT ---")
+    log(f"client: toggled={c_toggled} turn_off={c_off} turn_on={c_on} "
+        f"claim_prop={c_claim_prop} claim_npc={c_claim_npc} "
+        f"fuzzy_prop_adopt={c_fuzzy} npc_adopt={c_adopt} orphan_destroy={c_orphan} cascade={c_cascade}")
+    log(f"host: exec_off={h_off} exec_on={h_on} out_of_range_req={h_outofrange}")
+    fails: list[str] = []
+    if c_toggled < 2:
+        fails.append(f"client toggle did not fire twice (got {c_toggled}) -- trigger/setup issue")
+    if c_off < 1:
+        fails.append("no client turn_off detection (poll gated off? quiescence/baseline issue)")
+    if c_on < 1:
+        fails.append("no client turn_on detection")
+    if c_claim_prop < 1:
+        fails.append("client did NOT claim+freeze the turn-off ghost prop")
+    if c_claim_npc < 1:
+        fails.append("client did NOT claim+park the turn-on ghost NPC")
+    if c_fuzzy < 1:
+        fails.append("PROP ADOPT FAILED: no Gap-I-1 fuzzy match of the frozen ghost (kerfur moved >30cm? or host prop not broadcast)")
+    if c_adopt < 1:
+        fails.append("NPC ADOPT FAILED: no 'bound EXISTING' -> the turn-on fresh-spawned a duplicate beside the ghost (the dupe)")
+    if c_orphan > 0:
+        fails.append(f"{c_orphan} orphan-destroy: an adopt MISSED and the ghost timed out (a transient dupe before cleanup)")
+    if h_outofrange > 0:
+        fails.append(f"{h_outofrange} 'outside host range' kerfur request -- the client-eid cascade signature (a real dupe)")
+    if c_cascade > 0:
+        fails.append(f"{c_cascade} untracked-held kerfur broadcast -- grab cascade")
+    if fails:
+        log(f"FAIL ({len(fails)} issue(s)):")
+        for f in fails:
+            log(f"  - {f}")
+        sys.exit(2)
+    log("PASS: client toggled off+on; CLAIMED + ADOPTED both ghosts (prop via Gap-I-1 fuzzy, "
+        "NPC via bound-EXISTING); no orphan-destroy, no cascade -> no dupe, no respawn pop.")
+    sys.exit(0)
+
+
 def cmd_ragdollshot(args) -> None:
     """Force the CLIENT's player into ragdoll over the wire (leak-safe -- the test
     driver flips isRagdoll directly, no real ragdollMode / no playerRagdoll_C) and
@@ -1985,6 +2116,16 @@ def main() -> None:
                        help="per-process commit cap in GB (0 = disabled)")
     for flag, kw in host_res: p_npc.add_argument(flag, **kw)
     p_npc.set_defaults(func=cmd_npctest)
+
+    p_kt = sub.add_parser("kerfurtoggle",
+                          help="verify the client kerfur conversion-adopt fix: host spawns a kerfur, client toggles it off+on, assert CLAIM+ADOPT (no dupe/respawn)")
+    p_kt.add_argument("--boot-timeout", type=int, default=40, help="seconds to wait for host UDP bind")
+    p_kt.add_argument("--client-boot-timeout", type=int, default=75, help="seconds for the client to connect")
+    p_kt.add_argument("--install-timeout", type=int, default=90, help="seconds to wait for the host's NPC interceptor to install")
+    p_kt.add_argument("--settle", type=int, default=6, help="seconds after quiescence before spawning the kerfur")
+    p_kt.add_argument("--memory-limit-gb", type=float, default=12.0, help="per-process commit cap in GB (0 = disabled)")
+    for flag, kw in host_res: p_kt.add_argument(flag, **kw)
+    p_kt.set_defaults(func=cmd_kerfurtoggle)
 
     p_rag = sub.add_parser("ragdollshot",
                            help="force the client's player into ragdoll + capture 2 host screenshots of the puppet falling")

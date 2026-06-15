@@ -100,6 +100,24 @@ bool SpawnFreshNpcMirror(const std::wstring& classW, void* actorClass, uint32_t 
                          float locX, float locY, float locZ,
                          float rotPitch, float rotYaw, float rotRoll);
 
+// Bind an ALREADY-SPAWNED local actor as the host mirror for `elementId` (vs SpawnFreshNpcMirror
+// which spawns a new one). Used to ADOPT the client's own conversion result on a kerfur turn-on:
+// the client's local game spawned the kerfur NPC via the un-hookable EX_CallMath path, the poll
+// parked it (kerfur_convert::ClaimConversionGhosts), and this binds THAT real actor as the mirror
+// -- no fresh-spawn beside it (the "two kerfurs out of one object" dupe) and no destroy/respawn
+// pop. Adopting the real game-spawned actor is camera-safe (it is fully initialized, same as the
+// v75 save-twin adoption). Builds the Npc Element, Installs it as mirror `elementId`, parks it
+// host-driven. Returns true on success; on a duplicate-eid / Registry collision returns false
+// WITHOUT destroying the actor (the caller / ghost-cleanup owns it). Game thread; requires
+// SetClientRefs to have run.
+bool AdoptExistingNpcAsMirror(void* actor, uint32_t elementId, const std::wstring& classW);
+
+// Targeted K2_DestroyActor on a single local NPC actor. Used by kerfur_convert's orphan cleanup
+// to destroy a parked conversion ghost the host never confirmed (sentient-kerfur reject / dropped
+// request) before it can be grabbed into a client-eid dupe. No-op if K2_DestroyActor is unresolved
+// or the actor is not live. Game thread.
+void DestroyLocalNpcActor(void* actor);
+
 // Inc3 receiver (client-side, host-broadcast NPC teardown). Resolves
 // the mirror Element via MirrorManager<Npc>::Take(payload.elementId),
 // pulls the AActor* off it, calls K2_DestroyActor, then drops the

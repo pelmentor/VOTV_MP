@@ -14,6 +14,7 @@
 #include "coop/dev/restore_vitals.h"
 #include "coop/dev/spawn_menu_unlock.h"
 #include "coop/dev/spawn_npc.h"
+#include "coop/dev/kerfur_toggle.h"
 #include "coop/dev/teleport_client.h"
 #include "coop/event_feed.h"
 #include "coop/garbage_sync.h"
@@ -1097,6 +1098,11 @@ void Start() {
     // exercises host AllocAndInstall + broadcast + client mirror Install). Hands-on
     // spawning is the F1 menu (Game > Entities). No-op unless the trigger env is set.
     coop::dev::spawn_npc::Init();
+
+    // TEST-ONLY (VOTVCOOP_KERFUR_TOGGLE_TRIGGER): programmatic kerfur turn_off/turn_on so the
+    // CLIENT conversion-adopt path has autonomous coverage (the radial verb is EX_LocalVirtual-
+    // Function -- unhookable + needs a player at the menu). No-op unless the trigger env is set.
+    coop::dev::kerfur_toggle::Init();
 
     // TEST-ONLY (VOTVCOOP_TEST_SAVE_ENUM=1): verify the native save browser
     // (ue_wrap::save_browser drives VOTV's loadSlots) at the menu before the ImGui
