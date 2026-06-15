@@ -17,6 +17,7 @@
 #include "coop/element/element.h"
 #include "coop/element/registry.h"
 #include "coop/net/protocol.h"
+#include "coop/npc_sync.h"  // IsAllowlistedClass -- the NPC half of the load-tail quiescence probe
 #include "coop/prop_echo_suppress.h"
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
@@ -211,11 +212,19 @@ bool g_sweepPending = false;                          // armed at SnapshotComple
 bool g_sweepFired   = false;                          // sticky: set when the sweep runs, until re-armed (HasLoadTailQuiesced)
 std::chrono::steady_clock::time_point g_sweepArmedAt{};
 std::chrono::steady_clock::time_point g_sweepLastScan{};  // {} (epoch 0) => not yet scanned this arm
-int  g_sweepLastKeylessCount = -1;
-int  g_sweepStableScans      = 0;
-constexpr int kSweepScanIntervalMs = 200;   // 5 Hz quiescence probe while pending (matches npc_adoption)
-constexpr int kSweepQuiesceScans   = 3;     // keyless population stable across 3 scans (~600 ms) = tail drained
-constexpr int kSweepDeadlineMs     = 8000;  // hard cap: sweep regardless (parity with npc_adoption::kAdoptTimeoutMs)
+int  g_sweepLastUnsettledCount = -1;
+int  g_sweepStableScans        = 0;
+constexpr int kSweepScanIntervalMs = 200;    // 5 Hz quiescence probe while pending (matches npc_adoption)
+constexpr int kSweepQuiesceScans   = 10;     // load-tail population (keyless props AND allowlisted NPCs) stable
+                                             // across 10 scans (~2 s) = the async loadObjects pass has drained.
+                                             // Longer than the old 600 ms: the kerfur NPCs load with multi-
+                                             // hundred-ms gaps after the props, so a short window false-signals
+                                             // mid-load -> the adoption fresh-spawns a duplicate of a twin still
+                                             // to come (the 2026-06-15 kerfur-dupe).
+constexpr int kSweepDeadlineMs     = 45000;  // hard cap: sweep regardless. Generous -- a ~19 MB live-save blob
+                                             // loads async over ~12-15 s, so the deadline must NOT pre-empt
+                                             // quiescence (which fires when the load actually settles). This is
+                                             // the pathological backstop, not the normal path.
 
 // Record that the host snapshot bound `actor` (exact-key, fuzzy, or fresh
 // spawn) -- the actor is accounted-for by the host's world and must survive
@@ -918,7 +927,7 @@ void BeginClaimTracking() {
     g_sweepPending = false;
     g_sweepFired = false;
     g_sweepStableScans = 0;
-    g_sweepLastKeylessCount = -1;
+    g_sweepLastUnsettledCount = -1;
     // A fresh bracket re-enumerates pile-bind candidates (a re-bracket runs
     // against the post-sweep world; stale entries would be dead pointers).
     ResetPileBindIndex();
@@ -1109,30 +1118,50 @@ static void RunDivergenceSweep_(void* localPlayer) {
     }
 }
 
-// Quiescence probe for the deferred sweep: count in-universe (keyed-interactable
-// class), live, UNCLAIMED, non-per-player, non-chipPile actors that currently
-// read Key=None. This is exactly the population the sweep's keyless-skip would
-// spare. While the save load's late tail is still restoring keys this count
-// CHANGES (a keyless straggler that mints its key leaves the set); when it stops
-// changing the tail has drained and every survivor has its final key. ONE
-// GUObjectArray walk (the SeedWalk_ shape; pure pointer-compare class filters
-// before any key read), throttled to 5 Hz and only while a sweep is pending.
-static int CountKeylessUnclaimedInUniverse_() {
+// Load-tail quiescence probe for the deferred sweep + the NPC adoption (both gate on
+// HasLoadTailQuiesced). Counts two populations whose sum settles exactly when the
+// async loadObjects pass finishes materializing the world:
+//   (a) ALLOWLISTED NPCs (the kerfur load tail). Counted live, non-CDO, tracked OR
+//       untracked -- adoption/binding does NOT change the count (the actor stays live +
+//       allowlisted), so only loadObjects spawning a new twin perturbs it. This is the
+//       half the old prop-only probe MISSED: the kerfur NPCs respawn SECONDS after the
+//       props' keys mint (2026-06-15 hands-on), so a prop-only quiescence fired before
+//       the twins existed and the adoption fresh-spawned a duplicate next to the still-
+//       loading twin. Genuinely-absent twins (a host kerfur turned on after capture)
+//       have no local actor, so they do not perturb the count -> never block quiescence.
+//   (b) Keyless, UNCLAIMED, in-universe, non-per-player, non-chipPile props that read
+//       Key=None -- the prop load tail (a straggler that has not minted its key yet,
+//       exactly the set the sweep's keyless-skip would spare).
+// While either tail is still loading the sum CHANGES; when it stops changing for
+// kSweepQuiesceScans the load has drained. ONE GUObjectArray walk (pure pointer-compare
+// class filters before any key/name read), throttled to 5 Hz, only while a sweep pends.
+static int CountLoadTailUnsettled_() {
     const int32_t n = R::NumObjects();
-    int keyless = 0;
+    int unsettled = 0;
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
-        if (!ue_wrap::prop::IsClassKeyedInteractable(R::ClassOf(obj))) continue;
+        void* cls = R::ClassOf(obj);
+        // (a) allowlisted-NPC load tail (lineage test first; the NameOf/IsLive only run
+        // for the handful that pass it). A false return (allowlist not yet resolved)
+        // just degrades to prop-only quiescence -- never worse than the old behavior.
+        if (coop::npc_sync::IsAllowlistedClass(cls)) {
+            if (!R::IsLive(obj)) continue;
+            if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;  // CDO
+            ++unsettled;
+            continue;
+        }
+        // (b) keyless-prop load tail (the original probe population).
+        if (!ue_wrap::prop::IsClassKeyedInteractable(cls)) continue;
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;  // CDO (alloc-free)
         if (g_claimedActors.count(obj)) continue;                       // claimed: never a sweep candidate
         if (ue_wrap::prop::IsChipPile(obj)) continue;                   // chipPile is expressible keyless (not skipped)
         if (coop::prop_lifecycle::IsPerPlayerPropClass(R::ClassNameOf(obj))) continue;
         const std::wstring key = ue_wrap::prop::GetInteractableKeyString(obj);
-        if (key.empty() || key == L"None") ++keyless;
+        if (key.empty() || key == L"None") ++unsettled;
     }
-    return keyless;
+    return unsettled;
 }
 
 void ArmDivergenceSweep() {
@@ -1149,10 +1178,10 @@ void ArmDivergenceSweep() {
     g_sweepFired = false;
     g_sweepArmedAt = std::chrono::steady_clock::now();
     g_sweepLastScan = {};            // force a quiescence scan on the next tick
-    g_sweepLastKeylessCount = -1;
+    g_sweepLastUnsettledCount = -1;
     g_sweepStableScans = 0;
     UE_LOGI("remote_prop_spawn: divergence sweep ARMED -- deferring to load-tail quiescence "
-            "(keyless population stable x%d scans @%dms, or %dms hard deadline)",
+            "(keyless-prop + allowlisted-NPC population stable x%d scans @%dms, or %dms hard deadline)",
             kSweepQuiesceScans, kSweepScanIntervalMs, kSweepDeadlineMs);
 }
 
@@ -1171,11 +1200,11 @@ void TickClientReconcile() {
 
     const bool deadlineHit = msSince(g_sweepArmedAt) >= kSweepDeadlineMs;
     if (!deadlineHit) {
-        const int keyless = CountKeylessUnclaimedInUniverse_();
-        if (keyless != g_sweepLastKeylessCount) {
-            g_sweepLastKeylessCount = keyless;
+        const int unsettled = CountLoadTailUnsettled_();
+        if (unsettled != g_sweepLastUnsettledCount) {
+            g_sweepLastUnsettledCount = unsettled;
             g_sweepStableScans = 0;
-            return;  // population still changing -> load tail not drained, keep waiting
+            return;  // population still changing -> load tail (props or NPCs) not drained, keep waiting
         }
         if (++g_sweepStableScans < kSweepQuiesceScans) return;  // stable, but not for long enough yet
     }
@@ -1212,7 +1241,7 @@ void OnClientWorldReadyResetSweep() {
     g_sweepPending = false;
     g_sweepFired = false;
     g_sweepStableScans = 0;
-    g_sweepLastKeylessCount = -1;
+    g_sweepLastUnsettledCount = -1;
 }
 
 void ResetClaimTracking() {
@@ -1227,7 +1256,7 @@ void ResetClaimTracking() {
     g_sweepPending = false;
     g_sweepFired = false;
     g_sweepStableScans = 0;
-    g_sweepLastKeylessCount = -1;
+    g_sweepLastUnsettledCount = -1;
     ResetPileBindIndex();  // dangling-pointer hygiene across sessions (mirrors the claim set)
 }
 

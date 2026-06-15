@@ -43,7 +43,14 @@ bool g_snapshotDelivered = false;
 bool g_ghostSwept        = false;
 
 constexpr int kPollIntervalMs = 200;    // 5 Hz scan WHILE pending; zero cost otherwise
-constexpr int kAdoptTimeoutMs = 8000;   // no local twin in 8 s -> fresh-spawn fallback (never lose a host NPC)
+// LAST-RESORT backstop only. The primary gate is HasLoadTailQuiesced() (the prop+NPC
+// load-tail quiescence signal, itself deadline-capped at kSweepDeadlineMs in
+// remote_prop_spawn) -- it fires first on every real join. The old 8 s here fired
+// BEFORE the async 19 MB live-save load materialized the kerfur twins, so the adoption
+// fresh-spawned a mirror that then duplicated the late-loading twin (the 2026-06-15
+// kerfur-dupe). 60 s > the sweep deadline -> quiescence always wins; this only guards
+// the pathological case where quiescence never signals at all.
+constexpr int kAdoptTimeoutMs = 60000;
 
 inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
     return coop::element::MirrorManager<coop::element::Npc>::Instance();
@@ -138,26 +145,20 @@ void ResolvePending() {
             // bind failed -> leave pending; retry next scan (do not consume the candidate).
         } else if (coop::remote_prop_spawn::HasLoadTailQuiesced() ||
                    MsSince(e.armedAt) >= kAdoptTimeoutMs) {
-            // No local twin -- and either the save load tail has DRAINED (the prop divergence
-            // sweep fired) OR the hard fallback timeout elapsed. The quiescence signal is a PROXY:
-            // the save kerfur NPC respawns inside the SAME mainGamemode::loadObjects pass that mints
-            // the props' keys (votv-kerfurOmega RE), so once the keyed-prop population stops changing
-            // the NPC record has been processed too -- if no twin is present by then, none is coming
-            // (the host turned the kerfur ON before this client joined; the client's stale save has
-            // only the OFF prop, no NPC record). A twin that IS already present is bound by the scan
-            // above (bestIdx>=0), never reaching here -- so the proxy can only ever fresh-spawn when
-            // the twin is genuinely absent, not race a still-loading one. (If the quiescence
-            // definition ever changes, re-verify this single-pass coupling.)
-            // Fresh-spawn the mirror NOW instead of waiting the full 8 s -- this is what closes the
-            // ~6-8 s "kerfur invisible then pops in, turn-off does nothing" gap (the ghost OFF prop
-            // is swept at load quiescence; without this the replacement NPC mirror lagged to the
-            // fixed timeout). Quiescence is conservative (the keyless population must stabilize), so
-            // a genuinely slow-loading real twin keeps the count changing and is still adopted, not
-            // duplicated. The kAdoptTimeoutMs path remains the safety net if quiescence never signals.
+            // No local twin -- and the save load tail has DRAINED (the divergence sweep fired,
+            // HasLoadTailQuiesced), or the last-resort timeout elapsed. CRITICAL: quiescence now
+            // waits for the async ALLOWLISTED-NPC population to settle, not just the keyed props
+            // (remote_prop_spawn::CountLoadTailUnsettled_). The kerfur twins respawn SECONDS after
+            // the props' keys mint (2026-06-15 hands-on: prop-only quiescence fired while the kerfur
+            // NPCs were still loading -> this branch fresh-spawned a mirror that then duplicated the
+            // late-arriving twin). With the NPC-aware gate, every blob twin is present by quiescence
+            // and is bound by the scan above (bestIdx>=0) -- so this branch only ever fires for a
+            // twin that is GENUINELY absent (a host kerfur turned on AFTER the live-capture instant;
+            // the blob has no record of it), where a fresh mirror is correct, not a duplicate.
             const bool quiesced = coop::remote_prop_spawn::HasLoadTailQuiesced();
             UE_LOGW("npc-adopt: eid=%u class='%ls' -- no local twin (%s); fresh-spawning a mirror",
                     e.eid, e.classW.c_str(),
-                    quiesced ? "save load tail quiesced" : "8s fallback timeout");
+                    quiesced ? "load tail quiesced (props+NPCs settled)" : "last-resort timeout");
             coop::npc_mirror::SpawnFreshNpcMirror(e.classW, e.actorClass, e.eid,
                                                   e.locX, e.locY, e.locZ,
                                                   e.rotPitch, e.rotYaw, e.rotRoll);
@@ -226,20 +227,15 @@ void Tick() {
     }
 }
 
-void OnSnapshotComplete(bool skipGhostSweep) {
+void OnSnapshotComplete() {
     UE_ASSERT_GAME_THREAD("npc_adoption::OnSnapshotComplete");
+    // Marks the connect snapshot fully delivered. The one-shot ghost sweep (Tick) then
+    // fires only after BOTH this flag and g_pending being empty -- i.e. every armed
+    // adoption converged. Runs for every join incl. live-capture: ResolvePending's
+    // fresh-spawn is gated on HasLoadTailQuiesced (which now waits for the async NPC
+    // load too), so a still-loading local twin is adopted, never duplicated, and the
+    // ghost sweep only sees genuine orphans the host's world does not contain.
     g_snapshotDelivered = true;
-    // LIVE-capture join (save_capture): the client loaded the host's exact current
-    // world, so every loaded NPC is legitimate -- there are NO untracked orphans to
-    // sweep, and a partial/chunked EntitySpawn replay would otherwise let the ghost
-    // sweep K2-destroy a just-loaded NPC the host simply hasn't re-expressed yet.
-    // Latch the sweep as already-done so it never fires; ADOPTION (ResolvePending,
-    // which BINDS the local kerfur twin) still runs normally above.
-    if (skipGhostSweep) {
-        g_ghostSwept = true;
-        UE_LOGI("npc-adopt: live-capture join -- skipping the post-snapshot NPC ghost sweep "
-                "(client loaded the host's authoritative world; nothing to reconcile)");
-    }
 }
 
 void OnClientWorldReady() {

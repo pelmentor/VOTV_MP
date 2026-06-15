@@ -2129,14 +2129,10 @@ struct SaveTransferBeginPayload {
     uint8_t  gameMode;     // host's enum_gamemode ordinal (story=0) -- the zcoop_
                            // slot prefix can't prefix-match a mode, so the client
                            // threads this into LoadStorySave(forceGameMode)
-    uint8_t  liveCaptured; // 1 = the host serialized its LIVE world for this join
-                           // (save_capture) -> the client loaded the host's exact
-                           // current world, so there is NO divergent baseline to
-                           // reconcile -> the client SKIPS the divergence sweep +
-                           // NPC ghost sweep (running them on a complete-but-
-                           // chunked snapshot races the drain and nukes the world).
-                           // 0 = stale-canonical fallback -> sweep as before.
-    uint8_t  pad[2] = {};
+    uint8_t  pad[3] = {};  // (was liveCaptured; retired 2026-06-15 -- the client now
+                           // runs the divergence/ghost-sweep reconcile for EVERY join
+                           // incl. live-capture, gated on NPC-aware load-tail quiescence
+                           // + the >50% safety valve, so no per-join skip flag is needed)
 };
 static_assert(sizeof(SaveTransferBeginPayload) == 16, "SaveTransferBeginPayload must be 16 bytes");
 static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,

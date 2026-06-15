@@ -100,8 +100,7 @@ void SendBeginNoSave_(int slot) {
 // TickHost chunk pump streams it from there. Shared by the LIVE-capture path
 // (OnRequest) and the canonical torn-read fallback (TryCaptureBlob_); `crc` is
 // precomputed by the caller (both already have it in hand).
-void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes, uint32_t crc,
-                          bool liveCaptured) {
+void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes, uint32_t crc) {
     hs.active = true;
     hs.blob = std::move(bytes);
     hs.blobReady = true;
@@ -115,10 +114,6 @@ void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes
     b.crc32 = crc;
     b.gameMode = 0;  // story -- the coop target; a sandbox-host variant threads the
                      // live GameMode here when sandbox coop becomes a goal
-    // The client uses this to decide whether to run the divergence sweep: a live
-    // capture = the client loaded the host's exact current world (no divergent
-    // baseline), so it MUST skip the sweep; the stale-canonical fallback keeps it.
-    b.liveCaptured = liveCaptured ? 1 : 0;
     g_session->SendReliableToSlot(slot, coop::net::ReliableKind::SaveTransferBegin,
                                   &b, sizeof(b));
 }
@@ -171,7 +166,7 @@ bool TryCaptureBlob_(int slot, HostStream& hs) {
         return false;
     }
 
-    BeginStreamFromBlob_(slot, hs, std::move(bytes), crc, /*liveCaptured=*/false);
+    BeginStreamFromBlob_(slot, hs, std::move(bytes), crc);
     UE_LOGI("save_transfer: slot %d streaming CANONICAL slot '%ls' (stale fallback; %u bytes, "
             "%u chunks, crc=0x%08X)",
             slot, g_hostSlot.c_str(), static_cast<uint32_t>(hs.blob.size()), hs.chunkCount, crc);
@@ -188,7 +183,6 @@ uint32_t g_cliTotal = 0;
 uint32_t g_cliChunkCount = 0;
 uint32_t g_cliCrc = 0;
 uint8_t  g_cliGameMode = 0;
-bool     g_cliLiveCaptured = false;  // host live-captured this blob -> client SKIPS the divergence sweep
 bool     g_cliHaveBegin = false;
 uint32_t g_cliChunksSeen = 0;
 std::vector<uint8_t> g_cliBuf;
@@ -318,7 +312,7 @@ void OnRequest(int peerSlot) {
         DeleteFileLogged_(scratchFile);  // transient -- gone the instant it is read
         if (got) {
             const uint32_t crc = Crc32(bytes.data(), bytes.size());
-            BeginStreamFromBlob_(peerSlot, hs, std::move(bytes), crc, /*liveCaptured=*/true);
+            BeginStreamFromBlob_(peerSlot, hs, std::move(bytes), crc);
             UE_LOGI("save_transfer: slot %d streaming LIVE host world (%u bytes, %u chunks, "
                     "crc=0x%08X)",
                     peerSlot, static_cast<uint32_t>(hs.blob.size()), hs.chunkCount, crc);
@@ -390,7 +384,6 @@ void ClientArm() {
     g_cliHaveBegin = false;
     g_cliChunksSeen = 0;
     g_cliTotal = g_cliChunkCount = g_cliCrc = 0;
-    g_cliLiveCaptured = false;
     g_cliBuf.clear();
     UE_LOGI("save_transfer: client ARMED (menu-mode join -- will request the host save)");
 }
@@ -421,11 +414,10 @@ void OnBegin(const coop::net::SaveTransferBeginPayload& p) {
     g_cliChunkCount = p.chunkCount;
     g_cliCrc = p.crc32;
     g_cliGameMode = p.gameMode;
-    g_cliLiveCaptured = (p.liveCaptured != 0);
     if (g_cliState == ClientState::WaitingBegin) g_cliState = ClientState::Receiving;
     g_cliBuf.reserve(p.totalBytes);
-    UE_LOGI("save_transfer: Begin -- %u bytes in %u chunks (crc=0x%08X mode=%u live=%u)",
-            p.totalBytes, p.chunkCount, p.crc32, p.gameMode, p.liveCaptured);
+    UE_LOGI("save_transfer: Begin -- %u bytes in %u chunks (crc=0x%08X mode=%u)",
+            p.totalBytes, p.chunkCount, p.crc32, p.gameMode);
     MaybeFinishLocked_();
 }
 
@@ -443,11 +435,6 @@ void GetProgress(uint32_t& doneBytes, uint32_t& totalBytes) {
 uint8_t ReceivedGameMode() {
     std::lock_guard<std::mutex> lk(g_cliMu);
     return g_cliGameMode;
-}
-
-bool WasLiveCaptured() {
-    std::lock_guard<std::mutex> lk(g_cliMu);
-    return g_cliLiveCaptured;
 }
 
 void CleanupStaleSlotsAtBoot() {

@@ -355,18 +355,18 @@ void Update(net::Session& session, void* localPlayer) {
             // SnapshotComplete sweep destroys the unclaimed RNG-divergent
             // locals so the client adopts the host's world layout.
             //
-            // SKIP for a LIVE-capture join (save_transfer::WasLiveCaptured): the
-            // client loaded the host's exact current world, so there is no
-            // divergent baseline -- arming the claim set would only feed a sweep
-            // we must not run (it raced the chunked snapshot drain and destroyed
-            // ~2979 just-loaded props on the 2026-06-15 hands-on). No claim
-            // tracking armed -> ArmDivergenceSweep below also no-ops.
-            if (!coop::save_transfer::WasLiveCaptured()) {
-                coop::remote_prop_spawn::BeginClaimTracking();
-            } else {
-                UE_LOGI("event_feed: SnapshotBegin -- live-capture join, SKIPPING claim "
-                        "tracking + the divergence sweep (client loaded the host's world)");
-            }
+            // Runs for EVERY join, INCLUDING a live-capture save-transfer (2026-06-15
+            // kerfur-dupe root-cause fix). The live-save blob is captured at one
+            // instant, but the connect snapshot is enumerated LATER (props + NPCs at
+            // world-ready) and the client's loadObjects materializes the ~19 MB world
+            // ASYNC over many seconds -- so the two DIVERGE: a kerfur the host had ON
+            // loads as a stale OFF object in the blob while the snapshot delivers the
+            // live ON NPC. Reconciling that divergence is EXACTLY this claim set +
+            // quiescence-gated sweep's job. (The earlier "skip the sweep on a live-
+            // capture join" was the crutch that re-introduced the dupe; the world-wipe
+            // it guarded against is now prevented by the >50% safety valve in
+            // RunDivergenceSweep_, not by skipping the reconcile.)
+            coop::remote_prop_spawn::BeginClaimTracking();
             break;
         }
         case net::ReliableKind::SnapshotComplete: {
@@ -386,29 +386,23 @@ void Update(net::Session& session, void* localPlayer) {
             coop::join_progress::Complete();
             // P2 (2026-06-10): the snapshot drained -- every host prop has
             // claimed its client actor. The unclaimed RNG-divergent locals (the
-            // client's own fresh-New-Game litter the host does not have) are
-            // swept -- but NOT inline here. A save-loaded-but-host-converted-away
-            // prop (the kerfur the host turned ON before this client joined) has
-            // its key restored on a LATE loadData tail that finishes after this
-            // point, so an inline sweep would keyless-skip it into a ghost. ARM
-            // a deferred, load-tail-quiescence-gated sweep (TickClientReconcile
-            // fires it once keys have all minted) instead. localPlayer is
-            // re-resolved at sweep time.
-            // SKIP both sweeps for a LIVE-capture join -- see the SnapshotBegin
-            // comment. The client loaded the host's authoritative current world via
-            // the game's own loadObjects; there is nothing divergent to reconcile,
-            // and the sweep over a still-draining chunked snapshot nukes the world.
-            const bool liveCapture = coop::save_transfer::WasLiveCaptured();
-            if (!liveCapture) {
-                coop::remote_prop_spawn::ArmDivergenceSweep();
-            }
+            // client's own fresh-New-Game litter, OR the stale blob objects the
+            // host's live snapshot does not claim -- the kerfur the host turned
+            // ON) are swept -- but NOT inline here. A save-loaded prop has its key
+            // restored on a LATE loadData tail, and the kerfur NPCs respawn SECONDS
+            // after that, so an inline sweep would keyless-skip them into ghosts.
+            // ARM a deferred, load-tail-quiescence-gated sweep (TickClientReconcile
+            // fires it once the keyless-prop AND allowlisted-NPC populations stop
+            // changing = the async load has fully settled). localPlayer is re-
+            // resolved at sweep time. Runs for EVERY join incl. live-capture -- see
+            // the SnapshotBegin note; the >50% valve guards the world-wipe.
+            coop::remote_prop_spawn::ArmDivergenceSweep();
             // v75: the connect snapshot is fully delivered, so every save-persisted EntitySpawn
             // (the kerfur) has arrived + armed its deferred adoption. Tell npc_adoption: once those
             // pending adoptions converge it may run its one-shot ghost sweep (the NPC analogue of
-            // the prop divergence sweep armed above) without risking a not-yet-armed local twin --
-            // UNLESS this is a live-capture join, where the ghost sweep is suppressed (adoption
-            // still binds the local kerfur twin).
-            coop::npc_adoption::OnSnapshotComplete(/*skipGhostSweep=*/liveCapture);
+            // the prop divergence sweep armed above) -- gated on the SAME load-tail quiescence, so a
+            // still-loading local twin is adopted, never swept or fresh-spawned into a duplicate.
+            coop::npc_adoption::OnSnapshotComplete();
             break;
         }
 
