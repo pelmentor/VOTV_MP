@@ -168,7 +168,7 @@ void ConnectReplayForSlot(int slot) {
     coop::window_sync::QueueConnectBroadcastForSlot(slot);        // v41 base-window clean (adopt=1)
     coop::grime_sync::QueueConnectBroadcastForSlot(slot);         // v42 surface grime process (adopt=1)
     coop::trash_pile_sync::QueueConnectBroadcastForSlot(slot);    // v57 pile counters (adopt=1) + depleted-key replay
-    coop::npc_sync::RegisterExistingWorldNpcs();                  // pre-existing/level-load NPCs (the save's kerfur)
+    coop::npc_sync::RegisterExistingWorldNpcs(coop::npc_sync::NpcEnumOrigin::ConnectEdge);  // pre-existing/level-load NPCs (the save's kerfur) -> joiner adopts its twin
     coop::npc_sync::QueueConnectBroadcastForSlot(slot);           // existing NPCs -> joiner
     coop::balance_sync::OnClientConnect(slot);                    // v30: host's current balance
     coop::player_inventory_sync::EnsurePlayerFile(slot);         // v73: ensure this peer's per-save inventory file exists

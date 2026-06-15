@@ -208,9 +208,12 @@ void ConvergeAfterConversion(void* actor, int32_t internalIdx,
             eid != coop::element::kInvalidId) {
             coop::prop_lifecycle::SyncDestroyedTrackedProp(actor, eid);  // element-based; no actor deref
         }
-        // Registers the new (BP-internally spawned) kerfur + broadcasts
-        // EntitySpawn to connected peers (the v67 addition inside).
-        coop::npc_sync::RegisterExistingWorldNpcs();
+        // Registers the new (BP-internally spawned) kerfur + broadcasts EntitySpawn to connected
+        // peers (the v67 addition inside). MidSessionConverge origin -> savePersisted=0: the
+        // already-connected peers have NO local twin of this just-spawned kerfur, so they fresh-spawn
+        // a mirror immediately instead of being routed into the v75 connect-edge adoption poll (which
+        // would cause an ~8s pop-in + a class-only false-bind dupe -- RCA 2026-06-15).
+        coop::npc_sync::RegisterExistingWorldNpcs(coop::npc_sync::NpcEnumOrigin::MidSessionConverge);
     }
 }
 

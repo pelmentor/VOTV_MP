@@ -829,7 +829,7 @@ bool GetDevSpawnRefs(DevSpawnRefs& out) {
     return true;
 }
 
-int RegisterExistingWorldNpcs() {
+int RegisterExistingWorldNpcs(NpcEnumOrigin origin) {
     // HOST-only: register pre-existing/level-load NPC actors so the connect-snapshot mirrors them.
     // See npc_sync.h. Reaches the SAME end state as interceptor+POST for a fresh spawn (Npc Element
     // alloc + bound live actor + g_actorToNpcId entry) but for an actor that loaded with the level.
@@ -917,12 +917,17 @@ int RegisterExistingWorldNpcs() {
             const auto rot = ue_wrap::engine::GetActorRotation(obj);
             p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
             p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
-            // v75: savePersisted flag for client-side class-match ADOPTION. A non-None int_save
-            // Key == this pre-existing NPC is a save object both peers booted (the kerfur) -> the
-            // joiner adopts its own local twin instead of duplicating. A host-spawned transient
-            // enemy has no key -> savePersisted=0 -> fresh-spawn. (v74 shipped the key VALUE for
-            // key-equality match -- abandoned: the kerfur's key is minted RANDOM per load.)
-            p.savePersisted = ue_wrap::kerfur::HasSaveKey(obj) ? 1 : 0;
+            // v75: savePersisted flag for client-side class-match ADOPTION -- but gated on the
+            // caller's INTENT (origin), not just the actor's has-a-key property (RCA 2026-06-15).
+            // ConnectEdge: a JOINER may have loaded this keyed save object itself -> let it adopt its
+            // local twin (savePersisted = HasSaveKey). MidSessionConverge: a kerfur turned ON
+            // mid-session reaches ALREADY-CONNECTED peers who have NO twin (they cancelled their own
+            // local turn-on) -> ALWAYS 0 -> fresh-spawn now. A turn-on kerfur has a random UCS-minted
+            // key, so HasSaveKey is true, but the key is meaningless to a peer that never loaded it;
+            // routing it into the deferred adoption poll caused an ~8s pop-in + a class-only
+            // false-bind dupe. This matches the runtime-interceptor send (above, hardcoded 0).
+            p.savePersisted =
+                (origin == NpcEnumOrigin::ConnectEdge && ue_wrap::kerfur::HasSaveKey(obj)) ? 1 : 0;
             if (!s->SendEntitySpawn(p)) {
                 UE_LOGW("npc-sync[world-enum]: SendEntitySpawn failed for newly-registered eid=%u",
                         p.elementId);
