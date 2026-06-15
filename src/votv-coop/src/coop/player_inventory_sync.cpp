@@ -8,8 +8,8 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player_handshake.h"
-#include "coop/save_guard.h"
 #include "coop/save_transfer.h"
+#include "harness/config.h"     // ModuleDir -- the coop_players store now lives in the GAME folder
 #include "ue_wrap/engine.h"      // Inc 4: SetSaveObjectReadyHook -- the pre-materialize apply point
 #include "ue_wrap/inventory.h"
 #include "ue_wrap/log.h"
@@ -90,17 +90,20 @@ std::array<uint32_t, coop::net::kMaxPeers> g_hostSendSeq{};
 // which is well before the client finishes its save transfer + loads. Reset on disconnect.
 std::array<bool, coop::net::kMaxPeers> g_applySentToSlot{};
 
-// Build <SaveGames>/<hostSlot>/coop_players/<guid>.json. Empty path if any piece is missing.
+// Build <gameDir>/coop_players/<hostSlot>/<guid>.json. Empty path if any piece is missing.
+// User request (2026-06-15): store in the GAME folder (next to votv-coop.dll/.ini/.log), NOT in
+// AppData -- so the per-player inventory jsons are easy to find + hand-edit. Still keyed per host
+// SAVE SLOT (a subfolder under coop_players) so different worlds keep separate inventories.
 fs::path PlayerFilePath(const std::string& guid) {
     // Defense in depth (the wire boundary already validates): a GUID that is not exactly 32 hex
     // chars must NEVER become a path component -- return empty so every write path no-ops cleanly,
     // foreclosing path traversal even if a non-hex guid ever reaches here. (Adversarial-verify HIGH.)
     if (!coop::player_handshake::IsValidGuid(guid)) return {};
-    const fs::path base = coop::save_guard::SaveGamesDir();
+    const std::wstring base = harness::config::ModuleDir();
     if (base.empty()) return {};
     const std::wstring slot = coop::save_transfer::HostSlot();
     if (slot.empty()) return {};
-    return base / slot / L"coop_players" / (std::wstring(guid.begin(), guid.end()) + L".json");
+    return fs::path(base) / L"coop_players" / slot / (std::wstring(guid.begin(), guid.end()) + L".json");
 }
 
 std::string Hex(const std::vector<uint8_t>& b) {
@@ -289,11 +292,18 @@ void HostPersistTick(coop::net::Session* s) {
     for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
         HostEntry& e = g_hostBySlot[slot];
         if (e.dirty && now - e.lastWrite >= kWriteRate) FlushSlot(slot);
-        // Connect-edge apply push: connected + GUID arrived + not yet sent -> send once.
+        // Connect-edge apply push: once a slot is connected AND its GUID has arrived (carried in the
+        // Join), send it its persisted per-player inventory ONCE, latching on a successful enqueue.
+        // SendInventoryToSlot returns false on a channel-busy refusal (or a not-yet-arrived GUID), so
+        // an un-latched failure simply retries on the next 1 Hz tick until it goes out -- the original
+        // "latch even on refusal" bug ("no inventory blob") is fixed by latching on TRUE only. GNS
+        // reliable delivery guarantees the single enqueued blob reaches the joiner during its pre-world
+        // wait, where the (now PRE-WORLD-installed) receiver buffers it for OnSaveObjectReady. No spray
+        // is needed: the earlier "never arrived" symptom was the receiver's g_session being null during
+        // the wait (the world-gated Install bug, now fixed at StartCoopSession), not lossy delivery.
         if (!g_applySentToSlot[slot] && s->IsSlotConnected(slot) &&
             !coop::player_handshake::GuidForSlot(slot).empty()) {
-            SendInventoryToSlot(slot);
-            g_applySentToSlot[slot] = true;
+            if (SendInventoryToSlot(slot)) g_applySentToSlot[slot] = true;
         }
     }
 }
@@ -410,15 +420,15 @@ void OnReliable(const coop::net::BlobChunkPayload& p, uint8_t senderPeerSlot) {
     if (Clock::now() - e.lastWrite >= kWriteRate) FlushSlot(senderPeerSlot);
 }
 
-void SendInventoryToSlot(int peerSlot) {
+bool SendInventoryToSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
-    if (!s || s->role() != coop::net::Role::Host) return;  // host pushes; clients receive
-    if (peerSlot < 1 || peerSlot >= coop::net::kMaxPeers) return;
+    if (!s || s->role() != coop::net::Role::Host) return false;  // host pushes; clients receive
+    if (peerSlot < 1 || peerSlot >= coop::net::kMaxPeers) return false;
     const std::string& guid = coop::player_handshake::GuidForSlot(peerSlot);
     if (guid.empty()) {
         UE_LOGI("player_inventory: slot %d has no GUID yet -- not sending an apply blob this edge",
                 peerSlot);
-        return;
+        return false;  // not sent -> caller does not latch; retries when the GUID lands
     }
     std::vector<uint8_t> blob;
     if (!ReadBlobFile(guid, blob)) {
@@ -432,10 +442,11 @@ void SendInventoryToSlot(int peerSlot) {
                                           ++g_hostSendSeq[peerSlot], blob)) {
         UE_LOGI("player_inventory: sent slot %d guid=%s its per-player inventory (%zu-byte blob)",
                 peerSlot, guid.c_str(), blob.size());
-    } else {
-        UE_LOGW("player_inventory: send to slot %d refused (channel busy) -- the join boot's "
-                "wait-for-apply will retry the edge", peerSlot);
+        return true;
     }
+    UE_LOGW("player_inventory: send to slot %d refused (channel busy) -- will RETRY next tick "
+            "(NOT latched as sent)", peerSlot);
+    return false;
 }
 
 bool HasPendingApply() { return g_hasPendingApply.load(std::memory_order_acquire); }

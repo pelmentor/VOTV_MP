@@ -340,6 +340,10 @@ void ResetCachedSave() {
 }
 
 void SetSaveObjectReadyHook(SaveObjectReadyHook hook) {
+    // Idempotent: player_inventory_sync::Install re-calls this EVERY net-pump tick (the standard
+    // install-retry pattern), so logging on every call spammed the log at >10 Hz. Only act + log
+    // when the hook actually changes.
+    if (g_saveObjectReadyHook == hook) return;
     g_saveObjectReadyHook = hook;
     UE_LOGI("engine: SaveObjectReadyHook %s", hook ? "armed" : "disarmed");
 }

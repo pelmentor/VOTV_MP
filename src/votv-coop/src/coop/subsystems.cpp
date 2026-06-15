@@ -109,7 +109,12 @@ void Install(coop::net::Session& session) {
     coop::prop_stick_sync::Install(&session); // v68: wall-attachable stick mirror (camera-on-wall -- commit observer -> PropStickState; receiver replays forceStick)
     coop::sleep_sync::Install(&session);      // v71: the Minecraft sleep gate (isSleep edge poll -> host tally -> accelerate/end phases)
     coop::wisp_attack_sync::Install(&session); // v72: Killer Wisp coop -- AddPlayerDamage PRE-cancel (host neutralize) + host detect/relay
-    coop::player_inventory_sync::Install(&session); // v73: per-player inventory (host-persisted, GUID-keyed)
+    // v73 per-player inventory: Install() moved to StartCoopSession (PRE-WORLD). This
+    // subsystems::Install only runs at world-up (net_pump gates it on g_netLocal), but the
+    // apply-blob receiver + the pre-materialize SaveObjectReadyHook must be live BEFORE the join's
+    // world loads -- installing here silently dropped every apply chunk during the menu-mode wait.
+    // The Tick (stream/self-test) + EnsurePlayerFile/OnDisconnect hooks elsewhere in this file stay
+    // (post-world / per-slot edges).
     coop::balance_sync::SetSession(&session); // v30 shared host-authoritative balance
     // (trash_collect_sync has no observer to install -- playerTryToCollect is
     // BP-internal; it acts on the held-prop edge in local_streams, see

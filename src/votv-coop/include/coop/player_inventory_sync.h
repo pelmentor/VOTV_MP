@@ -44,8 +44,10 @@ void OnReliable(const coop::net::BlobChunkPayload& p, uint8_t senderPeerSlot);
 // FNV-verified, .bak fallback, EMPTY on missing/corrupt -- fail-safe, never leaks another player's
 // inventory). Chunked to that ONE slot over PlayerInventoryBlob. Called at the host's connect-replay
 // edge (subsystems ConnectReplayForSlot), right after EnsurePlayerFile. No-op off the host or when
-// the peer's GUID hasn't arrived. Game thread.
-void SendInventoryToSlot(int peerSlot);
+// the peer's GUID hasn't arrived. Returns true iff the blob was actually enqueued -- the caller
+// (HostPersistTick) latches "sent" ONLY on true, and retries next tick on a channel-busy refusal
+// (else the connect-edge refusal was never retried -> the client never got its inventory). Game thread.
+bool SendInventoryToSlot(int peerSlot);
 
 // CLIENT: true once the host's on-join apply blob has arrived + deserialized (the join boot waits
 // on this before loading the world, so the SaveObjectReadyHook always has the data). Game thread.

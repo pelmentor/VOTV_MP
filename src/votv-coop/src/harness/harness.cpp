@@ -331,8 +331,14 @@ void DriveMenuModeJoinWorldBoot() {
         const ULONGLONG w0 = ::GetTickCount64();
         while (!PIS::HasPendingApply()) {
             if (coop::shutdown::IsShuttingDown() || !g_session.running()) return;
-            if (::GetTickCount64() - w0 > 10000) {
-                UE_LOGW("harness: inventory apply blob did not arrive in 10s -- loading with the "
+            // 20 s safety cap. In practice the host pushes the apply blob the moment our GUID arrives
+            // (carried in the Join, right after connect), so it lands in ~1 RTT -- almost always DURING
+            // the save-transfer download above, before this wait even begins (HasPendingApply() is then
+            // already true and we never spin here). The cap only fires for a degenerate case: the host
+            // has no inventory for us / a version-mismatched host that never sends. On timeout we load
+            // with the v56-inherited inventory (the apply hook then SKIPS, never wipes).
+            if (::GetTickCount64() - w0 > 20000) {
+                UE_LOGW("harness: inventory apply blob did not arrive in 20s -- loading with the "
                         "v56-inherited inventory (the apply hook will skip)");
                 return;
             }
@@ -409,6 +415,16 @@ bool StartCoopSession(const coop::net::Config& netCfg) {
     coop::dev::force_weather::SetSession(&g_session);
     coop::dev_gate::SetSession(&g_session);  // the strict CLIENT lockout for every dev feature
     coop::moderation::SetSession(&g_session);
+    // v73 Inc4: the per-player inventory subsystem MUST install PRE-WORLD (here, with the other
+    // SetSession caches) -- NOT via the world-gated subsystems::Install. Both halves run before the
+    // join's world exists: OnReliable buffers the host's pushed apply blob during the menu-mode
+    // save-transfer wait, and the SaveObjectReadyHook must be ARMED before BootStorySaveBlocking so
+    // it fires on the join's OWN pre-materialize load. The old world-up call site left g_session
+    // null during the wait (every apply chunk silently dropped at OnReliable's `if (!s) return`) AND
+    // armed the hook AFTER the load -> the apply never ran. This was the "inventory never worked"
+    // root cause (2026-06-16 timing hunt: the blob arrived at the net thread during the join but was
+    // never assembled until world-up, far too late). Idempotent across Stop()/Start().
+    coop::player_inventory_sync::Install(&g_session);
     if (netCfg.role == coop::net::Role::Host) {
         // Snapshot the canonical save BEFORE coop injects state (host-only; clients are
         // save-blocked). Synchronous on this bringup thread -> completes before Start.

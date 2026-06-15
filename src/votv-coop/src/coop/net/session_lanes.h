@@ -59,7 +59,14 @@ inline Lane LaneForKind(ReliableKind k) {
     // nothing -- and Begin must precede its chunks in-lane.
     case ReliableKind::SaveTransferBegin: return Lane::Bulk;
     case ReliableKind::SaveTransferChunk: return Lane::Bulk;
-    case ReliableKind::PlayerInventoryBlob: return Lane::Bulk;  // v73 per-player inventory (large, chunked)
+    // v73 Inc4: the HOST->CLIENT apply blob must reach the joiner BEFORE its world loads
+    // (OnSaveObjectReady substitutes the inventory pre-materialize). Normal (priority 1, ahead of the
+    // Bulk save-transfer + ~3000-prop snapshot at 2) + pre-world-sendable (below) deliver it promptly
+    // during the joiner's pre-world wait rather than queued behind the bulk streams. It is a
+    // self-contained blob with NO in-lane ordering dependency, so it rides Normal freely. (The
+    // CLIENT->HOST persist stream shares this kind+lane -- small + post-world, unaffected; Normal
+    // keeps it off the urgent High lane.)
+    case ReliableKind::PlayerInventoryBlob: return Lane::Normal;
     // v68: PropStickState + PropRelease are ORDER-PAIRED: the receiver's release
     // gate (StickHoldsPhysicsOff) reads the frozen state the stick writes, and the
     // sender emits stick-then-release ~one pump pass apart -- a release overtaking
@@ -158,6 +165,12 @@ inline bool IsPreWorldSendableKind(ReliableKind k) {
     case ReliableKind::SaveTransferRequest:
     case ReliableKind::SaveTransferBegin:
     case ReliableKind::SaveTransferChunk:
+    // v73 Inc4: the per-player inventory APPLY blob is BY DESIGN pre-world -- the joiner must have it
+    // buffered before OnSaveObjectReady fires (the one window to substitute the inventory before the
+    // native loadObjects materializes the world). The receiver just deserializes + stores it
+    // (g_pendingApply); it assumes NO world. Without this it was blocked until ClientWorldReady ==
+    // too late, so the apply never ran ("no apply blob arrived" -- the user's "inventory never worked").
+    case ReliableKind::PlayerInventoryBlob:
     case ReliableKind::ClientWorldReady:
         return true;
     default:
