@@ -49,6 +49,21 @@
 >   independent of arrival, and clears any ghosts that already accumulated. (turn_off keeps
 >   its targeted radius PROP sweep: props can be client-OWNED, so a blanket sweep is wrong
 >   there; NPCs are always host-authoritative -> blanket is correct.)
+>
+> **FINAL (verified, commit `80a8387e`, deployed SHA 6a1229af): the destructive cleanup above was
+> REPLACED by CLAIM/ADOPT -- never destroy-and-recreate ([[feedback-recurring-bug-is-architectural]]).**
+> Hole-2's DestroyUntrackedClientNpcs() STILL duped on the user's hands-on: destroy-local + host-
+> respawn loses the race to a grab (the eid-44116 cascade) AND pops every toggle. The verified fix:
+> at poll-detection PARK the ghost NPC (DisableCharacterTicks+NeutralizeAiTimers) / FREEZE the ghost
+> prop (SetActorSimulatePhysics false) + record it; ADOPT it as the host mirror when the
+> authoritative entity arrives -- NPC via `npc_mirror::AdoptExistingNpcAsMirror`
+> (`kerfur_convert::FindParkedGhostNpcNear` from OnEntitySpawn), PROP via the EXISTING Gap-I-1 fuzzy
+> match (freezing keeps it in the 30cm window). Adoption is read from the MirrorManager IsMirror()
+> (CollectMirrorActors), NOT the stale prop_element_tracker/npc reverse maps -- a fuzzy-rekey/Install
+> doesn't update them, so the cleanup destroyed a just-adopted prop -> spurious turn-on -> churn (the
+> bug the autonomous test caught on run 1). Orphan cleanup (4s) handles the sentient-reject; hole-1's
+> quiescence gate STAYS. RUNTIME-VERIFIED 3/3 via `mp.py kerfurtoggle` (new `coop/dev/kerfur_toggle`
+> file-trigger calls the conversion verb by reflection = a radial-menu stand-in).
 
 
 Date: 2026-06-12 (session 12, post-compact). Trigger: user dupe report --
