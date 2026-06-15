@@ -1,5 +1,32 @@
 # Kerfur NPC <-> prop conversion RE + the v67 host-authoritative fix
 
+> **CORRECTION (2026-06-15): the conversion is 100% INVISIBLE to our hook engine; the fix
+> is a POLL (commit `d8bfe0ea`), NOT any interceptor.** Section 3's claim that actionName /
+> actionOptionIndex are "ProcessEvent-visible" is WRONG -- it made the entire v67 design a
+> silent no-op. Our hook engine is ONE MinHook detour on `UObject::ProcessEvent`
+> (ue_wrap/game_thread.h -- there is NO native-detour path). The conversion's three dispatch
+> forms ALL bypass it: the menu verb is EX_LocalVirtualFunction
+> (`mainPlayer::useSelectedAction`), the actor spawn EX_CallMath, the destroy
+> EX_VirtualFunction-native-branch. The old "PE-visible" / "lightswitch_probe FIRED"
+> evidence was a UE4SS **Lua** probe, which hooks the local-call path our shipping detour
+> does NOT. PROOF: every session, kerfur_convert logs `installed` on both peers and fires
+> its interceptors ZERO times while the user toggles. TWO interceptor attempts failed for
+> this exact reason: actionName (EX_LocalVirtualFunction) and BeginDeferred (EX_CallMath --
+> the suppressor never logs `skipping` for loadObjects' EX_CallMath kerfur spawns either,
+> the smoking gun). The dupe: a client turn_off ran local -> ghost prop_kerfurOmega + dead
+> mirror; grabbing the ghost broadcast it (the grab/held path IS PE-visible) = dupes on all
+> peers. **THE FIX (d8bfe0ea): a death-watch POLL (`kerfur_convert::PollKerfurConversions`,
+> Tick @5 Hz, both roles) -- the project's standard answer for invisible BP lifecycle.** A
+> kerfur MIRROR whose actor DIED while its wire Element is still present (a genuine
+> alive->dead transition; a wire destroy releases the Element first) == a local conversion.
+> CLIENT: forward the existing KerfurConvertRequest (the host's OnConvertRequest converges
+> EXPLICITLY to the wire -- no ProcessEvent dependency) + sweep the untracked local ghost
+> prop. HOST: converge its own toggle straight to the wire (ConvergeAfterConversion). No
+> wire/protocol change -- only the broken DETECTION moved from interceptor to poll. The
+> dead actionName/actionOptionIndex interceptors + kerfur_command (state verbs, display-
+> only) remain RULE-2 debt -> follow-up: remove them, detect state verbs via State-poll.
+
+
 Date: 2026-06-12 (session 12, post-compact). Trigger: user dupe report --
 "client sees a turned off kerfur-object, client turns it on, client turns it
 off - now host sees 2 kerfurs lying turned off."
