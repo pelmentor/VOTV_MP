@@ -61,12 +61,25 @@ std::atomic<bool> g_interceptorInstalled{false};
 bool  g_haveHostHp = false;
 float g_hostHpSnapshot = 0.f;
 
-// Per-wisp rising-edge tracking (game-thread only): the last tick's (grab && client-target)
-// for each wisp eid, so releasePlayer + the relay fire once per grab, not per tick.
+// Per-wisp rising-edge tracking (game-thread only): the last tick's puppet-attack trigger
+// (the wisp is in grab range of its puppet Target) for each wisp eid, so releasePlayer +
+// the relay fire once per grab, not per tick.
 std::unordered_map<uint32_t, bool> g_lastGrabClient;
 std::unordered_set<uint32_t> g_relayed;  // wisp eids whose grab was already relayed
 struct PendingDestroy { uint32_t eid; uint64_t deadlineMs; };
 std::vector<PendingDestroy> g_pendingDestroy;
+
+// NPC-victim death-watch (game-thread only). A wisp kills a kerfur/fossilhound via
+// int_objects::addDamage(1000) -> the NPC's OWN death() + self-K2_DestroyActor, which is
+// EX_VirtualFunction (PE-invisible) -- so our NpcDestroy PRE observer never fires and the
+// kerfur mirror would survive as a ghost on clients. When a wisp closes on a tracked NPC
+// Target we enroll its eid here; the discharge polls liveness and, on death, runs
+// SyncDestroyedNpcActor (the idempotent NpcDestroy body -> EntityDestroy broadcast -> the
+// mirror despawns). Keyed by victim NPC eid; the actor+idx snapshot + a GetNpcIdForActor
+// identity re-check guard against pointer recycling.
+struct NpcWatch { void* actor; int32_t idx; uint64_t deadlineMs; };
+std::unordered_map<uint32_t, NpcWatch> g_npcKillWatch;
+constexpr uint64_t kNpcWatchWindowMs = 6000;  // watch a closed-on NPC for death up to 6s, else drop
 
 uint64_t NowMs() {
     using namespace std::chrono;
@@ -146,6 +159,44 @@ void DischargePendingDestroys() {
     }
 }
 
+// Enroll (or refresh) a wisp-targeted NPC for the death-watch. Snapshot the actor + its
+// internal index so a later death is detectable even after the pointer is GC'd.
+void EnrollNpcKillWatch(uint32_t npcEid, void* npcActor) {
+    const uint64_t deadline = NowMs() + kNpcWatchWindowMs;
+    auto it = g_npcKillWatch.find(npcEid);
+    if (it != g_npcKillWatch.end()) { it->second.deadlineMs = deadline; return; }  // refresh window
+    g_npcKillWatch[npcEid] = NpcWatch{npcActor, R::InternalIndexOf(npcActor), deadline};
+    UE_LOGI("wisp_attack: watching NPC eid=%u (a wisp closed on it) for a wisp-kill death", npcEid);
+}
+
+// Poll watched NPCs; mirror the death of any that died (EX_VirtualFunction self-destroy our
+// PE observer can't see), drop survivors at their deadline.
+void DischargeNpcKillWatch() {
+    if (g_npcKillWatch.empty()) return;
+    const uint64_t now = NowMs();
+    for (auto it = g_npcKillWatch.begin(); it != g_npcKillWatch.end();) {
+        const uint32_t eid = it->first;
+        NpcWatch& w = it->second;
+        // Identity re-check: the map must still bind THIS actor to THIS eid. If it doesn't, the
+        // element was already drained (a normal PE-visible destroy beat us, or the eid recycled)
+        // -> nothing to do, drop the watch. (GetNpcIdForActor uses the actor as a key only.)
+        if (static_cast<uint32_t>(coop::npc_sync::GetNpcIdForActor(w.actor)) != eid) {
+            it = g_npcKillWatch.erase(it);
+            continue;
+        }
+        if (R::IsLiveByIndex(w.actor, w.idx)) {
+            if (now >= w.deadlineMs) { it = g_npcKillWatch.erase(it); continue; }  // survived the window
+            ++it;
+            continue;  // still alive -- keep watching
+        }
+        // Dead AND still mapped to our eid -> the wisp killed it. Broadcast the destroy.
+        coop::npc_sync::SyncDestroyedNpcActor(w.actor);
+        UE_LOGI("wisp_attack: NPC victim eid=%u died (wisp kill, BP-internal self-destroy) -- "
+                "mirrored EntityDestroy so the kerfur/fossilhound mirror despawns", eid);
+        it = g_npcKillWatch.erase(it);
+    }
+}
+
 }  // namespace
 
 void Install(coop::net::Session* session) {
@@ -175,7 +226,7 @@ void Tick() {
     // Walk the host's tracked Npc Elements (small set), NOT GUObjectArray. Find killerwisps.
     std::vector<coop::element::Npc*> npcs;
     NpcMirrors().Snapshot(npcs);
-    bool anyClientGrab = false;
+    bool anyHostFalseGrab = false;  // a wisp's BP grabbed the HOST while its real Target is a puppet
     std::unordered_set<uint32_t> liveWispEids;
 
     for (coop::element::Npc* npc : npcs) {
@@ -189,30 +240,59 @@ void Tick() {
         ue_wrap::wisp::State st;
         if (!ue_wrap::wisp::ReadState(actor, st)) continue;
         void* victim = st.target;
-        const bool isClient = victim && coop::players::Registry::Get().IsPuppet(victim);
-        if ((st.grab || st.tryGrab) && isClient) anyClientGrab = true;
 
-        const bool curGrab = st.grab && isClient;
-        const bool prevGrab = g_lastGrabClient[eid];
-        if (curGrab && !prevGrab) {
-            // GRAB rising edge: halt the fatality montage (the DROP-notify host kill) NOW,
-            // then relay once. releasePlayer re-fires on each rising edge (the wisp re-grabs
-            // ~1s after each release) until the scheduled despawn breaks the loop.
-            ue_wrap::wisp::CallReleasePlayer(actor);
-            if (!g_relayed.count(eid)) {
-                RelayGrab(s, actor, eid, victim);
-                g_relayed.insert(eid);
+        // Classify the wisp's acquired Target. The BP already CHASES any of {host pawn,
+        // puppet, kerfur, fossilhound} (scanForActors), but it only GRABS/KILLS player 0
+        // (the host). We synthesize the missing effect against the real Target.
+        auto& reg = coop::players::Registry::Get();
+        const bool isPuppet = victim && reg.IsPuppet(victim);
+        const uint32_t npcVictimEid =
+            (victim && !isPuppet && !reg.IsLocal(victim))
+                ? static_cast<uint32_t>(coop::npc_sync::GetNpcIdForActor(victim))
+                : static_cast<uint32_t>(coop::element::kInvalidId);
+        const bool isNpcVictim = npcVictimEid != static_cast<uint32_t>(coop::element::kInvalidId);
+
+        // The wisp is in lethal range of its Target (the BP's 550u grab radius), evaluated
+        // against the ACTUAL Target rather than the host's pawn. IsLive(victim) is REQUIRED
+        // before the deref: the BP does not null `Target` the frame its target dies, so a
+        // dead-but-still-referenced pointer would UAF in InGrabRange's GetActorLocation /
+        // EnrollNpcKillWatch's InternalIndexOf (the classification above is map-key-only, no
+        // deref). IsLive is the SEH-firewalled liveness primitive -- safe on a freed pointer.
+        const bool inRange = victim && R::IsLive(victim) && !st.harmless &&
+                             ue_wrap::wisp::InGrabRange(actor, victim);
+
+        // NPC victim: a wisp closing on a kerfur/fossilhound will addDamage(1000)->death (its
+        // own BP). Watch the eid so the BP-internal self-destroy gets mirrored (EntityDestroy).
+        if (isNpcVictim && inRange) EnrollNpcKillWatch(npcVictimEid, victim);
+
+        // PUPPET victim: drive the grab/kill the BP cannot (it would grab the host instead).
+        bool curGrab = false;
+        if (isPuppet) {
+            curGrab = inRange;  // host-proximity-independent: fires whenever the wisp reaches the puppet
+            // If the BP ALSO grabbed (or is winding up to grab) the host -- the host happened to
+            // be within 550 too -- that's a false-grab: protect the host's health across the
+            // whole grab + tryGrab window while we redirect the kill to the puppet.
+            if (st.grab || st.tryGrab) anyHostFalseGrab = true;
+            const bool prevGrab = g_lastGrabClient[eid];
+            if (curGrab && !prevGrab) {
+                // Abort any host false-grab (no-op if the BP didn't grab the host), then relay
+                // once. relayed-latch + the scheduled wisp despawn break the re-grab loop.
+                if (st.grab) ue_wrap::wisp::CallReleasePlayer(actor);
+                if (!g_relayed.count(eid)) {
+                    RelayGrab(s, actor, eid, victim);
+                    g_relayed.insert(eid);
+                }
             }
         }
         g_lastGrabClient[eid] = curGrab;
     }
 
-    g_cancelHostDamage.store(anyClientGrab, std::memory_order_release);
+    g_cancelHostDamage.store(anyHostFalseGrab, std::memory_order_release);
 
     // C4 host-health pin: snapshot on the rising edge (before the wisp's d1 limb damage), then
-    // re-write each tick while grabbed so any hit that slipped past the (one-tick-late) cancel
-    // is immediately undone. Clear when the grab ends.
-    if (anyClientGrab) {
+    // re-write each tick while a wisp false-grabs the host (its real Target being a puppet) so
+    // any hit that slipped past the (one-tick-late) cancel is immediately undone. Clear when over.
+    if (anyHostFalseGrab) {
         if (!g_haveHostHp) {
             float hp = 0.f;
             g_haveHostHp = ue_wrap::vitals::Read(ue_wrap::vitals::Field::Health, &hp);
@@ -225,6 +305,7 @@ void Tick() {
     }
 
     DischargePendingDestroys();
+    DischargeNpcKillWatch();  // mirror any wisp-killed NPC's BP-internal self-destroy
 
     // Drop state for wisps that despawned (no longer tracked) so a recycled eid starts clean.
     for (auto it = g_lastGrabClient.begin(); it != g_lastGrabClient.end();) {
@@ -240,6 +321,7 @@ void OnDisconnect() {
     g_lastGrabClient.clear();
     g_relayed.clear();
     g_pendingDestroy.clear();
+    g_npcKillWatch.clear();
 }
 
 }  // namespace coop::wisp_attack_sync

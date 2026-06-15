@@ -36,7 +36,7 @@ bool KeyDown(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
 //   - dev_gate re-checked per poll so the watcher self-disables the moment this
 //     peer becomes a connected client.
 DWORD WINAPI KeyWatcherThread(LPVOID) {
-    bool prevQ = false;
+    bool prevRawQ = false;  // RAW Q edge (independent of focus) so the diagnostics fire once per press
     while (!coop::shutdown::IsShuttingDown()) {
         if (g_enabled.load(std::memory_order_acquire)) {
             // Live role gate: a watcher enabled while solo/hosting dies the moment
@@ -45,18 +45,26 @@ DWORD WINAPI KeyWatcherThread(LPVOID) {
                 g_enabled.store(false, std::memory_order_release);
                 UE_LOGW("spawn_menu_unlock: auto-off -- dev features are disabled "
                         "while connected as a client");
-                prevQ = false;
+                prevRawQ = false;
                 ::Sleep(16);
                 continue;
             }
-            const bool focused = ::coop::ini_config::IsOurWindowForeground();
-            const bool q = focused && KeyDown('Q');
-            if (q && !prevQ) {
-                GT::Post([] { ue_wrap::spawn_menu::Open(); });
+            const bool rawQ = KeyDown('Q');
+            if (rawQ && !prevRawQ) {  // one event per physical Q press
+                const bool focused = ::coop::ini_config::IsOurWindowForeground();
+                if (focused) {
+                    UE_LOGI("spawn_menu_unlock: Q pressed (foreground) -- posting Open() to the game thread");
+                    GT::Post([] { ue_wrap::spawn_menu::Open(); });
+                } else {
+                    // The most common "nothing happens" cause: our window isn't foreground (the
+                    // ImGui menu / another window has focus), so the press is intentionally ignored.
+                    UE_LOGW("spawn_menu_unlock: Q pressed but our window is NOT foreground -- "
+                            "ignoring (click into the game, then press Q)");
+                }
             }
-            prevQ = q;
+            prevRawQ = rawQ;
         } else {
-            prevQ = false;
+            prevRawQ = false;
         }
         ::Sleep(16);  // 60 Hz, matching freecam's driver
     }

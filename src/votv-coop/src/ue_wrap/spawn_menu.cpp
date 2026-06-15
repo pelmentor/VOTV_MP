@@ -8,6 +8,8 @@
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
 
+#include <cstdint>
+
 namespace ue_wrap::spawn_menu {
 
 namespace R = ue_wrap::reflection;
@@ -48,6 +50,28 @@ bool Open() {
         UE_LOGW("spawn_menu::Open: could not resolve mainPlayer.%ls -- spawn menu "
                 "not opened", kInpSpawnmenuPressedFn);
         return false;
+    }
+    // Diagnostic (2026-06-15): the BP open ubergraph (@12104) NO-OPs the open if
+    // `activeInterface` is already valid (another UI is up). This is the prime suspect for
+    // "the dispatch logs success but no menu shows" -- so report it. Reflection-resolved
+    // offset, cached; a miss just skips the diagnostic (the open still dispatches below).
+    {
+        static int32_t sActiveIfaceOff = -2;  // -2 = unresolved, -1 = not found, >=0 = offset
+        if (sActiveIfaceOff == -2) {
+            void* cls = R::FindClass(P::name::MainPlayerClass);
+            sActiveIfaceOff = cls ? R::FindPropertyOffset(cls, L"activeInterface") : -1;
+        }
+        if (sActiveIfaceOff >= 0) {
+            void* iface = *reinterpret_cast<void* const*>(
+                reinterpret_cast<const uint8_t*>(localPlayer) + sActiveIfaceOff);
+            if (iface) {
+                UE_LOGW("spawn_menu::Open: mainPlayer.activeInterface is SET (%p) -- the BP open "
+                        "guard will likely NO-OP the spawn menu (close any open UI first). THIS is "
+                        "the gate, not gamemode.", iface);
+            } else {
+                UE_LOGI("spawn_menu::Open: activeInterface is null (open guard clear) -- dispatching");
+            }
+        }
     }
     // The input event takes one FKey `Key` param, but its only use is being copied
     // into the persistent frame -- the open ubergraph (@12077) never reads it for

@@ -14,6 +14,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
+#include "ue_wrap/types.h"       // FVector (InGrabRange distance)
 
 #include <atomic>
 #include <cstdint>
@@ -129,6 +130,17 @@ bool ReadState(void* wisp, State& out) {
     out.harmless      = ReadAt<bool>(wisp, g_harmlessOff);
     out.target        = ReadAt<void*>(wisp, g_targetOff);
     return true;
+}
+
+bool InGrabRange(void* wisp, void* target) {
+    if (!wisp || !target) return false;
+    // The BP grab-arm overlap radius (killerwisp.json @5702: SphereOverlapActors radius 550).
+    constexpr float kGrabRadius   = 550.0f;
+    constexpr float kGrabRadiusSq = kGrabRadius * kGrabRadius;
+    const ue_wrap::FVector w = ue_wrap::engine::GetActorLocation(wisp);
+    const ue_wrap::FVector t = ue_wrap::engine::GetActorLocation(target);
+    const float dx = w.X - t.X, dy = w.Y - t.Y, dz = w.Z - t.Z;
+    return (dx * dx + dy * dy + dz * dz) <= kGrabRadiusSq;
 }
 
 void* ReadLimbComponent(void* wisp, Limb limb) {

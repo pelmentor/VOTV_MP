@@ -58,6 +58,14 @@ struct State {
 // field reads (no UFunction dispatch). Game thread.
 bool ReadState(void* wisp, State& out);
 
+// True iff `target` is within the wisp's grab/kill radius -- the BP's SphereOverlapActors
+// 550u grab-arm radius (killerwisp.json scanForActors @5702). The HOST synthesizes the
+// grab trigger against the wisp's ACTUAL Target with this, because the BP's own `grab`
+// flag arms only on GetPlayerPawn(0) (the host's local pawn within 550u) -- so a client
+// puppet (or an NPC) the host happens to be far from is chased but never grabbed/killed.
+// Pure 3D distance read (actor locations), no UFunction. False on null. Game thread.
+bool InGrabRange(void* wisp, void* target);
+
 // The wisp's four limb static-mesh components -- the gib weld targets (killerwisp.hpp:
 // leg_L@0x0550, arm_L@0x0558, LEG_R@0x0560, arm_R@0x0568). On the kill, the BP spawns a
 // prop_bloodGib and welds it to one of these; the coop tear-mirror does the same on the
