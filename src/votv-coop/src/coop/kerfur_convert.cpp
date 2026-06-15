@@ -33,14 +33,18 @@
 #include "coop/npc_sync.h"
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
+#include "ue_wrap/engine.h"      // GetActorLocation -- the conversion poll's ghost-sweep radius
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace coop::kerfur_convert {
@@ -342,6 +346,153 @@ void SendQueuedRequest(const PendingAction& pa) {
             pa.toProp ? "turn_off" : "turn-on", p.elementId);
 }
 
+// ============================================================================
+// THE conversion detection: a POLL, not an interceptor.
+//
+// The radial-menu conversion is 100% INVISIBLE to our hook engine. The engine is
+// ONE MinHook detour on UObject::ProcessEvent (ue_wrap/game_thread.h); the menu
+// verb is EX_LocalVirtualFunction, the spawn EX_CallMath, the destroy
+// EX_VirtualFunction-native-branch -- NONE dispatch through ProcessEvent
+// (votv-kerfur-convert-RE-2026-06-12.md 3). So every interceptor we tried on
+// actionName / actionOptionIndex / BeginDeferred could never fire (proven: two
+// full sessions, zero firings). We detect the conversion the way the project
+// handles all invisible BP lifecycle -- a death-watch POLL:
+//
+//   a kerfur MIRROR whose actor has DIED while its wire Element is STILL present
+//   == the local game just converted it. (A wire-driven destroy releases the
+//   Element FIRST, so element-present + actor-dead is ALWAYS a local conversion;
+//   and we only fire on a genuine ALIVE->DEAD transition, never a stale mirror.)
+//
+//   CLIENT: forward the host-auth KerfurConvertRequest (the host's OnConvertRequest
+//     runs the real verb + converges EXPLICITLY to the wire -- no ProcessEvent
+//     dependency) AND sweep the local ghost the invisible BeginDeferred spawned
+//     (the dupe the user saw: an untracked ghost prop, broadcast when grabbed).
+//   HOST: converge its OWN toggle straight to the wire (ConvergeAfterConversion).
+//
+// Game-thread only (Tick). 5 Hz throttle bounds the Prop snapshot walk.
+// ============================================================================
+
+struct KerfurWatch { float x, y, z; bool handled; };
+std::unordered_map<uint32_t, KerfurWatch> g_kerfurWatch;  // eid -> last-live pose + dedupe; GT-only
+std::chrono::steady_clock::time_point g_lastConvPoll{};
+
+void SendConvertRequestDirect(uint32_t eid, uint8_t toProp) {
+    auto* s = LoadSession();
+    if (!s || !s->connected()) return;
+    coop::net::KerfurConvertPayload p{};
+    p.elementId = eid;
+    p.toProp = toProp;
+    s->SendReliable(coop::net::ReliableKind::KerfurConvertRequest, &p, sizeof(p));
+    UE_LOGI("kerfur_convert[client]: POLL -> sent %s request eid=%u (mirror converted locally)",
+            toProp ? "turn_off" : "turn-on", eid);
+}
+
+// Destroy any UNTRACKED live kerfur prop near `pos` -- the ghost the client's own
+// invisible dropKerfurProp just spawned. The host's authoritative prop arrives via
+// the wire WITH a wire Element (tracked), so an untracked kerfur prop at the dead
+// kerfur's transform IS the ghost. One GUObjectArray walk, only on a detected
+// turn_off (rare), cold path.
+void SweepGhostKerfurProp(float x, float y, float z) {
+    if (!g_kerfurPropClass) return;
+    void* bases[2] = {g_kerfurPropClass, g_floppyClass};
+    const size_t nBases = g_floppyClass ? 2u : 1u;
+    const int32_t n = R::NumObjects();
+    constexpr float kR2 = 400.f * 400.f;  // the drop is at the kerfur's own transform
+    int swept = 0;
+    for (int32_t i = 0; i < n; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj) continue;
+        void* cls = R::ClassOf(obj);
+        if (!cls || !R::IsDescendantOfAny(cls, bases, nBases)) continue;
+        if (!R::IsLive(obj)) continue;
+        if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;
+        if (PT::GetPropElementIdForActor(obj) != coop::element::kInvalidId) continue;  // tracked = host's, keep
+        const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
+        const float dx = loc.X - x, dy = loc.Y - y, dz = loc.Z - z;
+        if (dx * dx + dy * dy + dz * dz > kR2) continue;
+        coop::prop_lifecycle::DestroyLocalProp(obj, /*deferred=*/false);
+        ++swept;
+    }
+    if (swept)
+        UE_LOGI("kerfur_convert[client]: POLL swept %d local ghost kerfur prop(s) near (%.0f,%.0f,%.0f)",
+                swept, x, y, z);
+}
+
+// One ALIVE->DEAD transition pass over the kerfur mirror Elements (NPC = turn_off,
+// prop = turn_on). Fires only for an eid we previously cached LIVE, so a stale /
+// never-live mirror never false-triggers.
+void PollKerfurConversions() {
+    auto* s = LoadSession();
+    if (!s || !s->connected()) return;
+    if (!g_kerfurNpcClass || !g_kerfurPropClass) return;  // classes not resolved yet
+    const auto now = std::chrono::steady_clock::now();
+    if (g_lastConvPoll.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastConvPoll).count() < 200)
+        return;  // ~5 Hz
+    g_lastConvPoll = now;
+
+    const bool isHost   = s->role() == coop::net::Role::Host;
+    const bool isClient = s->role() == coop::net::Role::Client;
+    std::unordered_set<uint32_t> seen;
+
+    // turn_OFF: a kerfur NPC mirror whose actor died.
+    std::vector<coop::element::Npc*> npcs;
+    coop::element::MirrorManager<coop::element::Npc>::Instance().Snapshot(npcs);
+    for (auto* el : npcs) {
+        if (!el) continue;
+        void* actor = el->GetActor();
+        if (!actor || el->GetTypeName().find("kerfurOmega") == std::string::npos) continue;
+        const uint32_t eid = static_cast<uint32_t>(el->GetId());
+        seen.insert(eid);
+        if (R::IsLiveByIndex(actor, el->GetInternalIdx())) {
+            const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(actor);
+            g_kerfurWatch[eid] = KerfurWatch{loc.X, loc.Y, loc.Z, false};
+            continue;
+        }
+        auto it = g_kerfurWatch.find(eid);
+        if (it == g_kerfurWatch.end() || it->second.handled) continue;  // never-live / already handled
+        const float lx = it->second.x, ly = it->second.y, lz = it->second.z;
+        UE_LOGI("kerfur_convert: POLL turn_off (kerfur NPC eid=%u died invisibly) -> %s",
+                eid, isClient ? "client requests host" : "host broadcasts destroy+prop");
+        if (isClient) { SendConvertRequestDirect(eid, 1); SweepGhostKerfurProp(lx, ly, lz); }
+        else if (isHost)
+            ConvergeAfterConversion(actor, el->GetInternalIdx(),
+                                    static_cast<coop::element::ElementId>(eid), /*toProp=*/1);
+        it->second.handled = true;
+    }
+
+    // turn_ON: a kerfur PROP mirror whose actor died.
+    std::vector<coop::element::Prop*> props;
+    coop::element::MirrorManager<coop::element::Prop>::Instance().Snapshot(props);
+    for (auto* el : props) {
+        if (!el) continue;
+        void* actor = el->GetActor();
+        if (!actor || el->GetTypeName().find("prop_kerfurOmega") == std::string::npos) continue;
+        const uint32_t eid = static_cast<uint32_t>(el->GetId());
+        seen.insert(eid);
+        if (R::IsLiveByIndex(actor, el->GetInternalIdx())) {
+            const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(actor);
+            g_kerfurWatch[eid] = KerfurWatch{loc.X, loc.Y, loc.Z, false};
+            continue;
+        }
+        auto it = g_kerfurWatch.find(eid);
+        if (it == g_kerfurWatch.end() || it->second.handled) continue;
+        UE_LOGI("kerfur_convert: POLL turn-on (kerfur prop eid=%u died invisibly) -> %s",
+                eid, isClient ? "client requests host" : "host broadcasts destroy+npc");
+        if (isClient) SendConvertRequestDirect(eid, 0);
+        else if (isHost)
+            ConvergeAfterConversion(actor, el->GetInternalIdx(),
+                                    static_cast<coop::element::ElementId>(eid), /*toProp=*/0);
+        it->second.handled = true;
+    }
+
+    // Prune watch entries whose element is gone (released by a wire destroy / session end).
+    for (auto it = g_kerfurWatch.begin(); it != g_kerfurWatch.end();) {
+        if (seen.count(it->first) == 0) it = g_kerfurWatch.erase(it);
+        else ++it;
+    }
+}
+
 }  // namespace
 
 void Install(coop::net::Session* session) {
@@ -494,6 +645,11 @@ void OnConvertRequest(const coop::net::KerfurConvertPayload& payload,
 }
 
 void Tick() {
+    // THE conversion sync: poll for kerfur mirrors that converted invisibly (the
+    // menu's PE-invisible EX_CallMath/EX_Local* flow). MUST run before the pending-
+    // queue early-return below (it is independent of the queue). Cheap 5 Hz-gated.
+    PollKerfurConversions();
+
     // Two-phase drain (audit C2): execute only entries armed by a PREVIOUS
     // Tick, then arm the rest. A host-menu entry pushed during the actionName
     // dispatch can have THIS Tick run from a nested dispatch INSIDE the verb
@@ -531,8 +687,12 @@ void Tick() {
 }
 
 void OnDisconnect() {
-    std::lock_guard<std::mutex> lk(g_pendingMutex);
-    g_pendingCount = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_pendingMutex);
+        g_pendingCount = 0;
+    }
+    g_kerfurWatch.clear();  // GT-only; Tick is the sole toucher
+    g_lastConvPoll = {};
 }
 
 }  // namespace coop::kerfur_convert
