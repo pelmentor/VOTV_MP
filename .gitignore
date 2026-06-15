@@ -103,6 +103,11 @@ desktop.ini
 # Existing tracked copy is untracked via `git rm --cached CLAUDE.md` in the
 # same commit that adds this line.
 CLAUDE.md
+# Claude's persistent memory lives at the per-user path
+# (C:\Users\<user>\.claude\projects\<slug>\memory), NOT in the repo. A single
+# stray memory file once got written into a project-local memory/ dir and
+# committed by mistake (2026-06-15); ignore the path so it never recurs.
+/memory/
 
 # ===== Secrets — NEVER COMMIT (per-machine VPS / master-server credentials) =====
 # RULE: the VPS creds file stays LOCAL ONLY, never staged/committed/pushed.
