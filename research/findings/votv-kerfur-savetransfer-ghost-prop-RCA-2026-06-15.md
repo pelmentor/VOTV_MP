@@ -116,3 +116,42 @@ Run the full pre-deploy checklist: hot-path re-entry audit on `TickClientReconci
 - `d:\Projects\Programming\VOTV_MP\src\votv-coop\src\coop\subsystems.cpp` (`:148-194` ConnectReplayForSlot — additive replay, no change)
 - `d:\Projects\Programming\VOTV_MP\src\votv-coop\include\coop\net\protocol.h` (`:697` v77 head — no bump needed)
 - New: `d:\Projects\Programming\VOTV_MP\src\votv-coop\src\coop\prop_divergence_sweep.{h,cpp}` (extraction target)
+---
+
+## 5. AS BUILT (session 18, 2026-06-15; commit `52b1d94d`, deployed SHA `C6061A3D`)
+
+The fix shipped is this doc's recommendation (deferred + quiescence-gated prop divergence sweep)
+PLUS the two extra symptoms the user reported beyond symptom A.
+
+**A force-live-save approach was proposed and VETOED.** Before building the sweep, the
+alternative "have the host write a fresh LIVE save right before blob capture" was RE-verified
+feasible (`UsaveSlot_C::save` = synchronous `saveObjects`+`saveToSlot`; a turned-ON kerfur
+round-trips as an ON NPC). The USER REJECTED it: **"Forcing a save is bad practice"** (it clobbers
+the host's canonical save slot / runs the save machinery from a non-user action). Standing lesson:
+do NOT force the host to save to fix a transfer divergence -- reconcile CLIENT-SIDE. The shipped
+fix touches no host save.
+
+AS BUILT (all client-side, NO protocol change):
+- **A (ghost prop):** `DestroyUnclaimedDivergentProps` -> `ArmDivergenceSweep()` (at SnapshotComplete,
+  keeps claim-tracking armed) + `RunDivergenceSweep_` (static) driven by `TickClientReconcile()`
+  from `npc_mirror::TickClientNpcs`. Fires once the keyless in-universe population is stable across
+  `kSweepQuiesceScans=3` @200ms (~600ms) OR `kSweepDeadlineMs=8000`. Re-armed per ClientWorldReady
+  via `OnClientWorldReadyResetSweep()` (the 2-level-load). The keyless-skip is now only hit by true
+  transients (its WARN is a regression tripwire, expected ~0). The inline call is DELETED (RULE 2).
+- **C (grab re-spawns + claim-rescues the ghost):** `IsPendingSweepCandidate(actor)` gates
+  `trash_collect_sync::EnsureHeldItemBroadcast` -- a ghost grabbed in the pre-sweep window is not
+  re-announced (no host dup) nor claim-rescued (it stays a sweep candidate). Legit client drops go
+  via the takeObj path (claimed) so they are unaffected.
+- **B (turn-off does nothing for ~6-8s):** `HasLoadTailQuiesced()` (sticky `g_sweepFired`) is shared
+  with `npc_adoption::ResolvePending` -- the no-twin save-persisted NPC fresh-spawns at load
+  quiescence instead of the fixed 8s timeout (the NPC mirror now appears ~when the ghost is swept).
+- The "host->client converted-away key destroy" crutch this doc rejected stays rejected -- the
+  quiesced absence-sweep needs no new wire signal (the host's silence IS the signal).
+- Files: remote_prop_spawn.{h,cpp} (1176 LOC -- OVER the 800 soft cap; FLAGGED follow-on: extract
+  the claim-tracking + divergence-sweep subsystem to `coop/prop_divergence_sweep.{h,cpp}`; deferred
+  here only to avoid breaking its `ResetPileBindIndex` coupling to OnSpawn mid-fix), event_feed.cpp,
+  npc_mirror.cpp, net_pump.cpp, trash_collect_sync.cpp, npc_adoption.cpp, prop_lifecycle.{h,cpp}.
+- Audited SAFE (deferred sweep on 7 vectors; B/C additions). One LOW pre-existing residual: a >8s
+  non-quiescing load with the ghost still keyless at the 8s deadline (guarded by the keyless WARN).
+- HANDS-ON pending (next session): host turn ONE kerfur on (NO re-save) -> client save-transfer
+  join -> expect ONE active kerfur (~1-2s, not 8s), ZERO ghost prop, turn-off works, no grab-dupe.
