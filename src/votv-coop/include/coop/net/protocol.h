@@ -695,9 +695,10 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
 inline constexpr uint16_t kProtocolVersion = 78;  // v78: kerfur stable-id redesign -- KerfurConvert=74 host->all
-                                                  // form-transition broadcast (the SOLE conversion signal) +
-                                                  // KerfurHoldRequest=75 (no client-mint of a held kerfur) +
-                                                  // kFlagKerfur PropSpawn bit. See coop/kerfur_entity.h + the redesign doc.
+                                                  // form-transition broadcast (the SOLE conversion signal). K-5
+                                                  // gates the client mint + streams the held kerfur prop mirror's
+                                                  // host-range eid (no new packet -- slot 75/kFlagKerfur scaffolding
+                                                  // removed). See coop/kerfur_entity.h + the redesign doc.
                                                   // to occupant-exit too (idle ATV = physics ON everywhere, grabbable);
                                                   // AtvState stateBits gains bit3=authored (connect-snapshot: freeze only
                                                   // an actively-authored ATV, leave idle ones physics-on).
@@ -1611,10 +1612,11 @@ enum class ReliableKind : uint8_t {
                        //     sentient/kill refusal). Every client destroys its old-form mirror + adopts its
                        //     own claimed local conversion ghost to the authoritative newEid (initiator) or
                        //     materializes a fresh mirror (others). Payload: KerfurConvertBroadcastPayload.
-    KerfurHoldRequest = 75, // 2026-06-16 (v78): CLIENT->HOST held-kerfur ownership. A client grabbing a
-                       //     kerfur prop NEVER mints a peer-range eid (the K-5 class-gate); it sends this
-                       //     {kerfurId, held} so the host knows which peer carries which kerfur. held=0 =
-                       //     released. Payload: KerfurHoldPayload.
+    // Slot 75 (KerfurHoldRequest) was reserved in K-4a then REMOVED in K-5 (RULE 2): it was never
+    // sent. The held-kerfur carry needs NO new packet -- the client streams the kerfur prop MIRROR's
+    // host-range eid in its ordinary PropPose; the host's remote_prop receiver resolves the
+    // authoritative kerfur prop by that eid + kinematic-drives it, and the existing host->client
+    // unreliable relay fans it to other peers. (redesign K-5: gate the client mint + stream the eid.)
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -2000,14 +2002,9 @@ static_assert(sizeof(KerfurConvertBroadcastPayload) == 104, "KerfurConvertBroadc
 static_assert(sizeof(KerfurConvertBroadcastPayload) <= 256 - 20 - 8,
               "KerfurConvertBroadcastPayload must fit in one reliable datagram");
 
-// v78: CLIENT->HOST held-kerfur ownership (KerfurHoldRequest=75). A client grabbing a kerfur prop
-// NEVER mints a peer-range eid (the K-5 class-gate replaces the mint with this). held=0 = released.
-struct KerfurHoldPayload {
-    uint32_t kerfurId;  // 4 -- the stable KerfurId the client is holding
-    uint8_t  held;      // 1 -- 1 = grabbed, 0 = released
-    uint8_t  _pad[3];   // 3
-};
-static_assert(sizeof(KerfurHoldPayload) == 8, "KerfurHoldPayload must be 8 bytes");
+// (KerfurHoldPayload removed in K-5 with ReliableKind slot 75 -- the held-kerfur carry needs no new
+// packet; see the ReliableKind enum note. The client streams the kerfur prop mirror's host-range eid
+// in its ordinary PropPose.)
 
 // v74: host-authoritative kerfur menu command (KerfurCommand=70). CLIENT->HOST. The HOST
 // derives the REQUESTER from senderPeerSlot (so Follow follows the clicking player); the host's
@@ -2134,11 +2131,8 @@ inline constexpr uint8_t kFrozen          = 0x04;
 inline constexpr uint8_t kStatic          = 0x08;  // Aprop_C.Static @0x02D8
 inline constexpr uint8_t kSleep           = 0x10;  // Aprop_C.sleep  @0x02DD
 inline constexpr uint8_t kRemoveWOrespawn = 0x20;  // Aprop_C.removeWOrespawn @0x02D9
-inline constexpr uint8_t kFlagKerfur      = 0x40;  // v78 (K-5): this PropSpawn carries a KERFUR prop
-                                                   // (prop-form kerfur join-snapshot) -> the host stamps
-                                                   // it so the joiner's receiver routes it to the kerfur
-                                                   // hold/identity path. (The client is eid-based -- it
-                                                   // does NOT track KerfurIds.)
+// (0x40 was kFlagKerfur in K-4a; REMOVED in K-5 -- a client identifies a kerfur prop mirror by CLASS
+//  (kerfur_entity::IsKerfurClass), not a PropSpawn flag, so no bit is needed. 0x40 is free.)
 }  // namespace propspawn_flags
 
 // v5 Phase 5S0 Inc2: prop-destroy reliable payload. WireKey identifies the

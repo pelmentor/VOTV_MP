@@ -11,6 +11,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
 #include "coop/element/registry.h"
+#include "coop/kerfur_entity.h"  // K-5: IsKerfurActor (the client-mint gate)
 #include "coop/net/session.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -317,12 +318,21 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
     // ship a peer-range eid as a host-authoritative broadcast (slot-
     // collision risk on receivers). g_actorToPropElementIdMutex is the
     // synchronization point that owns this commit decision.
+    // K-5 client-mint gate: a CLIENT must NEVER mint a (peer-range) eid for a kerfur prop -- its
+    // identity is host-managed (the host owns the KerfurId + the host-range eid; the client adopts the
+    // host's mirror via KerfurConvert / the connect snapshot). Minting one is the grab-dupe root
+    // (redesign Failures #1/#3/#6). The HOST still registers its kerfur props normally (they need a
+    // host-range eid for the snapshot + the conversion poll), and BindFormActor lazily allocates the
+    // KerfurId at the first conversion, so no host-side first-sighting is needed here. Read OUTSIDE the
+    // lock (reflection-only, no mutex), gate INSIDE it on the same role read the alloc-range uses.
+    const bool isKerfur = coop::kerfur_entity::IsKerfurActor(actor);
     bool isHost = false;
     {
         std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
         if (g_actorToPropElementId.count(actor) > 0) return;  // idempotent
         auto* s = LoadSession();
         isHost = (s != nullptr && s->role() == coop::net::Role::Host);
+        if (isKerfur && s != nullptr && s->role() == coop::net::Role::Client) return;  // no client mint
     }
     auto el = std::make_unique<coop::element::Prop>();
     auto toStr = [](const std::wstring& w) {

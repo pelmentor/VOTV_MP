@@ -9,6 +9,7 @@
 #include "coop/dev/perf_probe.h"
 #include "coop/element/element.h"
 #include "coop/ini_config.h"
+#include "coop/kerfur_entity.h"  // K-5: GetKerfurMirrorEidForActor (held-kerfur-prop eid fallback)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/prop_element_tracker.h"
@@ -162,6 +163,18 @@ bool ReadLocalPose(void* local, void* controller, coop::net::PoseSnapshot& out) 
     return true;
 }
 
+// Resolve the wire elementId for a held prop. An ordinary keyed prop is in prop_element_tracker's
+// LOCAL map (g_actorToPropElementId). A kerfur prop on a CLIENT is a host-owned MIRROR (m_mirror=true)
+// that is NOT in that local map -- fall back to its host-range eid from the kerfur held-pose map so the
+// carry streams cross-peer by eid (its random BP key won't resolve; the host's remote_prop receiver
+// resolves the authoritative kerfur prop by this eid + kinematic-drives it). K-5. kInvalidId if neither.
+coop::element::ElementId ResolveHeldPropEid(void* heldActor) {
+    auto eid = coop::prop_element_tracker::GetPropElementIdForActor(heldActor);
+    if (eid == coop::element::kInvalidId)
+        eid = coop::kerfur_entity::GetKerfurMirrorEidForActor(heldActor);
+    return eid;
+}
+
 }  // namespace
 
 void OnSessionStart() {
@@ -264,7 +277,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         if (heldActor != g_lastHeldProp) {
             const bool mirrored =
                 coop::trash_collect_sync::EnsureHeldItemBroadcast(heldActor, &session);
-            const auto eid = coop::prop_element_tracker::GetPropElementIdForActor(heldActor);
+            const auto eid = ResolveHeldPropEid(heldActor);
             UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' eid=%u -> prop-mirror=%s",
                     heldActor, R::ClassNameOf(heldActor).c_str(),
                     ue_wrap::prop::GetInteractableKeyString(heldActor).c_str(),
@@ -282,7 +295,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             pp.key.data[pp.key.len++] = static_cast<char>(keyW[i]);
         }
         {
-            const auto eid = coop::prop_element_tracker::GetPropElementIdForActor(heldActor);
+            const auto eid = ResolveHeldPropEid(heldActor);
             pp.elementId = (eid == coop::element::kInvalidId) ? 0u : static_cast<uint32_t>(eid);
         }
         const auto loc = ue_wrap::engine::GetActorLocation(heldActor);

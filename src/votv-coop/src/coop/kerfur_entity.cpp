@@ -1,8 +1,8 @@
 // coop/kerfur_entity.cpp -- see coop/kerfur_entity.h.
 //
-// K-3: the host-side KerfurId authority table + the client K<->eid maps + the class/eid predicates.
-// No wire change; the conversion still runs the old kerfur_convert path. K-4 wires BindFormActor +
-// the KerfurConvert broadcast; K-5 wires the client-mint class-gate + KerfurHoldRequest.
+// K-3: the host-side KerfurId authority table + the class/eid predicates. No wire change; the
+// conversion still runs the old kerfur_convert path. K-4 wires BindFormActor + the KerfurConvert
+// broadcast; K-5 wires the client-mint class-gate + the CLIENT held-pose eid map (no new packet).
 
 #include "coop/kerfur_entity.h"
 
@@ -48,6 +48,11 @@ std::mutex g_mutex;  // guards every table below (game thread in practice; locke
 std::unordered_map<coop::element::ElementId, KerfurRecord> g_byKerfurId;
 std::unordered_map<void*, coop::element::ElementId>        g_actorToKerfurId;
 std::unordered_map<coop::element::ElementId, coop::element::ElementId> g_eidToKerfurId;  // currentEid -> K
+
+// K-5 CLIENT held-pose map: kerfur prop MIRROR actor -> its host-range eid (see the header). Distinct
+// from the host KerfurId table above -- this holds wire eids (not K), populated on the client only.
+// Guarded by g_mutex for uniformity (all access is game-thread, so contention is nil).
+std::unordered_map<void*, coop::element::ElementId> g_kerfurMirrorActorToEid;
 
 std::string NarrowAscii(const std::wstring& w) {
     std::string s;
@@ -147,6 +152,42 @@ bool IsKerfurEid(coop::element::ElementId currentEid) {
     return g_eidToKerfurId.count(currentEid) != 0;
 }
 
+// ---- K-5 CLIENT held-pose map -----------------------------------------------------------------------
+
+void NotifyKerfurPropMirrorBound(void* actor, coop::element::ElementId eid) {
+    if (!actor || eid == coop::element::kInvalidId) return;
+    auto* s = LoadSession();
+    if (!s || s->role() != coop::net::Role::Client) return;  // client-only (host owns the kerfur as a local)
+    if (!IsKerfurActor(actor)) return;                        // self-filter: only kerfur prop mirrors
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_kerfurMirrorActorToEid[actor] = eid;
+    }
+    UE_LOGI("kerfur_entity[client]: kerfur prop mirror actor=%p bound at host-range eid=%u "
+            "(held-pose stream can now carry it)", actor, eid);
+}
+
+coop::element::ElementId GetKerfurMirrorEidForActor(void* actor) {
+    if (!actor) return coop::element::kInvalidId;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    auto it = g_kerfurMirrorActorToEid.find(actor);
+    if (it == g_kerfurMirrorActorToEid.end()) return coop::element::kInvalidId;
+    const coop::element::ElementId eid = it->second;
+    // Self-heal: an actor pointer can be GC-recycled after the mirror it named was torn down. Verify
+    // the eid's Element still binds THIS actor; if not, the entry is stale -> evict + miss. (g_mutex ->
+    // Registry::m_mutex is the established lock order -- AllocKerfurId/BindFormActor already nest it.)
+    auto* el = coop::element::Registry::Get().Get(eid);
+    if (el && el->GetActor() == actor) return eid;
+    g_kerfurMirrorActorToEid.erase(it);
+    return coop::element::kInvalidId;
+}
+
+void ForgetKerfurPropMirror(void* actor) {
+    if (!actor) return;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_kerfurMirrorActorToEid.erase(actor);
+}
+
 void ReleaseKerfurId(coop::element::ElementId kerfurId) {
     if (kerfurId == coop::element::kInvalidId) return;
     std::unique_ptr<coop::element::KerfurEntity> drained;  // free K's Element OUTSIDE the lock
@@ -171,6 +212,7 @@ void OnDisconnect() {
         drained.swap(g_byKerfurId);
         g_actorToKerfurId.clear();
         g_eidToKerfurId.clear();
+        g_kerfurMirrorActorToEid.clear();  // K-5 client held-pose map
     }
     // drained's KerfurEntity dtors (FreeId) fire here, outside g_mutex.
 }

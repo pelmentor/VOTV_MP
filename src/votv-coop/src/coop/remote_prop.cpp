@@ -6,6 +6,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
 #include "coop/element/registry.h"
+#include "coop/kerfur_entity.h"  // K-5: NotifyKerfurPropMirrorBound (client held-pose eid map)
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/prop_echo_suppress.h"
@@ -724,6 +725,12 @@ void RegisterPropMirror(coop::element::ElementId eid,
         UE_LOGI("remote_prop::RegisterPropMirror: eid=%u bound to actor=%p "
                 "key='%ls' cls='%ls' ownerSlot=%d",
                 eid, actor, key.c_str(), cls.c_str(), ownerSlot);
+        // K-5: if this is a CLIENT kerfur prop mirror, record actor->host-range-eid so local_streams
+        // can stream the eid while it's carried (its random BP key won't resolve cross-peer; the host's
+        // remote_prop receiver resolves the authoritative kerfur prop by this eid). Self-filters to
+        // client + kerfur class (no-op for every ordinary prop / on the host). The single choke-point
+        // every kerfur prop mirror bind funnels through (convert materialize, join-snapshot, fuzzy-adopt).
+        coop::kerfur_entity::NotifyKerfurPropMirrorBound(actor, eid);
     }
     // On false: Install already logged the failure case (rejected
     // sentinel id, duplicate, or RegisterMirror failure).
@@ -741,6 +748,12 @@ void UnregisterPropMirror(coop::element::ElementId eid) {
     if (eid == 0u || eid == coop::element::kInvalidId) return;
     auto drained = PropMirrors().Take(eid);
     if (!drained) return;
+    // K-5: evict the client held-pose map symmetrically (it is populated at RegisterPropMirror). This
+    // is the general mirror-teardown choke-point -- covers a kerfur prop mirror dropped by a plain
+    // PropDestroy (not just the conversion path's explicit evict). No-op for a non-kerfur mirror / on
+    // the host (the map is empty there). GetKerfurMirrorEidForActor also self-heals, but evicting here
+    // keeps the map tight + the lifecycle symmetric (RegisterPropMirror populates <-> this evicts).
+    coop::kerfur_entity::ForgetKerfurPropMirror(drained->GetActor());
     UE_LOGI("remote_prop::UnregisterPropMirror: eid=%u drained", eid);
     // drained falls out of scope here; ~Prop -> ~Element ->
     // Registry::UnregisterMirror (via m_mirror=true).

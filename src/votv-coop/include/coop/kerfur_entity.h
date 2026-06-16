@@ -23,7 +23,8 @@
 //
 // PHASE: K-3 lands this table + its population/queries (no wire change; the conversion still runs the
 // old path -- the table is built but not yet DRIVING). K-4 adds BindFormActor + the KerfurConvert
-// broadcast. K-5 adds the client-mint class-gate + KerfurHoldRequest.
+// broadcast. K-5 adds the client-mint class-gate + the CLIENT held-pose eid map (below) -- NO new
+// packet: a held kerfur prop streams its host-range mirror eid in the ordinary PropPose.
 
 #pragma once
 
@@ -84,6 +85,31 @@ Form                     GetFormForKerfurId(coop::element::ElementId kerfurId);
 // per redesign section 11: it applies KerfurConvert by oldEid/newEid + IsKerfurClass, never by a
 // KerfurId, so the client K<->eid maps + RegisterClientKerfur of the K-3 scaffolding were removed.)
 bool IsKerfurEid(coop::element::ElementId currentEid);
+
+// ---- K-5 CLIENT held-pose eid map ------------------------------------------------------------------
+// A kerfur prop on a CLIENT is a host-owned MIRROR (m_mirror=true, host-range eid) -- NOT in
+// prop_element_tracker's local g_actorToPropElementId map, so GetPropElementIdForActor returns
+// kInvalidId for it. But a client carrying a kerfur prop must STREAM that mirror's host-range eid in
+// its PropPose (the kerfur's BP key is random per peer -> only the eid identifies it cross-peer; the
+// host's remote_prop receiver resolves the authoritative kerfur prop by that eid + drives it -- no new
+// packet needed). This client-only actor->eid map gives local_streams that eid in O(1).
+//
+// Populated by NotifyKerfurPropMirrorBound from remote_prop::RegisterPropMirror (the single choke-point
+// every kerfur prop mirror bind funnels through -- convert materialize, join-snapshot, fuzzy-adopt).
+// Queried by GetKerfurMirrorEidForActor (self-healing: a stale entry whose eid no longer binds the
+// actor is evicted on read, so a GC address-recycle can't mis-resolve). Cleared on OnDisconnect.
+// Game-thread only. HOST is a no-op (the host owns the kerfur as a LOCAL, never mirrors it).
+
+// CLIENT: record that a kerfur prop mirror actor was bound at host-range `eid`. Self-filters: no-op on
+// the host / for a non-kerfur actor. Idempotent.
+void NotifyKerfurPropMirrorBound(void* actor, coop::element::ElementId eid);
+
+// CLIENT: O(1) host-range eid for a locally-held kerfur prop mirror actor (for the held-pose stream).
+// kInvalidId if not tracked. Self-heals stale entries (verifies the eid still binds this actor).
+coop::element::ElementId GetKerfurMirrorEidForActor(void* actor);
+
+// CLIENT: evict an actor from the held-pose map (called on a kerfur mirror teardown). No-op if absent.
+void ForgetKerfurPropMirror(void* actor);
 
 // HOST only: the conversion mutation -- the MTA SetElementModel equivalent (redesign 10.3). The host
 // ran the BP verb (its own radial menu OR a client KerfurConvertRequest) and registered the new-form

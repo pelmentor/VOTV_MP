@@ -821,7 +821,11 @@ void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& p, void* lo
         dp.elementId = static_cast<uint32_t>(oldEid);
         coop::npc_mirror::OnEntityDestroy(dp);
     } else {
-        // new form is NPC -> old form was prop (eid-only teardown of the old prop mirror)
+        // new form is NPC -> old form was prop (eid-only teardown of the old prop mirror). K-5: evict
+        // the old prop mirror from the client held-pose map BEFORE OnDestroy frees its actor (the map
+        // self-heals on read too, but evicting on the known teardown keeps it tight).
+        if (auto* oldEl = coop::element::Registry::Get().Get(oldEid))
+            coop::kerfur_entity::ForgetKerfurPropMirror(oldEl->GetActor());
         coop::net::PropDestroyPayload dp{};
         dp.key.len = 0;
         dp.elementId = static_cast<uint32_t>(oldEid);

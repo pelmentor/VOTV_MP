@@ -9,6 +9,7 @@
 
 #include "coop/trash_collect_sync.h"
 
+#include "coop/kerfur_entity.h"  // K-5: IsKerfurActor (the held-kerfur class-gate)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/prop_element_tracker.h"
@@ -148,6 +149,16 @@ bool BroadcastConvertNear(uint32_t oldEid, const ue_wrap::FVector& pos, coop::ne
 bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     if (!heldActor || !s || !s->connected()) return false;
     if (!R::IsLive(heldActor)) return false;
+    // K-5 kerfur class-gate: a kerfur prop is a host-owned entity (the host owns its KerfurId + its
+    // host-range eid). A client must NEVER express/mint a peer-range eid for it -- that was the
+    // grab-dupe root (redesign Failures #1/#3/#6: the minted peer-range eid is dropped by the host's
+    // host-range conversion gate, then re-mirrored as a fresh client entity -> the dupe-and-drop loop).
+    // Never mint here; the held-pose stream (local_streams) instead carries the kerfur prop MIRROR by
+    // its host-range eid (kerfur_entity::GetKerfurMirrorEidForActor), which the host's remote_prop
+    // receiver resolves to the authoritative kerfur prop + kinematic-drives -- no PropSpawn needed. On
+    // the HOST this is redundant (its kerfur prop is tracker-known -> the express skip below already
+    // returns false), but gating up-front is role-agnostic + explicit.
+    if (coop::kerfur_entity::IsKerfurActor(heldActor)) return false;
     // Any KEYED interactable: Aprop_C trash items AND the non-Aprop_C
     // garbageClump/chipPile (the actual trash the player carries). CRASH-SAFETY
     // is enforced on the RECEIVER, not by excluding them here: GetStaticMesh
