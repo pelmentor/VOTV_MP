@@ -10,6 +10,7 @@
 #include "coop/player_handshake.h"
 #include "coop/save_transfer.h"
 #include "harness/config.h"     // ModuleDir -- the coop_players store now lives in the GAME folder
+#include "ue_wrap/begin_equipment.h"  // RULE-1 first-join: the game's own getData->AddEquipment equip
 #include "ue_wrap/engine.h"      // Inc 4: SetSaveObjectReadyHook -- the pre-materialize apply point
 #include "ue_wrap/inventory.h"
 #include "ue_wrap/log.h"
@@ -375,6 +376,21 @@ void Tick() {
             "(inv2: inventory=%zu equip=%zu hold=%zu)",
             blob1.size(), de ? 1 : 0, roundtrip ? "OK" : "MISMATCH",
             inv2.inventory.size(), inv2.equipment.size(), inv2.hold.size());
+
+    // RULE-1 proper-fix PROBE (ini starterkit_test=1, dev-only): equip the 3 SP starters via the
+    // game's OWN AddEquipment (begin_equipment::GiveFromClass) + re-read, confirming the canonical
+    // equip path adds the items BEFORE it's wired to the first-join edge. One-shot (rides this
+    // one-shot selftest). Removed once first-join uses it.
+    if (::coop::ini_config::IsIniKeyTrue("starterkit_test")) {
+        for (const wchar_t* c : {L"prop_equipment_flashlight_C", L"prop_equipment_glasses_C",
+                                 L"prop_equipment_compass_C"})
+            ue_wrap::begin_equipment::GiveFromClass(c);
+        ue_wrap::inventory::PlayerInventory after;
+        if (ue_wrap::inventory::ReadAll(after))
+            UE_LOGI("starterkit[probe]: after AddEquipment x3 -- inventory=%zu equip=%zu hold=%zu "
+                    "(was %zu/%zu/%zu)", after.inventory.size(), after.equipment.size(),
+                    after.hold.size(), inv.inventory.size(), inv.equipment.size(), inv.hold.size());
+    }
 }
 
 void OnReliable(const coop::net::BlobChunkPayload& p, uint8_t senderPeerSlot) {
