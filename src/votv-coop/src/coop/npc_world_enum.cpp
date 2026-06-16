@@ -15,6 +15,7 @@
 #include "coop/element/npc.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
+#include "coop/kerfur_entity.h"  // K-3: reserve the stable KerfurId when a kerfur NPC is registered
 #include "coop/npc_sync.h"
 #include "ue_wrap/engine.h"   // GetActorLocation / GetActorRotation
 #include "ue_wrap/kerfur.h"   // HasSaveKey -- the ConnectEdge savePersisted gate
@@ -99,6 +100,12 @@ int RegisterExistingWorldNpcs(NpcEnumOrigin origin) {
         el->SetActor(obj, R::InternalIndexOf(obj));
         coop::npc_sync::MapActorToNpcId(obj, eid);
         ++registered;
+        // K-3 (kerfur redesign): a kerfur NPC also gets a stable host-range KerfurId reserved in the
+        // KerfurEntity table (host authority, idempotent per actor). The table is BUILT here but does
+        // not yet DRIVE the conversion (K-4 wires BindFormActor) -- no behavior change in K-3.
+        if (clsName.find(L"kerfurOmega") != std::wstring::npos) {
+            coop::kerfur_entity::AllocKerfurId(obj, eid, coop::kerfur_entity::Form::Npc, clsName);
+        }
         // v67 (kerfur_convert): make the registration VISIBLE now -- broadcast
         // EntitySpawn for the newly-registered NPC to connected peers.
         // BP-internal spawns (EX_CallMath BeginDeferred -- e.g. prop_kerfurOmega.

@@ -33,6 +33,7 @@
 #include "coop/npc_mirror.h"     // DestroyUntrackedClientNpcs -- the turn-on ghost-NPC reconcile
 #include "coop/npc_sync.h"
 #include "coop/npc_world_enum.h"  // K-0: RegisterExistingWorldNpcs (moved out of npc_sync)
+#include "coop/kerfur_entity.h"   // K-3: stable-KerfurId table (share the resolved kerfur classes)
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
 #include "coop/remote_prop_spawn.h"  // HasLoadTailQuiesced -- gate the client poll past the join reconcile
@@ -647,6 +648,9 @@ void Install(coop::net::Session* session) {
     if (!g_kerfurNpcClass)  g_kerfurNpcClass  = R::FindClass(L"kerfurOmega_C");
     if (!g_kerfurPropClass) g_kerfurPropClass = R::FindClass(L"prop_kerfurOmega_C");
     if (!g_kerfurNpcClass || !g_kerfurPropClass) return;  // BP classes not loaded yet
+    // K-3: share the resolved kerfur bases with the KerfurId table (idempotent) so its class-gate
+    // predicates (IsKerfurClass/IsKerfurEid) and the K-5 mint-gate can answer without re-resolving.
+    coop::kerfur_entity::SetKerfurClasses(g_kerfurNpcClass, g_kerfurPropClass);
 
     if (!g_actionNameFn) {
         g_actionNameFn = R::FindFunction(g_kerfurNpcClass, L"actionName");

@@ -187,3 +187,67 @@ ownership. Clients cannot mint a kerfur identity (both entry points gated). Conv
 boundary, no per-cycle savePersisted decision, no class-only adoption guess, no reverse-map ingest, no
 dual driver, no client ghosts. The identity re-derivation that every prior fix lived in is gone,
 because identity is never re-derived.
+
+---
+
+## 10. CORRECTED DESIGN (2026-06-16, post-RE + 3-agent synthesis) — READ THIS, it supersedes §4.2.4
+
+Before implementation, one RE agent (bytecode + runtime-log census) + two independent architects
+re-derived the design. The RE agent's verdict is **definitive and corrects §4** of this doc:
+
+### 10.1 The interceptor does NOT fire on the real menu — KEEP claim/adopt (the §4.2.4 reversal)
+
+`mainPlayer_C::useSelectedAction` invokes `actionName`/`actionOptionIndex` via **`EX_LocalVirtualFunction`**
+(proven from raw cooked bytecode `research/bp_reflection/mainPlayer.json`), which UE4.27 routes through
+`ProcessInternal`/`ProcessLocalScriptFunction` — *beneath* the single `ProcessEvent` frame our one MinHook
+detours. Runtime logs confirm: the interceptor-cancel lines have **never** fired in any real session
+(even after the `NameEquals` case-insensitivity fix — that fixed *resolution*, not *reachability*); the
+death-watch POLL carries 100% of detections. **The client's local conversion is therefore UNAVOIDABLE.**
+§4.2.4's "interceptor cancels → no ghost → retire claim/adopt" is **struck**. A true pre-cancel would
+need a second hook engine on `ProcessInternal` — rejected: `ProcessInternal` fires on *every* internal
+script call (orders of magnitude hotter than `ProcessEvent`); a detour there is the FPS-killing hot-path
+pattern CLAUDE.md forbids, for the marginal benefit of eliminating a ghost that adopts cleanly.
+**Accept-and-adopt anchored to the stable id is the correct architecture (optimistic-local + authoritative-reconcile — standard netcode, MTA included).**
+
+### 10.2 Registry model — host-side authority, kerfur stays a real Npc/Prop mirror (NO surgery)
+
+`Registry::m_byId[id]` is single-valued, so the kerfur cannot be a `KerfurEntity` element AND an Npc/Prop
+mirror at one id. Resolution (both architects converged): **`KerfurEntity` is a HOST-side authority element
+(`ElementType::Kerfur=4`, `AllocHostId` reserves the stable `KerfurId K`), held in a host-only table — NOT
+in `MirrorManager<Npc/Prop>`.** The kerfur's *rendered* form is a normal **Npc mirror (NPC form, eid N)**
+or **Prop mirror (prop form, eid P)** at its own independent host-range eid, in the existing managers —
+so `npc_pose_host`/`npc_pose_drive` + the prop pose/physics pipelines are **unchanged** (no regression,
+full held/thrown-prop fidelity). `K` is the durable handle; `N`/`P` are the per-form wire eids. At any
+instant only `K` + the current-form eid are live (old-form eid freed on conversion).
+
+### 10.3 `KerfurConvert` (host→all) is the SOLE conversion-transition packet
+
+It REPLACES the EntityDestroy+PropSpawn choreography *for conversions* (initial spawns still use
+EntitySpawn/PropSpawn). Payload: `{kerfurId K, toForm, newEid, locX/Y/Z, rotP/Y/R, newClassName[64],
+rejected, isReply}`. Host on conversion: run the verb → register the verb's output actor via the normal
+Npc/Prop pipeline (host-range `newEid`) → `BindFormActor(K)` updates the host table → broadcast
+`KerfurConvert`. Every client's handler: `rejected` → no-op (mirror stays; fixes #7); else → destroy the
+old-form mirror (at the `K→oldEid` map) + **adopt a claimed local ghost to `newEid` if present (initiator),
+else materialize a fresh mirror at `newEid`** (synthetic EntitySpawn/PropSpawn → existing OnEntitySpawn/
+OnPropSpawn) + update `K↔eid`. `newEid` is host-allocated → never peer-range → never rejected.
+`KerfurConvertRequest` (slot 63, extended) stays client→host, carrying `K + toProp`.
+
+### 10.4 Net delta vs the current shipped code (what actually changes)
+
+KEEP: the POLL detection, `ClaimConversionGhosts`/`FindParkedGhostNpcNear`/`CleanupParkedGhosts` (the
+ghost adopt — RE-mandated), the Npc/Prop pose pipelines, the connect-edge save-load class-match adoption.
+ADD: `coop/kerfur_entity.{h,cpp}` (`ElementType::Kerfur`, the host table, `AllocKerfurId`/`GetKerfurById`/
+`GetKerfurByActor`/`IsKerfurEid`/`BindFormActor`/`ApplyFormChange`), the `KerfurConvert` broadcast +
+`KerfurHoldRequest=74` + `kFlagKerfur=0x40` (proto **v78**), the **class-gate** in `MarkPropElement` +
+`EnsureHeldItemBroadcast`. DELETE (RULE 2): `IngestSpawnedConversionProps`, the request-vs-converge dual
+driver. The ghost-adopt target flips from a fuzzy Gap-I-1 race to the authoritative `newEid` from
+`KerfurConvert` — that determinism, plus the no-mint class-gate + the stable `K`, is the root fix.
+
+### 10.5 Phases (each builds + `mp.py kerfurtoggle` 10× smokes)
+- **K-3** (no wire): `ElementType::Kerfur` + `kerfur_entity.{h,cpp}` table; populate it at kerfur
+  registration (host `AllocKerfurId`) + client `RegisterClientKerfurId`. Conversion still runs the OLD
+  path — the table is built but not yet driving. Behavior-unchanged; smoke must still PASS.
+- **K-4** (v78, core): `KerfurConvert` packet + `BindFormActor`/`ApplyFormChange` + delete
+  `IngestSpawnedConversionProps` + collapse the dual-driver. The new path REPLACES the old.
+- **K-5**: class-gate (`MarkPropElement` + `EnsureHeldItemBroadcast`) + `KerfurHoldRequest` + `kFlagKerfur`
+  join-snapshot + update the `kerfur_toggle` dev trigger to request (not call the verb directly).

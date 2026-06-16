@@ -69,6 +69,12 @@ enum class ElementType : uint8_t {
     Player  = 1,
     Prop    = 2,
     Npc     = 3,
+    // v78 (kerfur redesign): a logical kerfur that flips between an AI NPC
+    // (kerfurOmega_C) and a grabbable prop (prop_kerfurOmega_C). A KerfurEntity
+    // is a HOST-ONLY authority record reserving one stable host-range KerfurId
+    // spanning BOTH forms; the kerfur's RENDERED form is a normal Npc/Prop mirror
+    // at its own per-form eid (see coop/kerfur_entity.h + the redesign doc).
+    Kerfur  = 4,
     // Door / Light / Vehicle / etc. get IDs as those features land.
 };
 
