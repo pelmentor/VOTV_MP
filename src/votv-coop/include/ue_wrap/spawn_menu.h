@@ -33,4 +33,18 @@ namespace ue_wrap::spawn_menu {
 // interface is already open or the player is swimming (matching vanilla Q).
 bool Open();
 
+// Close the spawn menu: the INVERSE of Open(). Restores SetInputMode_GameOnly +
+// hides the mouse cursor (the load-bearing un-stick -- Open() leaves the player in
+// GameAndUI/cursor mode, so without a close the player can no longer interact with
+// the world), then collapses the widget + runs its closed() teardown if present.
+// Reproduces vanilla's close block (ExecuteUbergraph_mainPlayer @11555) natively.
+// Idempotent + safe to call when already closed. GAME THREAD ONLY.
+bool Close();
+
+// Toggle open<->closed from GROUND TRUTH (the widget's live Visibility byte), so the
+// Q key both opens AND dismisses the menu and a player can never be stranded in the
+// open state. Self-correcting if the game closed the menu via its own path. The dev
+// Q-key watcher calls this. GAME THREAD ONLY.
+bool Toggle();
+
 }  // namespace ue_wrap::spawn_menu

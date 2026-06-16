@@ -170,6 +170,25 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
         return false;
     }
 
+    // Pre-quiescence JOIN WINDOW (2026-06-16 hands-on, the "kerfur off+grab dupe"). The guard above
+    // only fires once the divergence sweep is ARMED (g_sweepPending). But a save-loaded in-universe
+    // keyed prop the client grabs in the ~25 s window BEFORE the snapshot bracket opens slips past it
+    // (g_sweepPending still false) -- and expressing it here SendPropSpawns a host duplicate the
+    // client-side sweep can NEVER reclaim (it ran: host fresh-spawned a kerfur prop, eid 43938,
+    // ownerSlot=1, permanent). Same divergence-universe membership, just not yet sweep-armed: until
+    // load-tail quiescence the world is NOT reconciled, so a grabbed un-adjudicated local is not ours
+    // to announce. Keep holding it locally (no pop); the host expresses its OWN copy in the bracket
+    // (our held copy is then key/fuzzy-matched + claimed -> the held-pose stream mirrors it, no dupe),
+    // or the sweep destroys our copy if the host converted it away. HasLoadTailQuiesced flips true the
+    // instant the sweep fires, so this gates ONLY the join window -- never steady-state gameplay.
+    if (!coop::remote_prop_spawn::HasLoadTailQuiesced() &&
+        coop::remote_prop_spawn::IsInDivergenceUniverseUnclaimed(heldActor)) {
+        UE_LOGI("trash_collect: held item %p cls='%ls' grabbed PRE-QUIESCENCE (join window not yet "
+                "reconciled) -- NOT expressing (host expresses its own / the sweep adjudicates ours; "
+                "prevents the off+grab host dupe)", heldActor, R::ClassNameOf(heldActor).c_str());
+        return false;
+    }
+
     // Express-if-unknown (ghost-twin fix, 2026-06-10 hands-on forensics). The
     // old predicate skipped ANY keyed held actor as "a normal world prop the
     // peer already has" -- but "has a key" is NOT "peer has it": a prop that

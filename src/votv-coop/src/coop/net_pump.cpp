@@ -224,6 +224,19 @@ static std::atomic<bool> g_worldReadyAnnounced{false};
 // across world-changes). Reset on send + on disconnect.
 static std::atomic<bool> g_reAnnounceWorldReady{false};
 
+// The UWorld we last announced ClientWorldReady against (GT-only -- net_pump Tick is GT). A
+// "world-change re-seed" only RE-announces when the CURRENT world differs from this, i.e. the
+// UWorld actually SWAPPED. The join's one-time menu->game prop-element-shadow drain is a bookkeeping
+// reap WITHIN the already-announced game world (no swap); misreading it as a world change fired a
+// spurious SECOND ClientWorldReady -> the host re-replayed the full snapshot -> the client reset +
+// re-ran NPC adoption against its already-bound live mirrors -> DUPLICATE kerfurs (2026-06-16, the
+// "kerfurs still duping at join" + email-restorm + BeginDeferred-null churn). Gating on a real swap
+// is airtight: re-replaying host state into a "new" world is only meaningful when that world's
+// actors were actually destroyed+recreated -- which only a UWorld swap does (a real cave/level
+// travel re-opens untitled_1 = a NEW UWorld, so legitimate travels still re-announce + re-bind
+// keyless chipPiles). Reset on disconnect.
+static void* g_announcedWorld = nullptr;
+
 // v75: the save-transfer kerfur-ghost reconcile moved into coop/npc_adoption (the deferred
 // class-match adoption owns the timing now). net_pump only NOTIFIES npc_adoption at the
 // ClientWorldReady announce (OnClientWorldReady) so it can reset per-world state; the ghost sweep
@@ -415,6 +428,19 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                     }
                 }
             };
+            // CLIENT re-announce gate (2026-06-16). Re-announce world-ready ONLY when the UWorld
+            // actually SWAPPED since our last announce -- NOT for the join's menu-shadow drain within
+            // the same world (which spuriously double-snapshotted + duped kerfurs). See g_announcedWorld.
+            auto maybeReAnnounce = [&session, reapWorld]() {
+                if (session.role() == coop::net::Role::Host) return;
+                if (reapWorld != g_announcedWorld) {
+                    g_reAnnounceWorldReady.store(true, std::memory_order_relaxed);
+                } else {
+                    UE_LOGI("net_pump: world-change re-seed on the SAME world already announced (%p) -- "
+                            "NOT re-announcing (suppresses the join menu-shadow-drain double-snapshot + "
+                            "kerfur re-adopt dupe)", reapWorld);
+                }
+            };
             if (reaped >= kReseedPurge) {
                 if (!coop::prop_element_tracker::InPurgeEpisode()) {
                     coop::prop_element_tracker::SetInPurgeEpisode(true);
@@ -429,12 +455,10 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                 const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps();
                 UE_LOGI("net_pump: world-change re-seed added %zu live keyed prop(s) (snapshot-completeness)", added);
                 if (added > 0) retriggerReadySlots();
-                // CLIENT: the world just changed under us -> re-announce world-ready
-                // so the host re-replays its authoritative state into the new world
-                // (re-binds our keyless chipPiles to host eids). Gate on role here;
-                // the announce block re-checks registry coherence before sending.
-                if (session.role() != coop::net::Role::Host)
-                    g_reAnnounceWorldReady.store(true, std::memory_order_relaxed);
+                // CLIENT: re-announce world-ready so the host re-replays its authoritative state into
+                // the new world (re-binds our keyless chipPiles to host eids) -- but ONLY if the world
+                // actually swapped (maybeReAnnounce). The join's same-world shadow drain must not.
+                maybeReAnnounce();
             } else if (inGameplayWorld &&
                        coop::prop_element_tracker::HasSeededOnce() &&
                        !coop::prop_element_tracker::IsRegistrySeededForCurrentWorld()) {
@@ -454,8 +478,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                 const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps();
                 UE_LOGI("net_pump: world changed without a mass purge -- re-seeded (%zu new keyed)", added);
                 if (added > 0) retriggerReadySlots();
-                if (session.role() != coop::net::Role::Host)
-                    g_reAnnounceWorldReady.store(true, std::memory_order_relaxed);
+                maybeReAnnounce();  // only if the UWorld actually swapped (see g_announcedWorld)
             }
         }
     }
@@ -533,6 +556,10 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                                            nullptr, 0)) {
                 g_worldReadyAnnounced.store(true, std::memory_order_relaxed);
                 g_reAnnounceWorldReady.store(false, std::memory_order_relaxed);
+                // Stamp the world we just announced against; a later re-seed only re-announces if the
+                // current world differs (maybeReAnnounce). Resolved here (rare -- once per real
+                // announce), never per-frame. R/P are the file-scope reflection/profile aliases.
+                g_announcedWorld = R::FindObjectByClass(P::name::WorldClass);
                 // v75: a fresh connect replay (this world's EntitySpawns + SnapshotComplete) is
                 // about to arrive -- reset the deferred-adoption per-world state so the new world
                 // re-adopts its save-NPCs + re-sweeps orphans (the ghost sweep itself fires from
@@ -550,6 +577,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     if (!isConnected) {
         g_worldReadyAnnounced.store(false, std::memory_order_relaxed);   // re-announce next connection
         g_reAnnounceWorldReady.store(false, std::memory_order_relaxed);
+        g_announcedWorld = nullptr;                                      // fresh connection re-stamps
     }
 
     if (g_wasConnected && !isConnected) {

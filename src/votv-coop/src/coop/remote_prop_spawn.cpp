@@ -1221,15 +1221,25 @@ void TickClientReconcile() {
     RunDivergenceSweep_(localPlayer);
 }
 
-bool IsPendingSweepCandidate(void* actor) {
-    if (!g_sweepPending || !actor) return false;
+bool IsInDivergenceUniverseUnclaimed(void* actor) {
+    // The divergence-universe membership test WITHOUT the g_sweepPending precondition: an UNCLAIMED,
+    // in-universe, keyed Aprop the host has not expressed -- a save-loaded local awaiting adjudication
+    // against the host snapshot. Used by IsPendingSweepCandidate (a sweep is armed) AND by the
+    // pre-quiescence join-window grab guard in trash_collect_sync (the sweep is not yet armed) so both
+    // share ONE membership definition (RULE 2 -- no second copy of this lineage logic).
+    if (!actor) return false;
     if (g_claimedActors.count(actor)) return false;  // host-expressed / self-claimed legit drop -> not a ghost
     void* cls = R::ClassOf(actor);
     if (!ue_wrap::prop::IsClassKeyedInteractable(cls)) return false;  // out of the divergence universe
     if (!R::IsLive(actor)) return false;
     if (ue_wrap::prop::IsChipPile(actor)) return false;  // pile has its own collect/share + death-watch path
     if (coop::prop_lifecycle::IsPerPlayerPropClass(R::ClassNameOf(actor))) return false;  // per-player: never swept
-    return true;  // unclaimed in-universe keyed Aprop while a sweep is pending = a ghost awaiting adjudication
+    return true;  // unclaimed in-universe keyed Aprop = a divergence candidate awaiting adjudication
+}
+
+bool IsPendingSweepCandidate(void* actor) {
+    // A divergence sweep is armed AND this actor is one of its candidates.
+    return g_sweepPending && IsInDivergenceUniverseUnclaimed(actor);
 }
 
 bool HasLoadTailQuiesced() { return g_sweepFired; }

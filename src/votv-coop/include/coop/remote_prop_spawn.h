@@ -127,10 +127,19 @@ void TickClientReconcile();
 // re-arms it. Game-thread only.
 void OnClientWorldReadyResetSweep();
 
-// True while a deferred sweep is pending AND `actor` is one of its candidates:
-// an in-universe (keyed-interactable Aprop), live, UNCLAIMED local prop the host
-// did NOT express -- a divergent ghost awaiting adjudication (e.g. the
-// save-transfer kerfur the host turned ON before this client joined, which the
+// The divergence-universe membership test WITHOUT the "a sweep is pending" precondition: `actor`
+// is an in-universe (keyed-interactable Aprop), live, UNCLAIMED local prop the host did NOT express
+// -- a save-loaded local awaiting adjudication against the host snapshot, regardless of whether the
+// sweep has armed yet. trash_collect_sync uses this (gated on !HasLoadTailQuiesced) to refuse to
+// broadcast such a prop grabbed in the WHOLE pre-quiescence join window, not just while a sweep is
+// actively pending (the 2026-06-16 off+grab dupe: a grab BEFORE the bracket armed slipped past
+// IsPendingSweepCandidate and fresh-spawned a permanent host duplicate). Game-thread only.
+bool IsInDivergenceUniverseUnclaimed(void* actor);
+
+// True while a deferred sweep is pending AND `actor` is one of its candidates (=
+// IsInDivergenceUniverseUnclaimed while g_sweepPending): an in-universe (keyed-interactable Aprop),
+// live, UNCLAIMED local prop the host did NOT express -- a divergent ghost awaiting adjudication
+// (e.g. the save-transfer kerfur the host turned ON before this client joined, which the
 // client's stale save still has as an OFF prop). The client held-prop broadcast
 // (trash_collect_sync::EnsureHeldItemBroadcast) calls this to REFUSE to re-announce
 // such a ghost when the player grabs it in the pre-sweep window: a PropSpawn would

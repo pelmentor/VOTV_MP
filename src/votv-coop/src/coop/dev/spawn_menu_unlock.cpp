@@ -53,8 +53,11 @@ DWORD WINAPI KeyWatcherThread(LPVOID) {
             if (rawQ && !prevRawQ) {  // one event per physical Q press
                 const bool focused = ::coop::ini_config::IsOurWindowForeground();
                 if (focused) {
-                    UE_LOGI("spawn_menu_unlock: Q pressed (foreground) -- posting Open() to the game thread");
-                    GT::Post([] { ue_wrap::spawn_menu::Open(); });
+                    UE_LOGI("spawn_menu_unlock: Q pressed (foreground) -- posting Toggle() to the game thread");
+                    // Toggle, not Open: Q both opens AND dismisses the menu. Open() leaves the player
+                    // in GameAndUI/cursor mode; with only an open path the player gets stranded and can
+                    // no longer interact with the world (the 2026-06-16 "all peers can't interact" bug).
+                    GT::Post([] { ue_wrap::spawn_menu::Toggle(); });
                 } else {
                     // The most common "nothing happens" cause: our window isn't foreground (the
                     // ImGui menu / another window has focus), so the press is intentionally ignored.

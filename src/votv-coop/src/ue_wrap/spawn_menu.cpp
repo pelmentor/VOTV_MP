@@ -151,4 +151,77 @@ bool Open() {
     return true;
 }
 
+bool Close() {
+    void* localPlayer = coop::players::Registry::Get().Local();
+
+    // (1) THE LOAD-BEARING UN-STICK: restore SetInputMode_GameOnly + hide the cursor. Open() leaves
+    // the player in GameAndUI/cursor mode (spawn_menu.cpp Open() @ SetInputMode_GameAndUIEx + cursor);
+    // without this the world interaction/use trace stays dead. Do it FIRST and unconditionally (even
+    // if the widget lookup below fails), so input can never stay trapped. Mirrors vanilla's close
+    // block (ExecuteUbergraph_mainPlayer @11555). SetInputMode_GameOnly(APlayerController*) -- single
+    // param 'PlayerController' (UMG.hpp).
+    if (localPlayer) {
+        if (void* pc = ue_wrap::engine::GetController(localPlayer)) {
+            static void* sWblCdo     = nullptr;
+            static void* sGameOnlyFn = nullptr;
+            if (!sWblCdo) sWblCdo = R::FindClassDefaultObject(L"WidgetBlueprintLibrary");
+            if (sWblCdo && !sGameOnlyFn)
+                sGameOnlyFn = R::FindFunction(R::ClassOf(sWblCdo), L"SetInputMode_GameOnly");
+            if (sWblCdo && sGameOnlyFn) {
+                ue_wrap::ParamFrame f(sGameOnlyFn);
+                if (f.valid()) {
+                    f.Set<void*>(L"PlayerController", pc);
+                    ue_wrap::Call(sWblCdo, f);
+                }
+            }
+            static int32_t sCursorOff = -2;
+            if (sCursorOff == -2) sCursorOff = R::FindPropertyOffset(R::ClassOf(pc), L"bShowMouseCursor");
+            if (sCursorOff >= 0) *(reinterpret_cast<uint8_t*>(pc) + sCursorOff) = 0;
+        }
+    }
+
+    // (2) Collapse the widget (native UWidget::SetVisibility, the inverse of Open()'s native show).
+    void* widget = FindSpawnMenuWidget();
+    if (widget) {
+        static void* sSetVisFn = nullptr;
+        if (!sSetVisFn) {
+            void* widgetCls = R::FindClass(L"Widget");  // UWidget
+            sSetVisFn = widgetCls ? R::FindFunction(widgetCls, L"SetVisibility") : nullptr;
+        }
+        if (sSetVisFn) {
+            ue_wrap::ParamFrame f(sSetVisFn);
+            if (f.valid()) {
+                f.Set<uint8_t>(L"InVisibility", 1);  // ESlateVisibility::Collapsed
+                ue_wrap::Call(widget, f);
+            }
+        } else if (g_visOff >= 0) {
+            *(reinterpret_cast<uint8_t*>(widget) + g_visOff) = 1;  // fallback: raw byte
+        }
+        // (3) Symmetric content teardown if the widget exposes one (resolve once; absence is fine).
+        static void* sClosedFn      = nullptr;
+        static bool  sClosedResolved = false;
+        if (!sClosedResolved) {
+            sClosedResolved = true;
+            sClosedFn = g_spawnMenuCls ? R::FindFunction(g_spawnMenuCls, L"closed") : nullptr;
+        }
+        if (sClosedFn) {
+            ue_wrap::ParamFrame f(sClosedFn);
+            if (f.valid()) ue_wrap::Call(widget, f);
+        }
+    }
+
+    UE_LOGI("spawn_menu::Close: restored GameOnly input + hid cursor%s",
+            widget ? " + collapsed widget" : " (no widget)");
+    return true;
+}
+
+bool Toggle() {
+    // Decide from GROUND TRUTH (the live Visibility byte), never a cached open-flag -- so a Q press
+    // does the right thing even if the game closed the menu via its own path. FindSpawnMenuWidget()
+    // also resolves g_spawnMenuCls so ReadVis can resolve its offset.
+    void* widget = FindSpawnMenuWidget();
+    if (widget && ReadVis(widget) == 0) return Close();  // currently Visible -> dismiss
+    return Open();                                        // collapsed / not-yet-created -> open
+}
+
 }  // namespace ue_wrap::spawn_menu
