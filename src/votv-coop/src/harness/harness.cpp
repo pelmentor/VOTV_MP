@@ -319,27 +319,25 @@ void DriveMenuModeJoinWorldBoot() {
         ue_wrap::log::Flush();
         return;
     }
-    // v73 Inc4: when the per-player apply is enabled, WAIT (pumping net) for the host's apply blob
-    // BEFORE loading the world, so the pre-materialize SaveObjectReadyHook has this client's
-    // inventory at load time. The host pushes it at our PRE-WORLD connect edge, so it has almost
-    // always arrived during the save-transfer wait above -- this is the safety barrier. On timeout
-    // we load anyway (the hook then SKIPS, leaving the v56-inherited inventory). No-op when the
-    // apply gate is off (the v56 inheritance stays). Both load branches below wait first.
+    // v73: WAIT (pumping net) for the host's per-player apply blob BEFORE loading the world, so the
+    // pre-materialize SaveObjectReadyHook has this client's inventory at load time. The host pushes it
+    // the moment our GUID arrives (in the Join, right after connect), so it has almost always arrived
+    // during the save-transfer wait above -- this is the safety barrier. If it is already here we skip
+    // the wait. Both load branches below wait first.
     auto waitForApplyBlob = [] {
         namespace PIS = coop::player_inventory_sync;
-        if (!PIS::IsApplyEnabled() || PIS::HasPendingApply()) return;
+        if (PIS::HasPendingApply()) return;
         const ULONGLONG w0 = ::GetTickCount64();
         while (!PIS::HasPendingApply()) {
             if (coop::shutdown::IsShuttingDown() || !g_session.running()) return;
-            // 20 s safety cap. In practice the host pushes the apply blob the moment our GUID arrives
-            // (carried in the Join, right after connect), so it lands in ~1 RTT -- almost always DURING
-            // the save-transfer download above, before this wait even begins (HasPendingApply() is then
+            // 20 s safety cap. In practice the apply blob lands in ~1 RTT -- almost always DURING the
+            // save-transfer download above, before this wait even begins (HasPendingApply() is then
             // already true and we never spin here). The cap only fires for a degenerate case: the host
             // has no inventory for us / a version-mismatched host that never sends. On timeout we load
-            // with the v56-inherited inventory (the apply hook then SKIPS, never wipes).
+            // anyway and the apply hook SKIPS (keeps the loaded inventory, never wipes).
             if (::GetTickCount64() - w0 > 20000) {
                 UE_LOGW("harness: inventory apply blob did not arrive in 20s -- loading with the "
-                        "v56-inherited inventory (the apply hook will skip)");
+                        "loaded inventory (the apply hook will skip)");
                 return;
             }
             PostPumpComposite([] {

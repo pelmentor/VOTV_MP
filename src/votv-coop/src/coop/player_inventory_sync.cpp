@@ -58,22 +58,15 @@ constexpr auto kClientPoll  = std::chrono::seconds(1);
 constexpr auto kWriteRate   = std::chrono::seconds(15);
 constexpr auto kAsmTtl      = std::chrono::seconds(30);
 
-// ---- INCREMENT 4: the live apply on join (host->client + the SaveObjectReadyHook) ----
-// Staged-rollout gate (ini `inventory_apply`, default OFF): when OFF, the host->client send is
-// still exercised but the CLIENT never writes the save object (the v56 whole-host-save inventory
-// inheritance stays in effect). When ON, the per-player inventory is applied on join, RETIRING
-// the v56 inheritance (a transitional gate with a written retirement plan -- see the impl-plan
-// doc + the findings doc; flip to default-ON once the inventory_probe + hands-on confirm
-// items-usable). Read once.
-bool g_applyEnabledInit = false;
-bool g_applyEnabled = false;
-bool ApplyEnabled() {
-    if (!g_applyEnabledInit) {
-        g_applyEnabled = ::coop::ini_config::IsIniKeyTrue("inventory_apply");
-        g_applyEnabledInit = true;
-    }
-    return g_applyEnabled;
-}
+// ---- The live per-player apply on join (host->client push + the SaveObjectReadyHook) ----
+// The host pushes each joiner its persisted inventory (coop_players/<slot>/<guid>.json); the client
+// buffers it (g_pendingApply) and the pre-materialize SaveObjectReadyHook substitutes it into the
+// freshly-loaded save object BEFORE the native loadObjects() builds the live world from it -- so the
+// joiner gets THEIR OWN per-player items, not the host's save inventory. This IS the inventory
+// behaviour now (no rollout flag -- RULE 2: a flag that kept the old v56 host-save inheritance as a
+// parallel path was migration baggage, retired once the apply was verified end-to-end). The only
+// fallback is the SaveObjectReadyHook no-op below, for the degenerate case where the apply blob
+// genuinely never arrived -- it KEEPS the loaded inventory rather than wiping.
 
 // CLIENT: the host's on-join apply blob, reassembled here (separate Assembler from the host's
 // receive path -- host->client is a distinct stream direction). Deserialized into g_pendingApply.
@@ -311,11 +304,9 @@ void HostPersistTick(coop::net::Session* s) {
 // CLIENT: the engine's pre-materialize hook (registered in Install). Fires on the game thread
 // with the freshly loaded/created save object, BEFORE the native loadObjects() builds the world
 // from it -- the one window to substitute this client's per-player inventory. Self-gates: only a
-// CLIENT, only with the apply gate ON, only with a pending blob (the join boot waits for it). On
-// a miss it SKIPS (leaves the loaded inventory) rather than wiping -- never destroys data it
-// can't replace.
+// CLIENT, only with a pending blob (the join boot waits for it). On a miss it SKIPS (leaves the
+// loaded inventory) rather than wiping -- never destroys data it can't replace.
 void OnSaveObjectReady(void* saveSlotObject) {
-    if (!ApplyEnabled()) return;                    // staged-rollout gate (v56 inheritance stays)
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || s->role() != coop::net::Role::Client) return;  // only a joining client applies
     if (!g_hasPendingApply.load(std::memory_order_acquire)) {
@@ -450,8 +441,6 @@ bool SendInventoryToSlot(int peerSlot) {
 }
 
 bool HasPendingApply() { return g_hasPendingApply.load(std::memory_order_acquire); }
-
-bool IsApplyEnabled() { return ApplyEnabled(); }
 
 void OnDisconnectForSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);

@@ -53,11 +53,6 @@ bool SendInventoryToSlot(int peerSlot);
 // on this before loading the world, so the SaveObjectReadyHook always has the data). Game thread.
 bool HasPendingApply();
 
-// True iff the Inc-4 live apply is enabled (ini `inventory_apply`, default OFF -- the staged-
-// rollout gate). The join boot consults this to decide whether to WAIT for the host's apply blob
-// before loading the world (when OFF, the v56 host-save inventory inheritance stays). Any thread.
-bool IsApplyEnabled();
-
 // Per-slot disconnect (host): flush that peer's last inventory blob to disk + drop its
 // in-memory entry. Client: no-op. Game thread.
 void OnDisconnectForSlot(int peerSlot);

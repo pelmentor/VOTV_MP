@@ -78,8 +78,8 @@ void Tick() {
             blob0.size(), blob1.size(), blob2.size(),
             pass ? "Engine write path is structurally sound (no fault, faithful reconstruction). "
                    "Items-usable still needs the multiplayer-join hands-on (materialize path)."
-                 : "MISMATCH/READ-FAIL -- the engine write reconstructs the arrays incorrectly; "
-                   "do NOT enable inventory_apply until this is PASS.");
+                 : "MISMATCH/READ-FAIL -- the engine write reconstructs the arrays incorrectly "
+                   "(it would corrupt a joiner's per-player inventory).");
 }
 
 }  // namespace coop::dev::inventory_probe

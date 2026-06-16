@@ -18,8 +18,8 @@
 // PASS proves the engine-side write is structurally sound (no fault, no corruption, faithful
 // FName/FString/UClass/group reconstruction). It does NOT prove "items are usable after a real
 // load" -- that needs the materialize path (loadObjects) which only runs on a fresh world load;
-// verify it via the multiplayer join hands-on (a client with inventory_apply=1 rejoining and
-// confirming its items are present + usable).
+// verify it via the multiplayer join hands-on (a client rejoining and confirming its items are
+// present + usable).
 //
 // NOT dev_gate-gated (it never sends/mutates cross-peer state); the ini key is the only gate.
 
