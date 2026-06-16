@@ -353,6 +353,18 @@ void Tick() {
     s_done = true;
     UE_LOGI("inventory[selftest]: read local saveSlot -- inventory=%zu equipment=%zu hold=%zu",
             inv.inventory.size(), inv.equipment.size(), inv.hold.size());
+    {   // DIAG: name what the LOCAL player actually has post-spawn (find flashlight/glasses/compass).
+        auto narrow = [](const std::wstring& w) { return std::string(w.begin(), w.end()); };
+        for (size_t i = 0; i < inv.inventory.size(); ++i)
+            UE_LOGI("  selftest inv[%zu]: className='%s' key='%s'", i,
+                    narrow(inv.inventory[i].className).c_str(), narrow(inv.inventory[i].key).c_str());
+        for (size_t i = 0; i < inv.equipment.size(); ++i)
+            UE_LOGI("  selftest eq[%zu]: propName='%s' className='%s'", i,
+                    narrow(inv.equipment[i].propName).c_str(), narrow(inv.equipment[i].data.className).c_str());
+        for (size_t i = 0; i < inv.hold.size(); ++i)
+            UE_LOGI("  selftest hold[%zu]: propName='%s' className='%s'", i,
+                    narrow(inv.hold[i].propName).c_str(), narrow(inv.hold[i].data.className).c_str());
+    }
     const std::vector<uint8_t> blob1 = coop::inventory_wire::Serialize(inv);
     ue_wrap::inventory::PlayerInventory inv2;
     const bool de = coop::inventory_wire::Deserialize(blob1, inv2);
@@ -411,6 +423,48 @@ void OnReliable(const coop::net::BlobChunkPayload& p, uint8_t senderPeerSlot) {
     if (Clock::now() - e.lastWrite >= kWriteRate) FlushSlot(senderPeerSlot);
 }
 
+// The SP New-Game starter items (RE 2026-06-16: a New Game gives the player exactly these three --
+// glasses rides the MAIN inventory, flashlight + compass ride the worn-equipment slot array; the
+// game's `beginEquipment` logic adds them at New Game and the host save retains them across play).
+int StarterIndex(const std::wstring& className) {
+    if (className == L"prop_equipment_flashlight_C") return 0;
+    if (className == L"prop_equipment_glasses_C")    return 1;
+    if (className == L"prop_equipment_compass_C")    return 2;
+    return -1;
+}
+
+// Build the first-join STARTER KIT (flashlight + glasses + compass) by reading the host's OWN live
+// inventory and keeping only those three (one per class) -- valid, complete save records with no
+// hardcoded struct layout and no inheriting the host's other items. The 8-slot worn-equipment array
+// shape is preserved (non-starter / duplicate slots cleared) so the kit keeps the New-Game layout.
+// Returns false if no starter item is present (host dropped them / saveSlot unresolvable) -> caller
+// sends EMPTY. Game thread (ReadAll).
+// NOTE: the copied records carry the host's item KEYS -- benign while the items are held/worn
+// inventory DATA (not world actors); only a simultaneous DROP of the same starter item by multiple
+// peers would collide on the world-prop key. Follow-up (regenerate keys) only if that's observed.
+bool BuildFirstJoinStarterKit(ue_wrap::inventory::PlayerInventory& out) {
+    ue_wrap::inventory::PlayerInventory host;
+    if (!ue_wrap::inventory::ReadAll(host)) return false;
+    bool got[3] = {false, false, false};
+    for (const auto& r : host.inventory) {
+        const int k = StarterIndex(r.className);
+        if (k >= 0 && !got[k]) { got[k] = true; out.inventory.push_back(r); }
+    }
+    out.equipment = host.equipment;  // keep the worn-slot array shape
+    for (auto& e : out.equipment) {
+        const int k = StarterIndex(e.data.className);
+        if (k < 0 || got[k]) e = ue_wrap::inventory::EquipRecord{};  // clear non-starter / dup slot
+        else got[k] = true;
+    }
+    out.hold = host.hold;
+    for (auto& e : out.hold) {
+        const int k = StarterIndex(e.data.className);
+        if (k < 0 || got[k]) e = ue_wrap::inventory::EquipRecord{};
+        else got[k] = true;
+    }
+    return got[0] || got[1] || got[2];
+}
+
 bool SendInventoryToSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || s->role() != coop::net::Role::Host) return false;  // host pushes; clients receive
@@ -423,11 +477,22 @@ bool SendInventoryToSlot(int peerSlot) {
     }
     std::vector<uint8_t> blob;
     if (!ReadBlobFile(guid, blob)) {
-        // No file / corrupt + no .bak -> send an EMPTY inventory (fail-safe; the client starts
-        // empty, NEVER inheriting the host's or another player's items).
-        blob = coop::inventory_wire::Serialize(ue_wrap::inventory::PlayerInventory{});
-        UE_LOGI("player_inventory: slot %d guid=%s -- no valid saved inventory; sending EMPTY",
-                peerSlot, guid.c_str());
+        // First join (no persisted file / corrupt + no .bak): seed the SP starter kit (flashlight +
+        // glasses + compass) so the player isn't dropped into the host's world empty-handed (it is
+        // confirmed empty otherwise -- a loaded coop save runs no begin-equipment). Read off the
+        // host's own live inventory, filtered to the 3 starter classes. On failure / kit absent,
+        // degrade to EMPTY (fail-safe -- never inherit the host's other or another player's items).
+        ue_wrap::inventory::PlayerInventory kit;
+        if (BuildFirstJoinStarterKit(kit)) {
+            blob = coop::inventory_wire::Serialize(kit);
+            UE_LOGI("player_inventory: slot %d guid=%s -- first join, seeding SP starter kit "
+                    "(inventory=%zu equip-slots=%zu)", peerSlot, guid.c_str(),
+                    kit.inventory.size(), kit.equipment.size());
+        } else {
+            blob = coop::inventory_wire::Serialize(ue_wrap::inventory::PlayerInventory{});
+            UE_LOGI("player_inventory: slot %d guid=%s -- first join, starter kit unavailable; sending EMPTY",
+                    peerSlot, guid.c_str());
+        }
     }
     if (coop::blob_chunks::SendBlobToSlot(s, peerSlot, coop::net::ReliableKind::PlayerInventoryBlob,
                                           ++g_hostSendSeq[peerSlot], blob)) {
