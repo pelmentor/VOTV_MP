@@ -694,7 +694,14 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 78;  // v78: kerfur stable-id redesign -- KerfurConvert=74 host->all
+inline constexpr uint16_t kProtocolVersion = 79;  // v79: EventCue=75 -- HOST-AUTH cosmetic emitter-cue mirror
+                                                  // (B1, the "sync all events" arc). The host polls for new
+                                                  // cosmetic ParticleSystemComponents (eff_shootingStar_rain etc.,
+                                                  // spawned via EX_CallMath = PE-invisible) + broadcasts {cueId,pos};
+                                                  // clients replay the emitter (reflected SpawnEmitterAtLocation).
+                                                  // Fixes the Meteor Shower / Shooting Star ("starfall") not
+                                                  // appearing on peers. See coop/event_cue_sync.h.
+                                                  // v78: kerfur stable-id redesign -- KerfurConvert=74 host->all
                                                   // form-transition broadcast (the SOLE conversion signal). K-5
                                                   // gates the client mint + streams the held kerfur prop mirror's
                                                   // host-range eid (no new packet -- slot 75/kFlagKerfur scaffolding
@@ -1612,11 +1619,17 @@ enum class ReliableKind : uint8_t {
                        //     sentient/kill refusal). Every client destroys its old-form mirror + adopts its
                        //     own claimed local conversion ghost to the authoritative newEid (initiator) or
                        //     materializes a fresh mirror (others). Payload: KerfurConvertBroadcastPayload.
-    // Slot 75 (KerfurHoldRequest) was reserved in K-4a then REMOVED in K-5 (RULE 2): it was never
-    // sent. The held-kerfur carry needs NO new packet -- the client streams the kerfur prop MIRROR's
-    // host-range eid in its ordinary PropPose; the host's remote_prop receiver resolves the
-    // authoritative kerfur prop by that eid + kinematic-drives it, and the existing host->client
-    // unreliable relay fans it to other peers. (redesign K-5: gate the client mint + stream the eid.)
+    EventCue = 75,     // 2026-06-17 (v79): HOST-AUTH cosmetic emitter-cue mirror (B1, the "sync all events"
+                       //     arc). The host polls for a NEW cosmetic ParticleSystemComponent whose Template is
+                       //     a registered cue (eff_shootingStar_rain @ (0,0,6000) = the Meteor Shower / Shooting
+                       //     Star "starfall"; spawned via EX_CallMath SpawnEmitterAtLocation = PE-invisible, no
+                       //     mirrorable actor) + broadcasts {cueId, pos}; every client replays the emitter via a
+                       //     reflected SpawnEmitterAtLocation. HOST-AUTHORITATIVE (clients run a dormant
+                       //     scheduler -- time_sync pins their TimeScale=0 -- so they never fire events
+                       //     themselves): NOT relayable, NO suppression. Payload: EventCuePayload. Cue
+                       //     registry: coop/event_cue_sync.cpp. (Slot 75 was briefly KerfurHoldRequest
+                       //     scaffolding in K-4a, removed in K-5 BEFORE it ever shipped on the wire -- never
+                       //     sent, so the id is genuinely free; reused here with the v79 version bump.)
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -2961,6 +2974,22 @@ struct FireflySpawnPayload {
     float z;
 };
 static_assert(sizeof(FireflySpawnPayload) == 12, "FireflySpawnPayload must be 12 bytes");
+
+// EventCuePayload -- one HOST-AUTHORITATIVE cosmetic emitter cue (EventCue=75, v79; B1). The
+// host detects a new cosmetic ParticleSystemComponent whose Template is a registered cue
+// (cueId == index into coop/event_cue_sync's static cue registry; starRain=0) and broadcasts
+// the spawn position; every client replays that emitter there via reflected
+// SpawnEmitterAtLocation. World-space position only (the firefly shape): for a fixed-location
+// cue like starRain the host sends the BP-hardcoded (0,0,6000); for a positioned cue it sends
+// the captured component location. Host->client only (clients never fire events), so no relay,
+// no echo. cueId is on the wire and APPEND-ONLY (never renumber the registry).
+struct EventCuePayload {
+    uint32_t cueId;  // index into event_cue_sync's cue registry (append-only)
+    float x;         // world spawn location of the cue emitter
+    float y;
+    float z;
+};
+static_assert(sizeof(EventCuePayload) == 16, "EventCuePayload must be 16 bytes");
 
 // InventoryPickupPayload -- one inventory-collect blip (InventoryPickup=47, v58). The
 // collector broadcasts its own world position at the moment the native inventory_Cue

@@ -108,6 +108,28 @@ FVector GetComponentRelativeLocation(void* component) {
         reinterpret_cast<uint8_t*>(component) + P::off::USceneComponent_RelativeLocation);
 }
 
+void* GetParticleSystemTemplate(void* particleSystemComponent) {
+    if (!particleSystemComponent) return nullptr;
+    // UParticleSystemComponent::Template is a UObjectProperty (UParticleSystem*). Resolve its
+    // offset ONCE via reflection (FindPropertyOffset walks the FProperty chain) -- same idiom as
+    // SetMovementVelocity below. The raw pointer read is safe (the component is game-thread-owned;
+    // the caller polls on the game thread).
+    static int32_t sTemplateOffset = -1;
+    if (sTemplateOffset < 0) {
+        void* pscClass = R::FindClass(L"ParticleSystemComponent");
+        if (!pscClass) return nullptr;  // class not loaded yet -- caller retries next poll
+        sTemplateOffset = R::FindPropertyOffset(pscClass, L"Template");
+        if (sTemplateOffset < 0) {
+            UE_LOGE("engine: GetParticleSystemTemplate -- 'Template' property not found on "
+                    "UParticleSystemComponent (CXX dump stale?)");
+            return nullptr;
+        }
+        UE_LOGI("engine: UParticleSystemComponent::Template offset = 0x%X", sTemplateOffset);
+    }
+    return *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(particleSystemComponent) + sTemplateOffset);
+}
+
 bool SetComponentVisible(void* component, bool visible, bool propagate) {
     if (!component || !ResolveCompVis()) {
         UE_LOGE("engine: SetComponentVisible unresolved (cls=%p setVis=%p setHidden=%p)",

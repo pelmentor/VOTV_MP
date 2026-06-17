@@ -9,6 +9,7 @@
 #include "coop/element/registry.h"
 
 #include "coop/chat_sync.h"
+#include "coop/event_cue_sync.h"
 #include "coop/firefly_sync.h"
 #include "coop/inventory_pickup_sync.h"
 #include "coop/sky_sync.h"
@@ -80,6 +81,22 @@ void HandleWorldEvent(net::Session& session,
         net::FireflySpawnPayload fp{};
         std::memcpy(&fp, msg.payload, sizeof(fp));
         coop::firefly_sync::OnReliable(fp);
+        break;
+    }
+    case net::ReliableKind::EventCue: {
+        // v79 (B1): HOST-AUTHORITATIVE cosmetic emitter cue. Only the host originates one (it is
+        // the sole event producer -- clients run a dormant scheduler), so this only ever runs on
+        // a client and always replays ANOTHER (the host's) cue emitter. No trust gate needed --
+        // a cosmetic transient particle; the wire-level senderEpoch + the host-only-send topology
+        // already bound it. (event_feed trust-gates the eid-carrying state kinds, not this.)
+        if (msg.payloadLen < sizeof(net::EventCuePayload)) {
+            UE_LOGW("event_feed: EventCue payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::EventCuePayload));
+            break;
+        }
+        net::EventCuePayload ep{};
+        std::memcpy(&ep, msg.payload, sizeof(ep));
+        coop::event_cue_sync::OnReliable(ep);
         break;
     }
     case net::ReliableKind::InventoryPickup: {

@@ -39,6 +39,7 @@
 #include "coop/atv_sync.h"
 #include "coop/drone_sync.h"
 #include "coop/order_sync.h"
+#include "coop/event_cue_sync.h"
 #include "coop/firefly_sync.h"
 #include "coop/inventory_pickup_sync.h"
 #include "coop/chat_sync.h"
@@ -91,6 +92,7 @@ void Install(coop::net::Session& session) {
     coop::drone_sync::Install(&session);     // v48 delivery drone body pose (host-authoritative singleton)
     coop::order_sync::Install(&session);     // v49 delivery-drone economy: client->host shop-order forward
     coop::firefly_sync::Install(&session);   // v51 peer-symmetric ambient firefly mirror (each peer captures+shares its own)
+    coop::event_cue_sync::Install(&session); // v79 HOST-AUTH cosmetic emitter-cue mirror (B1: starfall etc. -- host detects PSC, client replays)
     coop::inventory_pickup_sync::Install(&session);  // v58 inventory-collect blip (PlaySound2D observer)
     coop::chat_sync::Install(&session);      // v60 T-chat (the ui/chat_input send path)
     coop::turbine_sync::Install(&session);   // v61 wind-turbine facing/spin mirror (host-auth ~1 Hz)
@@ -265,6 +267,7 @@ DisconnectStats DisconnectAll() {
     coop::drone_sync::OnDisconnect();
     coop::order_sync::OnDisconnect();
     coop::firefly_sync::OnDisconnect();
+    coop::event_cue_sync::OnDisconnect();    // v79 clear the cosmetic-cue poll snapshot
     coop::inventory_pickup_sync::OnDisconnect();
     coop::chat_sync::OnDisconnect();
     coop::turbine_sync::OnDisconnect();
@@ -304,6 +307,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::Interactable};  coop::atv_sync::Tick(); }            // v47 ATV: occupant streams its pose / mirror drives the interp (host+client)
     { PP::Scope _s{PP::Bucket::Interactable};  coop::drone_sync::Tick(); }          // v48 delivery drone: host streams transform / client suppresses tick + mirrors
     { PP::Scope _s{PP::Bucket::Interactable};  coop::turbine_sync::Tick(); }        // v61 wind turbines: host ~1 Hz driver-float poll / client deferred-apply retry
+    { PP::Scope _s{PP::Bucket::Interactable};  coop::event_cue_sync::Tick(); }      // v79 cosmetic event cues (B1): host ~1 Hz new-PSC poll -> EventCue broadcast (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable};  coop::device_occupancy::Tick(); }    // v63 device occupancy: activeInterface edge poll + pending claim retry
     { PP::Scope _s{PP::Bucket::Interactable};  coop::console_state_sync::Tick(); }  // v64 signal-catcher: host sky poll / client mirror sweep / desk + dish owner streams
     { PP::Scope _s{PP::Bucket::Interactable};  coop::signal_catch_sync::Tick(); }   // v70: catch/cleared detectors (1 Hz) + the joiner's pending download adopt

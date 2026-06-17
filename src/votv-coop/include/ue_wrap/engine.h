@@ -402,6 +402,13 @@ FVector GetComponentForwardVector(void* component);
 // (0,0,0) RelLoc on a non-root component is unusual and worth logging.
 FVector GetComponentRelativeLocation(void* component);
 
+// Read a UParticleSystemComponent's `Template` (the UParticleSystem* it renders) via a
+// reflection-resolved property offset (raw pointer read, cached). Used by event_cue_sync to
+// identify which cosmetic cue a live PSC belongs to (the EX_CallMath SpawnEmitterAtLocation that
+// created it is invisible to our ProcessEvent detour, so we match the resulting component's
+// template instead). nullptr on null input / unresolved offset / a non-PSC component.
+void* GetParticleSystemTemplate(void* particleSystemComponent);
+
 // Build a SCREEN-SPACE HUD widget (a UUserWidget with a single multi-line UTextBlock
 // root) and add it to the viewport. Unlike the world-space nameplate, this renders on
 // the player's screen via UUserWidget::AddToViewport -- it does NOT need the stock HUD

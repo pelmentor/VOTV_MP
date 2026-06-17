@@ -452,6 +452,7 @@ void Update(net::Session& session, void* localPlayer) {
 
         // ---- ambient / world events (event_dispatch_world.cpp) ----
         case net::ReliableKind::FireflySpawn:
+        case net::ReliableKind::EventCue:        // v79 host-auth cosmetic emitter cue (starfall etc.)
         case net::ReliableKind::InventoryPickup:
         case net::ReliableKind::ChatMessage:
         case net::ReliableKind::TimeSync:

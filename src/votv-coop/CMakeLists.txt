@@ -229,6 +229,7 @@ add_library(votv-coop SHARED
     src/coop/drone_sync.cpp
     src/coop/order_sync.cpp
     src/coop/firefly_sync.cpp
+    src/coop/event_cue_sync.cpp
     src/coop/window_sync.cpp
     src/coop/grime_sync.cpp
     src/coop/player_handshake.cpp
