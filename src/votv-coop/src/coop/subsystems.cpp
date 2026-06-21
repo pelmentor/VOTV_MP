@@ -243,6 +243,7 @@ void DisconnectSlot(coop::net::Session& session, int slot) {
     // state get a call here. prop_lifecycle / npc_sync / weather_sync
     // hold GLOBAL state that DisconnectAll handles correctly on full
     // disconnect.
+    coop::trash_proxy::OnDisconnectForSlot(slot);   // phase 1: retire the leaver's trash proxies BEFORE the generic mirror drain (else the rooted AStaticMeshActor leaks -- CRITICAL-1)
     coop::remote_prop::OnDisconnectForSlot(slot);
     coop::item_activate::OnDisconnectForSlot(slot);
     coop::device_occupancy::OnDisconnectForSlot(slot);  // v63: release a leaver's device claims

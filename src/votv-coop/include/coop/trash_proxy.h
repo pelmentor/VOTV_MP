@@ -58,7 +58,7 @@ bool IsClumpClass(const std::wstring& className);
 // instead of leaking a second actor. Returns the actor (the caller
 // RegisterPropMirror's it for the pose drive + OnConvert resolve), or nullptr on
 // failure. Game thread.
-void* SpawnProxy(coop::element::ElementId eid, uint8_t chipType, bool isClump,
+void* SpawnProxy(coop::element::ElementId eid, uint8_t chipType, bool isClump, int ownerSlot,
                  const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot);
 
 // Re-skin proxy `eid` in place (pile<->clump) -- the dup-killing convert path:
@@ -76,6 +76,13 @@ void RetireProxy(coop::element::ElementId eid);
 // Is `eid` a tracked trash proxy? Lets the wire receiver branch to ReskinProxy /
 // RetireProxy instead of the BP spawn-fresh path. Game thread.
 bool IsProxy(coop::element::ElementId eid);
+
+// Retire every proxy owned by `slot` (a PER-SLOT disconnect -- a single peer
+// dropping while the session stays up). MUST be called before the generic
+// per-slot mirror drain (remote_prop::OnDisconnectForSlot -> DrainMirrorsForSlot),
+// which would otherwise drain a proxy's Prop Element WITHOUT un-rooting its
+// AStaticMeshActor = a rooted leak (CRITICAL-1). Game thread.
+void OnDisconnectForSlot(int slot);
 
 // Retire EVERY proxy (net disconnect): the structural no-leak backstop so a rooted
 // proxy never survives the session. Game thread.
