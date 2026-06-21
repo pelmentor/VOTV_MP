@@ -362,20 +362,35 @@ Scope: trash only; `Aprop_C` + kerfur mirrors unchanged.
   - `subsystems.cpp` `DisconnectSlot` — `OnDisconnectForSlot(slot)` before the generic per-slot mirror drain;
     `DisconnectAll` — `OnDisconnect()` before `ForceRelease`.
 
-### Audit `a249b005` (post-ship): CRITICAL fixed; HIGH-1/HIGH-2/MEDIUM-1 + the lerp PENDING
+### Audit `a249b005` (post-ship): CRITICAL fixed; then ALL the pre-smoke fixes + the lerp BUILT
 
 - **CRITICAL-1 — FIXED (`1011e512`):** a PER-SLOT disconnect drained a proxy's Prop Element WITHOUT
   `RetireProxy` → the rooted `AStaticMeshActor` leaked. Fixed via `OnDisconnectForSlot(slot)` (retire by
   `ownerSlot`, stamped from `senderSlot` at spawn) running BEFORE the generic drain. (The design's Q2 claimed
   this "structurally impossible" — it was the gap.) MEDIUM-2 (cache the component) + MEDIUM-3 (fold the class
   cache) also FIXED.
-- **STILL PENDING before the phase-1 smoke (NOT built):** **HIGH-1** (a `ToClump` that beats its spawn renders
-  as a pile — must spawn in the `wantClump` form); **HIGH-2** (the clump's per-chipType MATERIAL swap —
-  `setTex` = `SetMaterial(0, pileMesh.GetMaterial(0))`; phase 1 sets only the mesh, so clumps render with the
-  default dirtball material — needs `engine::SetComponentMaterial` + a `GetStaticMeshMaterial` reader, see the
-  `SkinProxy` TODO `trash_proxy.cpp:81-84`); **MEDIUM-1** (`FindObject`, not `StaticLoadObject`, + no
-  `/Engine/BasicShapes/Cube.Cube` fallback → a cold asset could leave a proxy invisible); and the **R4
-  km-walk lerp** + the **explicit reliable carry-end release** (replacing the 500 ms timeout).
+- **HIGH-1/HIGH-2/MEDIUM-1 — ALL BUILT (`3d371349`):** HIGH-1 = `OnConvert` spawns the proxy in the
+  unambiguous `wantClump` form on a convert-before-spawn AND `SpawnProxy` convergence no longer re-skins (the
+  form is owned by the ctx-ordered convert channel, so a stale trailing spawn can't flip a clump back to a
+  pile). HIGH-2 = bytecode-VERIFIED `setTex` (`prop_garbageClump.json` export 64 = `StaticMesh.SetMaterial(0,
+  getChipPileType(chipType).GetMaterial(0))` on the fixed dirtball — a MATERIAL swap); new
+  `engine::SetComponentMaterial` + `GetStaticMeshMaterial` (SDK-exact); `SkinProxy` clump = dirtball + the
+  material, pile = mesh + `SetMaterial(0,null)`. MEDIUM-1 = Cube last-ditch fallback (`StaticLoadObject` deemed
+  unwarranted — a loaded trash class pins its meshes resident).
+- **R4 km-walk lerp + reliable carry-end release — ALL BUILT (`095dbf44` + HOT-1 `8a17faeb`):** MTA-style
+  interpolation scoped to the proxy (`BeginLerpToPose`/`AdvanceLerp`, advanced every tick; non-proxy keeps
+  teleport); the 500 ms timeout-release gated to `!isProxy` so a host-authoritative proxy FREEZES on a network
+  gap and releases only on the explicit reliable edge (throw / ToPile convert / disconnect); proxy throw =
+  freeze + the ToPile convert repositions to the landed pile; the destroy-only-via-`RetireProxy` invariant
+  hardened (ForceRelease + OnDisconnectForSlot proxy-aware). HOT-1 dirty-gate skips sub-epsilon writes.
+- **Hot-path audit `aa8e7d9a` — GO (no CRITICAL/HIGH); HOT-1 folded.**
+- **SMOKE — FUNCTIONALLY GREEN by matching real log (SHA `f2344bab`, 2026-06-21):** an autonomous LAN
+  chippile run had the host drive a real grab + re-pile on a tracked pile (eid=6264); the client mirrored it
+  via the proxy. Client log: **875 `trash_proxy: SPAWN`**, **the dup GONE (`0` `mirror NOT-FOUND`)**, the
+  eid=6264 grab→carry→throw→re-pile cycle end-to-end with `proxy SPAWNED PILE (convert beat its spawn)
+  [SYNC-MIRROR OK -- no dup]` (HIGH-1 live), `0` proxy/drive errors, no crash/OOM, 300 s stable. The lan-test
+  exit-1 was a harness puppet-counter bug (host-centric slot-1 check), fixed `f1177589`. The km-walk FEEL +
+  the visual dup-gone remain the user's hands-on (`research/handson_runbook_2026-06-21_proxy_phase1.md`).
 
 Full design + RCA: **`research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`** (§2 the
 proxy design, §6 the four mesh/collision requirements, §7 the phase split + C1/C2/C3 + Q1/Q2 + the

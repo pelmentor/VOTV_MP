@@ -316,13 +316,15 @@ does NOT read+send a live mesh name. The phase-1 ue_wrap foundation is therefore
 
 ---
 
-## AS-BUILT — phase 1 of the proxy (2026-06-21, HEAD `1011e512`) — BUILT CLEAN, NOT SMOKED
+## AS-BUILT — phase 1 of the proxy (2026-06-21, code HEAD `8a17faeb`, build `f2344bab`) — SMOKED FUNCTIONALLY GREEN
 
-> **AS-BUILT ≠ VERIFIED.** Phase 1 of the host-authoritative `AStaticMeshActor` trash proxy (§2/§7) is
-> implemented and **builds clean (Release, `votv-coop.dll` links)**, but the dup fix + the pose-follow are
-> **NOT smoke-verified hands-on**. The deployed DLL is still `BA79E705` (the prior A+B thunk build) — phase 1
-> is **NOT deployed** (the user is mid-A+B hands-on, so the deploy slots are in use). §2/§6/§7 above stay the
-> design of record; this section records what shipped + what is still pending before the smoke.
+> **Phase 1 of the host-authoritative `AStaticMeshActor` trash proxy (§2/§7) is BUILT, audit-GO, and
+> autonomously SMOKE-verified by matching real log** (the SMOKE bullet below): the dup is gone (0
+> `mirror NOT-FOUND`), 875 proxies, the grab→carry→throw→re-pile cycle mirrored cross-peer, no crash/leak,
+> 300 s stable. **Still NOT hands-on verified** — the km-walk FEEL + the visual dup-gone are the user's
+> hands-on (runbook take-23). §2/§6/§7 above stay the design of record; this section records what shipped.
+> Commits: `06685a9c` (core) + `1011e512` (leak hotfix) + `3d371349` (HIGH-1/2 + MEDIUM-1) + `095dbf44`
+> (lerp/freeze/teardown) + `8a17faeb` (HOT-1 dirty-gate); harness `4a1f42a6` + `f1177589`.
 
 ### What shipped (commits `06685a9c` core + `1011e512` hotfix)
 
@@ -358,17 +360,53 @@ does NOT read+send a live mesh name. The phase-1 ue_wrap foundation is therefore
   `ReskinProxy` no longer walks ~237k GUObjectArray entries per convert.
 - **MEDIUM-3 — FIXED:** fold `IsTrashProxyClass` + `IsClumpClass` into one cached `ClassKind` lookup (one
   `FindClass` per distinct class, not two).
-- **STILL PENDING before smoke (NOT built):**
-  - **HIGH-1** — a `ToClump` convert that beats its own `OnSpawn` renders as a PILE (the fallthrough spawn
-    path doesn't honor `wantClump`); the proxy must spawn in the requested form.
-  - **HIGH-2** — the clump's per-chipType look is a MATERIAL swap on the fixed dirtball mesh
-    (`prop_garbageClump_C::setTex` = `SetMaterial(0, pileMesh.GetMaterial(0))`); phase 1 sets only the mesh →
-    clumps currently render with the default dirtball material. Needs `engine::SetComponentMaterial` +
-    a `GetStaticMeshMaterial` reader (see the `SkinProxy` TODO at `trash_proxy.cpp:81-84`).
-  - **MEDIUM-1** — `ResolveClumpMesh`/`ResolvePileMesh` use `FindObject`, not `StaticLoadObject` (§R1), and
-    have no `/Engine/BasicShapes/Cube.Cube` fallback → a cold/not-streamed asset could leave a proxy invisible.
-  - The **R4 km-walk lerp** + the **explicit reliable carry-end release** (replacing the 500 ms timeout,
-    Section 3) — the next commit; phase-1 pose-follow is still teleport via the existing mirror drive.
+- **The pre-smoke fixes — ALL BUILT (`3d371349`):**
+  - **HIGH-1 — FIXED.** Two root fixes: (a) `OnConvert` now spawns the proxy directly in the unambiguous
+    `wantClump` form when a trash convert beats its `OnSpawn` (no proxy for E yet), instead of routing through
+    `OnSpawn` whose form is class-derived; (b) `SpawnProxy`'s re-spawn convergence branch **no longer re-skins**
+    — the form (pile↔clump) is owned exclusively by the ctx-ordered convert channel, so a trailing/stale
+    `PropSpawn(chipPile, E)` can never flip a correctly-converted CLUMP back to a PILE. `ClassNameToWString`
+    promoted to `remote_prop_spawn` public API (de-duplicated, RULE 2).
+  - **HIGH-2 — FIXED + bytecode-VERIFIED.** Pulled the actual `prop_garbageClump_C::setTex` kismet
+    (`docs/piles/re-artifacts/bp_reflection/prop_garbageClump.json` export 64): it is
+    `this.StaticMesh.SetMaterial(0, getChipPileType(chipType).GetMaterial(0))` on the FIXED dirtball mesh —
+    a **MATERIAL swap, NOT a mesh swap** (the prop.cpp comment claiming "picks the clump mesh" was wrong; corrected).
+    New `engine::SetComponentMaterial` (PrimitiveComponent::SetMaterial, null reverts to default) +
+    `engine::GetStaticMeshMaterial` (UStaticMesh::GetMaterial, param `MaterialIndex` — SDK-verified
+    `Engine.hpp:19127`). `SkinProxy` clump = dirtball + `SetMaterial(0, pileMesh.GetMaterial(0))`; pile = pile
+    mesh + `SetMaterial(0, null)` (clear any stale clump override on the shared component).
+  - **MEDIUM-1 — FIXED.** Cube last-ditch fallback (dirtball → pile mesh → `/Engine/BasicShapes/Cube`). A full
+    native `StaticLoadObject` was deemed unwarranted (a loaded trash class pins its meshes resident +
+    `ResolvePileMesh` last-good-caches, so the chain never bottoms out in practice) — documented, not a crutch.
+- **The R4 km-walk robustness — ALL BUILT (`095dbf44` + audit HOT-1 `8a17faeb`):**
+  - **MTA-style interpolation (proxy-scoped):** `ActiveDrive` lerps position + rotation from the current
+    rendered transform to each new pose over the measured interval, advanced EVERY tick (`BeginLerpToPose` +
+    `AdvanceLerp`); first pose / far jump (>5 m) / non-proxy snap; shortest-arc angle lerp. A non-proxy Aprop_C
+    held item keeps byte-identical teleport behavior (interpolation must not regress proven sync).
+  - **Freeze-not-timeout:** the 500 ms stream-stop physics-release is gated to `!isProxy` — a host-authoritative
+    proxy FREEZES on a network gap (the km-walk fix) and releases ONLY on an explicit reliable edge
+    (`OnRelease` throw / `OnConvert` ToPile / disconnect). Proxy throw = freeze (no local physics) + the ToPile
+    convert repositions to the landed pile. Invariant hardened: a proxy is destroyed ONLY via `RetireProxy`
+    (ForceRelease + OnDisconnectForSlot are proxy-aware — never `ConsumeLocalActor` = no rooted-slot leak).
+  - **HOT-1 dirty-gate (`8a17faeb`):** `AdvanceLerp` skips the SetActorLocation/Rotation write when the per-tick
+    interp step is sub-epsilon (0.25 cm / 0.1°) — a held-but-still clump costs ZERO engine writes; active
+    motion writes every tick (mirrors + exceeds `atv_sync::ApplyMirror`).
+- **Hot-path audit `aa8e7d9a` (post-build) — GO, no CRITICAL/HIGH.** Independently traced the
+  destroy-only-via-RetireProxy invariant (holds by construction — the sweep + reaper both `if (pr.mirror)
+  continue`), the re-entrancy (fixed-size `g_drives` array — safe), the lerp math, the non-proxy exemption,
+  and all four new UFunction signatures (SDK-exact). Only finding = HOT-1 (MEDIUM, folded above). Endorsed the
+  post-smoke extraction of the drive subsystem → `remote_prop_drive.{cpp,h}` (`remote_prop.cpp` is 1325 LOC).
+- **SMOKE — FUNCTIONALLY GREEN by matching real log (autonomous LAN chippile, SHA `f2344bab`, 2026-06-21).**
+  Host drove a real grab on a tracked pile (eid=6264) + Phase B re-pile; the client mirrored it. Verified
+  in the client log: **875 `trash_proxy: SPAWN`** (AStaticMeshActor, rooted, NoCollision — the BP mirror is
+  gone); **the dup is GONE — `0` `mirror NOT-FOUND` / `spawn fresh`**; the eid=6264 cross-peer cycle worked
+  end-to-end (host `GRAB ADOPT → broadcast convert → CARRY → THROW → RE-PILE(thunk) → LAND`; client `HOLD
+  carry pose (ctx-gate)` → `trash_proxy: SPAWN` → **`recv convert LAND → proxy SPAWNED PILE (convert beat its
+  spawn) [SYNC-MIRROR OK -- no dup]`** = HIGH-1 firing live); **`0` proxy/drive errors**, no crash/SEH/OOM,
+  session stable 300 s. The autotest's lan-test exit-1 was a HARNESS PASS-criteria bug (the net-stats
+  `puppet=` counter is host-centric — `net_pump::Puppet(1)` slot 1, but a client's host-puppet is at slot 0),
+  fixed in `f1177589`; the puppet demonstrably spawned (`RemotePlayer::Spawn` + `pose-diag` tracking). What
+  the smoke CANNOT prove (still the user's hands-on, runbook take-23): the km-walk FEEL + the visual dup-gone.
 
 ### Scope held
 
