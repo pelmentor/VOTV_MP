@@ -24,6 +24,7 @@
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
 #include "coop/remote_prop.h"
+#include "coop/trash_proxy.h"   // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -337,6 +338,28 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
         // dedup spam loop on the receiver.
         UE_LOGW("remote_prop::OnSpawn: unkeyed + no eid (cls='%ls' key='%ls') -- dropping",
                 classW.c_str(), keyW.c_str());
+        return;
+    }
+    // PROXY PATH (phase 1): trash (chipPile/clump + variants) is mirrored by a host-authoritative
+    // AStaticMeshActor WE own (coop/trash_proxy) -- NO blueprint (no self-morph / GC / stale-index ->
+    // no dup) -- instead of the real BP. Branch BEFORE the BP dedup / converge / physics machinery:
+    // SpawnProxy is idempotent (re-skins an existing proxy for the same eid, so a re-spawn convergence
+    // never doubles). Re-skin (pile<->clump) is OnConvert::ReskinProxy; teardown is OnDestroy::RetireProxy.
+    // Trash is eid-only (the EID is the identity, Key=None). skipBind respected: OnConvert's
+    // convert-before-spawn fallthrough passes skipBind=true and binds E itself.
+    if (coop::trash_proxy::IsTrashProxyClass(classW)) {
+        const bool isClump = coop::trash_proxy::IsClumpClass(classW);
+        ue_wrap::FVector  loc{payload.locX, payload.locY, payload.locZ};
+        ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};
+        void* proxy = coop::trash_proxy::SpawnProxy(payload.elementId, payload.chipType, isClump, loc, rot);
+        if (proxy) {
+            if (!skipBind)
+                coop::remote_prop::RegisterPropMirror(payload.elementId, proxy, L"", classW, senderSlot);
+            if (outSpawned) *outSpawned = proxy;
+        } else {
+            UE_LOGW("remote_prop::OnSpawn: trash proxy spawn FAILED for eid=%u class='%ls'",
+                    payload.elementId, classW.c_str());
+        }
         return;
     }
     // Phase 5S0 de-dupe: if a local Aprop_C derivative with the same Key

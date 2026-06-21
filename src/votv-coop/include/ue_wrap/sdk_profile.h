@@ -919,6 +919,13 @@ inline constexpr const wchar_t* SkinnedMeshComponentClass = L"SkinnedMeshCompone
 inline constexpr const wchar_t* SetSkeletalMeshFn = L"SetSkeletalMesh";   // USkinnedMeshComponent
 inline constexpr const wchar_t* SetAnimClassFn = L"SetAnimClass";         // USkeletalMeshComponent
 
+// UStaticMeshComponent::SetStaticMesh -- the trash-proxy mirror's mesh swap (the
+// host-authoritative AStaticMeshActor re-skins pile<->clump by setting the mesh
+// the client resolves from chipType via getChipPileType). FindFunction does NOT
+// climb to super, so SetStaticMesh resolves from its OWN owning class.
+inline constexpr const wchar_t* StaticMeshComponentClass = L"StaticMeshComponent";
+inline constexpr const wchar_t* SetStaticMeshFn = L"SetStaticMesh";       // UStaticMeshComponent
+
 // Bug 2 Plan B1: BUA-interceptor target. The kerfur AnimBP class (its
 // AnimBlueprintGeneratedClass leaf name; the AnimBP source asset is
 // 'AnimBlueprint_kerfurOmega_regular' but the generated UClass adds the '_C'

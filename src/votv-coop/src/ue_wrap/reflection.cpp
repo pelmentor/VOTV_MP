@@ -108,6 +108,17 @@ bool AddToRoot(void* obj) {
     return true;
 }
 
+bool RemoveFromRoot(void* obj) {
+    if (!obj) return false;
+    const int32_t idx = *reinterpret_cast<int32_t*>(
+        reinterpret_cast<uint8_t*>(obj) + O::UObject_InternalIndex);
+    uint8_t* item = ItemAt(idx);
+    if (!item) return false;
+    int32_t& flags = *reinterpret_cast<int32_t*>(item + O::FUObjectItem_Flags);
+    flags &= ~0x40000000;  // clear EInternalObjectFlags::RootSet (UE4.27)
+    return true;
+}
+
 int32_t InternalIndexOf(void* obj) {
     if (!obj) return -1;
     // Dereferences obj -- caller guarantees obj is live/mapped (see header).

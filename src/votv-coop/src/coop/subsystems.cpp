@@ -53,6 +53,7 @@
 #include "coop/garbage_sync.h"
 #include "coop/trash_channel.h"
 #include "coop/trash_collect_sync.h"
+#include "coop/trash_proxy.h"
 #include "coop/trash_pile_sync.h"
 #include "coop/save_block.h"
 #include "coop/save_button_disable.h"
@@ -253,6 +254,11 @@ void DisconnectSlot(coop::net::Session& session, int slot) {
 }
 
 DisconnectStats DisconnectAll() {
+    // PHASE 1: tear down trash proxies FIRST -- before ForceRelease (which can
+    // ConsumeLocalActor a carried proxy without un-rooting -> a rooted leak).
+    // RetireProxy un-roots + destroys + evicts the drive, so ForceRelease below
+    // sees no live/rooted proxy and no stale drive entry (structural no-leak).
+    coop::trash_proxy::OnDisconnect();
     coop::remote_prop::ForceRelease();
     // P2: a disconnect mid-snapshot must drop the armed claim set (dangling
     // actor pointers must not survive into the next session); no sweep.

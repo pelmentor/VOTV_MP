@@ -395,6 +395,37 @@ void SetChipType(void* actor, uint8_t chipType) {
     }
 }
 
+void* ResolvePileMesh(uint8_t chipType, void* worldContext) {
+    // Ulib_getFunc_C::getChipPileType(Type, __WorldContext) -> UStaticMesh*: the
+    // game's OWN chipType -> pile-mesh resolver. The client computes the trash
+    // proxy's mesh EXACTLY as the game does (zero hardcoded asset paths; correct
+    // for all 14 chipType variants). Dispatched on the lib's CDO (a
+    // UBlueprintFunctionLibrary, so the call target is Default__lib_getFunc_C).
+    // Caches the last non-null result as a fallback so a transient null (a
+    // not-yet-streamed variant, or an out-of-range chipType) never leaves a proxy
+    // invisible. Game-thread only (dispatches a UFunction; static locals are GT-serial).
+    static void* sCdo = nullptr;
+    static void* sFn = nullptr;
+    static void* sLastGood = nullptr;
+    if (!sFn || !sCdo) {
+        if (!sFn) {
+            if (void* cls = R::FindClass(L"lib_getFunc_C"))
+                sFn = R::FindFunction(cls, L"getChipPileType");
+        }
+        if (!sCdo) sCdo = R::FindClassDefaultObject(L"lib_getFunc_C");
+    }
+    if (!sFn || !sCdo || !worldContext) return sLastGood;
+    void* mesh = nullptr;
+    {
+        ue_wrap::ParamFrame f(sFn);
+        f.Set<uint8_t>(L"Type", chipType);          // TEnumAsByte<enum_chipPileType::Type>
+        f.Set<void*>(L"__WorldContext", worldContext);
+        if (ue_wrap::Call(sCdo, f)) mesh = f.Get<void*>(L"ReturnValue");
+    }
+    if (mesh && R::IsLive(mesh)) { sLastGood = mesh; return mesh; }
+    return sLastGood;  // transient null -> last good (never invisible)
+}
+
 std::wstring GetClassName(void* prop) {
     if (!prop) return {};
     return R::ClassNameOf(prop);

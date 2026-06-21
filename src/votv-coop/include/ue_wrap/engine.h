@@ -252,6 +252,12 @@ bool DestroyActor(void* actor);
 // Returns nullptr if the pawn isn't a Character or its CMC isn't present.
 void* GetCharacterMovementComponent(void* characterPawn);
 
+// The UStaticMeshComponent subobject of `actor` (an AStaticMeshActor's root, or
+// any actor that owns one) via a reflection child-walk. nullptr if none. Used to
+// reach the host-authoritative trash proxy's mesh component (SetStaticMesh /
+// collision). Game thread.
+void* GetStaticMeshComponent(void* actor);
+
 // Write a FVector to a UMovementComponent's `Velocity` UPROPERTY (offset
 // resolved once at startup via reflection: FindPropertyOffset on UMovementComponent).
 // (Kept for potential future use; current v2 anim drive in RemotePlayer::
@@ -551,6 +557,14 @@ bool ClearSkeletalMesh(void* skeletalMeshComponent);
 // SkeletalMeshComponent and (re)instantiate it (also flips AnimationMode to
 // UseAnimBlueprint). Drives the puppet's pose. Game thread only.
 bool SetAnimClass(void* skeletalMeshComponent, void* animBlueprintClass);
+
+// UStaticMeshComponent::SetStaticMesh(NewMesh) -- swap the static-mesh asset onto
+// a UStaticMeshComponent (the host-authoritative trash-proxy mirror re-skinning
+// pile<->clump; the client resolves NewMesh from chipType via getChipPileType).
+// Resolved from the OWNING class UStaticMeshComponent (FindFunction does not climb
+// to super). Recomputes bounds + collision body from the new mesh in the same
+// call. Rejects null. Game thread only.
+bool SetStaticMesh(void* staticMeshComponent, void* staticMeshAsset);
 
 // Destroy an actor component (UActorComponent::K2_DestroyComponent). Used to
 // strip a remote pawn's local-only systems (e.g. its unbound PostProcessComponent

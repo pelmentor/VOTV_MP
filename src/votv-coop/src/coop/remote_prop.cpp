@@ -14,6 +14,7 @@
 #include "coop/prop_stick_sync.h"  // v68: stuck wall-attachable gates (unstick + release)
 #include "coop/remote_prop_spawn.h"
 #include "coop/trash_channel.h"  // docs/piles/08: per-eid sync-time-context (stale carry/convert drop)
+#include "coop/trash_proxy.h"    // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -891,6 +892,14 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
     // Clears g_drives[*] if the destroyed actor was under drive (T-10, GT-only).
     // Dispatched from event_feed::Update on the game thread (PropDestroy case).
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDestroy)");
+    // PROXY PATH (phase 1): a trash proxy mirror is retired through its OWN teardown (Destroy ->
+    // RemoveFromRoot -> unbind). The rooted AStaticMeshActor MUST be un-rooted here or it leaks its
+    // GUObjectArray slot forever. Trash rides key=None + an eid; return before the legacy keyed/BP path.
+    if (payload.elementId != 0 && payload.elementId != coop::element::kInvalidId &&
+        coop::trash_proxy::IsProxy(payload.elementId)) {
+        coop::trash_proxy::RetireProxy(payload.elementId);
+        return;
+    }
     const std::wstring keyW = KeyToWString(payload.key);
     // Resolve the doomed actor BEFORE draining the mirror. KEYED props resolve by Key (a
     // separate key->actor index). The NON-KEYABLE trash clump rides key=None + an eid and
@@ -964,6 +973,19 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer,
     // docs/piles/08: adopt the host's authoritative sync-time-context for E, and DROP a stale/out-of-order
     // convert (a duplicate, or one older than a transition we already applied). ctx==0 = legacy/non-trash.
     if (!coop::trash_channel::AdoptInboundConvertCtx(E, payload.ctx)) return nullptr;
+    // PROXY PATH (phase 1, THE dup fix): if E's mirror is our host-authoritative trash proxy, re-skin it
+    // IN PLACE (pile<->clump). The eid->actor binding is NEVER touched -> no spawn-fresh, no orphan, no
+    // dup; and a rooted proxy never goes stale, so the "mirror NOT-FOUND -> spawn fresh" path that caused
+    // the dup is structurally unreachable. Non-proxy converts (Aprop_C / kerfur, or a rare trash convert
+    // that beat its OnSpawn) keep the legacy spawn+rebind path below.
+    if (coop::trash_proxy::IsProxy(E)) {
+        void* proxy = coop::trash_proxy::ReskinProxy(E, payload.chipType, wantClump);
+        UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> PROXY re-skinned IN PLACE to %s chipType=%u "
+                "[SYNC-MIRROR OK -- no spawn-fresh, no dup]",
+                edge, E, static_cast<unsigned>(payload.ctx), wantClump ? "CLUMP" : "PILE",
+                static_cast<unsigned>(payload.chipType));
+        return proxy;
+    }
     void* cur = ResolveLiveActorByEid(E);
     const bool hadMirror = (cur != nullptr);   // was a SYNC-MIRROR of E present to re-skin?
     // Idempotency: if our rendering of E already matches the target edge (an echo, a duplicate, or a

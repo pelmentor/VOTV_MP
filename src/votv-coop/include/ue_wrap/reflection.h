@@ -91,6 +91,16 @@ int32_t InternalIndexOf(void* obj);
 // Returns false if obj is null or its index is out of range.
 bool AddToRoot(void* obj);
 
+// Clear the RootSet flag AddToRoot set, making `obj` GC-eligible again. Pairs
+// with AddToRoot on EVERY teardown of a runtime-pinned UObject (e.g. the trash
+// proxy mirror): a destroyed-but-still-rooted object leaks its GUObjectArray
+// slot forever. Clears EInternalObjectFlags::RootSet (0x40000000) on
+// FUObjectItem.Flags @+0x08. Returns false if obj is null / index out of range.
+// Destructor-SAFE -- a pure slot-flag clear, no UFunction dispatch / game-thread
+// / mutex requirement (unlike K2_DestroyActor), so it can anchor the owned-proxy
+// Element teardown as the structural no-leak backstop.
+bool RemoveFromRoot(void* obj);
+
 // UObjectBase accessors (offsets are the standard UE4.27 layout).
 const FName& NameOf(void* uobject);   // NamePrivate  @ +0x18
 void*        ClassOf(void* uobject);  // ClassPrivate @ +0x10

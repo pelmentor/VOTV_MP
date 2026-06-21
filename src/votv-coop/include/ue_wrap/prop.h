@@ -188,6 +188,15 @@ uint8_t GetChipType(void* actor);
 // mirrored clump shows the SAME trash variant the owner grabbed.
 void SetChipType(void* actor, uint8_t chipType);
 
+// Resolve the chipType -> pile static-mesh the GAME uses, via
+// Ulib_getFunc_C::getChipPileType(chipType, worldContext) dispatched on the lib's
+// CDO. Returns a UStaticMesh* (the client computes the trash proxy's mesh exactly
+// as the game does -- no hardcoded paths). Caches the last non-null result as the
+// never-invisible fallback. `worldContext` is any live UObject world context.
+// Game-thread only (dispatches a UFunction). Returns null only before the lib is
+// loaded with no prior success.
+void* ResolvePileMesh(uint8_t chipType, void* worldContext);
+
 // (v52: TurnChipPileToPile RETIRED -- RULE 1+2. It dispatched actorChipPile_C::turnToPile,
 // which the disassembly proves is the pile->clump GRAB morph: it spawns a clump (Max:=2.0),
 // throws it, and K2_DestroyActor's self. The old v29 "landed pile impact sound" call thus

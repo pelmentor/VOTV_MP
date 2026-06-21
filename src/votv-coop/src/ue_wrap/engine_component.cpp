@@ -72,6 +72,17 @@ bool ResolveMeshFns() {
     return g_setSkeletalMeshFn && g_setAnimClassFn;
 }
 
+void* g_staticMeshCompClass = nullptr;  // owns SetStaticMesh
+void* g_setStaticMeshFn = nullptr;
+
+bool ResolveStaticMeshFn() {
+    if (!g_staticMeshCompClass)
+        g_staticMeshCompClass = R::FindClass(P::name::StaticMeshComponentClass);
+    if (g_staticMeshCompClass && !g_setStaticMeshFn)
+        g_setStaticMeshFn = R::FindFunction(g_staticMeshCompClass, P::name::SetStaticMeshFn);
+    return g_setStaticMeshFn != nullptr;
+}
+
 }  // namespace
 
 FVector GetComponentLocation(void* component) {
@@ -209,6 +220,23 @@ bool SetAnimClass(void* component, void* animBlueprintClass) {
     return Call(component, f);
 }
 
+bool SetStaticMesh(void* component, void* staticMeshAsset) {
+    // UStaticMeshComponent::SetStaticMesh(NewMesh) -- swap the static-mesh asset
+    // onto a component (the trash-proxy mirror re-skin). Recomputes the
+    // component's bounds + collision body from the new mesh in the SAME call
+    // (atomic on the game thread -- no window where the visual is the new mesh
+    // but collision is still the old bound). Rejects null: a proxy must never go
+    // invisible, so the caller resolves a fallback mesh instead. Game thread only.
+    if (!component || !staticMeshAsset || !ResolveStaticMeshFn()) {
+        UE_LOGE("engine: SetStaticMesh unresolved (comp=%p mesh=%p fn=%p)",
+                component, staticMeshAsset, g_setStaticMeshFn);
+        return false;
+    }
+    ParamFrame f(g_setStaticMeshFn);
+    f.Set<void*>(L"NewMesh", staticMeshAsset);
+    return Call(component, f);
+}
+
 void* GetCharacterMovementComponent(void* characterPawn) {
     if (!characterPawn) return nullptr;
     for (const auto& c : R::ChildObjectsOf(characterPawn)) {
@@ -217,6 +245,20 @@ void* GetCharacterMovementComponent(void* characterPawn) {
         }
     }
     UE_LOGW("engine: GetCharacterMovementComponent -- no CMC subobject on %p", characterPawn);
+    return nullptr;
+}
+
+void* GetStaticMeshComponent(void* actor) {
+    // The UStaticMeshComponent subobject of `actor` (an AStaticMeshActor's root,
+    // or any actor that owns one). Reflection child-walk -- no UFunction. Used to
+    // reach the host-authoritative trash proxy's mesh component (SetStaticMesh /
+    // collision). Game thread.
+    if (!actor) return nullptr;
+    for (const auto& c : R::ChildObjectsOf(actor)) {
+        if (c.className == L"StaticMeshComponent") {
+            return c.object;
+        }
+    }
     return nullptr;
 }
 

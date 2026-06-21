@@ -1,0 +1,298 @@
+# The pile client-mirror staleness + the host-authoritative proxy redesign (DESIGN) — 2026-06-21
+
+**Tag: DESIGN (the km-walk robustness track).** OPEN as of HEAD `fea04c26` (deployed `BA79E705`, proto v82).
+This is the track AFTER the deterministic re-pile thunk (commit `d19ae4d4`) + the triple-grab-cue fix
+(`fea04c26`). Those fixed the HOST-side re-pile determinism + the sound; they do **NOT** fix the dup the
+user hit — that is a CLIENT-side mirror-staleness problem with a different root, documented here.
+
+---
+
+## 1. The symptom + the root (from the 2026-06-21 client log)
+
+**User report:** host grabs piles, the **original piles don't disappear** on the client (a visible dup);
+and after carrying a clump away from the client + back, the **sync mirror broke entirely**. Plus the
+"perfect sync" bar: a player should be able to **carry a pile a few km and it stays mirrored**.
+
+**Root (client log, eid=4424 lifecycle):**
+- `17:12:26` the host expressed pile 4424 -> the client `OnSpawn`'d a **real `actorChipPile_C` mirror**
+  (`…3F92E700`) + `RegisterPropMirror eid=4424 bound to …3F92E700`.
+- `17:12:36` (10 s later, standing still) the first grab convert: `ResolveLiveActorByEid(4424)` returned
+  **null** -> `[PILE] CLIENT recv convert GRAB … mirror NOT-FOUND … spawned fresh; was desynced
+  pre-convert`. The mirror had gone **not-live within 10 s on its own** (no `OnDestroy` -- the mirror
+  chipPile's own `K2_DestroyActor` is `EX_VirtualFunction`, invisible to us). The fresh spawn + the
+  lingering original (untracked) = the dup.
+- After that one glitch, eid=4424 ran **30+ flawless re-skins** + a clean `OnDestroy`. So the registry +
+  the convert mechanism are SOUND; the **only** failure is the mirror dying on its own.
+
+**Why it dies:** the client mirror is a **real game BP actor** (`actorChipPile_C` / `prop_garbageClump_C`)
+that runs its OWN ubergraph -> it self-morphs / self-destructs / is GC-eligible (unrooted, per
+`remote_prop.cpp:313`) on its own schedule, independent of the host. A self-living mirror can never survive
+a km carry.
+
+**The dup is an ORPHAN symptom, not a registry/spawn bug** (the registry `REBOUND` eid=4424 correctly every
+convert). Killing the staleness kills the dup.
+
+---
+
+## 2. The radical fork — host-authoritative PROXY mirror (RECOMMENDED), discriminator dropped
+
+The earlier plan was a 3-verdict discriminator (self-morph / GC / stale-index) -> a targeted fix
+(BP-suppress / `AddToRoot` / registry). The better RULE-1 move (user-driven 2026-06-21): change the
+mirror's **rules of existence** instead of patching each death mode.
+
+**Principle:** a point-hook (the thunk) wins when you must INTERCEPT existing behaviour + let the original
+finish -- that is the HOST re-pile catch, and it is correct. But the CLIENT needs behaviour the stock actor
+does NOT have: a **host-authoritative entity that does not self-morph, does not self-destruct, runs no BP,
+survives a km-walk, and changes state ONLY on the host's command.** Forwarding into the stock actor's BP is
+pointless there -- you want an actor the game does not ship. So: give the client its OWN minimal mirror.
+
+### Code evidence the proxy is viable (SDK `CXXHeaderDump`, 2026-06-21)
+- **Visual + collision are COMPONENTS, not BP-generated geometry:**
+  `AactorChipPile_C { UStaticMeshComponent* StaticMesh @0x0228; UStaticMeshComponent* Collision @0x0230; }`
+  `Aprop_garbageClump_C { UStaticMeshComponent* StaticMesh @0x0230; }`. The BP's `Init`/`UserConstructionScript`
+  only ASSIGNS the mesh asset (per `chipType`); the component holds it -> separable from the graph.
+- **The grab-trace is collision-based, not class-gated:** `mainPlayer.lookAtActor @0x0AA0` is the camera
+  trace's hit; the grabbable check (`canPickup`/`playerTryToGrab`) is the chipPile's own BP, AFTER the
+  trace. Increment 2 intercepts at the `InpActEvt` PRE (reads `lookAtActor`) BEFORE that -> a proxy with
+  collision on the trace channel is seen; it never has to BE a chipPile.
+- **The client needs nothing locally beyond render + grab-collision** -- host-authoritative owns physics,
+  settling, interactions, state.
+
+### The proxy design
+- The client mirror of a trash entity becomes an **`AStaticMeshActor`** (engine class, NO BP) we own:
+  - `StaticMeshComponent.SetStaticMesh(meshAsset)` -- the mesh resolved cross-peer from the `chipType` byte
+    (already on the PropConvert wire): the client computes the mesh exactly as the game does, via a
+    reflection-call to `lib_getFunc_C::getChipPileType(chipType)` (faithful, zero hardcoded paths). The
+    convert (pile<->clump) just **re-skins** the proxy in place, no spawn-fresh -- but ASYMMETRICALLY (see
+    Section 6 R1): ToPile sets the per-chipType pile mesh; ToClump sets the FIXED `dirtball` mesh + borrows
+    `getChipPileType(chipType).GetMaterial(0)` (the clump is a MATERIAL swap, NOT a mesh swap -- verified in
+    `prop_garbageClump_C::setTex`). Resolve via `StaticLoadObject` (not `FindObject`) so a not-yet-streamed
+    asset still loads; fall back to `/Engine/BasicShapes/Cube.Cube` so the proxy is never invisible.
+  - collision on the camera-trace channel (replicate the chipPile `Collision` profile) so Increment-2
+    grab-trace hits it.
+  - `AddToRoot` (or a held ref) -> no GC race. We own its eid->actor registry -> no stale-index. No BP ->
+    no self-morph. **Staleness / GC / stale-index eliminated by construction -> the discriminator, the
+    periodic health poll, and the serial-number check are all UNNECESSARY.**
+  - driven kinematically by the existing pose stream; state changes only on host convert/pose/release.
+- **Scope:** trash-only (chipPile/clump -- the self-morphing world litter). Aprop_C + kerfur mirrors are
+  unchanged (they are not self-morphing in the same way).
+- **Bounded edges to own at build:** the mesh-name cross-peer resolution; the exact camera-trace collision
+  channel; the re-skin path in `OnConvert` (set mesh instead of spawn-fresh + echo-destroy).
+
+---
+
+## 3. Carry hardening (symptom 3: walk-away broke the mirror)
+
+The 500 ms stream-stop timeout (`remote_prop.cpp:506`) is a heuristic that cannot tell a network gap from
+a real host release -> on a km-walk with jitter it false-releases (physics on, the mirror falls/desyncs).
+
+**Fix:** the host emits a **reliable** release on EVERY carry-end edge (throw / drop / swap / disconnect),
+the receiver treats **no-stream = FREEZE** (hold the last pose, physics-off), and drops physics ONLY on the
+explicit release. The 500 ms timeout degrades to a long safety-net (~30 s, for a crashed/disconnected peer),
+not a per-frame cliff. (Must verify the host emits the release on ALL carry-ends, else freeze-forever
+replaces fall-forever.)
+
+---
+
+## 4. The discriminator (FALLBACK ONLY — needed only if the proxy is rejected)
+
+If the proxy is NOT adopted (e.g., the visual turns out to need the BP for something beyond a static mesh),
+diagnose the death mode FIRST (read-only, no fix, like the read-only thunk pass) before any BP-suppress/root:
+- At `OnConvert` NOT-FOUND + a flagged (ini-gated, ~1 Hz, diagnostic-only) mirror-health poll: read --
+  WITHOUT dereferencing the maybe-freed pointer -- the **GUObjectArray slot** at the cached internalIdx +
+  the cached **SerialNumber** (`FUObjectItem + 0x10`; cache it at bind, compare BOTH idx AND serial -- idx
+  reuse with a serial bump means the slot is a DIFFERENT object, NOT evidence about ours) + the
+  PendingKill/Unreachable flags.
+- For self-morph specifically, do NOT use a "fresh pile within radius R" heuristic (a stray ambient pile
+  false-positives, and on a km-walk last-known position lags). Instead detect it **directly**: the mirror
+  chipPile's own re-pile fires `BeginDeferred` on the CLIENT -> our process-wide thunk catches it with
+  `worldCtx` = our tracked mirror eid = unambiguous self-morph evidence (the exact source + product). No
+  proximity, no false positive. GC = no thunk fire + the slot freed/serial-bumped; stale-index = the slot
+  still holds our object (idx+serial match) but `IsLiveByIndex` said dead.
+- Strictly read-only: it roots nothing, suppresses nothing -- it must not alter the phenomenon it
+  diagnoses. The fix follows the verdict in a separate build.
+
+**But the proxy makes all of this moot** -- it is on the table only as the fallback.
+
+---
+
+## 5. Status + next
+
+- Re-pile thunk + sound fix: AS-BUILT, deployed `BA79E705`, hands-on PENDING (the user confirms single cue
+  + no vanish-return via `research/handson_runbook_2026-06-21_repile_thunk.md` take-22).
+- Mirror-staleness dup + the km-walk carry: **OPEN.** Design: the host-authoritative `AStaticMeshActor`
+  proxy (Section 2) + the explicit reliable carry-end release (Section 3). The discriminator (Section 4) is
+  the fallback only.
+- NEXT once the user green-lights the proxy direction: build the trash proxy mirror (spawn `AStaticMeshActor`
+  + mesh-name resolve + collision channel + root + the `OnConvert` re-skin path), then the carry-end release.
+
+---
+
+## 6. The four locked requirements (VERIFIED 2026-06-21 vs SDK + bytecode + our code; user green-lit the build)
+
+Before the build the user fixed four edges as REQUIREMENTS. Each is now evidence-backed (three parallel RE
+agents + a firsthand SDK read). Two of them REFINE the user's framing -- noted inline. HEAD `fea04c26`.
+
+### R1 -- cross-peer mesh resolution + fallback  [static VERIFIED; clump-is-material REFINEMENT]
+- **All trash meshes are 100% STATIC cooked `UStaticMesh` assets -- nothing procedural.** The pile mesh is
+  chosen in `actorChipPile_C::init()` -> `StaticMesh.SetStaticMesh(lib_getFunc_C::getChipPileType(chipType))`,
+  a pure `EX_SwitchValue` over 14 `chipType` cases returning hard `UStaticMesh` object refs
+  (`research/bp_reflection/lib_getFunc.json`). All 14 pile meshes + `dirtball` confirmed present in the pak
+  (`research/pak_re/paklist.txt`). The variant subclasses (`_erie`/`_wetConcrete`/`_leaves`) touch NO
+  geometry (scale/material/state only). ⇒ **R1(a) YES** -- every variant restores cross-peer by name; no
+  vertex data ever crosses the wire.
+- **REFINEMENT -- the CLUMP is MATERIAL, not mesh.** `prop_garbageClump_C::setTex()` never calls
+  `SetStaticMesh`; the clump keeps a FIXED `dirtball` mesh (`/Game/meshes/shovel/dirtball/dirtball`) and only
+  `StaticMesh.SetMaterial(0, getChipPileType(chipType).GetMaterial(0))`. So the proxy convert is ASYMMETRIC:
+  **ToPile** = `SetStaticMesh(pileMesh[chipType])`; **ToClump** = `SetStaticMesh(dirtball)` +
+  `SetMaterial(0, pileMesh[chipType].GetMaterial(0))`.
+- **Wire:** send the `chipType` byte (PropConvert already carries it) -- the client computes the mesh the SAME
+  way the game does via `getChipPileType(chipType)` (reflection-call). The full chipType->mesh table is in the
+  RE agent's report; resolve via `StaticLoadObject` (idempotent if resident), NOT `FindObject`.
+- **R1(b) FALLBACK:** on resolve-null, `StaticLoadObject("/Engine/BasicShapes/Cube.Cube")` (confirmed in the
+  pak) -> the proxy is never invisible/uncollidable.
+- **Scale note:** `init` gives the pile a random per-instance scale (Z 1.0-1.1, XY 1.2-1.3) + Z-yaw. The proxy
+  must take the HOST's ACTUAL transform (capture + send scale3D at spawn/convert), NOT re-roll the RNG.
+
+### R2 -- collision channel + one-vs-two components  [trace channel VERIFIED; collision-geometry PROBE-GATED]
+- **THE TRACE:** `mainPlayer.LookAtFunction` sets `lookAtActor @0x0AA0` from a `SphereTraceSingle` (radius 2)
+  on **`TraceChannel = TraceTypeQuery1`** (param[4]==0; `research/bp_reflection/_mainplayer_uber_full.txt`),
+  with object-type fallbacks, and sanity-checks `hit.GetCollisionObjectType() == 0` (ECC_WorldStatic). ⇒ the
+  proxy must BLOCK that trace channel and be `ObjectType = WorldStatic`.
+- **OFFSETS reconciled (firsthand SDK read):** `AactorChipPile_C` = `StaticMesh @0x0228` (visual,
+  `NoCollision`), `Collision @0x0230` (the separate `garbageCollider` hull -- the component that ANSWERS the
+  trace), `chipType @0x0238`. **The user's "Collision @0x0238" was the `chipType` field** -- `Collision` is
+  `0x0230`. `Aprop_garbageClump_C` = `physicsImpact @0x0228`, single `StaticMesh @0x0230` (visual AND
+  collider), `chipType @0x0238`.
+- **VERDICT -- ONE component is sufficient for the CHANNEL.** The proxy is an `AStaticMeshActor` (one root
+  `UStaticMeshComponent`). Set: `CollisionEnabled = QueryOnly` (host-driven kinematic), `ObjectType =
+  WorldStatic`, profile **`BlockAll`** (blocks Visibility+Camera+all custom channels -> answers
+  TraceTypeQuery1 regardless of the project's channel remap). The clump form's `dirtball` is known-collidable
+  (it is the stock clump's own collider).
+- **PROBE-GATE (the geometry subtlety the user raised):** the stock PILE splits visual/collider because the
+  visible pile mesh is `NoCollision` and uses the `garbageCollider` hull; whether the visible pile mesh has
+  SIMPLE collision a default (`bTraceComplex=false`) trace can hit is the ONE thing static RE cannot settle.
+  So the FIRST proxy smoke is the look-trace probe: spawn a proxy in pile form, look at it, read `lookAtActor`
+  (`engine::ReadMainPlayerLookAtActor`). If the worn pile mesh is not hit, the bounded fallback is to add the
+  stock `garbageCollider` hull as a collision-only 2nd component (the exact stock setup) -- two components,
+  faithful. **Lead single-component; escalate to two ONLY if the probe fails.** (This is also why collision is
+  only strictly needed for the future client-grab Increment 2; the immediate dup/km-walk fix needs render +
+  host-driven pose, so the proxy is built WITH collision but the probe gates it without blocking the dup fix.)
+
+### R3 -- convert = atomic re-skin in place, registry untouched, no dup  [VERIFIED viable]
+- Today `OnConvert` (`remote_prop.cpp:952`) SPAWN-FRESH-AND-DESTROYS; the dup is the `cur==null -> spawn
+  fresh, old never destroyed` path (`:967 -> :996/:1024`). For the proxy: `OnConvert` becomes
+  `SetStaticMesh(+material for clump)` on the SAME proxy actor; the eid->actor map (`MirrorManager<Prop>`) is
+  UNTOUCHED (pointer unchanged; the in-place `existing->SetActor` rebind already exists).
+- **Atomicity CONFIRMED:** `OnConvert` runs under `UE_ASSERT_GAME_THREAD`; UFunction calls are synchronous
+  `ProcessEvent` -> back-to-back `SetStaticMesh` then the collision/material set in the one body = no tick
+  boundary, no window where visual=clump but collision=pile (`SetStaticMesh` recomputes the component bound
+  from the new mesh, so the collision bound follows the visual in the same call).
+- **No dup BY CONSTRUCTION:** an `AddToRoot`'d proxy never goes stale -> `ResolveLiveActorByEid` never returns
+  null -> the fresh-spawn dup path is dead.
+
+### R4 -- client visual interpolation between host poses, no physics  [VERIFIED feasible]
+- Today props TELEPORT (`remote_prop.cpp:482-483`, raw `SetActorLocation/Rotation`); NO prop interp buffer.
+  The `LerpWindow` (`include/coop/lerp_window.h`) used by `RemotePlayer`/`Npc` is the ready-made shape.
+- **Plan:** on a new pose, cache target+error and `LerpWindow::Open`; add a per-tick advance branch (the
+  every-tick `remote_prop::Tick` call already exists, `net_pump.cpp:951`) that writes `cur += error*dAlpha`
+  until the window closes. Physics stays off (already true for driven props). ⇒ the proxy interpolates
+  visually; the km-walk is smooth on the client. Pairs with the carry-end reliable release (Section 3):
+  no-stream = FREEZE at the last pose; drop only on the explicit release.
+
+**Net:** all four LOCKED; two refinements vs the user's framing (clump = material not mesh; pile-mesh
+collision-geometry is probe-gated). The proxy is the root-cause fix; the discriminator/poll/serial-check
+(Section 4) stay DROPPED as moot.
+
+---
+
+## 7. Phase split + the 3 lifecycle/collision clarifications (LOCKED 2026-06-21)
+
+The user split the build to keep collision uncertainty OUT of the dup/km-walk fix. Three clarifications:
+
+### C1 -- does the proxy-clump answer the look-trace? (deferred to phase 2)
+The clump is the carried/flying form; you grab a PILE, never a clump. In phase 2 (client-grab) the proxy
+answers the trace in BOTH forms via the WORN mesh's bound (dirtball for clump, pileMesh for pile) -- NO
+per-form collision toggle. A client targeting a clump and trying to grab is rejected by the HOST's own grab
+validation (the clump is held/flying, not a grabbable pile) -- host-authority arbitrates, so a special-case
+"disable collision on ToClump" would be a crutch (RULE 1). The re-skin stays a pure mesh/material swap; the
+collision bound follows the mesh automatically + atomically (`SetStaticMesh` recomputes it).
+
+### C2 -- collision is PHASE 2; phase 1 carries ZERO collision uncertainty
+The look-trace probe validates trace-answering, but collision is only needed for client-grab (Increment 2):
+- **PHASE 1 (now): visual + position + re-skin, NoCollision.** Fixes the dup + km-walk. The proxy is a
+  kinematic visual follower; the client player walks THROUGH mirrored trash (a temporary, accepted phase-1
+  limitation). No collision config, no probe -> no collision uncertainty in the dup fix.
+- **PHASE 2 (with Increment 2): collision geometry.** Set BlockAll/WorldStatic/QueryOnly, run the look-trace
+  probe, escalate to the `garbageCollider` hull (a 2nd collision-only component) if the worn pile mesh
+  isn't hit.
+
+### C3 -- proxy lifecycle (AddToRoot MUST pair with RemoveFromRoot on every teardown)
+- **Who tears down:** the client's `remote_prop::OnDestroy` handler (on a PropDestroy for the eid) ->
+  RemoveFromRoot + K2_DestroyActor + unregister; AND the disconnect drain (`ForceRelease` /
+  `OnDisconnectForSlot` -> `DrainWirePropMirrors`, `remote_prop.cpp:1078/1085`) sweeps the whole mirror
+  registry -> RemoveFromRoot each proxy. ONE teardown helper does BOTH (un-root THEN destroy), called from
+  both paths -- else a destroyed-but-rooted proxy leaks (exactly why `RemoveFromRoot` must be built; the
+  agent flagged it missing).
+- **host-destroy IS reliable.** `PropDestroy` is a `ReliableKind` (`event_feed.cpp:156`,
+  `event_dispatch_entity.cpp:244`) on the ARQ channel (retransmit-until-acked) -> it CANNOT be lost like an
+  unreliable pose packet. So "leak-forever if destroy lost" cannot happen via packet loss.
+- **NO far-distance culling.** The proxy mirrors host membership 1:1; retirement is host-driven (the host
+  emits PropDestroy when the entity leaves its expressed set / dies), never local distance culling -- local
+  culling would re-introduce the stale-mirror class the proxy exists to kill.
+- **Backstop:** even with reliable destroy, the existing membership-bounded reconcile (host re-seed/retire,
+  `da233ecb`) is a secondary safety for a host-side silent retire; the proxy is a Prop mirror in the same
+  `MirrorManager<Prop>` the reconcile sweeps, so it participates.
+
+### Phase-1 scope (building now)
+ue_wrap foundation (`SetStaticMesh`, host-side mesh/material reader, `RemoveFromRoot`, exported root/mesh
+getter) -> trash proxy module (spawn `AStaticMeshActor` + `AddToRoot` + chipType mesh/material + Cube
+fallback + host scale3D, **NoCollision**) -> wire into `OnSpawn` (trash join-spawn) + `OnConvert` (atomic
+re-skin in place, registry untouched -> kills the dup) -> R4 lerp + reliable carry-end release -> lifecycle
+teardown (RemoveFromRoot on OnDestroy + disconnect-sweep). Collision + probe + the client-grab direction are
+PHASE 2.
+
+### A+B hands-on (BA79E705, 2026-06-21 18:06 logs) -- GREEN
+Every convert `[SYNC-MIRROR OK]` + `mirror FOUND` both directions across ~10 cycles (eids 4424/4425/5261);
+`HOST RE-PILE(thunk) ... convert IN PLACE` on every re-pile (no vanish-return); `CLIENT HOLD carry pose`
+shows the ctx-gate holding the ahead-of-convert pose (the triple-cue fix); zero `mirror NOT-FOUND`, zero
+errors. The audible single-cue is INFERRED from the HOLD lines (user observational confirm pending). The dup
+did NOT recur, but the run didn't clearly exercise walk-away -> the robustness track (the proxy) stands.
+
+### Q1 -- phase-1 NoCollision IS a temporary regression (verified)
+Stock client trash DOES block the player. Verified from the SCS collision template
+(`docs/piles/re-artifacts/chipPile.json`): the `garbageCollider` hull is `ObjectType = ECC_WorldStatic`,
+`CollisionEnabled = QueryAndPhysics` (archetype default; not serialized), and its serialized
+`ResponseArray` deltas are WorldStatic/Destructible/sound/water/trigger -> `ECR_Ignore`, WorldDynamic ->
+`ECR_Overlap`. **`Pawn` is NOT in the delta list -> it keeps the default `ECR_Block`** (same for
+Visibility/Camera). So the player capsule (ECC_Pawn) blocks against the hull -> currently you cannot walk
+through a client-mirrored pile. Phase-1 NoCollision removes that -> the client walks THROUGH mirrored trash.
+Magnitude is small (the hull is short ground litter the capsule steps over via movement step-up; the
+perceptible case is larger / flying clumps) and strictly temporary. **Phase 2 restores it via the
+`garbageCollider` hull, which is DOUBLE-DUTY: the Pawn-block (player body) AND the Visibility/Camera
+grab-trace.** So ALL collision lives in phase 2 via the one hull -- a coherent split, not two separate jobs.
+Phase 1 sets the proxy EXPLICITLY NoCollision (predictable; a kinematic host-driven proxy needs no local
+collision -- the host owns physics).
+
+### Q2 -- single un-root chokepoint (verified); the reconcile does NOT even touch mirrors
+The membership-reconcile sweep (`RunDivergenceSweep_`, `remote_prop_spawn.cpp:1024`) **EXCLUDES mirrors**:
+`if (pr.mirror) continue;` -- it dooms only the client's OWN local (non-mirror, save-loaded) Prop Elements,
+never a host-driven mirror (MTA CElementGroup membership: it adjudicates only what THIS client loaded). The
+proxy is a mirror (`RegisterPropMirror`, `m_mirror=true`) -> it is **never swept**. So the "backstop path
+leaks" case cannot arise -- the reconcile isn't a proxy retire path at all. The ONLY proxy retire paths:
+(a) host `PropDestroy` -> `remote_prop::OnDestroy` (reliable ARQ), (b) the disconnect drain
+(`DrainWirePropMirrors` / `OnDisconnectForSlot`). BOTH remove the Prop from `MirrorManager<Prop>` ->
+`unique_ptr` dtor -> `~Prop` -> `~Element` -> `Registry::UnregisterMirror` (`element.cpp:53`). **The single
+chokepoint is the Prop Element dtor.** Design (belt-and-suspenders):
+- a `RetireProxy(eid)` helper does `RemoveFromRoot -> K2_DestroyActor -> unbind` at BOTH call sites; AND
+- `RemoveFromRoot` is ALSO anchored in the owned-proxy Element teardown -- a cheap, dtor-SAFE flag-clear on
+  the GUObjectArray slot (unlike `K2_DestroyActor`, which stays at the call site for game-thread / mutex
+  safety). So ANY future path that removes the Element from `MirrorManager<Prop>` un-roots automatically ->
+  a destroyed-but-rooted leak is **structurally impossible**, even if a new retire path forgets `RetireProxy`.
+
+### Mesh resolution simplification (from R1) -- no host-side mesh reader needed
+Because the client computes the mesh from the `chipType` byte via `getChipPileType(chipType)` (R1), the host
+does NOT read+send a live mesh name. The phase-1 ue_wrap foundation is therefore: `SetStaticMesh`,
+`SetComponentMaterial` (clump material), `GetMeshMaterial` (read slot-0 off the resolved pile mesh),
+`getChipPileType` caller, `RemoveFromRoot`, and an exported static-mesh-component/root getter. Plus
+`SpawnActor`(engine class) + `AddToRoot`, which already exist.
