@@ -165,6 +165,27 @@ inline constexpr size_t UStruct_ChildProperties = 0x50;   // FField* (params fir
 inline constexpr size_t UStruct_PropertiesSize = 0x58;    // int32 (full frame size)
 inline constexpr size_t UFunction_ParmsSize = 0xB6;       // uint16 (param-region size)
 inline constexpr size_t UFunction_ReturnValueOffset = 0xB8;  // uint16 (0xFFFF = none)
+// UFunction::Func -- the FNativeFuncPtr the BP-VM invokes for EVERY call path (a
+// native function's C++ exec thunk; a script function's ProcessInternal). IDA-pinned
+// 2026-06-21 against exe ad478218 (size kExpectedExeSize): UFunction::Invoke
+// (0x141302DC0) does `(*(Function+0xD8))(Object, &Frame, Result)`. Patching this
+// pointer = the standalone "UE4SS RegisterHook" technique -- catches an EX_CallMath
+// call a ProcessEvent observer can NEVER see (the chipPile/clump spawn). The value
+// must land in .text. See ue_wrap/ufunction_hook.{h,cpp} +
+// research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md.
+inline constexpr size_t UFunction_Func = 0xD8;
+
+// FFrame layout (the BP-VM execution frame; one passed to every native exec thunk).
+// IDA-pinned 2026-06-21 from execBeginDeferredActorSpawnFromClass (0x14300B270): it
+// reads Object @ a2[3] (the Step Context) and Code @ a2[4]. Node@0x10/Object@0x18/
+// Code@0x20/Locals@0x28/PropertyChainForCompiledIn@0x80/CurrentNativeFunction@0x88.
+//   FFrame_Object -- the actor whose bytecode is executing = the SOURCE entity for a
+//     spawn issued from its ubergraph (the re-piling clump). Bytecode-confirmed the
+//     clump's BeginDeferred passes EX_Self for WorldContextObject (== this Object).
+//   FFrame_Code -- non-null on a bytecode (EX_CallMath) dispatch (params stepped from
+//     the stream, NOT Locals -- so a native-thunk hook reads Object, never Locals).
+inline constexpr size_t FFrame_Object = 0x18;             // UObject* (the executing/source object)
+inline constexpr size_t FFrame_Code   = 0x20;             // uint8* (instruction ptr; null on the ProcessInternal path)
 
 inline constexpr size_t FField_Next = 0x20;               // FField*
 inline constexpr size_t FField_NamePrivate = 0x28;        // FName

@@ -54,18 +54,11 @@ void Install(coop::net::Session* session);
 // Idempotent: once minted the Key is non-None, so a repeat call returns false.
 bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* session);
 
-// HOST: register an adopted grab-clump (bound to eid E) to watch for its RE-PILE. When the clump dies
-// (the BP re-piles it into a fresh chipPile, then destroys the clump -- both EX_CallMath/BP-internal ->
-// invisible to a spawn hook), Tick CONVERTS eid E onto that fresh pile in place (clump->pile, same eid),
-// so the client re-skins its ONE mirror -- no destroy+spawn dupe (the user's 2026-06-21 "clump AND pile
-// both on the ground"), and the re-piled pile keeps its eid so it is immediately grab-syncable again
-// (also closing the "host mirrors ~50%" untracked gap). Game thread, host only.
-void WatchClumpForRepile(uint32_t eid, void* clumpActor);
-
-// HOST: poll the watched grab-clumps; the tick a clump dies, find the fresh untracked pile at its resting
-// spot and convert eid E onto it (trash_channel::OnHostConvert ToPile), or PropDestroy(E) if it was
-// consumed (no fresh pile). Cheap when nothing died (a liveness check per watched clump). Game thread, host.
-void Tick(coop::net::Session& session);
+// (The proximity RE-PILE death-watch -- WatchClumpForRepile / Tick -- is RETIRED 2026-06-21, RULE 2. It
+// converted on the clump's DEATH by a nearest-untracked pile search; the DETERMINISTIC UFunction::Func thunk
+// (OnBeginDeferredSpawnObserve in the .cpp, installed in Install) replaced it after a hands-on validated the
+// thunk's *Result is ptr-for-ptr the same pile the death-watch found. The thunk converts the EXACT spawned
+// pile the same tick the clump's EX_CallMath BeginDeferred fires -- no proximity, no reaper race.)
 
 // (docs/piles/08, 2026-06-21: the v81 MORPH -- here and in the retired coop/pile_morph -- is FULLY GONE,
 // RULE 1+2. It re-skinned eid E in place but detected the land by a proximity FindNearestChipPile that

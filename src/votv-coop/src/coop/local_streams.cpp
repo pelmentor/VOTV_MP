@@ -308,10 +308,9 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                 const auto cloc = ue_wrap::engine::GetActorLocation(heldActor);
                 const auto crot = ue_wrap::engine::GetActorRotation(heldActor);
                 adoptedEid = coop::trash_channel::AdoptPendingGrabClump(session, heldActor, cloc, crot);
-                // Watch this clump for its re-pile: when it dies (re-piles), an immediate re-seed
-                // registers the new pile NOW so it is grab-syncable without the ~4s steady-re-seed gap.
-                if (adoptedEid != coop::element::kInvalidId)
-                    coop::trash_collect_sync::WatchClumpForRepile(static_cast<uint32_t>(adoptedEid), heldActor);
+                // (The re-pile death-watch enroll is GONE 2026-06-21, RULE 2: the clump's re-pile is now
+                // caught deterministically at its EX_CallMath BeginDeferred via the UFunction::Func thunk
+                // -- trash_collect_sync::OnBeginDeferredSpawnObserve -- so no proximity watch is needed.)
             }
             g_lastHeldEid = (adoptedEid != coop::element::kInvalidId) ? adoptedEid
                                                                       : ResolveHeldPropEid(heldActor);

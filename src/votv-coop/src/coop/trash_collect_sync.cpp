@@ -24,11 +24,11 @@
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"     // MainPlayerClass + MainPlayerUseInputEventFn
 #include "ue_wrap/types.h"
+#include "ue_wrap/ufunction_hook.h"  // the deterministic re-pile: BeginDeferred Func-patch (docs/piles/08)
 
 #include <atomic>
 #include <chrono>
 #include <string>
-#include <vector>
 
 namespace coop::trash_collect_sync {
 namespace {
@@ -50,41 +50,41 @@ bool g_grabObserverInstalled = false;  // InpActEvt_use PRE registration latch (
 // (An earlier design caught the spawn at a host_spawn_watcher BeginDeferred POST -- RETIRED 2026-06-21: the
 // chipPile/clump spawn is dispatched EX_CallMath, INVISIBLE to our ProcessEvent hook; it never fired.)
 
-// The clump RE-PILE watch: the held/thrown clump (bound to eid E) is followed until it dies (the BP
-// re-piles it into a fresh chipPile, then K2_DestroyActors the clump -- both EX_CallMath/BP-internal,
-// invisible to a spawn hook). The tick the clump dies, we CONVERT E onto that fresh pile in place
-// (clump->pile, same eid -- symmetric with the grab's pile->clump), so the client re-skins its ONE mirror
-// of E and there is NO destroy+spawn dupe (the user's 2026-06-21 "clump AND pile both on the ground").
-// Identity is the eid; the new pile is found by the clump's OWN resting position filtered to UNTRACKED
-// piles only (a pre-existing neighbour is tracked -> excluded -> NOT the s35 proximity mis-bind, which
-// matched any nearby pile). GAME-THREAD only (the host net-pump tick).
-struct WatchedClump {
-    uint32_t         eid         = 0;
-    void*            actor       = nullptr;
-    int32_t          internalIdx = -1;   // captured live -> IsLiveByIndex without deref
-    ue_wrap::FVector lastPos{};           // updated each tick while alive (follows carry + flight)
-};
-std::vector<WatchedClump> g_watchedClumps;
-constexpr size_t kMaxWatchedClumps = 64;     // a runaway backstop; only a handful are ever carried at once
-constexpr float  kRepileSearchCm   = 250.f;  // the new pile sits at the clump's traced resting point
+// (The proximity RE-PILE death-watch -- WatchClumpForRepile / Tick / FindNearestUntrackedChipPile_ /
+// g_watchedClumps -- is RETIRED 2026-06-21, RULE 2. It converted on the clump's DEATH by a nearest-untracked
+// pile search; the deterministic UFunction::Func thunk (OnBeginDeferredSpawnObserve) replaced it after a
+// hands-on validated the thunk's *Result is ptr-for-ptr the same pile the death-watch found. The thunk
+// converts the EXACT spawned pile the same tick -- no proximity, no reaper race. A consumed clump (no
+// re-pile spawn) now just dies untracked -> the normal prop reaper PropDestroys it.)
 
-// Nearest UNTRACKED chipPile within `radiusCm` of `at` (the clump's last position) -- i.e. the just-formed
-// re-pile product. Tracked piles (pre-existing neighbours) are excluded, so a dense cluster cannot mis-bind.
-void* FindNearestUntrackedChipPile_(const ue_wrap::FVector& at, float radiusCm) {
-    const int32_t n = R::NumObjects();
-    void* best = nullptr;
-    float bestD2 = radiusCm * radiusCm;
-    for (int32_t i = 0; i < n; ++i) {
-        void* o = R::ObjectAt(i);
-        if (!o || !R::IsLive(o)) continue;
-        if (!ue_wrap::prop::IsChipPile(o)) continue;
-        if (PT::GetPropElementIdForActor(o) != coop::element::kInvalidId) continue;  // tracked neighbour
-        const ue_wrap::FVector p = ue_wrap::engine::GetActorLocation(o);
-        const float dx = p.X - at.X, dy = p.Y - at.Y, dz = p.Z - at.Z;
-        const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < bestD2) { bestD2 = d2; best = o; }
-    }
-    return best;
+bool g_repileThunkInstalled = false;          // process-lifetime Func-patch latch
+
+// THE DETERMINISTIC RE-PILE (docs/piles/08 "thunk") -- the convert, validated GREEN 2026-06-21 (host log:
+// many CLEAN [REPILE], the thunk's *Result ptr-for-ptr == the death-watch's FindNearest pile every isolated
+// re-pile). On a host re-pile the clump's `EX_CallMath BeginDeferredActorSpawnFromClass(self=clump, pile)`
+// fires our UFunction::Func patch -> (srcObj = FFrame::Object = the re-piling clump @0x18; newActor =
+// *Result = the new chipPile). If the clump is a TRACKED trash entity (eid E) we convert E onto the new pile
+// IN PLACE, the SAME tick the pile is constructed -- zero proximity, zero death-watch, no reaper race (so the
+// old ~5s vanish-return is gone by construction). The GRAB case (srcObj=pile, newActor=clump) is NOT a clump
+// source -> ignored here; the host grab stays on the InpActEvt PRE + held-edge adopt path. A wild srcObj (a
+// wrong offset -- ruled out, IDA-pinned + validated) would fault in IsGarbageClump and the facility's
+// RunCbSEH absorbs it -> no convert. Game thread (BeginDeferred is GT-only); host-only.
+void OnBeginDeferredSpawnObserve(void* srcObj, void* newActor) {
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || !s->connected() || s->role() != coop::net::Role::Host) return;  // host authors converts
+    if (!srcObj || !newActor) return;
+    if (!ue_wrap::prop::IsGarbageClump(srcObj)) return;   // re-pile source must be a clump (grab case is a pile -> skip)
+    if (!ue_wrap::prop::IsChipPile(newActor)) return;     // ... spawning a chipPile
+    const coop::element::ElementId E = PT::GetPropElementIdForActor(srcObj);
+    if (E == coop::element::kInvalidId) return;           // an UNTRACKED clump (grab-adopt miss; the eid=0 gap) -> skip
+    // The new pile is NOT positioned yet (FinishSpawning runs after BeginDeferred returns); the clump
+    // (srcObj) IS at its sphere-traced resting point, so take loc/rot from it -- the convert position.
+    const ue_wrap::FVector  loc      = ue_wrap::engine::GetActorLocation(srcObj);
+    const ue_wrap::FRotator rot      = ue_wrap::engine::GetActorRotation(srcObj);
+    const uint8_t           chipType = ue_wrap::prop::GetChipType(srcObj);
+    UE_LOGI("[PILE] HOST RE-PILE(thunk) eid=%u clump=%p -> chipPile=%p convert IN PLACE (deterministic, same "
+            "tick as the spawn -- no death-watch, no proximity)", static_cast<unsigned>(E), srcObj, newActor);
+    coop::trash_channel::OnHostConvert(*s, E, coop::net::propconvert_kind::kToPile, newActor, loc, rot, chipType);
 }
 
 }  // namespace
@@ -330,6 +330,25 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
 
 void Install(coop::net::Session* session) {
     g_session.store(session, std::memory_order_release);  // re-cache every call (reconnect)
+
+    // The deterministic re-pile thunk (READ-ONLY observe pass this cut): patch
+    // BeginDeferredActorSpawnFromClass's UFunction::Func so we catch the clump's chipPile spawn
+    // (EX_CallMath -> invisible to ProcessEvent). Independent latch -> retries until GameplayStatics
+    // resolves, regardless of the grab-observer state. host_spawn_watcher's POST observer on the SAME
+    // UFunction is unaffected (separate mechanism; our forwarder is transparent + the pinecone path's
+    // result is not a chipPile/clump, so our cb ignores it).
+    if (!g_repileThunkInstalled) {
+        void* gsCls = R::FindClass(P::name::GameplayStaticsClass);
+        void* bdFn  = gsCls ? R::FindFunction(gsCls, P::name::BeginDeferredSpawnFn) : nullptr;
+        if (bdFn) {
+            ue_wrap::ufunction_hook::InstallPostHook(bdFn, &OnBeginDeferredSpawnObserve);
+            g_repileThunkInstalled = true;  // latch on attempt (InstallPostHook logs success/refusal)
+            UE_LOGI("trash_collect: re-pile Func-patch armed on BeginDeferred -- the DETERMINISTIC converter "
+                    "(clump re-pile -> OnHostConvert ToPile the same tick as the spawn; death-watch retired)");
+        }
+        // bdFn null -> GameplayStatics not loaded yet; retry next world-gated Install call.
+    }
+
     if (g_grabObserverInstalled) return;
     void* cls = R::FindClass(P::name::MainPlayerClass);
     if (!cls) return;  // mainPlayer_C not loaded yet -> retry on the next world-gated Install
@@ -348,57 +367,7 @@ void Install(coop::net::Session* session) {
             "as a pending grab -> the held-edge adopts the spawned clump; docs/piles/08)");
 }
 
-void WatchClumpForRepile(uint32_t eid, void* clumpActor) {
-    if (!clumpActor || eid == 0) return;
-    const int32_t idx = R::InternalIndexOf(clumpActor);
-    if (idx < 0) return;
-    const ue_wrap::FVector pos = ue_wrap::engine::GetActorLocation(clumpActor);
-    for (auto& w : g_watchedClumps) {              // already watching this actor -> refresh
-        if (w.actor == clumpActor) { w.eid = eid; w.internalIdx = idx; w.lastPos = pos; return; }
-    }
-    if (g_watchedClumps.size() >= kMaxWatchedClumps)
-        g_watchedClumps.erase(g_watchedClumps.begin());   // shed oldest (its re-pile rides the slow reaper)
-    g_watchedClumps.push_back(WatchedClump{eid, clumpActor, idx, pos});
-}
-
-void Tick(coop::net::Session& session) {
-    if (g_watchedClumps.empty()) return;
-    if (session.role() != coop::net::Role::Host) { g_watchedClumps.clear(); return; }
-    for (size_t i = 0; i < g_watchedClumps.size();) {
-        WatchedClump& w = g_watchedClumps[i];
-        if (R::IsLiveByIndex(w.actor, w.internalIdx)) {
-            w.lastPos = ue_wrap::engine::GetActorLocation(w.actor);  // follow the clump through carry + flight
-            ++i; continue;
-        }
-        // The clump just died: the BP re-piled it (spawned a fresh chipPile at its sphere-traced resting
-        // point, THEN destroyed the clump) or it was consumed. Find the fresh untracked pile at the resting
-        // spot and CONVERT eid E onto it IN PLACE (clump->pile, same eid) so the client re-skins its ONE
-        // mirror -- no destroy+spawn dupe. The rebind re-points E onto the live new pile, so the reaper sees
-        // E alive and won't PropDestroy it.
-        void* newPile = FindNearestUntrackedChipPile_(w.lastPos, kRepileSearchCm);
-        if (newPile) {
-            const ue_wrap::FVector  loc      = ue_wrap::engine::GetActorLocation(newPile);
-            const ue_wrap::FRotator rot      = ue_wrap::engine::GetActorRotation(newPile);
-            const uint8_t           chipType = ue_wrap::prop::GetChipType(newPile);
-            UE_LOGI("[PILE] HOST RE-PILE eid=%u -- clump died -> convert onto fresh pile %p @(%.0f,%.0f,%.0f) "
-                    "IN PLACE (same eid, no dupe)", w.eid, newPile, loc.X, loc.Y, loc.Z);
-            coop::trash_channel::OnHostConvert(session, static_cast<coop::element::ElementId>(w.eid),
-                                               coop::net::propconvert_kind::kToPile, newPile, loc, rot, chipType);
-        } else {
-            // No fresh pile near the resting spot -> the clump was consumed/destroyed for good. Drop the
-            // mirror NOW via PropDestroy (the slow reaper would also catch it, but do it now -- no dupe window).
-            coop::net::PropDestroyPayload dp{};
-            dp.key.len   = 0;
-            dp.elementId = w.eid;
-            session.SendPropDestroy(dp);
-            UE_LOGI("[PILE] HOST clump eid=%u died with no fresh pile nearby -> consumed; PropDestroy(eid)", w.eid);
-        }
-        g_watchedClumps.erase(g_watchedClumps.begin() + i);
-    }
-}
-
 void OnDisconnect() {
-    g_watchedClumps.clear();
     g_session.store(nullptr, std::memory_order_release);
 }
 
