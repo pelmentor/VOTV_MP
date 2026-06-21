@@ -67,7 +67,8 @@ Those questions are now answered canonically (code-verified, confidence-tagged) 
   take-18 Init-POST bet).
 
 These supersede the cross-cutting parts of the pile docs below; 01-04 remain the pile-specific
-history/diagnosis/design, and **07 is the current morph design + as-built**.
+history/diagnosis/design, and **08 is the CURRENT design** (the host-authoritative trash channel);
+**07 is SUPERSEDED + RETIRED** (the morph -- a real hands-on refuted its smoke "VERIFIED" 2026-06-21).
 
 ## Folder contents
 
@@ -82,10 +83,16 @@ history/diagnosis/design, and **07 is the current morph design + as-built**.
   stack; what to preserve (kerfur/email/harness). (EXECUTED — see Status.)
 - **[04-ROBUST-DESIGN.md](04-ROBUST-DESIGN.md)** — what good looks like: the 5 pillars of robust
   native-looking pile sync + the anti-patterns we did wrong (the deterministic-placement insight).
-- **[07-MORPH-V2-held-object-channel.md](07-MORPH-V2-held-object-channel.md)** — **THE CURRENT morph
-  design + as-built** (grab→carry→throw→land): held-object grab adopt + death-watch land poll, eid `E`
-  re-skinned in place, deferred-destroy fallback. DLL `2f0970276799478c` (proto v81), built + reviewed,
-  NOT verified. Read this for the morph.
+- **[08-HOST-AUTH-TRASH-CHANNEL.md](08-HOST-AUTH-TRASH-CHANNEL.md)** — **THE CURRENT DESIGN (locked
+  2026-06-21).** Host-authoritative trash-entity state machine (eid = logical entity; PILED/HELD_BY(N)/
+  FLYING; position is NEVER identity), MTA single-syncer + sync-time-context byte, cloned from the door
+  channel; client-grab via suppress-native + GrabIntent → host executes the real verb; the clump↔pile
+  link is the zero-proximity convert-spawn POST. The verified chipPile mechanic + both root causes +
+  the 6-step plan. **Read this for the pile sync.** Implementation pending.
+- **[07-MORPH-V2-held-object-channel.md](07-MORPH-V2-held-object-channel.md)** — **SUPERSEDED + RETIRED
+  2026-06-21** (the morph: held-object adopt + PROXIMITY land-watch). Its smoke "VERIFIED" was a FALSE
+  POSITIVE; the real hands-on refuted it (proximity false-fires in clusters; client grab never armed).
+  History only — see 08.
 - `_archive/05-MORPH-SYNC-DESIGN.md` + `_archive/06-AS-BUILT-sync-mirror.md` — **SUPERSEDED** (the FAILED
   take-18 that bet on the clump Init-POST observer firing; it does NOT). Kept for the failure analysis.
 - `_archive/session-log/` — the day-by-day failed-iteration log (s21..s33). Historical.

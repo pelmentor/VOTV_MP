@@ -3,10 +3,16 @@
 > The corrected grab->carry->throw->land design. Supersedes **05** (the morph DESIGN that
 > bet on the clump Init-POST observer + `holdPlayer`) and **06** (its AS-BUILT, which FAILED
 > the hands-on as a regression). Synthesized 2026-06-20 (session 33) after a full re-read of
-> the CURRENT take-17 code + the bytecode RE. **Status: VERIFIED 2026-06-20 (session 34)** — the full
-> grab→carry→throw→land cycle runs end-to-end cross-peer on a 2-peer smoke that fires the pile's OWN
-> `playerGrabbed` (a *matching real log*, not a fake; see "Verification" below). One empirical correction
-> vs the original draft: the clump rides **`grabbing_actor`**, NOT `holding_actor`.
+> the CURRENT take-17 code + the bytecode RE.
+>
+> **⚠ STATUS: SUPERSEDED + RETIRED 2026-06-21 — see [08-HOST-AUTH-TRASH-CHANNEL.md](08-HOST-AUTH-TRASH-CHANNEL.md).**
+> The "VERIFIED 2026-06-20" claim that was here was a **FALSE POSITIVE**: the autonomous smoke fired
+> `playerGrabbed` on ONE sanitized pile and never exercised a pile CLUSTER or the client→host direction.
+> The real hands-on (2026-06-21) REFUTED it — the proximity land-watch (`FindNearestChipPile(lastPos,100cm)`)
+> consumes a NEIGHBOR pile in a cluster → eid mis-binds → divergence; and the client grab never armed
+> (hands-full gate + the direction was never wired). The whole "owner-side re-skin on both peers + proximity
+> land" model is retired (RULE 2) in favour of the **host-authoritative state machine** (08). History only —
+> everything below is the SUPERSEDED design; do NOT implement it.
 
 ## Why 05/06 failed, and the one rule that fixes it
 
