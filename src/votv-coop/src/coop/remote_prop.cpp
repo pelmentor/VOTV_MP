@@ -697,7 +697,8 @@ void RegisterPropMirror(coop::element::ElementId eid,
                         void* actor,
                         const std::wstring& key,
                         const std::wstring& cls,
-                        int senderSlot) {
+                        int senderSlot,
+                        bool rebindInPlace) {
     if (!actor) return;
     // Fork B 2b (2026-06-10): quiet idempotency. Under the relaxed snapshot
     // gate the OWNER client re-ingests its own entities at every re-bracket
@@ -706,6 +707,27 @@ void RegisterPropMirror(coop::element::ElementId eid,
     // duplicate path doesn't warn once per entity per re-bracket.
     if (auto* existing = coop::element::Registry::Get().Get(eid)) {
         if (existing->GetActor() == actor) return;
+        // v81 MORPH V2: the SINGLE rebind entry point. Re-skin eid E onto the new rendering (pile-A ->
+        // clump -> pile-B). HEAD keeps the existing live actor (a different live actor for the same eid
+        // is a conflict to reject); the morph LEGITIMATELY swaps the actor (the old one is destroyed
+        // right after). Route on the Element's AUTHORITATIVE m_mirror flag -- NOT a caller's runtime
+        // guess (findings 3/6/7/15): a MIRROR rebinds via SetActor here; a LOCAL element (a host
+        // applying a client's convert against its OWN pile) MUST go through RebindLocalElementActor so
+        // the forward map g_actorToPropElementId stays consistent. Only the morph callers pass true.
+        if (rebindInPlace) {
+            if (existing->IsMirror()) {
+                existing->SetActor(actor, R::InternalIndexOf(actor));
+                // Keep the K-5 client kerfur held-pose map consistent if this is a kerfur mirror (it
+                // won't be for a chipPile/clump morph -- self-filters on class).
+                coop::kerfur_entity::NotifyKerfurPropMirrorBound(actor, eid);
+                UE_LOGI("remote_prop::RegisterPropMirror: eid=%u REBOUND mirror in place -> actor=%p "
+                        "cls='%ls' (morph re-skin)", eid, actor, cls.c_str());
+            } else {
+                coop::prop_element_tracker::RebindLocalElementActor(eid, actor);
+            }
+            return;
+        }
+        // else: fall through to Install, which rejects the duplicate eid (HEAD live-conflict guard).
     }
     // Tag with the originating peer slot for per-slot disconnect eviction
     // (D1-7). Out-of-range/unknown -> -1 (untagged; only drained on full
@@ -886,43 +908,69 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
 
 void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer, int senderSlot) {
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnConvert)");
-    // (1) Destroy the mirror BALL by oldEid. Reuse the full OnDestroy eid teardown (drive-cache
-    // clear + PHC release + echo-suppressed K2_DestroyActor + UnregisterPropMirror). The clump is
-    // eid-only (key reads None), so key.len=0 routes OnDestroy down its eid path.
-    if (payload.oldEid != 0 && payload.oldEid != coop::element::kInvalidId) {
-        coop::net::PropDestroyPayload dp{};
-        dp.key.len   = 0;
-        dp.elementId = payload.oldEid;
-        OnDestroy(dp, localPlayer);
+    // v81 MORPH V2 -- bind-model re-skin of eid E in place (oldEid == newEid == E). NO fresh eid,
+    // NO second entity. Resolve our current rendering of E, spawn the NEW rendering bound to the
+    // SAME E, rebind, then echo-destroy the old. docs/piles/07-MORPH-V2-held-object-channel.md.
+    const uint32_t E = payload.newEid;
+    if (E == 0u || E == coop::element::kInvalidId) {
+        UE_LOGW("remote_prop::OnConvert: invalid eid E=%u -- dropping", E);
+        return nullptr;
     }
-    // (2) Spawn the authoritative pile by newEid via the existing fresh-spawn path. It spawns as a
-    // SETTLED pile (physFlags=0: not simulating, no velocity) -- a landed pile needs no morph. It
-    // keeps QueryAndPhysics so it is grabbable on both peers; OnSpawn binds the mirror at newEid
-    // (RegisterPropMirror). newEid is a FRESH owner-minted id distinct from oldEid -> no eid
-    // collision, the ball and pile are separate cross-peer entities. (v52: kFreshLanded was retired
-    // -- its only effect was the turnToPile GRAB morph that destroyed the pile; see OnSpawn.)
+    void* cur = ResolveLiveActorByEid(E);
+    const bool wantClump = (payload.kind == coop::net::propconvert_kind::kToClump);
+    // Idempotency: if our rendering of E already matches the target edge (an echo, a duplicate, or a
+    // grab-race loser's convert arriving after we already rendered the same class), this is a no-op
+    // -- the winner's held-pose stream drives it. Prevents a spurious re-spawn + actor churn.
+    if (cur && ue_wrap::prop::IsGarbageClump(cur) == wantClump) {
+        UE_LOGI("remote_prop::OnConvert: eid=%u already %s -- idempotent no-op",
+                E, wantClump ? "clump" : "pile");
+        return cur;
+    }
+    // Spawn the NEW rendering bound to E. ToClump -> a kinematic clump (physFlags=0 -> not simulating;
+    // OnSpawn also disarms the clump's self-convert hit-notify) the held-pose stream then drives;
+    // ToPile -> a settled, grabbable pile (physFlags=0 -> resting, QueryAndPhysics kept). skipBind:
+    // OnConvert binds E explicitly below; fromConvert: skip the eid-dedup so the still-live OLD rendering
+    // of E doesn't converge the spawn.
     coop::net::PropSpawnPayload p{};
     p.className = payload.pileClass;
-    p.key.len   = 0;                         // chipPile is eid-only
+    p.key.len   = 0;                         // chipPile/clump are eid-only (Key=None)
     p.locX = payload.locX; p.locY = payload.locY; p.locZ = payload.locZ;
     p.rotPitch = payload.rotPitch; p.rotYaw = payload.rotYaw; p.rotRoll = payload.rotRoll;
     p.scaleX = p.scaleY = p.scaleZ = 1.f;
-    p.physFlags = 0;                         // settled landed pile: no sim, no morph
+    p.physFlags = 0;
     p.chipType = payload.chipType;
     p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
     p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-    p.elementId = payload.newEid;
-    // fromConvert=true: a convert-born pile has no local counterpart -- the
-    // position-bind lane must not match it to a nearby unrelated pile.
-    remote_prop_spawn::OnSpawn(p, senderSlot, localPlayer, /*fromConvert=*/true);
-    void* pile = ResolveLiveActorByEid(payload.newEid);
-    UE_LOGI("remote_prop::OnConvert: ball eid=%u -> pile eid=%u cls='%.*s' at (%.1f,%.1f,%.1f) "
-            "variant=%u%s",
-            payload.oldEid, payload.newEid,
-            static_cast<int>(payload.pileClass.len), payload.pileClass.data,
+    p.elementId = E;
+    void* next = nullptr;
+    remote_prop_spawn::OnSpawn(p, senderSlot, localPlayer, /*fromConvert=*/true,
+                              /*deferKerfur=*/true, &next, /*skipBind=*/true);
+    if (!next) {
+        UE_LOGW("remote_prop::OnConvert: eid=%u %s spawn FAILED -- E left rendering as the old actor",
+                E, wantClump ? "clump" : "pile");
+        return nullptr;
+    }
+    // Rebind E onto the new rendering. RegisterPropMirror is the single rebind entry point -- it routes
+    // on the Element's authoritative IsMirror() flag (a MIRROR -> SetActor; a host's OWN local element ->
+    // RebindLocalElementActor, keeping the forward map consistent), so this is correct even when cur is
+    // momentarily dead (findings 3/6/7/15 -- the old eIsLocal-from-live-cur guess silently mis-routed a
+    // local element through the mirror path and desynced g_actorToPropElementId).
+    const std::wstring cls = R::ClassNameOf(next);
+    RegisterPropMirror(E, next, L"", cls, senderSlot, /*rebindInPlace=*/true);
+    // Echo-destroy the OLD rendering AFTER the rebind (so E always resolves to a live actor -- no
+    // flicker where E points at nothing). MarkIncomingDestroy suppresses our own destroy-broadcast.
+    if (cur && cur != next) {
+        ClearAnyDriveFor(cur);
+        if (ResolveDestroyFn()) {
+            coop::prop_echo_suppress::MarkIncomingDestroy(cur);
+            R::CallFunction(cur, g_destroyActorFn, nullptr);
+        }
+    }
+    UE_LOGI("remote_prop::OnConvert: eid=%u re-skin -> %s cls='%ls' at (%.1f,%.1f,%.1f) variant=%u",
+            E, wantClump ? "clump" : "pile", cls.c_str(),
             payload.locX, payload.locY, payload.locZ,
-            static_cast<unsigned>(payload.chipType), pile ? "" : " [pile spawn FAILED]");
-    return pile;
+            static_cast<unsigned>(payload.chipType));
+    return next;
 }
 
 void ConsumeLocalActor(void* actor) {

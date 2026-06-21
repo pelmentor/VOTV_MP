@@ -42,6 +42,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // Clump VISIBILITY probe: solo. Spawns a bare prop_garbageClump_C + logs its
     // StaticMesh asset (null vs named) -- gates the mannequin-model clump rework.
     SpawnIf("VOTVCOOP_RUN_CLUMPVIS_PROBE", "clump visibility probe", &ClumpVisProbeThread, role);
+    // chipPile GRAB test (v81 morph verify): HOST teleports to a tracked chipPile, aims +
+    // confirms lookAtActor==pile via the game's own trace, fires InpActEvt_use (the real
+    // E-press edge), then measures whether the morphed clump lands in holding_actor and the
+    // peer's mirror converts. CLIENT scan-only. Closes the one link an audit/smoke can't.
+    SpawnIf("VOTVCOOP_RUN_CHIPPILE_TEST", "chipPile grab test", &ChipPileTestThread, role);
     // Phase 5F flashlight: both peers toggle their own flashlight; the OTHER
     // peer's puppet should reflect it via the ItemActivate wire path.
     SpawnIf("VOTVCOOP_RUN_FLASHLIGHT_TEST", "flashlight test", &FlashlightTestThread, role);

@@ -68,6 +68,12 @@ bool IsClassKeyedInteractable(void* cls);
 // grabbing a tracked PILE (lookAtActor). Class cached via ResolveExtraBases. False for null.
 bool IsChipPile(void* obj);
 
+// True iff `obj`'s class is prop_garbageClump_C or a subclass (_erie/_leaves/_wetConcrete and
+// prop_dirtball_C which derives from it) -- the carried "ball" a chipPile morphs INTO on grab.
+// Pointer-chain lineage test (no wstring). Used by the bind-model pile morph (pile_morph) to
+// identify the held clump on the PROVEN held-object channel. False for null / non-clump.
+bool IsGarbageClump(void* obj);
+
 // AtrashBitsPile_C lineage test + its collect counters (v57 trash_pile_sync).
 // amountA@0x0260 / amountB@0x0264 raw int32 per the CXX dump; the displayed
 // "uses" readout is their SUM, formatted live by lookAt on every look -- raw

@@ -54,8 +54,17 @@ namespace coop::remote_prop_spawn {
 // (kerfur_prop_adoption::Arm) instead of fresh-spawning a duplicate beside the still-async-loading
 // twin. Passed false by the adoption's own quiescence fresh-spawn fallback (one-shot, no defer loop)
 // and by kerfur_convert::MaterializeKerfurMirror's convert materialize (the parked ghost is ready now).
+//
+// `outSpawned` / `skipBind` (v81 MORPH V2, remote_prop::OnConvert only): when `skipBind` is true,
+// OnSpawn does NOT bind the freshly-spawned actor to `payload.elementId` (it skips the final
+// RegisterPropMirror + IndexActorKey) and instead returns the actor via `*outSpawned`. The bind-model
+// morph re-skins the SAME eid E in place, and the rebind path differs for a LOCAL element (host's own
+// pile -> RebindLocalElementActor) vs a MIRROR (a bystander's adopted pile -> RegisterPropMirror
+// rebindInPlace), so OnConvert binds explicitly. `fromConvert` ALSO skips the eid-dedup so a convert
+// always fresh-spawns the new rendering of E (the still-live old rendering of E must NOT converge it).
 void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
-             void* localPlayer, bool fromConvert = false, bool deferKerfur = true);
+             void* localPlayer, bool fromConvert = false, bool deferKerfur = true,
+             void** outSpawned = nullptr, bool skipBind = false);
 
 // ---- Adoption-universe claim tracking (P2 2026-06-10; widened Fork B 2e) --
 //

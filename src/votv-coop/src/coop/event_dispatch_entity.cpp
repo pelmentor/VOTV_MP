@@ -336,15 +336,21 @@ void HandleEntityEvent(net::Session& session,
             UE_LOGW("event_feed: PropConvert pileClass.len=%u > 63 -- dropping", p.pileClass.len);
             break;
         }
-        if (msg.senderPeerSlot >= 0) {
-            const bool senderIsHost = (msg.senderPeerSlot == 0);
-            if (!coop::element::Registry::IsAllowedSenderEid(senderIsHost, p.oldEid) ||
-                !coop::element::Registry::IsAllowedSenderEid(senderIsHost, p.newEid)) {
-                UE_LOGW("event_feed: PropConvert eids (old=0x%08x new=0x%08x) out of allowed "
-                        "%s range (senderPeerSlot=%d) -- dropping",
-                        p.oldEid, p.newEid, senderIsHost ? "host" : "peer", msg.senderPeerSlot);
-                break;
-            }
+        // v81 MORPH V2 either-range trust: a PropConvert re-skins an EXISTING shared entity's eid E
+        // (oldEid==newEid==E), and E is the ORIGINAL owner's (host-minted) id -- NOT the sender's. When
+        // a CLIENT grabs a host-owned pile and broadcasts the morph, E is host-range with a client
+        // sender slot; the old per-role IsAllowedSenderEid(role) check would DROP it (the exact failure
+        // a host-grab-only smoke masks -- symmetric with the PropDestroy either-range fix above). Accept
+        // EITHER range; still reject a genuinely invalid id (0 / kInvalidId / out of both ranges).
+        auto eidOutOfBothRanges = [](uint32_t e) {
+            return e != 0u && e != coop::element::kInvalidId &&
+                   !coop::element::Registry::IsAllowedHostAllocatedEid(e) &&
+                   !coop::element::Registry::IsAllowedPeerAllocatedEid(e);
+        };
+        if (eidOutOfBothRanges(p.oldEid) || eidOutOfBothRanges(p.newEid)) {
+            UE_LOGW("event_feed: PropConvert eids (old=0x%08x new=0x%08x) out of both allocated "
+                    "ranges (senderPeerSlot=%d) -- dropping", p.oldEid, p.newEid, msg.senderPeerSlot);
+            break;
         }
         // OnConvert spawns the pile via remote_prop_spawn::OnSpawn (which RegisterPropMirror-binds it,
         // so a later grab resolves its eid via the InpActEvt_use observer -> PropDestroy). A null

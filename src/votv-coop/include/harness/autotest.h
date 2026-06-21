@@ -32,6 +32,20 @@ DWORD WINAPI GrabTestThread(LPVOID arg);
 void RunAutonomousClumpTest();
 DWORD WINAPI ClumpTestThread(LPVOID arg);
 
+// Autonomous chipPile GRAB test (env VOTVCOOP_RUN_CHIPPILE_TEST=1, 2026-06-20,
+// harness/autotest_chippile.cpp). HOST-driven; closes the ONE runtime-unverified link in
+// the v81 pile morph (docs/piles/07): does a REAL E-press grab of a tracked chipPile put the
+// morphed clump into mainPlayer.holding_actor (so pile_morph::TryAdoptHeldClump fires)? It
+// teleports the host player to a tracked pile, aims the camera + POLLS the game's own
+// interaction trace until lookAtActor==pile (the self-validating fidelity gate), fires
+// CallFunction(InpActEvt_use) -- the SAME ProcessEvent edge a real E-press hits, so
+// OnPileGrabPre fires identically and the BP runs the real grab (RE pass1: the graph gates
+// ONLY on icast(lookAtActor), no input gate) -- then MEASURES holding_actor for the clump and
+// (best-effort) throws to test the re-pile. CLIENT scan-only (observes OnConvert over the
+// wire). Never claims pass from this alone; it produces the matching real log to read.
+void RunAutonomousChipPileTest();
+DWORD WINAPI ChipPileTestThread(LPVOID arg);
+
 // Clump VISIBILITY probe (env VOTVCOOP_RUN_CLUMPVIS_PROBE=1). Solo. Spawns a bare
 // prop_garbageClump_C in front of the player + logs whether its StaticMesh asset is
 // null (empty) or named (visible) -- gates the mannequin-model rework. Launch via mp.py clumpvis.

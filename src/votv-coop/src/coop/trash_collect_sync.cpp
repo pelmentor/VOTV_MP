@@ -10,6 +10,7 @@
 #include "coop/trash_collect_sync.h"
 
 #include "coop/kerfur_entity.h"  // K-5: IsKerfurActor (the held-kerfur class-gate)
+#include "coop/pile_morph.h"     // v81 MORPH V2: the bind-model grab edge (replaces the v52 death-watch)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/prop_element_tracker.h"
@@ -42,105 +43,25 @@ namespace P  = ue_wrap::profile;
 std::atomic<coop::net::Session*> g_session{nullptr};
 bool g_grabObserverInstalled = false;  // InpActEvt_use PRE registration latch (stays for process life)
 
-// Death-watch set. The clump's morph-destroy is unobservable (see header), so the
-// owner liveness-checks every clump it broadcast and broadcasts the despawn when the
-// actor dies. GAME-THREAD ONLY: both the held-edge (EnsureHeldItemBroadcast) and the
-// per-tick sweep (TickWatchReleasedClumps) run from net_pump::Tick on the game thread,
-// so no lock is needed. Bounded -- clumps are transient (usually 0-1 active); the cap
-// is a runaway backstop. [[project-bug-trash-chippile-uaf-crash]]
-struct WatchedClump {
-    void*    actor       = nullptr;
-    int32_t  internalIdx = -1;     // captured while live -> IsLiveByIndex without deref
-    uint32_t eid         = 0;      // PropDestroy identity (key=None)
-    ue_wrap::FVector lastPos{};    // updated each tick while alive -> the landed-pile search anchor
-};
-std::vector<WatchedClump> g_watchedClumps;
-constexpr size_t kMaxWatchedClumps = 32;
-
+// RULE 1+2 (2026-06-20, v81 MORPH V2): the CLUMP death-watch that used to live here (WatchedClump /
+// g_watchedClumps / WatchClump / BroadcastConvertNear / TickWatchReleasedClumps) is RETIRED. It
+// expressed a held clump as a FRESH-eid keyless PropSpawn then liveness-polled it to emit a fresh-eid
+// PropConvert on land -- the destroy-and-recreate model the robust design condemns: a SECOND cross-peer
+// entity per morph (the dupe), and the host's held clump was suppressed forever by the pre-quiescence
+// guard so it never fired at all. Replaced by coop/pile_morph: the bind-model morph RE-SKINS the pile's
+// eid E in place (pile-A -> clump -> pile-B, oldEid==newEid==E), anchored on the PROVEN held-object
+// channel, with a deferred-destroy fallback. docs/piles/07-MORPH-V2-held-object-channel.md.
+//
 // NOTE (2026-06-17, RULE 1+2): the mirror-PILE death-watch that used to live here (g_watchedPiles +
-// WatchPile/WatchPileAt/NotifyPileConsumed/TickWatchReleasedPiles) is RETIRED. It inferred "grabbed"
-// from "a watched pile's actor died NEAR the local camera", which is UNSOUND: a chipPile is a mobile,
-// physics-simulating actor that dies near the camera for many non-grab reasons (a peer bumping it,
-// a physics nudge through the floor, a LifeSpan/removeWOrespawn despawn). Any such near-camera death
-// was misread as a grab -> a spurious PropDestroy(eid) -> the receiver's unconditional K2_DestroyActor
-// wiped the pile on BOTH peers. Since BOTH peers watch the same pile, a peer repeatedly TOUCHING a pile
-// eventually triggered a near-camera non-grab death and the pile vanished for everyone -- the recurring
-// "piles destroyed when a peer touches them a lot" bug. The DECISIVE RE
-// (votv-pile-grab-observable-hook-RE-2026-06-08-pass1.md) proved the correct, strictly-better mechanism
-// is OnPileGrabPre below: a PRE observer on the (ProcessEvent-visible) E-press InpActEvt_use that reads
-// lookAtActor -> the pile, still ALIVE + eid-resolvable -> PropDestroy(eid). It fires ONLY on a real
-// grab (a bump/stream-out/physics-death is not an E-press, so it can never enter that path). The CLUMP
-// death-watch below stays -- a thrown clump's morph-to-pile conversion is genuinely unobservable and
-// has no input edge, so the owner-side liveness poll is the only signal (and clumps are airborne &
-// transient, not the stationary piles a player walks up to and bumps).
-
-// Register a freshly-broadcast clump for death-watching. Idempotent per eid.
-void WatchClump(void* clump, uint32_t eid) {
-    if (!clump || eid == 0) return;
-    const int32_t idx = R::InternalIndexOf(clump);
-    if (idx < 0) return;
-    const ue_wrap::FVector pos = ue_wrap::engine::GetActorLocation(clump);
-    for (auto& w : g_watchedClumps) {
-        if (w.eid == eid) { w.actor = clump; w.internalIdx = idx; w.lastPos = pos; return; }
-    }
-    if (g_watchedClumps.size() >= kMaxWatchedClumps) {
-        // Backstop: shed the oldest (should never trigger in normal play).
-        g_watchedClumps.erase(g_watchedClumps.begin());
-    }
-    g_watchedClumps.push_back(WatchedClump{clump, idx, eid, pos});
-}
-
-// When a watched clump dies it CONVERTED: its hit-handler spawned a fresh chipPile at ~the clump's
-// last position then self-destructed (the morph is BP-internal/unobservable, so the death-watch is
-// how we learn of it). Find that pile -- an owner-side spatial query of OUR OWN just-spawned pile,
-// which IS sound (the unsound case the DECISIVE RE retired was FindNearestChipPile on the RECEIVER,
-// where piles are NOT co-located cross-peer; here the owner's pile is genuinely at pos). Mint a NEW
-// eid for it, bind it locally, and broadcast ONE atomic PropConvert{oldEid=the dying clump's ball
-// eid, newEid=the pile, transform, chipType, vel}. The receiver atomically destroys the ball mirror
-// by oldEid AND spawns the pile by newEid -> no lingering ball, no double pile, no cross-peer
-// position guess. Also enrols the owner's pile in the mirror-pile death-watch so a later re-grab of
-// it propagates by identity. Returns true iff a pile was found + the convert broadcast (false = the
-// clump expired WITHOUT converting -> caller falls back to a bare PropDestroy(oldEid) so the peer
-// still despawns the flying mirror). RE: votv-clump-lifecycle-observability-...-pass2.md.
-bool BroadcastConvertNear(uint32_t oldEid, const ue_wrap::FVector& pos, coop::net::Session* s) {
-    float dist = -1.f;
-    void* pile = ue_wrap::prop::FindNearestChipPile(pos, 200.f, &dist);
-    if (!pile) return false;
-    const std::wstring cls = R::ClassNameOf(pile);
-    // Mint the authoritative pile eid + bind it to the owner's pile (so the owner's OWN later
-    // re-grab of this pile resolves the eid for the mirror-pile death-watch). Idempotent.
-    PT::MarkProcessedInit(pile);
-    PT::MarkPropElement(pile, L"", cls);
-    const coop::element::ElementId newEid = PT::GetPropElementIdForActor(pile);
-    if (newEid == coop::element::kInvalidId) return false;
-    coop::net::PropConvertPayload p{};
-    p.oldEid = oldEid;
-    p.newEid = static_cast<uint32_t>(newEid);
-    p.pileClass.len = 0;
-    for (size_t i = 0; i < cls.size() && i < 63; ++i)
-        p.pileClass.data[p.pileClass.len++] = static_cast<char>(cls[i]);
-    const ue_wrap::FVector  loc = ue_wrap::engine::GetActorLocation(pile);
-    const ue_wrap::FRotator rot = ue_wrap::engine::GetActorRotation(pile);
-    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
-    p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
-    p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
-    p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
-    p.chipType = ue_wrap::prop::GetChipType(pile);
-    UE_LOGI("trash_collect: CONVERT ball eid=%u -> pile eid=%u cls='%ls' at (%.1f,%.1f,%.1f) "
-            "variant=%u dist=%.1f",
-            oldEid, p.newEid, cls.c_str(), p.locX, p.locY, p.locZ,
-            static_cast<unsigned>(p.chipType), dist);
-    s->SendReliable(coop::net::ReliableKind::PropConvert, &p, sizeof(p));
-    // Fork B 2c: a convert-born pile announced while a snapshot bracket is
-    // open is wire-expressed by US -- claim it or the adoption sweep at
-    // SnapshotComplete destroys our own freshly-announced pile. Also keeps
-    // the watched-piles-are-always-claimed invariant for owner-side watches.
-    coop::remote_prop_spawn::RecordClaimIfTracking(pile);
-    // The owner's later re-grab of this converted pile is caught by OnPileGrabPre (the InpActEvt_use
-    // PRE observer reads lookAtActor=pile -> newEid -> PropDestroy) -> the receiver drops its mirror.
-    // (This used to enroll the pile in the now-retired pile death-watch; see the note above.)
-    return true;
-}
+// WatchPile/...) was RETIRED earlier. It inferred "grabbed" from "a watched pile's actor died NEAR the
+// local camera", which is UNSOUND: a chipPile dies near the camera for many non-grab reasons (a peer
+// bump, a physics nudge, a LifeSpan despawn), each misread as a grab -> a spurious PropDestroy -> the
+// pile wiped on BOTH peers (the recurring "piles destroyed when touched a lot" bug). The DECISIVE RE
+// (votv-pile-grab-observable-hook-RE-2026-06-08-pass1.md) proved the correct mechanism is OnPileGrabPre
+// below: a PRE observer on the (ProcessEvent-visible) E-press InpActEvt_use that reads lookAtActor ->
+// the pile, still ALIVE + eid-resolvable. It fires ONLY on a real grab (a bump/stream-out/physics-death
+// is not an E-press). OnPileGrabPre now arms the pile_morph grab edge (carry + re-pile) with a
+// deferred-destroy fallback that preserves the working grab->vanish.
 
 }  // namespace
 
@@ -157,6 +78,13 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     // the HOST this is redundant (its kerfur prop is tracker-known -> the express skip below already
     // returns false), but gating up-front is role-agnostic + explicit.
     if (coop::kerfur_entity::IsKerfurActor(heldActor)) return false;
+    // v81 MORPH V2 class-gate: a garbageClump is the bind-model morph's product -- pile_morph owns its
+    // identity, claiming it at its Init-POST (TryClaimMorphProduct) where it re-skins the grabbed pile's
+    // eid E onto the clump + suppresses the independent expression; the carry then streams under E. The
+    // clump must NEVER be expressed here as a FRESH-eid keyless PropSpawn (the retired v52 death-watch
+    // model = a second cross-peer entity = the dupe). If a clump reaches here it had no live grab to
+    // claim (a stray pickup / a missed morph the deferred-destroy fallback handles) -> never author it.
+    if (ue_wrap::prop::IsGarbageClump(heldActor)) return false;
     // Any KEYED interactable: Aprop_C trash items AND the non-Aprop_C
     // garbageClump/chipPile (the actual trash the player carries). CRASH-SAFETY
     // is enforced on the RECEIVER, not by excluding them here: GetStaticMesh
@@ -322,42 +250,9 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     // Fork B 2c: self-claim -- this peer just wire-expressed the held item;
     // an open bracket's sweep must not destroy it as "unclaimed".
     coop::remote_prop_spawn::RecordClaimIfTracking(heldActor);
-    // Non-keyable trash CLUMP (key was cleared above): its eventual morph-destroy is
-    // UNOBSERVABLE (bypasses the K2_DestroyActor observer), so death-watch it -- the
-    // tick its actor dies we broadcast the despawn by eid. Keyed Aprop_C trash items
-    // are NOT watched: their destroy fires the observer normally (the keyed path works).
-    if (keyStr.empty() && p.elementId != 0) {
-        WatchClump(heldActor, p.elementId);
-    }
+    // (v81 MORPH V2: the former clump WatchClump enroll is GONE -- clumps return early above; the
+    // bind-model pile_morph owns the clump's identity + its land conversion.)
     return true;
-}
-
-void TickWatchReleasedClumps(coop::net::Session* s) {
-    if (!s || !s->connected() || g_watchedClumps.empty()) return;
-    for (size_t i = 0; i < g_watchedClumps.size();) {
-        WatchedClump& w = g_watchedClumps[i];
-        if (R::IsLiveByIndex(w.actor, w.internalIdx)) {
-            w.lastPos = ue_wrap::engine::GetActorLocation(w.actor);  // track for the landed-pile search
-            ++i;
-            continue;
-        }
-        // The clump's actor went dead -> it CONVERTED (re-piled on landing) or its LifeSpan
-        // expired. Emit ONE atomic PropConvert if it re-piled: the receiver destroys the ball
-        // mirror by oldEid AND spawns the pile by newEid in a single handler (no separate
-        // spawn+destroy race, no lingering ball, no double pile). If it expired WITHOUT
-        // converting (no pile near lastPos), fall back to a bare PropDestroy(oldEid) so the peer
-        // still despawns the flying mirror. RE: ...-robust-design-...-pass2.md.
-        const bool converted = BroadcastConvertNear(w.eid, w.lastPos, s);
-        if (!converted) {
-            coop::net::PropDestroyPayload dp{};
-            dp.key.len   = 0;          // key=None: the clump is eid-only
-            dp.elementId = w.eid;
-            s->SendPropDestroy(dp);
-            UE_LOGI("trash_collect: watched clump eid=%u died WITHOUT converting -> PropDestroy (despawn mirror)",
-                    w.eid);
-        }
-        g_watchedClumps.erase(g_watchedClumps.begin() + i);
-    }
 }
 
 // ---- pile-grab destroy: the InpActEvt_use PRE observer (RULE-1 replacement for the death-watch) ----
@@ -382,8 +277,19 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
     if (!s || !s->connected()) return;  // BOTH roles -- whoever physically grabs
     void* aimed = ue_wrap::engine::ReadMainPlayerLookAtActor(self);  // the pile (PRE-conversion, alive)
     if (!aimed || !ue_wrap::prop::IsChipPile(aimed)) return;         // E-press not aimed at a pile
+    // HANDS-FULL gate: if the player is ALREADY holding something (a carried clump/item), this E-press
+    // cannot grab the aimed pile -- no morph will happen. Arming a morph (with its deferred PropDestroy
+    // fallback) here would spuriously vanish an un-grabbed pile's mirror on peers. Skip. (PRE observer:
+    // the held state is the player's PRIOR carry; the aimed pile's own morph hasn't run yet.)
+    {
+        ue_wrap::engine::MainPlayerGrabState gs{};
+        if (ue_wrap::engine::ReadMainPlayerGrabState(self, gs) && (gs.grabbingActor || gs.holdingActor))
+            return;
+    }
     // Cross-peer identity: a pile WE own is in the forward map; a pile WE mirror is in the prop
-    // MirrorManager. Either resolves THE shared eid the other peer keys its copy on.
+    // MirrorManager. Either resolves THE shared host-minted eid the other peer keys its copy on. (The
+    // morph's rebind routes on the Element's authoritative IsMirror() flag inside RegisterPropMirror, so
+    // we no longer need to thread which map it came from.)
     coop::element::ElementId eid = PT::GetPropElementIdForActor(aimed);
     if (eid == coop::element::kInvalidId)
         eid = coop::remote_prop::ResolveMirrorEidByActor(aimed);
@@ -398,12 +304,13 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
     if (eid == s_lastEid && now - s_lastTs < std::chrono::milliseconds(300)) return;
     s_lastEid = eid;
     s_lastTs  = now;
-    coop::net::PropDestroyPayload dp{};
-    dp.key.len   = 0;     // chipPile is eid-only (Key=None on the wire)
-    dp.elementId = static_cast<uint32_t>(eid);
-    s->SendPropDestroy(dp);
-    UE_LOGI("trash_collect: pile grab (E-press on chipPile eid=%u) -> PropDestroy (peer drops its mirror)",
-            static_cast<unsigned>(eid));
+    // v81 MORPH V2: arm the bind-model morph (carry + re-pile) on the pile's eid E. pile_morph claims the
+    // morphed clump at its Init-POST (rebind E + PropConvert{ToClump} + suppress the clump's independent
+    // identity). A deferred PropDestroy(E) fallback inside pile_morph fires if no clump is claimed in time
+    // -- so this STILL produces the working take-17 grab->vanish when the morph can't sync (no regression),
+    // and the carry/re-pile when it can (the upgrade).
+    const ue_wrap::FVector pilePos = ue_wrap::engine::GetActorLocation(aimed);  // pile alive here
+    coop::pile_morph::OnGrab(*s, eid, pilePos);
 }
 
 void Install(coop::net::Session* session) {
@@ -422,12 +329,13 @@ void Install(coop::net::Session* session) {
         return;  // not latched -> retry next Install
     }
     g_grabObserverInstalled = true;
-    UE_LOGI("trash_collect: pile-grab observer installed on InpActEvt_use (E-press on a chipPile -> PropDestroy(eid))");
+    UE_LOGI("trash_collect: pile-grab observer installed on InpActEvt_use (E-press on a chipPile -> "
+            "pile_morph grab edge: carry+re-pile, deferred-destroy fallback)");
 }
 
 void OnDisconnect() {
     g_session.store(nullptr, std::memory_order_release);
-    g_watchedClumps.clear();
+    coop::pile_morph::OnDisconnect();  // clear the morph latches (pending-morph + land-watch)
 }
 
 }  // namespace coop::trash_collect_sync

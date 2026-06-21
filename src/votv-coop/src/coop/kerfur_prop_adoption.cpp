@@ -148,7 +148,7 @@ void ResolvePending() {
                     e.payload.elementId, e.classW.c_str(),
                     quiesced ? "load tail quiesced" : "last-resort timeout");
             coop::remote_prop_spawn::OnSpawn(e.payload, /*senderSlot=*/0, localPlayer,
-                                             /*fromConvert=*/false, /*deferKerfur=*/false);
+                                             /*deferKerfur=*/false);
             resolved = true;
         }
         if (resolved) {

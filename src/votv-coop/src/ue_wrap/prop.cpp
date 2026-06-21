@@ -156,6 +156,12 @@ bool IsChipPile(void* obj) {
     return WalksToBase(R::ClassOf(obj), ActorChipPileCls());
 }
 
+bool IsGarbageClump(void* obj) {
+    if (!obj) return false;
+    ResolveExtraBases();
+    return WalksToBase(R::ClassOf(obj), GarbageClumpCls());
+}
+
 bool IsTrashBitsPile(void* obj) {
     if (!obj) return false;
     ResolveExtraBases();

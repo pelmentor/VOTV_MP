@@ -302,8 +302,7 @@ void MaterializeKerfurMirror(bool toNpc, coop::element::ElementId eid, const std
         // deferKerfur=false: this is the CONVERSION materialize -- the client's parked ghost is ready
         // NOW (claim/adopt), so OnSpawn must run the inline fuzzy-adopt, NOT defer to the join-time
         // kerfur_prop_adoption poll (which is for un-converted save-loaded twins). K-6.
-        coop::remote_prop_spawn::OnSpawn(sp, /*senderSlot=*/0, localPlayer, /*fromConvert=*/false,
-                                         /*deferKerfur=*/false);
+        coop::remote_prop_spawn::OnSpawn(sp, /*senderSlot=*/0, localPlayer, /*deferKerfur=*/false);
     }
 }
 

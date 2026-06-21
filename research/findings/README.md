@@ -1,0 +1,37 @@
+# research/findings — point-in-time RE + design log (read this first)
+
+This folder is the project's **append-only, point-in-time** reverse-engineering and design log
+(per `docs/ARCHITECTURE.md`: living docs stay current in `docs/`; the dated history lives here). ~150
+files. **It is NOT a description of the current state** — each file is a snapshot from its date.
+
+## How to read it (so you don't mistake an old doc for the truth)
+
+1. **For the CURRENT cross-cutting truth, start in `docs/`, NOT here:**
+   - [../../docs/COOP_ENTITY_EXPRESSION_MAP.md](../../docs/COOP_ENTITY_EXPRESSION_MAP.md) — how every
+     synced entity gets identity/expression/destroy (code-verified, confidence-tagged).
+   - [../../docs/COOP_DISPATCH_VISIBILITY.md](../../docs/COOP_DISPATCH_VISIBILITY.md) — will my hook fire?
+     (VISIBLE vs INVISIBLE dispatch). **These two supersede the cross-cutting parts of the RE docs here.**
+   - [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md), [COOP_SCOPE](../../docs/COOP_SCOPE.md),
+     [ROADMAP](../../docs/ROADMAP.md), and the auto-memory (`MEMORY.md` index) for the running state.
+2. **`*-RE-*` docs are DURABLE** — bytecode/struct/dispatch facts that stay true until the GAME updates
+   (e.g. `votv-pile-grab-observable-hook-RE`, `votv-clump-pile-dupe-DECISIVE-RE` — both cited by the
+   COOP_* maps as the evidence base). Trust them, but still verify the offset/field against the current
+   CXXHeaderDump (WP18: memory decays, the dump is authority).
+3. **`*-DESIGN-*` / `*-PLAN-*` / `*-roadmap-*` docs are POINT-IN-TIME** — the design rationale for a
+   feature as of its date. Most describe SHIPPED features (the **code is the as-built truth**, not the
+   design doc). Some describe APPROACHES THAT WERE ABANDONED — those live in `_archive/`.
+4. **`*-AUDIT-*` / `*-RCA-*` docs** are post-mortems of a specific bug/state; the bug is usually long-fixed.
+
+## `_archive/` — definitively superseded / abandoned approaches
+Moved out of the active log so they can't be mistaken for a current plan (see `_archive/README.md`). As
+of 2026-06-20: the failed pile save-strip + thin-client-sync approaches (superseded by docs/piles/07).
+
+## Note on duplication
+The pile/trash/clump/snapshot/save-transfer RE docs are ALSO copied verbatim under
+`docs/piles/findings/` (the consolidated pile knowledge base). The originals here are the canonical
+copies; `docs/piles/` is the curated subset.
+
+> Sweep note (2026-06-20): this index was added during the "fix ourselves" pass. A full per-file
+> staleness audit of all ~150 point-in-time docs was NOT done (most are durable RE or shipped-feature
+> design — not misleading); only the definitively-dead approaches were archived. If a specific topic's
+> docs look contradictory, the `docs/` canonical doc + the code win.

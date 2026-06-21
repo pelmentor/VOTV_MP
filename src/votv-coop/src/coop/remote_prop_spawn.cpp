@@ -310,7 +310,9 @@ void RecordClaimIfTracking(void* actor) {
 }
 
 void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
-             void* localPlayer, bool fromConvert, bool deferKerfur) {
+             void* localPlayer, bool fromConvert, bool deferKerfur,
+             void** outSpawned, bool skipBind) {
+    if (outSpawned) *outSpawned = nullptr;  // cleared up-front; set only on a successful spawn
     using ue_wrap::ParamFrame;
     using ue_wrap::Call;
     const std::wstring classW = ClassNameToWString(payload.className);
@@ -347,7 +349,15 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // client's to match host's). 2026-05-24.
     bool dedupeFellBack = false;
     void* existing = nullptr;
-    if (eidOnly) {
+    if (fromConvert) {
+        // v81 MORPH V2: a convert re-skins eid E in place (oldEid==newEid==E). The still-live OLD
+        // rendering of E (the pile-A being morphed, or the clump being re-piled) is ALREADY at
+        // Registry::Get(E) -- letting the eid-dedup below resolve it as `existing` would converge the
+        // morph onto the actor we are replacing instead of fresh-spawning the new one. Skip the dedup
+        // entirely for a convert: OnConvert captures the old rendering itself, then destroys it after
+        // the new one is spawned + rebound. (Pre-v81, fromConvert minted a FRESH newEid so this never
+        // collided; the bind model reuses E, so the skip is now load-bearing.)
+    } else if (eidOnly) {
         // Non-keyable clump: dedup by EID (the Registry mirror binding), not key.
         if (auto* e = coop::element::Registry::Get().Get(payload.elementId)) {
             void* a = e->GetActor();
@@ -905,6 +915,11 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // a future Init-body change can't silently regress only one path.
     RestoreCollisionIfNeeded(L"fresh-spawn", classW, spawned);
     // (kAtRest sleep REVERTED 2026-06-09 -- see exact-key branch.)
+    // v81 MORPH V2: a convert re-skins eid E in place and the rebind path is local-vs-mirror
+    // specific (RebindLocalElementActor vs RegisterPropMirror rebindInPlace), so OnConvert binds
+    // explicitly -- hand it the spawned actor and skip the default mirror bind here.
+    if (outSpawned) *outSpawned = spawned;
+    if (skipBind) return;
     // A2 (2026-05-29) mirror binding: bind sender's wire eid to the freshly
     // spawned local actor. Subsequent Registry::Get(eid) on this peer
     // resolves to this actor; PropDestroy with the same eid drains the

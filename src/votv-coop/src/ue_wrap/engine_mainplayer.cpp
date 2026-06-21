@@ -306,6 +306,20 @@ void* ReadMainPlayerLookAtActor(void* mainPlayer) {
     return *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(mainPlayer) + off);
 }
 
+bool WriteMainPlayerLookAtActor(void* mainPlayer, void* actor) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    const int32_t off = ue_wrap::reflected_offset::MainPlayer_lookAtActor();
+    if (off < 0) return false;
+    // lookAtActor is the cached interaction-trace result the game re-derives every tick (NOT a
+    // UFunction-setter-managed field with side-effect setup), so a direct write is safe and is the
+    // established in-tree pattern -- device_screen.cpp ClearAimForDispatch nulls + restores it
+    // around an InpActEvt_use dispatch. Setting it to the aimed actor for the single dispatch that
+    // immediately follows lets the BP's icast(lookAtActor) resolve to it (the next tick's trace
+    // overwrites it). Game thread only.
+    *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(mainPlayer) + off) = actor;
+    return true;
+}
+
 bool ReadMainPlayerRadialSelect(void* mainPlayer, bool& releaseEToUse, int32_t& actionIndex) {
     releaseEToUse = false;
     actionIndex   = -1;

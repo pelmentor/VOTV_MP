@@ -6,16 +6,19 @@ gate — don't proceed until met.
 
 Legend: ☐ not started · ◐ in progress · ☑ done.
 
-**Quick status (2026-05-29):** Phases 0-3 done. Phase 4 partial (4.1
-input replication is per-pawn pose stream; 4.2-4.6 ongoing). Phase 5
-done (autonomous harness + LAN test framework). Phase 4.x transport
-migrated to **GameNetworkingSockets v1.5.1** (Valve, vendored as
-submodule; PR-1..PR-4 SHIPPED 2026-05-28) with 3 priority lanes
-(High / Normal / Bulk) and `kMaxPeers=4` via PollGroup. Recent work is in
-the 5N* / 5S* / 5T / 5D series (NPC sync, save snapshot-on-connect,
-terminals, doors+lights), plus the Tier-3 MTA Element/Registry/Mirror
-migration shipped 2026-05-28. See the bottom of this file for the "Live
-workstreams" section — that's where iteration actually happens.
+**Quick status (updated 2026-06-20):** Phases 0-5 done. Transport is
+**GameNetworkingSockets v1.5.1** (3 lanes, `kMaxPeers=4`). The foundation
+(MTA Element/Registry/Mirror) + the broad replication surface have shipped:
+NPC sync, WorldActor mirror (proto v80), save snapshot-on-connect, terminals,
+doors+lights+keypads, kerfur (prop⇄NPC conversion), events, voice, and the
+MTA-divergence refactor (incremental re-seed + membership-bounded sweep). The
+protocol is at **v81** (the pile MORPH V2 work). **The day-to-day live state is
+in the auto-memory (`MEMORY.md` index + the top `project_*` entry), NOT this
+file** — this roadmap is the phase-gate structure; the memory is the running log.
+For cross-cutting architecture truth see the new
+[COOP_ENTITY_EXPRESSION_MAP.md](COOP_ENTITY_EXPRESSION_MAP.md) +
+[COOP_DISPATCH_VISIBILITY.md](COOP_DISPATCH_VISIBILITY.md). The "Live workstreams"
+section at the bottom of this file is stale (≤2026-05-29) — defer to memory.
 
 **Foundation audit v2 (2026-05-29):** see
 `research/findings/votv-architecture-audit-2026-05-29.md` for the full

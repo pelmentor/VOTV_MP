@@ -397,6 +397,39 @@ coop::element::ElementId GetPropElementIdForActor(void* actor) {
     return it->second;
 }
 
+void RebindLocalElementActor(coop::element::ElementId eid, void* newActor) {
+    // Game-thread only (all morph edges run on the game thread); the reverse map is mutex-guarded.
+    if (eid == coop::element::kInvalidId || eid == 0u || !newActor) return;
+    coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+    if (!el) return;
+    if (el->IsMirror()) {
+        // A mirror eid is the wrong path -- remote_prop::RegisterPropMirror(...,rebindInPlace)
+        // owns mirror rebinds (and the reverse map below is host/seed-side local bookkeeping a
+        // mirror was never in). Defensive guard; pile_morph only calls this for an isLocal eid.
+        UE_LOGW("prop_element_tracker::RebindLocalElementActor: eid=%u is a MIRROR -- ignoring "
+                "(use RegisterPropMirror rebindInPlace)", eid);
+        return;
+    }
+    void* oldActor = el->GetActor();
+    if (oldActor == newActor) return;  // idempotent
+    // Re-point the canonical Element (+ cached liveness index) so ResolveLiveActorByEid(eid)
+    // now resolves the new rendering of E.
+    el->SetActor(newActor, R::InternalIndexOf(newActor));
+    // Re-point the reverse map: drop the OLD actor's entry only if it still names THIS eid
+    // (an address-recycle by a newer prop must not be disturbed), then bind newActor -> eid.
+    {
+        std::lock_guard<std::mutex> lk(g_actorToPropElementIdMutex);
+        if (oldActor) {
+            auto it = g_actorToPropElementId.find(oldActor);
+            if (it != g_actorToPropElementId.end() && it->second == eid)
+                g_actorToPropElementId.erase(it);
+        }
+        g_actorToPropElementId[newActor] = eid;
+    }
+    UE_LOGI("prop_element_tracker::RebindLocalElementActor: eid=%u re-pointed %p -> %p (morph re-skin)",
+            eid, oldActor, newActor);
+}
+
 // ---- Key -> live-actor lookup (public) ----------------------------------
 
 void IndexActorKey(void* actor, const std::wstring& key) {

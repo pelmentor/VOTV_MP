@@ -12,8 +12,10 @@
 #include "coop/kerfur_entity.h"  // K-5: GetKerfurMirrorEidForActor (held-kerfur-prop eid fallback)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
+#include "coop/pile_morph.h"      // v81 MORPH V2: TryAdoptHeldClump (the proven held-object grab seam)
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_stick_sync.h"
+#include "coop/remote_prop.h"     // ResolveMirrorEidByActor (the bound-clump held-pose eid fallback)
 #include "coop/trash_collect_sync.h"
 
 #include "ue_wrap/atv.h"
@@ -41,6 +43,10 @@ namespace R = ue_wrap::reflection;
 // OnSessionStart on each session.Start.
 void* g_lastHeldProp = nullptr;
 coop::net::WireKey g_lastHeldKey{};
+// v81 MORPH V2: the held actor's wire eid, resolved ONCE on the new-held edge (where the O(n)
+// ResolveMirrorEidByActor fallback for a morph-bound clump may run) and reused for the per-tick stream so
+// the hot path stays O(1) -- a held actor's identity is stable for the whole carry. kInvalidId = unkeyed.
+coop::element::ElementId g_lastHeldEid = coop::element::kInvalidId;
 uint64_t g_propEmitCount = 0;
 
 // v22 ragdoll-physics edge detector (same file-scope rationale as g_lastHeldProp:
@@ -172,6 +178,13 @@ coop::element::ElementId ResolveHeldPropEid(void* heldActor) {
     auto eid = coop::prop_element_tracker::GetPropElementIdForActor(heldActor);
     if (eid == coop::element::kInvalidId)
         eid = coop::kerfur_entity::GetKerfurMirrorEidForActor(heldActor);
+    // v81 MORPH V2: a held garbageClump bound to the grabbed pile's eid E by pile_morph (the host's own
+    // morph rebinds the local tracker Element -> resolved above; a client's morph rebinds a MIRROR ->
+    // resolved here). Without this the carried clump would stream eid=0 ("no local match" flood) and the
+    // peers' clump mirror would never follow the hand. Reached only on the new-held edge + cached for the
+    // per-tick stream by the caller, so the O(n) mirror snapshot is not a hot path.
+    if (eid == coop::element::kInvalidId)
+        eid = coop::remote_prop::ResolveMirrorEidByActor(heldActor);
     return eid;
 }
 
@@ -180,6 +193,7 @@ coop::element::ElementId ResolveHeldPropEid(void* heldActor) {
 void OnSessionStart() {
     g_lastHeldProp = nullptr;
     g_lastHeldKey = {};
+    g_lastHeldEid = coop::element::kInvalidId;
     g_propEmitCount = 0;
     g_wasRagdolling = false;
     g_ragdollEmitCount = 0;
@@ -275,14 +289,24 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         // floats in front of the puppet via this pose stream (like the mannequin),
         // and gets physics on release. [[project-bug-trash-chippile-uaf-crash]]
         if (heldActor != g_lastHeldProp) {
-            const bool mirrored =
-                coop::trash_collect_sync::EnsureHeldItemBroadcast(heldActor, &session);
-            const auto eid = ResolveHeldPropEid(heldActor);
-            UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' eid=%u -> prop-mirror=%s",
+            // New-held edge -- the PROVEN held-object grab seam (v81 MORPH V2). If a pile_morph grab is
+            // pending and this newly-held actor is the morphed clump, adopt it onto the grabbed pile's eid
+            // E (rebind + PropConvert{ToClump} + arm the land-watch) and DON'T author it as a fresh-eid
+            // item (the convert + this pose stream own the clump). A non-clump / no-pending held item
+            // falls through to the normal Aprop_C broadcast. Then resolve the wire eid ONCE here -- the
+            // only place the O(n) ResolveMirrorEidByActor fallback (for the morph-bound clump) may run --
+            // and CACHE it (g_lastHeldEid) for the per-tick stream below so the carry hot path is O(1).
+            const bool adopted =
+                coop::pile_morph::TryAdoptHeldClump(session, heldActor);
+            const bool mirrored = adopted
+                ? false
+                : coop::trash_collect_sync::EnsureHeldItemBroadcast(heldActor, &session);
+            g_lastHeldEid = ResolveHeldPropEid(heldActor);
+            UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' eid=%u -> %s",
                     heldActor, R::ClassNameOf(heldActor).c_str(),
                     ue_wrap::prop::GetInteractableKeyString(heldActor).c_str(),
-                    (eid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(eid),
-                    mirrored ? "BROADCAST" : "no");
+                    (g_lastHeldEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(g_lastHeldEid),
+                    adopted ? "MORPH-ADOPT(ToClump)" : (mirrored ? "BROADCAST" : "no"));
         }
         // Stream the held world transform. key (None for the clump) + eid (the
         // clump's cross-peer identity); the receiver resolves the mirror by key,
@@ -294,10 +318,10 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // The save UUIDs are ASCII; this lossless narrowing is fine.
             pp.key.data[pp.key.len++] = static_cast<char>(keyW[i]);
         }
-        {
-            const auto eid = ResolveHeldPropEid(heldActor);
-            pp.elementId = (eid == coop::element::kInvalidId) ? 0u : static_cast<uint32_t>(eid);
-        }
+        // v81 MORPH V2: use the eid CACHED on the new-held edge (O(1)) -- do NOT re-run the O(n)
+        // ResolveHeldPropEid every tick (the CLAUDE.md per-frame full-scan hot-path regression).
+        pp.elementId = (g_lastHeldEid == coop::element::kInvalidId) ? 0u
+                                                                    : static_cast<uint32_t>(g_lastHeldEid);
         const auto loc = ue_wrap::engine::GetActorLocation(heldActor);
         const auto rot = ue_wrap::engine::GetActorRotation(heldActor);
         pp.x = loc.X; pp.y = loc.Y; pp.z = loc.Z;
@@ -362,6 +386,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                                 vel.angularDegS.X, vel.angularDegS.Y, vel.angularDegS.Z);
         g_lastHeldProp = nullptr;
         g_lastHeldKey = {};
+        g_lastHeldEid = coop::element::kInvalidId;  // v81: invalidate the cached held eid on release
     }
 
     // v22 ragdoll PHYSICS stream. While the local player's native ragdoll

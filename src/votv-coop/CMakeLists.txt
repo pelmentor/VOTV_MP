@@ -258,6 +258,7 @@ add_library(votv-coop SHARED
     src/coop/garbage_sync.cpp
     src/coop/ambient_spawner_suppress.cpp
     src/coop/host_spawn_watcher.cpp
+    src/coop/pile_morph.cpp
     src/coop/trash_collect_sync.cpp
     src/coop/trash_pile_sync.cpp
     src/coop/weather_sync.cpp
@@ -348,6 +349,7 @@ add_library(votv-coop SHARED
     src/harness/harness.cpp
     src/harness/harness_diag.cpp
     src/harness/autotest.cpp
+    src/harness/autotest_chippile.cpp
     src/harness/autotest_dispatch.cpp
     src/harness/autotest_vitals.cpp
     src/harness/autotest_ragdoll_spawn_probe.cpp

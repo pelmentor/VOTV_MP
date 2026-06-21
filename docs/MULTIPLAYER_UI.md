@@ -1,9 +1,14 @@
 # MULTIPLAYER_UI — coop menu design
 
-**Living document.** Captures the user's vision for the in-game multiplayer
-UI. The networking behind it is gated (methodology Phase 3+); this doc is
-the design + the approach decision so we build the right thing when we get
-there. Status: **design only, not yet built.**
+**Living document.** Captures the user's vision + the approach decision for the
+in-game multiplayer UI.
+
+**Status (updated 2026-06-20): BUILT.** The menu shell + flows have shipped as
+runtime-UMG built by our C++ mod (the "chosen" approach below) — see the `ui/`
+modules: `server_browser.cpp`, `host_save_picker.cpp`, `roster.cpp`,
+`scoreboard.cpp`, `dev_menu.cpp`, `moderation.cpp`, `hud.cpp`. This doc is kept
+for the **design rationale** (why runtime UMG, not BPModLoader/paks); the code is
+the truth for the as-built UI.
 
 ## User vision (2026-05-22)
 
@@ -73,13 +78,11 @@ tooling, not the player-facing menu.
 - Load path: `UmainGameInstance_C::setSaveSlotObject` + open `untitled_1`;
   GameMode applies world state (`loadObjects`/`loadTriggers`).
 
-## Gating
+## Gating — RESOLVED (built)
 
-**Status 2026-05-25:** the Phase 2 orphan + Phase 3 transport + session
-API are all SHIPPED. The menu's prerequisites are met. Build is
-deferred because the env-var `.bat` launchers
-(`mp_host_game.bat` / `mp_client_connect.bat`) cover the hands-on
-workflow adequately while feature work on replication (5N* / 5S* / 5T /
-5D) is the active priority. The menu shell will land once the
-per-feature replication surface stabilises; until then, see the
-launchers + `docs/AUTONOMOUS_TESTING.md` for the runtime entry points.
+**Historical (2026-05-25):** the menu build was originally deferred while the
+env-var `.bat` launchers (`mp_host_game.bat` / `mp_client_connect.bat`) covered
+the hands-on workflow and replication feature-work (5N*/5S*/5T/5D) was the
+priority. **That deferral is over — the menu/flows shipped (see the Status
+banner + `ui/` modules).** The `.bat` launchers remain the autonomous-test entry
+points (see `docs/AUTONOMOUS_TESTING.md`).

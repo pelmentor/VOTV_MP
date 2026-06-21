@@ -39,11 +39,15 @@ int32_t MainPlayer_grabbing_component();
 int32_t MainPlayer_grabsHeavy();
 int32_t MainPlayer_grabLen();
 int32_t MainPlayer_Heavy();
-// holding_actor is the non-PhysicsHandle "held" pointer used by chipPile/
-// clump morph (toClump() writes the spawned clump address here, NOT
-// grabbing_actor; their pickup path doesn't go through UPhysicsHandle).
-// Probe-confirmed 2026-05-27; the PropPose-emit branch reads this as a
-// fallback when grabbing_actor is null.
+// holding_actor is a secondary non-PhysicsHandle "held" pointer.
+// CORRECTED 2026-06-20 (runtime probe, harness/autotest_chippile.cpp): the chipPile/clump GRAB does
+// NOT write holding_actor. A real grab runs the pile's playerGrabbed -> pickupObjectDirect, which
+// routes the clump THROUGH the PhysicsHandle, so the morphed clump lands in grabbing_actor (observed
+// 16/16 probe polls across two smokes; holding_actor stayed null). The earlier "toClump() writes
+// holding_actor, Probe-confirmed 2026-05-27" note was a STATIC-dump inference (not a probe), and
+// toClump is not on the grab path at all (votv-pile-grab-observable-hook-RE-2026-06-08 sec 2.2).
+// The PropPose-emit branch reads holding_actor only as a FALLBACK when grabbing_actor is null --
+// left in place for any other carry that might use it (not retired on a hunch).
 int32_t MainPlayer_holding_actor();
 // The actor the local player is currently aiming at (lookAtActor @0x0AA0). On an
 // E-press (InpActEvt_use) this is the door/interactable being used -- read it in the

@@ -79,11 +79,20 @@ bool IsActorUnderAnyDrive(void* actor);
 // `senderSlot` is the originating peer slot (reliable header senderPeerSlot,
 // the host-relay logical origin) -- tagged onto the mirror so a per-slot
 // disconnect drains exactly this peer's mirrors (D1-7). Pass -1 if unknown.
+//
+// `rebindInPlace` (v81 MORPH V2 -- the 3 morph sites ONLY): when the eid already exists bound to a
+// DIFFERENT live actor, HEAD rejects the duplicate (a different live actor keeps the eid). The bind-
+// model morph re-skins eid E across pile-A -> clump -> pile-B (one actor at a time, the old destroyed
+// right after), so a morph rebind MUST re-point the existing MIRROR Element onto the new rendering of E
+// (SetActor) instead of rejecting. Default false preserves HEAD's live-conflict guard for the ~9
+// non-morph callers. Only used for MIRROR eids; a host's OWN local element rebinds via
+// prop_element_tracker::RebindLocalElementActor (which also fixes the forward map).
 void RegisterPropMirror(coop::element::ElementId eid,
                         void* actor,
                         const std::wstring& key,
                         const std::wstring& cls,
-                        int senderSlot);
+                        int senderSlot,
+                        bool rebindInPlace = false);
 
 // Reverse lookup of the wire ElementId bound to `actor` in the prop MirrorManager, or kInvalidId if
 // none. The forward map (prop_element_tracker::GetPropElementIdForActor) is the O(1) path for OWNED
@@ -143,15 +152,16 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer);
 // contract -- one implementation. Game thread only; no-op for null.
 void ClearAnyDriveFor(void* actor);
 
-// v52: handle an incoming PropConvert -- the ATOMIC trash-clump ball->pile swap. Destroys the
-// mirror BALL by payload.oldEid (the full OnDestroy eid teardown: drive-cache clear, PHC release,
-// echo-suppressed K2_DestroyActor, UnregisterPropMirror) THEN spawns the authoritative pile by
-// payload.newEid through the existing OnSpawn fresh-spawn path as a settled landed pile (+
-// RegisterPropMirror). Both run in this one handler -> the ball vanishes the exact frame the pile
-// appears: no lingering ball, no double pile (the two eids are distinct by construction). Returns
-// the spawned pile actor so the caller can enroll it in the mirror-pile death-watch (for identity-
-// based re-grab destroy), or null if the spawn failed. Game-thread only.
-// RE: votv-clump-lifecycle-observability-and-robust-design-2026-06-08-pass2.md.
+// v81 MORPH V2: handle an incoming PropConvert -- the bind-model pile-morph re-skin of eid E in
+// place (oldEid==newEid==E). Resolves this peer's current rendering of E (pile-A or clump), spawns
+// the NEW rendering bound to the SAME E at the payload transform (ToClump -> a kinematic clump the
+// held-pose stream drives; ToPile -> a settled, grabbable pile), rebinds E onto it (a LOCAL element
+// -> RebindLocalElementActor; a MIRROR -> RegisterPropMirror rebindInPlace), then echo-destroys the
+// old rendering. Order spawn-new -> rebind -> destroy-old so E never resolves to a dead actor.
+// Idempotent: a convert whose target rendering already matches the current one (an echo, or a
+// grab-race loser's convert) is a no-op. Returns the new rendering actor, or null on spawn failure.
+// The host applies a CLIENT's convert against its OWN local element E -- host-authority via the
+// host-minted eid, no request/relay. Game-thread only. docs/piles/07-MORPH-V2-held-object-channel.md.
 void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer, int senderSlot);
 
 // Echo-suppressed local destroy of an actor we own a copy of (MarkIncomingDestroy makes

@@ -338,6 +338,14 @@ bool ReadMainPlayerGrabState(void* mainPlayer, MainPlayerGrabState& out);
 // aiming at anything / mainPlayer dead. Game thread.
 void* ReadMainPlayerLookAtActor(void* mainPlayer);
 
+// Direct write of AmainPlayer_C::lookAtActor (the cached interaction-trace result, re-derived
+// each tick -- NOT a UFunction-setter-managed field). Lets a test drive the BP's
+// icast(lookAtActor) to a chosen actor for the SINGLE InpActEvt_use dispatch that immediately
+// follows (the next tick's trace overwrites it). Same in-tree pattern device_screen.cpp uses
+// (ClearAimForDispatch nulls + restores it around an enter dispatch). Returns false on
+// null/dead pawn or unresolved offset. Game thread only.
+bool WriteMainPlayerLookAtActor(void* mainPlayer, void* actor);
+
 // The local player's radial-menu confirm state: AmainPlayer_C::releaseEToUse @0x0E88 (true on the
 // "release E to use" radial confirm) + actionIndex @0x0A98 (the highlighted option's index into the
 // target's getActionOptions list). Returns false (outs untouched) if mainPlayer is dead or the

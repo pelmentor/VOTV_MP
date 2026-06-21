@@ -694,7 +694,15 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 80;  // v80: B3b WorldActor mirror -- WorldActorSpawn=76 +
+inline constexpr uint16_t kProtocolVersion = 81;  // v81: pile MORPH V2 -- the bind-model grab->carry->
+                                                  // throw->land sync (PropConvert=41 re-skins eid E in
+                                                  // place: oldEid==newEid==E, +kind byte ToClump/ToPile).
+                                                  // RETIRES the v52 fresh-eid death-watch morph. Anchored
+                                                  // on the PROVEN held-object channel (local_streams),
+                                                  // NOT the un-hookable clump Init-POST / holdPlayer.
+                                                  // coop/pile_morph + remote_prop::OnConvert (re-skin).
+                                                  // docs/piles/07-MORPH-V2-held-object-channel.md.
+                                                  // v80: B3b WorldActor mirror -- WorldActorSpawn=76 +
                                                   // WorldActorDestroy=77 (reliable, reuse EntitySpawn/Destroy
                                                   // payloads) + MsgType::WorldActorPose=33 (unreliable FULL-
                                                   // rotation transform batch). Host-authoritative mirror of the
@@ -3093,23 +3101,30 @@ struct TurbineStatePayload {
 };
 static_assert(sizeof(TurbineStatePayload) == 56, "TurbineStatePayload must be 56 bytes");
 
-// PropConvertPayload -- the atomic trash-clump ball->pile swap (PropConvert=41, v52). The owner's
-// clump death-watch fires this ONE reliable event the instant its watched clump dies (= it morphed
-// into a ground pile, the unobservable BP-internal convert). It carries BOTH the dying ball's eid
-// (to destroy the receiver's mirror ball) AND a freshly minted id for the new pile (so the pile is a
-// distinct cross-peer entity, re-grab-trackable on both peers). The receiver runs OnDestroy(oldEid)
-// then OnSpawn(newEid) as a settled pile in one handler -> the ball vanishes the exact frame the pile
-// appears. Two distinct eids by construction (never reuses the ball's id for the pile) -> no eid
-// collision. The resting transform is the clump's last live pose (~where the pile lands); the receiver
-// never searches for a pile by position (the old cross-peer-unsound FindNearestChipPile is gone).
+// propconvert_kind -- the morph edge a PropConvert re-skins (v81 MORPH V2).
+namespace propconvert_kind {
+inline constexpr uint8_t kToClump = 0;  // pile-A -> clump (grab): spawn a kinematic clump, drive by pose
+inline constexpr uint8_t kToPile  = 1;  // clump -> pile-B (land): spawn a settled, grabbable pile
+}  // namespace propconvert_kind
+
+// PropConvertPayload -- the bind-model pile MORPH re-skin (PropConvert=41, v81 MORPH V2). REPLACES the
+// v52 fresh-eid death-watch model. On the bind model BOTH peers own the same pile bound to the shared
+// host-minted eid `E` (RegisterPropMirror / local tracker Element). The morph re-skins E across the
+// three UObjects pile-A -> clump -> pile-B: `oldEid == newEid == E` on EVERY edge, so the receiver
+// re-points its single rendering of E (spawn-new -> rebind -> echo-destroy-old) instead of creating a
+// second cross-peer entity. `kind` selects the edge (ToClump on grab, ToPile on land). The owner emits
+// it from the PROVEN held-object channel (grab: new-held edge; land: bound-clump death) -- never from
+// the un-hookable clump Init-POST. The host applies a CLIENT's convert against its OWN local element E
+// (host-authority via the host-minted eid, no request/relay). docs/piles/07-MORPH-V2-held-object-channel.md.
 struct PropConvertPayload {
-    uint32_t      oldEid;                 // the mirror BALL (clump) to destroy
-    uint32_t      newEid;                 // authoritative id for the NEW pile (owner allocator)
-    WireClassName pileClass;              // the chipPile leaf class (read off the owner's spawned pile)
-    float locX, locY, locZ;               // resting transform of the pile
+    uint32_t      oldEid;                 // == E (the bound pile/clump being re-skinned)
+    uint32_t      newEid;                 // == E (SAME id on the bind model; identity is preserved)
+    WireClassName pileClass;              // ToPile: the chipPile leaf class; ToClump: the clump leaf class
+    float locX, locY, locZ;               // resting/grab transform of the new rendering
     float rotPitch, rotYaw, rotRoll;
-    uint8_t chipType;                     // the trash variant (clump.chipType -> pile.setTex)
-    uint8_t _pad[3];                      // keep the struct 4-aligned + bytes-beyond-pileClass-len zero
+    uint8_t chipType;                     // the trash variant (carried across both edges)
+    uint8_t kind;                         // propconvert_kind:: kToClump (grab) | kToPile (land)  [was _pad[0]]
+    uint8_t _pad[2];                      // keep the struct 4-aligned + bytes-beyond-pileClass-len zero
 };
 static_assert(sizeof(PropConvertPayload) == 100, "PropConvertPayload must be 100 bytes");
 
