@@ -29,6 +29,12 @@ constexpr auto kPollInterval = std::chrono::milliseconds(1000);
 constexpr auto kAssemblyTTL  = std::chrono::seconds(20);
 constexpr auto kTombstoneTTL = std::chrono::seconds(20);
 constexpr size_t kTopicCap = 256, kTextCap = 4096, kPfpCap = 96;
+// A single poll that adds more than this many rows is a SAVE LOAD (the email
+// history materializing all at once), never gameplay (which trickles 1-2 mails per
+// in-game event). Such a batch is ADOPTED as baseline and never broadcast -- the
+// joiner already gets the full history via the v56 save transfer. This is the
+// timing-independent catch-all behind stabilize-before-prime (2026-06-19 flood RCA).
+constexpr size_t kBulkAppendThreshold = 32;
 
 // The shadow: one entry per saveSlot.emails row, prefix-aligned with the
 // array between polls (the game only appends at the tail; every other
@@ -41,18 +47,30 @@ struct ShadowRow {
 };
 std::vector<ShadowRow> g_shadow;
 bool g_primed = false;
+// Stabilize-before-prime (2026-06-19 flood RCA): the save's emails load
+// ASYNchronously, so the array climbs 2 -> ... -> N over the first seconds. Priming
+// at the first sight (N=2 of a 2056-row save) mis-classifies the other 2054 as "new
+// local appends" and broadcasts them to a joiner that already has them via the v56
+// save transfer -> the echo flood + a multi-second game-thread freeze. So we prime
+// only after the count HOLDS for 2 consecutive polls (a lighter take on
+// save_transfer's stable-read guard -- the email array loads monotonically, and the
+// bulk-append re-baseline below is the catch-all if a mid-load pause defeats this).
+int32_t g_primeLastCount = -1;
+int     g_primeStable    = 0;
 uint32_t g_nextSeq = 1;  // per-sender email id
 Clock::time_point g_nextPoll{};
 
 // Receiver assembly: (senderSlot, blobSeq) -> blob (shared transport).
 coop::blob_chunks::Assembler g_assembler;
 
-// Wire-applied rows awaiting shadow registration: instance key -> the WIRE
-// blob hash. The poll's append branch adopts the wire hash for these (echo-
-// proof AND delete-key consistency -- a receiver that resolved a different
-// pfp would re-derive a different hash locally).
+// Wire-applied rows awaiting shadow registration, keyed by the CONTENT HASH (the
+// stable cross-peer identity). The poll's append branch finds the freshly-appended
+// tail row by hash and marks it sent (echo-proof). We deliberately do NOT correlate
+// by the per-process RowKey: addEmail rebuilds the laptop list UI, which can re-touch
+// the row's FText between the apply-time read and the next poll, drifting the RowKey
+// -> a wire row mis-flagged as a local append -> re-broadcast -> the 2026-06-19 echo
+// flood. The content hash is computed from the serialized bytes, so it cannot drift.
 struct AppliedMark {
-    UE::RowKey key;
     uint64_t hash;
     Clock::time_point at;
 };
@@ -186,15 +204,11 @@ void CompleteAssembly(const std::vector<uint8_t>& blob, uint8_t senderSlot) {
         return;
     }
     if (UE::AddEmail(row)) {
-        // ECHO-PROOF: register the appended tail row's instance key with the
-        // WIRE hash; the next poll's append branch adopts it as sent. The
-        // shadow itself has a single writer (the poll) -- registering rather
-        // than pushing keeps prefix alignment even when a local append
-        // landed earlier in this same poll window.
-        const int32_t n = UE::EmailCount();
-        UE::RowKey key;
-        if (n > 0 && UE::ReadRowKey(n - 1, key))
-            g_applied.push_back({key, hash, Clock::now()});
+        // ECHO-PROOF by CONTENT HASH: record the wire hash; the next poll's append
+        // branch finds this freshly-appended tail row by hash and marks it sent, so
+        // we never echo it back to the sender. Hash (not RowKey) because addEmail's
+        // laptop-UI rebuild can drift the row's per-process key before the poll runs.
+        g_applied.push_back({hash, Clock::now()});
         UE_LOGI("email_sync: applied email from slot %u (topic '%ls')",
                 static_cast<unsigned>(senderSlot), row.topic.c_str());
     } else {
@@ -245,13 +259,25 @@ void Tick() {
             g_applied.clear();
             g_tombstones.clear();
         }
+        g_primeLastCount = -1;  // re-stabilize before the next world's prime
+        g_primeStable = 0;
         return;
     }
 
     if (!g_primed) {
-        // First sight of the array this world: the rows are the save's
-        // history (a joiner got them via the v56 save transfer; the host's
-        // are its own) -- shadow them WITHOUT broadcasting.
+        // First sight of the array this world: the rows are the save's history (a
+        // joiner got them via the v56 save transfer; the host's are its own) -- shadow
+        // them WITHOUT broadcasting. CRITICAL: the array loads ASYNCHRONOUSLY, so wait
+        // until the count has stopped climbing (held for 2 consecutive polls) before
+        // priming -- otherwise the rows that load AFTER the prime are mis-seen as new
+        // local appends and mass-broadcast to the joiner (the 2026-06-19 echo flood).
+        if (n != g_primeLastCount) {
+            g_primeLastCount = n;
+            g_primeStable = 0;
+            return;  // count still moving -- the save is still loading
+        }
+        if (++g_primeStable < 2) return;  // need one more identical poll (~1s) to confirm settled
+
         g_shadow.clear();
         g_shadow.reserve(static_cast<size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -265,7 +291,7 @@ void Tick() {
             g_shadow.push_back(srow);
         }
         g_primed = true;
-        UE_LOGI("email_sync: shadow primed at %d existing email(s)", n);
+        UE_LOGI("email_sync: shadow primed at %d existing email(s) (settled)", n);
     } else {
         // Positional diff under the append-at-tail invariant: surviving rows
         // keep their relative order; anything in the shadow that no longer
@@ -295,26 +321,46 @@ void Tick() {
                 removed.push_back(srow.hash);
             }
         }
+        // A bulk batch of new rows in ONE poll is a save load (history materializing),
+        // not gameplay -- adopt it as baseline and never broadcast it (the joiner gets
+        // history via the save transfer). Catches the case where the prime ran before
+        // the real save loaded (count sat stable at a menu/partial value), which the
+        // stabilize guard alone can miss. See kBulkAppendThreshold.
+        const bool bulkLoad = (cur.size() - j) > kBulkAppendThreshold;
+        if (bulkLoad)
+            UE_LOGW("email_sync: %zu new rows in one poll -- save-load re-baseline "
+                    "(adopted as sent, NOT broadcast)", cur.size() - j);
         for (; j < cur.size(); ++j) {
             ShadowRow srow;
             srow.key = cur[j];
+            // Compute the row's STABLE content hash first -- the identity we correlate
+            // a wire-applied row on (the per-process RowKey can drift; see AddEmail).
+            UE::Row r;
+            uint64_t rowHash = 0;
+            const bool rowReadable = UE::ReadRow(static_cast<int32_t>(j), r);
+            if (rowReadable) {
+                const std::vector<uint8_t> blob = SerializeRow(r);
+                rowHash = Fnv64(blob.data(), blob.size());
+            }
+            srow.hash = rowHash;
             bool wireApplied = false;
-            for (auto it = g_applied.begin(); it != g_applied.end(); ++it) {
-                if (it->key == cur[j]) {
-                    srow.hash = it->hash;  // the broadcast identity, verbatim
-                    srow.sent = true;
-                    g_applied.erase(it);
-                    wireApplied = true;
-                    break;
+            if (rowReadable && !bulkLoad) {
+                for (auto it = g_applied.begin(); it != g_applied.end(); ++it) {
+                    if (it->hash == rowHash) {  // applied from the wire -> never echo back
+                        srow.sent = true;
+                        g_applied.erase(it);
+                        wireApplied = true;
+                        break;
+                    }
                 }
             }
             if (!wireApplied) {
-                UE::Row r;
-                if (UE::ReadRow(static_cast<int32_t>(j), r)) {
-                    const std::vector<uint8_t> blob = SerializeRow(r);
-                    srow.hash = Fnv64(blob.data(), blob.size());
+                if (bulkLoad) {
+                    srow.sent = true;   // save-load batch: adopt as baseline, never broadcast
+                } else if (rowReadable) {
                     srow.sent = false;  // genuine local append: broadcast below
                 } else {
+                    srow.sent = true;   // unreadable: skip past it (never broadcast garbage)
                     UE_LOGW("email_sync: unreadable new row %zu -- skipped", j);
                 }
             }
@@ -379,6 +425,8 @@ void OnDisconnect() {
     g_applied.clear();
     g_shadow.clear();
     g_primed = false;  // re-prime on the next session (save state may differ)
+    g_primeLastCount = -1;  // re-stabilize before the next session's prime
+    g_primeStable = 0;
     g_nextSeq = 1;
     g_nextPoll = {};   // no residual throttle into the next session
 }
