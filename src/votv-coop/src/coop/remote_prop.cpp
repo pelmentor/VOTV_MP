@@ -90,6 +90,12 @@ constexpr uint64_t kLerpMinMs   = 16;     // ~one 60 fps frame
 constexpr uint64_t kLerpMaxMs   = 200;    // ~5 Hz floor (a gappy stream still converges)
 constexpr float    kSnapDist    = 500.f;  // 5 m: beyond this, snap instead of interpolate
 constexpr float    kSnapDistSq  = kSnapDist * kSnapDist;
+// Per-tick dirty-gate epsilons (atv_sync::ApplyMirror discipline): at 125 Hz the interp
+// step is often sub-visible -- a held-but-still clump, or a sub-cm creep. Skip the engine
+// write below these (the skipped delta accumulates until it crosses). Conservative so a
+// slow drift still steps invisibly (sub-pixel at gameplay scale).
+constexpr float    kLerpEpsLocSq = 0.25f * 0.25f;  // 0.25 cm
+constexpr float    kLerpEpsRotDeg = 0.1f;          // summed |axis delta|, degrees
 
 // v68 sustained-stream unstick gate (prop_stick_sync design note): when a
 // PropPose stream targets a STUCK wall-attachable, 1-2 stale packets may
@@ -539,6 +545,7 @@ void AdvanceLerp(ActiveDrive& d, uint64_t nowMs) {
         ? static_cast<float>(nowMs - d.lerpStartMs) / static_cast<float>(d.lerpDurMs) : 1.f;
     if (alpha < 0.f) alpha = 0.f;
     if (alpha > 1.f) alpha = 1.f;
+    const bool done = (alpha >= 1.f);
     const ue_wrap::FVector loc{
         d.startLoc.X + (d.targetLoc.X - d.startLoc.X) * alpha,
         d.startLoc.Y + (d.targetLoc.Y - d.startLoc.Y) * alpha,
@@ -547,11 +554,28 @@ void AdvanceLerp(ActiveDrive& d, uint64_t nowMs) {
         LerpAngle(d.startRot.Pitch, d.targetRot.Pitch, alpha),
         LerpAngle(d.startRot.Yaw,   d.targetRot.Yaw,   alpha),
         LerpAngle(d.startRot.Roll,  d.targetRot.Roll,  alpha) };
+    // Dirty-gate: skip the SetActorLocation/Rotation (each a ParamFrame heap alloc +
+    // ProcessEvent) when neither position nor any axis moved beyond an epsilon since the
+    // LAST WRITTEN transform. A held-but-still clump (target == last pose) or a sub-cm
+    // creep then costs ZERO engine writes; the skipped delta accumulates (renderedLoc/Rot
+    // unchanged) until it crosses the epsilon, then one write catches up. Active motion
+    // (> eps/tick) writes every tick -> still smooth. On the final frame we still skip if
+    // already within epsilon (the actor is there) but ALWAYS deactivate.
+    const float dl = (loc.X - d.renderedLoc.X) * (loc.X - d.renderedLoc.X)
+                   + (loc.Y - d.renderedLoc.Y) * (loc.Y - d.renderedLoc.Y)
+                   + (loc.Z - d.renderedLoc.Z) * (loc.Z - d.renderedLoc.Z);
+    const float dr = std::fabs(ue_wrap::NormalizeAxis(rot.Pitch - d.renderedRot.Pitch))
+                   + std::fabs(ue_wrap::NormalizeAxis(rot.Yaw   - d.renderedRot.Yaw))
+                   + std::fabs(ue_wrap::NormalizeAxis(rot.Roll  - d.renderedRot.Roll));
+    if (dl < kLerpEpsLocSq && dr < kLerpEpsRotDeg) {
+        if (done) d.lerpActive = false;  // settled within epsilon -> stop (no redundant write)
+        return;
+    }
     E::SetActorLocation(d.actor, loc);
     E::SetActorRotation(d.actor, rot);
     d.renderedLoc = loc;
     d.renderedRot = rot;
-    if (alpha >= 1.f) d.lerpActive = false;  // reached target -> freeze (no redundant writes)
+    if (done) d.lerpActive = false;  // reached target -> freeze
 }
 
 }  // namespace
