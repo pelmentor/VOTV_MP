@@ -12,8 +12,10 @@
 // MTA precedent: CElement::GenerateSyncTimeContext / CanUpdateSync (reference/mtasa-blue,
 // CElement.cpp:1281/1300). Increment 1 (host-grab direction) is ctx-only; the PILED/HELD/FLYING state
 // machine + the client GrabIntent/ThrowIntent handlers land with the client direction (v83). Principle
-// 7: coop/ network layer; the convert spawn is caught by host_spawn_watcher (ue_wrap seam) and broadcast
-// here. GAME-THREAD only (every entry point runs on the net-pump game thread).
+// 7: coop/ network layer. The clump<->pile link is driven from the VISIBLE seams (the InpActEvt_use PRE
+// records a pending grab; the held-object edge adopts the clump) -- NOT the BeginDeferred spawn POST,
+// which is EX_CallMath-dispatched and never reaches our ProcessEvent hook (2026-06-21 RE/hands-on).
+// GAME-THREAD only (every entry point runs on the net-pump game thread).
 
 #pragma once
 
@@ -26,16 +28,14 @@ namespace ue_wrap { struct FVector; struct FRotator; }
 
 namespace coop::trash_channel {
 
-// HOST: a chipPile/clump convert spawn was caught at the host_spawn_watcher convert-spawn POST.
-//   E        = the host-minted eid of the SOURCE actor (WorldContextObject -- the dying pile on a grab,
-//              the dying clump on a land).
+// HOST: a trash entity re-skinned (grab pile->clump, or land clump->pile).
+//   E        = the host-minted eid of the entity being re-skinned (the grabbed pile / the re-piling clump).
 //   kind     = propconvert_kind::kToClump (grab: pile->clump) | kToPile (land: clump->pile).
-//   newActor = the just-spawned actor (BeginDeferred ReturnValue). NOT YET POSITIONED -- loc/rot come
-//              from the SpawnTransform PARAM (the spawn watcher reads it; GetActorLocation is origin
-//              here), and chipType comes from the SOURCE (the clump's own chipType isn't written until
-//              after BeginDeferred returns -- bytecode @2790).
+//   newActor = the new rendering (the clump on a grab / the new pile on a land), already positioned.
+//   loc/rot  = newActor's transform; chipType = the trash variant (carried across both edges).
 // Bumps E's ctx, re-skins E onto newActor locally, and broadcasts PropConvert{E,kind,ctx,loc,rot,
-// chipType} to all peers. Host-only (the spawn watcher is host-gated). Game thread.
+// chipType} to all peers. Host-only. Driven from AdoptPendingGrabClump (grab) / the re-pile watch (land),
+// NOT a spawn POST -- the chipPile/clump spawns are EX_CallMath-dispatched -> invisible. Game thread.
 void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t kind, void* newActor,
                    const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot, uint8_t chipType);
 
@@ -43,6 +43,31 @@ void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t ki
 // ctx and returns the new value to stamp on the outgoing PropRelease. Returns 0 if E is not a tracked
 // trash entity (a normal prop release -> no ctx enforcement). Game thread.
 uint8_t OnHostRelease(coop::element::ElementId E);
+
+// ---- GRAB ADOPTION (the VISIBLE-seam clump<->pile link, replacing the dead BeginDeferred POST) -------
+// The chipPile's clump spawn is dispatched EX_CallMath (a native thunk) -> INVISIBLE to our ProcessEvent
+// hook (votv-clump-lifecycle-observability ...-2026-06-08-pass2, confirmed by the 2026-06-21 hands-on).
+// So the convert is NOT caught at the spawn; it is driven from the two VISIBLE seams instead: the
+// InpActEvt_use PRE (the pile is aimed + alive -> its eid is known) records a PENDING grab, and the
+// held-object edge (the clump is now in hand) ADOPTS that clump onto the pending pile's eid.
+
+// HOST: the local player pressed E aiming at tracked pile `pileEid` (InpActEvt_use PRE). The clump the BP
+// spawns next is this pile's grab product. chipType is captured here (the pile is alive at PRE; the new
+// clump's own chipType isn't written yet). A later press overwrites an unconsumed pending grab. Game thread.
+void NotePendingGrab(coop::element::ElementId pileEid, uint8_t chipType);
+
+// HOST: a garbage clump just entered the hand (the held-object new-held edge). If a recent NotePendingGrab
+// is pending, ADOPT `heldClump` onto that pile's eid E: OnHostConvert(E, ToClump, heldClump, loc, rot,
+// chipType) -- bumps ctx, rebinds E onto the clump, broadcasts PropConvert{ToClump} -- and returns E (the
+// caller sets g_lastHeldEid=E so the carry stream stamps ctx). Returns kInvalidId if there is no pending
+// grab (a normal held prop -> not a trash convert). Caller gates on IsGarbageClump. Game thread.
+coop::element::ElementId AdoptPendingGrabClump(coop::net::Session& s, void* heldClump,
+                                               const ue_wrap::FVector& clumpLoc,
+                                               const ue_wrap::FRotator& clumpRot);
+
+// HOST: decay the pending-grab TTL once per gameplay tick (clears a grab that produced no clump, so a
+// later unrelated clump pickup can't be mis-adopted). Game thread.
+void TickPendingGrab();
 
 // The current per-eid sync-time-context (for local_streams to stamp on each carry PropPose). 0 =
 // untracked / non-trash (no ctx enforcement). Game thread.

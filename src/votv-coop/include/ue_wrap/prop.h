@@ -74,13 +74,6 @@ bool IsChipPile(void* obj);
 // local_streams) to identify the held clump on the proven held-object channel. False for null / non-clump.
 bool IsGarbageClump(void* obj);
 
-// Class-level twins of IsChipPile / IsGarbageClump (take a UClass*, not an instance) -- for the
-// host_spawn_watcher convert-spawn POST, which must classify the spawn by its ActorClass PARAM
-// BEFORE dereferencing the not-yet-positioned ReturnValue actor (a fast pointer-chain walk vs the
-// cached base, no per-spawn actor deref). Class cached via ResolveExtraBases. False for null.
-bool IsChipPileClass(void* cls);
-bool IsGarbageClumpClass(void* cls);
-
 // AtrashBitsPile_C lineage test + its collect counters (v57 trash_pile_sync).
 // amountA@0x0260 / amountB@0x0264 raw int32 per the CXX dump; the displayed
 // "uses" readout is their SUM, formatted live by lookAt on every look -- raw

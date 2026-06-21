@@ -22,6 +22,13 @@ struct Entry {
     uint64_t    bornMs = 0;
 };
 
+// Lines queued by PushDelayed, promoted to g_lines by Tick once dueMs is reached. Game-thread only.
+struct Pending {
+    std::string text;
+    uint64_t    dueMs = 0;
+};
+std::deque<Pending> g_pending;
+
 // g_lines is GAME-THREAD ONLY (Push/Tick/Reset all run there) -- no lock needed
 // between them. The published POD snapshot (g_pub) is what the render thread reads,
 // guarded by g_mu; g_count is a lock-free HasAny() fast-path.
@@ -79,11 +86,32 @@ void Push(const std::wstring& line) {
     Republish();
 }
 
+void PushDelayed(const std::wstring& line, uint64_t delayMs) {
+    Pending p;
+    p.text  = ToAscii(line);
+    p.dueMs = NowMs() + delayMs;
+    g_pending.push_back(std::move(p));
+}
+
 void Tick() {
-    if (g_lines.empty()) return;  // cheap idle path; g_count already 0
     const uint64_t now = NowMs();
+    // Promote any delayed lines whose time has come (born NOW so their TTL/fade starts here).
+    bool promoted = false;
+    for (auto it = g_pending.begin(); it != g_pending.end();) {
+        if (now >= it->dueMs) {
+            Entry e; e.text = std::move(it->text); e.bornMs = now;
+            g_lines.push_back(std::move(e));
+            it = g_pending.erase(it);
+            promoted = true;
+        } else {
+            ++it;
+        }
+    }
+    if (promoted)
+        while (g_lines.size() > static_cast<size_t>(kMaxLines)) g_lines.pop_front();
+    if (g_lines.empty()) return;  // cheap idle path (nothing live; future-dated pending re-checked next Tick)
     while (!g_lines.empty() && now - g_lines.front().bornMs >= kTtlMs) g_lines.pop_front();
-    Republish();  // also refreshes the fade alphas on the survivors
+    Republish();  // promote-fresh + expire-old + refresh the fade alphas on the survivors
 }
 
 void GetSnapshot(Snapshot& out) {
@@ -97,6 +125,7 @@ bool HasAny() {
 
 void Reset() {
     g_lines.clear();
+    g_pending.clear();
     {
         std::lock_guard<std::mutex> lk(g_mu);
         g_pub = Snapshot{};

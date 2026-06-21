@@ -16,6 +16,7 @@
 #include "coop/prop_synth_key.h"
 #include "coop/remote_prop.h"        // ResolveMirrorEidByActor (the pile-grab hook mirror eid resolve)
 #include "coop/remote_prop_spawn.h"
+#include "coop/trash_channel.h"      // NotePendingGrab (the VISIBLE-seam grab->clump link; docs/piles/08)
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"     // RegisterPreObserver (the InpActEvt_use pile-grab observer)
 #include "ue_wrap/log.h"
@@ -42,18 +43,49 @@ namespace P  = ue_wrap::profile;
 std::atomic<coop::net::Session*> g_session{nullptr};
 bool g_grabObserverInstalled = false;  // InpActEvt_use PRE registration latch (stays for process life)
 
-// RULE 1+2 (2026-06-21, docs/piles/08): the v81 MORPH lived here + in coop/pile_morph (CLUMP death-watch /
-// proximity land-detect / deferred-destroy / TryAdoptHeldClump / OnGrab) and is FULLY RETIRED. It re-skinned
-// eid E in place but detected the land by a proximity FindNearestChipPile(lastPos), which FALSE-FIRED on a
-// NEIGHBOUR pile in a dense CLUSTER (the eid mis-bound -> divergence; the user's "host took piles, nothing
-// synced"). The host-authoritative trash channel replaces it: identity is the host-minted eid end-to-end
-// (POSITION IS NEVER IDENTITY -> a cluster can't mis-bind), the clump<->pile link is the host_spawn_watcher
-// convert-spawn POST (WorldContextObject=source -> trash_channel, ZERO proximity), and a per-eid sync-time-
-// context (ctx) drops stale carry/land packets. This file keeps only EnsureHeldItemBroadcast (the held-item
-// broadcast for normal Aprop trash) + PROBE-A. coop/trash_channel + host_spawn_watcher.
-//
-// NOTE: the older mirror-PILE death-watch (g_watchedPiles) was retired earlier for the same unsoundness --
-// it inferred "grabbed" from "a pile died near the camera", which fires for bumps/physics/despawn too.
+// RULE 1+2 (2026-06-21, docs/piles/08): the v81 MORPH (proximity FindNearestChipPile land-detect) is FULLY
+// RETIRED -- it mis-bound on a NEIGHBOUR pile in a dense cluster. The host-grab sync is now: the InpActEvt
+// PRE observer (OnPileGrabPre) records the aimed pile's eid (trash_channel::NotePendingGrab); the held-edge
+// adopts the spawned clump onto that eid; identity is the host eid end-to-end (POSITION IS NEVER IDENTITY).
+// (An earlier design caught the spawn at a host_spawn_watcher BeginDeferred POST -- RETIRED 2026-06-21: the
+// chipPile/clump spawn is dispatched EX_CallMath, INVISIBLE to our ProcessEvent hook; it never fired.)
+
+// The clump RE-PILE watch: the held/thrown clump (bound to eid E) is followed until it dies (the BP
+// re-piles it into a fresh chipPile, then K2_DestroyActors the clump -- both EX_CallMath/BP-internal,
+// invisible to a spawn hook). The tick the clump dies, we CONVERT E onto that fresh pile in place
+// (clump->pile, same eid -- symmetric with the grab's pile->clump), so the client re-skins its ONE mirror
+// of E and there is NO destroy+spawn dupe (the user's 2026-06-21 "clump AND pile both on the ground").
+// Identity is the eid; the new pile is found by the clump's OWN resting position filtered to UNTRACKED
+// piles only (a pre-existing neighbour is tracked -> excluded -> NOT the s35 proximity mis-bind, which
+// matched any nearby pile). GAME-THREAD only (the host net-pump tick).
+struct WatchedClump {
+    uint32_t         eid         = 0;
+    void*            actor       = nullptr;
+    int32_t          internalIdx = -1;   // captured live -> IsLiveByIndex without deref
+    ue_wrap::FVector lastPos{};           // updated each tick while alive (follows carry + flight)
+};
+std::vector<WatchedClump> g_watchedClumps;
+constexpr size_t kMaxWatchedClumps = 64;     // a runaway backstop; only a handful are ever carried at once
+constexpr float  kRepileSearchCm   = 250.f;  // the new pile sits at the clump's traced resting point
+
+// Nearest UNTRACKED chipPile within `radiusCm` of `at` (the clump's last position) -- i.e. the just-formed
+// re-pile product. Tracked piles (pre-existing neighbours) are excluded, so a dense cluster cannot mis-bind.
+void* FindNearestUntrackedChipPile_(const ue_wrap::FVector& at, float radiusCm) {
+    const int32_t n = R::NumObjects();
+    void* best = nullptr;
+    float bestD2 = radiusCm * radiusCm;
+    for (int32_t i = 0; i < n; ++i) {
+        void* o = R::ObjectAt(i);
+        if (!o || !R::IsLive(o)) continue;
+        if (!ue_wrap::prop::IsChipPile(o)) continue;
+        if (PT::GetPropElementIdForActor(o) != coop::element::kInvalidId) continue;  // tracked neighbour
+        const ue_wrap::FVector p = ue_wrap::engine::GetActorLocation(o);
+        const float dx = p.X - at.X, dy = p.Y - at.Y, dz = p.Z - at.Z;
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; best = o; }
+    }
+    return best;
+}
 
 }  // namespace
 
@@ -278,11 +310,22 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
     const unsigned fwd = (fwdEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(fwdEid);
     const unsigned mir = (mirEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(mirEid);
     UE_LOGI("[PILE] %s E-PRESS on pile %p -- localEid=%u mirrorEid=%u %s (carry slots: grabbingActor=%p "
-            "holdingActor=%p). PROBE-A; host grab will sync via the spawn-POST convert (Increment 1).",
+            "holdingActor=%p)",
             s->role() == coop::net::Role::Host ? "HOST" : "CLIENT", aimed, fwd, mir,
             (fwd != 0 || mir != 0) ? "[TRACKED -> grab will sync]"
                                    : "[UNTRACKED -> grab will NOT sync; tracking gap]",
             gs.grabbingActor, gs.holdingActor);
+
+    // HOST: record the pending grab. The clump the BP spawns next (EX_CallMath -> invisible at spawn) is
+    // adopted onto THIS pile's eid at the held-object edge (local_streams -> AdoptPendingGrabClump), which
+    // broadcasts the PropConvert{ToClump}. The host owns its piles -> fwdEid is the authoritative local
+    // element id (fall back to the mirror eid defensively). Client grab is Increment 2 (suppress + GrabIntent).
+    if (s->role() == coop::net::Role::Host) {
+        const coop::element::ElementId grabEid =
+            (fwdEid != coop::element::kInvalidId) ? fwdEid : mirEid;
+        if (grabEid != coop::element::kInvalidId)
+            coop::trash_channel::NotePendingGrab(grabEid, ue_wrap::prop::GetChipType(aimed));
+    }
 }
 
 void Install(coop::net::Session* session) {
@@ -301,11 +344,61 @@ void Install(coop::net::Session* session) {
         return;  // not latched -> retry next Install
     }
     g_grabObserverInstalled = true;
-    UE_LOGI("trash_collect: pile grab-intent observer installed on InpActEvt_use (PROBE-A diagnostic; "
-            "the host grab syncs via the host_spawn_watcher convert-spawn POST, docs/piles/08)");
+    UE_LOGI("trash_collect: pile grab observer installed on InpActEvt_use (records the aimed pile's eid "
+            "as a pending grab -> the held-edge adopts the spawned clump; docs/piles/08)");
+}
+
+void WatchClumpForRepile(uint32_t eid, void* clumpActor) {
+    if (!clumpActor || eid == 0) return;
+    const int32_t idx = R::InternalIndexOf(clumpActor);
+    if (idx < 0) return;
+    const ue_wrap::FVector pos = ue_wrap::engine::GetActorLocation(clumpActor);
+    for (auto& w : g_watchedClumps) {              // already watching this actor -> refresh
+        if (w.actor == clumpActor) { w.eid = eid; w.internalIdx = idx; w.lastPos = pos; return; }
+    }
+    if (g_watchedClumps.size() >= kMaxWatchedClumps)
+        g_watchedClumps.erase(g_watchedClumps.begin());   // shed oldest (its re-pile rides the slow reaper)
+    g_watchedClumps.push_back(WatchedClump{eid, clumpActor, idx, pos});
+}
+
+void Tick(coop::net::Session& session) {
+    if (g_watchedClumps.empty()) return;
+    if (session.role() != coop::net::Role::Host) { g_watchedClumps.clear(); return; }
+    for (size_t i = 0; i < g_watchedClumps.size();) {
+        WatchedClump& w = g_watchedClumps[i];
+        if (R::IsLiveByIndex(w.actor, w.internalIdx)) {
+            w.lastPos = ue_wrap::engine::GetActorLocation(w.actor);  // follow the clump through carry + flight
+            ++i; continue;
+        }
+        // The clump just died: the BP re-piled it (spawned a fresh chipPile at its sphere-traced resting
+        // point, THEN destroyed the clump) or it was consumed. Find the fresh untracked pile at the resting
+        // spot and CONVERT eid E onto it IN PLACE (clump->pile, same eid) so the client re-skins its ONE
+        // mirror -- no destroy+spawn dupe. The rebind re-points E onto the live new pile, so the reaper sees
+        // E alive and won't PropDestroy it.
+        void* newPile = FindNearestUntrackedChipPile_(w.lastPos, kRepileSearchCm);
+        if (newPile) {
+            const ue_wrap::FVector  loc      = ue_wrap::engine::GetActorLocation(newPile);
+            const ue_wrap::FRotator rot      = ue_wrap::engine::GetActorRotation(newPile);
+            const uint8_t           chipType = ue_wrap::prop::GetChipType(newPile);
+            UE_LOGI("[PILE] HOST RE-PILE eid=%u -- clump died -> convert onto fresh pile %p @(%.0f,%.0f,%.0f) "
+                    "IN PLACE (same eid, no dupe)", w.eid, newPile, loc.X, loc.Y, loc.Z);
+            coop::trash_channel::OnHostConvert(session, static_cast<coop::element::ElementId>(w.eid),
+                                               coop::net::propconvert_kind::kToPile, newPile, loc, rot, chipType);
+        } else {
+            // No fresh pile near the resting spot -> the clump was consumed/destroyed for good. Drop the
+            // mirror NOW via PropDestroy (the slow reaper would also catch it, but do it now -- no dupe window).
+            coop::net::PropDestroyPayload dp{};
+            dp.key.len   = 0;
+            dp.elementId = w.eid;
+            session.SendPropDestroy(dp);
+            UE_LOGI("[PILE] HOST clump eid=%u died with no fresh pile nearby -> consumed; PropDestroy(eid)", w.eid);
+        }
+        g_watchedClumps.erase(g_watchedClumps.begin() + i);
+    }
 }
 
 void OnDisconnect() {
+    g_watchedClumps.clear();
     g_session.store(nullptr, std::memory_order_release);
 }
 

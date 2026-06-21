@@ -353,6 +353,9 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::TrashWatch};
       const bool inTransition = fleeing || coop::join_progress::Active();
       coop::trash_pile_sync::Tick(inTransition); }  // counter poll + depletion death-watch (transition-gated)
+    if (isHost) { PP::Scope _s{PP::Bucket::TrashWatch};
+      coop::trash_channel::TickPendingGrab();         // docs/piles/08: expire a grab that produced no clump
+      coop::trash_collect_sync::Tick(session); }      // docs/piles/08: re-pile watch -> register a re-piled pile NOW (host)
     { PP::Scope _s{PP::Bucket::Balance};       coop::balance_sync::Tick(); }       // v30: host polls saveSlot.Points + broadcasts on change; client retries the pending mirror apply
     coop::dev::drone_probe::Install();  // dev-only delivery-drone RE probe (ini drone_probe=1; self-latches + retries until the BP class loads)
     coop::dev::drone_probe::Tick(isConnected, isHost);  // polls drone/order/radar; with drone_probe_drive=1 ALSO auto-fires one delivery (host) / order (client)

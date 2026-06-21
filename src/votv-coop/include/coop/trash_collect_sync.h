@@ -38,8 +38,10 @@ namespace coop::trash_collect_sync {
 // Install the pile-grab observer (a PRE observer on AmainPlayer_C::InpActEvt_use). Caches `session`
 // (re-cached every call for reconnect) and registers the observer once mainPlayer_C is loaded
 // (idempotent; retries on later calls until the class resolves). Call from the world-gated subsystem
-// install. In docs/piles/08 this observer is PROBE-A only (a diagnostic): the host grab syncs via the
-// host_spawn_watcher convert-spawn POST. Game thread.
+// install. docs/piles/08: this PRE observer is the HOST-GRAB seam -- it records the aimed pile's eid as
+// a pending grab (trash_channel::NotePendingGrab); the held-object edge then adopts the spawned clump
+// onto that eid. (The clump's BeginDeferred spawn is EX_CallMath -> invisible to a spawn-POST hook.)
+// Game thread.
 void Install(coop::net::Session* session);
 
 // Game thread. If `heldActor` is a live, UNKEYED (Key=None) Aprop_C, force-mint
@@ -47,10 +49,23 @@ void Install(coop::net::Session* session);
 // mirror the held-pose stream can then drive into the collector's hands).
 // Returns true iff it minted + broadcast. No-op (returns false) for: null/dead
 // actors, non-Aprop_C (transient chip/clump -- crash safety), the host-authoritative
-// garbageClump (docs/piles/08: trash_channel owns it via the source pile's eid -- never authored
+// garbageClump (docs/piles/08: trash_channel owns it via the grabbed pile's eid -- never authored
 // here), and already-keyed actors (a normal world-prop grab -- the peer already has it).
 // Idempotent: once minted the Key is non-None, so a repeat call returns false.
 bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* session);
+
+// HOST: register an adopted grab-clump (bound to eid E) to watch for its RE-PILE. When the clump dies
+// (the BP re-piles it into a fresh chipPile, then destroys the clump -- both EX_CallMath/BP-internal ->
+// invisible to a spawn hook), Tick CONVERTS eid E onto that fresh pile in place (clump->pile, same eid),
+// so the client re-skins its ONE mirror -- no destroy+spawn dupe (the user's 2026-06-21 "clump AND pile
+// both on the ground"), and the re-piled pile keeps its eid so it is immediately grab-syncable again
+// (also closing the "host mirrors ~50%" untracked gap). Game thread, host only.
+void WatchClumpForRepile(uint32_t eid, void* clumpActor);
+
+// HOST: poll the watched grab-clumps; the tick a clump dies, find the fresh untracked pile at its resting
+// spot and convert eid E onto it (trash_channel::OnHostConvert ToPile), or PropDestroy(E) if it was
+// consumed (no fresh pile). Cheap when nothing died (a liveness check per watched clump). Game thread, host.
+void Tick(coop::net::Session& session);
 
 // (docs/piles/08, 2026-06-21: the v81 MORPH -- here and in the retired coop/pile_morph -- is FULLY GONE,
 // RULE 1+2. It re-skinned eid E in place but detected the land by a proximity FindNearestChipPile that

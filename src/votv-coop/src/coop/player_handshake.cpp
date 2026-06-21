@@ -526,10 +526,12 @@ void AnnouncePeerSpawned(net::Role role, int slot) {
     // peer's world-ready. The HOST announces a joiner via OnClientWorldReady (below), NOT here -- the
     // first pose can be a pre-world pose (user 2026-06-17). The role arg is kept for the slot-0 phrasing.
     const std::wstring nick = NicknameForSlot(static_cast<uint8_t>(slot));
+    // 5 s delay: the world-ready announce fires before the loading screen visually clears, so showing the
+    // join line immediately looks premature (user 2026-06-21). Let the join settle first.
     if (role == net::Role::Client && slot == 0) {
-        coop::chat_feed::Push(L"Joined " + nick + L"'s game");
+        coop::chat_feed::PushDelayed(L"Joined " + nick + L"'s game", 5000);
     } else {
-        coop::chat_feed::Push(nick + L" joined the game");
+        coop::chat_feed::PushDelayed(nick + L" joined the game", 5000);
     }
 }
 
@@ -541,8 +543,8 @@ void OnClientWorldReady(int slot) {
     if (slot < 1 || slot >= net::kMaxPeers) return;  // slot 0 = host self; never "joins"
     if (g_joinAnnouncedBySlot[slot]) return;          // already announced for this join
     g_joinAnnouncedBySlot[slot] = true;
-    coop::chat_feed::Push(NicknameForSlot(slot) + L" joined the game");
-    UE_LOGI("player_handshake: slot %d joined the game (announced on ClientWorldReady)", slot);
+    coop::chat_feed::PushDelayed(NicknameForSlot(slot) + L" joined the game", 5000);  // 5 s: let the joiner finish loading
+    UE_LOGI("player_handshake: slot %d joined the game (announced on ClientWorldReady, +5s)", slot);
 }
 
 bool HandleAssignPeerSlot(net::Session& session,

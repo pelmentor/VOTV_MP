@@ -297,7 +297,22 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // fresh keyed prop. Resolve the wire eid ONCE here (the only place the O(n) ResolveMirrorEidByActor
             // fallback for the eid-only clump may run) and CACHE it (g_lastHeldEid) so the carry stream is O(1).
             const bool mirrored = coop::trash_collect_sync::EnsureHeldItemBroadcast(heldActor, &session);
-            g_lastHeldEid = ResolveHeldPropEid(heldActor);
+            // HOST grab adoption (docs/piles/08): a freshly-grabbed trash CLUMP is eid-less here -- bind it
+            // to the pile's eid recorded at the InpActEvt PRE seam (the clump's BeginDeferred spawn is
+            // EX_CallMath -> invisible, so we can't catch it at spawn). AdoptPendingGrabClump rebinds E onto
+            // the clump + broadcasts PropConvert{ToClump} + returns E; we cache E as the carry eid.
+            coop::element::ElementId adoptedEid = coop::element::kInvalidId;
+            if (session.role() == coop::net::Role::Host && ue_wrap::prop::IsGarbageClump(heldActor)) {
+                const auto cloc = ue_wrap::engine::GetActorLocation(heldActor);
+                const auto crot = ue_wrap::engine::GetActorRotation(heldActor);
+                adoptedEid = coop::trash_channel::AdoptPendingGrabClump(session, heldActor, cloc, crot);
+                // Watch this clump for its re-pile: when it dies (re-piles), an immediate re-seed
+                // registers the new pile NOW so it is grab-syncable without the ~4s steady-re-seed gap.
+                if (adoptedEid != coop::element::kInvalidId)
+                    coop::trash_collect_sync::WatchClumpForRepile(static_cast<uint32_t>(adoptedEid), heldActor);
+            }
+            g_lastHeldEid = (adoptedEid != coop::element::kInvalidId) ? adoptedEid
+                                                                      : ResolveHeldPropEid(heldActor);
             const unsigned eidLog =
                 (g_lastHeldEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(g_lastHeldEid);
             UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' eid=%u -> %s",

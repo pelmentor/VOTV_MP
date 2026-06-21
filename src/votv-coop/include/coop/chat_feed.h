@@ -35,6 +35,12 @@ struct Snapshot {
 // "X joined the game" line is interesting for a moment, then clutters forever.
 void Push(const std::wstring& line);
 
+// Append an event line AFTER `delayMs` (promoted to the live feed by Tick once due). Used for the join
+// announces: the client reports world-ready before its loading screen visually clears, so showing
+// "X joined the game" immediately looks premature -- a short delay lets the join settle first
+// (user 2026-06-21). Game thread (queued on the game-thread Tick).
+void PushDelayed(const std::wstring& line, uint64_t delayMs);
+
 // Drop expired lines + recompute the fade alphas by age, then republish the
 // snapshot. Cheap no-op when the feed is empty. Call from a periodic game-thread
 // tick (the harness tick, ~60 Hz).

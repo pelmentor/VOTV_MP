@@ -46,6 +46,11 @@ void RebindE(coop::element::ElementId E, void* actor) {
                                           /*rebindInPlace=*/true);
 }
 
+// The pending grab recorded at the InpActEvt_use PRE seam, consumed by the next held-clump edge.
+struct PendingGrab { bool active = false; uint32_t eid = 0; uint8_t chipType = 0; int ttl = 0; };
+PendingGrab g_pendingGrab;
+constexpr int kPendingGrabTtlTicks = 30;  // ~0.3-0.5s; the grab's clump enters the hand within a few frames
+
 }  // namespace
 
 void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t kind, void* newActor,
@@ -84,6 +89,35 @@ uint8_t OnHostRelease(coop::element::ElementId E) {
     return ctx;
 }
 
+void NotePendingGrab(coop::element::ElementId pileEid, uint8_t chipType) {
+    if (pileEid == 0u || pileEid == coop::element::kInvalidId) return;
+    g_pendingGrab = PendingGrab{true, static_cast<uint32_t>(pileEid), chipType, kPendingGrabTtlTicks};
+    UE_LOGI("[PILE] HOST grab PENDING eid=%u variant=%u -- the clump the BP spawns next adopts this eid "
+            "(InpActEvt PRE seam; the BeginDeferred spawn is EX_CallMath -> invisible)",
+            static_cast<unsigned>(pileEid), static_cast<unsigned>(chipType));
+}
+
+coop::element::ElementId AdoptPendingGrabClump(coop::net::Session& s, void* heldClump,
+                                               const ue_wrap::FVector& clumpLoc,
+                                               const ue_wrap::FRotator& clumpRot) {
+    if (!g_pendingGrab.active || !heldClump) return coop::element::kInvalidId;
+    const coop::element::ElementId E = static_cast<coop::element::ElementId>(g_pendingGrab.eid);
+    const uint8_t chipType = g_pendingGrab.chipType;
+    g_pendingGrab.active = false;                          // consume (one clump per grab)
+    UE_LOGI("[PILE] HOST GRAB ADOPT eid=%u -- clump %p entered the hand -> binding it to the grabbed pile's "
+            "eid + broadcasting convert", static_cast<unsigned>(E), heldClump);
+    OnHostConvert(s, E, coop::net::propconvert_kind::kToClump, heldClump, clumpLoc, clumpRot, chipType);
+    return E;
+}
+
+void TickPendingGrab() {
+    if (g_pendingGrab.active && --g_pendingGrab.ttl <= 0) {
+        UE_LOGI("[PILE] HOST grab PENDING eid=%u expired (no clump appeared -- grab produced none / hands full)",
+                static_cast<unsigned>(g_pendingGrab.eid));
+        g_pendingGrab.active = false;
+    }
+}
+
 uint8_t CtxForEid(coop::element::ElementId E) {
     auto it = g_ctx.find(static_cast<uint32_t>(E));
     return (it == g_ctx.end()) ? uint8_t{0} : it->second;
@@ -102,14 +136,20 @@ bool AdoptInboundConvertCtx(coop::element::ElementId E, uint8_t ctx) {
 }
 
 bool IsInboundStreamCtxFresh(coop::element::ElementId E, uint8_t ctx) {
-    if (ctx == 0) return true;                            // legacy/non-trash
+    if (ctx == 0) return true;                            // legacy/non-trash keyed prop -> no enforcement
     auto it = g_ctx.find(static_cast<uint32_t>(E));
-    if (it == g_ctx.end() || it->second == 0) return true;  // no convert seen yet -> can't judge, apply
-    return AtLeast(ctx, it->second);                     // drop a carry/throw older than the last transition
+    // A trash carry/throw (ctx>=1) for an eid we have seen NO convert for yet: the ToClump convert (reliable
+    // lane) has not landed, so E still renders as a PILE here. Applying the clump's carry pose would DRIVE
+    // the pile to the carry point + fire its grab cue BEFORE the re-skin -- the 2026-06-21 double-grab-sound
+    // + pre-convert pile-jump glitch (the unreliable pose beats the reliable convert). DROP until the convert
+    // arrives (reliable -> it will); then g_ctx[E] is set and poses apply to the clump.
+    if (it == g_ctx.end() || it->second == 0) return false;
+    return AtLeast(ctx, it->second);                     // else drop only a pose older than the last transition
 }
 
 void OnDisconnect() {
     g_ctx.clear();
+    g_pendingGrab = PendingGrab{};
 }
 
 }  // namespace coop::trash_channel
