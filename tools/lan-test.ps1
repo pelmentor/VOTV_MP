@@ -173,7 +173,22 @@ function Launch-Instance($role, $nick, $logName, $extraEnv, $pose, $grabTest, $f
 
 Step "launching HOST (nick=Host, binds port $Port, autotest pose @ host$(if($GrabTest){', GRAB TEST armed (full)'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (host drives, client observes)'})$(if($RedSkyTest){', RED SKY TEST armed (host drives)'}))..."
 $hostProc = Launch-Instance "host" "Host" $hostLogName "" $hostPose $GrabTest $FlashlightTest $WeatherTest $RedSkyTest $ChipPileTest
-Start-Sleep -Seconds 4   # let the host process come up first
+# Wait for the HOST to be HOSTING (its first "net stats: state=" heartbeat) before launching
+# the client, instead of a fixed 4 s head-start. Under boot contention the host's startup
+# (incl. the ~10 s widget reflection dump) can push "hosting" past a minute, and a fixed sleep
+# let the client's menu-join time out before the host was accepting -- the 2026-06-21 connect
+# race (host reached hosting at 21:40:39, client gave up at 21:40:31). Poll the host log; the
+# client still takes ~30-60 s to boot to its own join attempt, by which point the host is ready.
+Step "waiting up to 180 s for HOST to start hosting (net stats heartbeat) before launching client..."
+$hostReadyDeadline = (Get-Date).AddSeconds(180)
+$hostReady = $false
+while ((Get-Date) -lt $hostReadyDeadline) {
+    if ($hostProc.HasExited) { throw "host instance exited ($($hostProc.ExitCode)) before it started hosting" }
+    if ((Test-Path $hostLog) -and (Select-String -Path $hostLog -Pattern "net stats: state=" -SimpleMatch -Quiet)) { $hostReady = $true; break }
+    Start-Sleep -Seconds 2
+}
+if ($hostReady) { Step "host is hosting -- launching client." }
+else { Step "WARN: host hosting heartbeat not seen in 180 s; launching client anyway (connect may still race)." }
 Step "launching CLIENT (nick=Client, peer=127.0.0.1:$Port, autotest pose @ client$(if($GrabTest){', SCAN ONLY'})$(if($FlashlightTest){', FLASHLIGHT TEST armed'})$(if($WeatherTest){', WEATHER TEST armed (observer-only)'})$(if($RedSkyTest){', RED SKY TEST armed (observer-only)'}))..."
 # Client also gets VOTVCOOP_RUN_GRAB_TEST=1 -- it runs the prop scan + logs
 # fields for cross-peer Key comparison, but does NOT drive any UFunctions.
