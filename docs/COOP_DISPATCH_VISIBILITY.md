@@ -150,6 +150,13 @@ OUTER door (engine/native/delegate → BP); it is not re-entered for an inner BP
   converts the EXACT spawned pile the same tick → the ~5s reaper-vs-rebind glitch is gone by construction.
   The GRAB direction still uses the VISIBLE InpActEvt-PRE + held-edge adopt (a future tightening moves it to
   the same thunk). **[V/AS-BUILT]**
+- **The thunk catches the HOST's authoring. The CLIENT MIRROR needs no dispatch observation at all** — as of
+  the phase-1 trash proxy (`coop/trash_proxy`, `06685a9c`+`1011e512`, AS-BUILT/not-smoked), the client's
+  mirror of a chipPile/clump is an `AStaticMeshActor` WE spawn/destroy/re-skin via our OWN
+  `SpawnActor`/`DestroyActor`/`SetStaticMesh` (driven by the reliable PropSpawn/PropConvert/PropDestroy wire)
+  — **visible by construction; there is no BP self-morph/self-destroy dispatch to observe for the mirror
+  anymore.** The EX_CallMath invisibility problem here is purely a HOST-side authoring concern (the thunk);
+  the client just renders host-authoritative state. **[V/AS-BUILT]**
 
 ## NEEDS-PROBE
 

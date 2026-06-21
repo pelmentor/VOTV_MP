@@ -1,9 +1,17 @@
-# The pile client-mirror staleness + the host-authoritative proxy redesign (DESIGN) — 2026-06-21
+# The pile client-mirror staleness + the host-authoritative proxy redesign (DESIGN + AS-BUILT phase 1) — 2026-06-21
 
-**Tag: DESIGN (the km-walk robustness track).** OPEN as of HEAD `fea04c26` (deployed `BA79E705`, proto v82).
-This is the track AFTER the deterministic re-pile thunk (commit `d19ae4d4`) + the triple-grab-cue fix
-(`fea04c26`). Those fixed the HOST-side re-pile determinism + the sound; they do **NOT** fix the dup the
-user hit — that is a CLIENT-side mirror-staleness problem with a different root, documented here.
+**Tag: DESIGN of record (§2/§6/§7) + AS-BUILT phase 1 (see the dated section at the end).** The design was
+authored at HEAD `fea04c26` (deployed `BA79E705`, proto v82). **Phase 1 of the proxy then SHIPPED at HEAD
+`1011e512`** (commits `06685a9c` + `1011e512`) — **AS-BUILT, builds clean, NOT smoked** (the proxy is not yet
+deployed; the user is mid-A+B hands-on). This is the track AFTER the deterministic re-pile thunk (commit
+`d19ae4d4`) + the triple-grab-cue fix (`fea04c26`). Those fixed the HOST-side re-pile determinism + the
+sound; they do **NOT** fix the dup the user hit — that is a CLIENT-side mirror-staleness problem with a
+different root, documented here, and now addressed by the phase-1 proxy.
+
+> **§2 (the proxy design), §6 (the four locked requirements), §7 (the phase split + C1/C2/C3 + Q1/Q2) remain
+> the DESIGN OF RECORD.** §4 (the 3-verdict discriminator / health-poll / serial-check) is the FALLBACK that
+> the proxy makes **moot — DROPPED, not built** (it would only have returned if the proxy were rejected; it
+> was not). The dated **AS-BUILT (2026-06-21)** section at the bottom records what actually shipped.
 
 ---
 
@@ -94,7 +102,13 @@ replaces fall-forever.)
 
 ---
 
-## 4. The discriminator (FALLBACK ONLY — needed only if the proxy is rejected)
+## 4. The discriminator (DROPPED — the fallback the proxy made moot; NOT built)
+
+> **STATUS 2026-06-21: DROPPED.** The proxy (Section 2) shipped as phase 1 (`06685a9c` + `1011e512`), so the
+> 3-verdict discriminator / periodic health-poll / GUObjectArray-serial-check below were **never built** and
+> are **not on any roadmap**. They were the fallback for "the proxy is rejected"; it was not. Kept here only
+> as the analysis of the death modes the proxy eliminates by construction. Do NOT resurrect without a written
+> reason the proxy failed.
 
 If the proxy is NOT adopted (e.g., the visual turns out to need the BP for something beyond a static mesh),
 diagnose the death mode FIRST (read-only, no fix, like the read-only thunk pass) before any BP-suppress/root:
@@ -120,11 +134,14 @@ diagnose the death mode FIRST (read-only, no fix, like the read-only thunk pass)
 
 - Re-pile thunk + sound fix: AS-BUILT, deployed `BA79E705`, hands-on PENDING (the user confirms single cue
   + no vanish-return via `research/handson_runbook_2026-06-21_repile_thunk.md` take-22).
-- Mirror-staleness dup + the km-walk carry: **OPEN.** Design: the host-authoritative `AStaticMeshActor`
-  proxy (Section 2) + the explicit reliable carry-end release (Section 3). The discriminator (Section 4) is
-  the fallback only.
-- NEXT once the user green-lights the proxy direction: build the trash proxy mirror (spawn `AStaticMeshActor`
-  + mesh-name resolve + collision channel + root + the `OnConvert` re-skin path), then the carry-end release.
+- Mirror-staleness dup + the km-walk carry: **phase 1 of the proxy AS-BUILT** (`06685a9c` + `1011e512`,
+  HEAD `1011e512`) — builds clean, **NOT smoked, NOT deployed**. The host-authoritative `AStaticMeshActor`
+  proxy (Section 2) shipped for **visual + position + re-skin, EXPLICIT NoCollision** (phase 1 per §7/C2).
+  The discriminator (Section 4) is **DROPPED** (moot). See the dated AS-BUILT section at the bottom.
+- STILL PENDING before the phase-1 smoke (audit `a249b005`): HIGH-1 (ToClump-beats-spawn renders as a pile),
+  HIGH-2 (the clump's per-chipType MATERIAL swap), MEDIUM-1 (`StaticLoadObject` + Cube fallback), and the R4
+  km-walk lerp + the explicit reliable carry-end release (Section 3). Collision + the look-trace probe + the
+  client-grab direction are **PHASE 2** (Increment 2).
 
 ---
 
@@ -296,3 +313,66 @@ does NOT read+send a live mesh name. The phase-1 ue_wrap foundation is therefore
 `SetComponentMaterial` (clump material), `GetMeshMaterial` (read slot-0 off the resolved pile mesh),
 `getChipPileType` caller, `RemoveFromRoot`, and an exported static-mesh-component/root getter. Plus
 `SpawnActor`(engine class) + `AddToRoot`, which already exist.
+
+---
+
+## AS-BUILT — phase 1 of the proxy (2026-06-21, HEAD `1011e512`) — BUILT CLEAN, NOT SMOKED
+
+> **AS-BUILT ≠ VERIFIED.** Phase 1 of the host-authoritative `AStaticMeshActor` trash proxy (§2/§7) is
+> implemented and **builds clean (Release, `votv-coop.dll` links)**, but the dup fix + the pose-follow are
+> **NOT smoke-verified hands-on**. The deployed DLL is still `BA79E705` (the prior A+B thunk build) — phase 1
+> is **NOT deployed** (the user is mid-A+B hands-on, so the deploy slots are in use). §2/§6/§7 above stay the
+> design of record; this section records what shipped + what is still pending before the smoke.
+
+### What shipped (commits `06685a9c` core + `1011e512` hotfix)
+
+- **NEW `coop/trash_proxy.{cpp,h}`** — owns the eid→proxy registry (`g_proxies`) + the rooting. Exports
+  `SpawnProxy` / `ReskinProxy` / `RetireProxy` / `IsTrashProxyClass` / `IsClumpClass` / `IsProxy` /
+  `OnDisconnect` / `OnDisconnectForSlot`. The proxy is an `AStaticMeshActor` (NO blueprint), `AddToRoot`'d,
+  EXPLICIT NoCollision (`SetActorRootCollisionEnabled(actor, 0)` — `trash_proxy.cpp:120`); `SpawnProxy` is
+  idempotent (a same-eid re-spawn re-skins the existing actor instead of leaking a second — `:107-112`).
+  `RetireProxy` = `ClearAnyDriveFor → DestroyActor → RemoveFromRoot → unbind the Prop mirror` in that order
+  (the GC-window order from §C3/Q2 — `:140-163`).
+- **ue_wrap foundation (additive):** `reflection::RemoveFromRoot` (pairs `AddToRoot`), `engine::SetStaticMesh`
+  + `engine::GetStaticMeshComponent` (on `UStaticMeshComponent`), `prop::ResolvePileMesh` (the game's OWN
+  `getChipPileType(chipType)` resolver per R1, last-good-cached so a proxy is never invisible).
+- **Wiring (the dup fix):**
+  - `remote_prop_spawn.cpp` `OnSpawn` — a trash class (`IsTrashProxyClass`) → `SpawnProxy` +
+    `RegisterPropMirror`, branched BEFORE the BP dedup/converge/physics machinery (`:343-364`).
+  - `remote_prop.cpp` `OnConvert` — `IsProxy(E)` → `ReskinProxy` IN PLACE (`SetStaticMesh` on the SAME actor,
+    binding untouched) → return. **THIS is the dup fix** (no spawn-fresh, no orphan; a rooted proxy never goes
+    stale → the "mirror NOT-FOUND → spawn fresh" path that caused the dup is structurally unreachable).
+  - `remote_prop.cpp` `OnDestroy` — `IsProxy(E)` → `RetireProxy` → return (un-roots the rooted actor; else it
+    leaks its GUObjectArray slot forever).
+  - `subsystems.cpp` `DisconnectSlot` — `trash_proxy::OnDisconnectForSlot(slot)` BEFORE the generic per-slot
+    mirror drain; `DisconnectAll` — `trash_proxy::OnDisconnect()` BEFORE `ForceRelease`.
+
+### Audit `a249b005` (post-ship) — CRITICAL fixed; HIGH/MEDIUM-1 pending
+
+- **CRITICAL-1 — FIXED (`1011e512`):** a PER-SLOT disconnect drained a proxy's Prop Element via
+  `DrainMirrorsForSlot` WITHOUT `RetireProxy` → the rooted `AStaticMeshActor` leaked. Fixed by making
+  `g_proxies` the authoritative per-slot retire driver: `ProxyEntry.ownerSlot` (stamped from `senderSlot` at
+  spawn) + `OnDisconnectForSlot(slot)` retiring every proxy owned by that slot, called before the generic
+  drain. (The design's Q2 claimed this was "structurally impossible" — it was the gap.)
+- **MEDIUM-2 — FIXED:** cache the proxy's `UStaticMeshComponent` in `ProxyEntry` (resolved once at spawn) →
+  `ReskinProxy` no longer walks ~237k GUObjectArray entries per convert.
+- **MEDIUM-3 — FIXED:** fold `IsTrashProxyClass` + `IsClumpClass` into one cached `ClassKind` lookup (one
+  `FindClass` per distinct class, not two).
+- **STILL PENDING before smoke (NOT built):**
+  - **HIGH-1** — a `ToClump` convert that beats its own `OnSpawn` renders as a PILE (the fallthrough spawn
+    path doesn't honor `wantClump`); the proxy must spawn in the requested form.
+  - **HIGH-2** — the clump's per-chipType look is a MATERIAL swap on the fixed dirtball mesh
+    (`prop_garbageClump_C::setTex` = `SetMaterial(0, pileMesh.GetMaterial(0))`); phase 1 sets only the mesh →
+    clumps currently render with the default dirtball material. Needs `engine::SetComponentMaterial` +
+    a `GetStaticMeshMaterial` reader (see the `SkinProxy` TODO at `trash_proxy.cpp:81-84`).
+  - **MEDIUM-1** — `ResolveClumpMesh`/`ResolvePileMesh` use `FindObject`, not `StaticLoadObject` (§R1), and
+    have no `/Engine/BasicShapes/Cube.Cube` fallback → a cold/not-streamed asset could leave a proxy invisible.
+  - The **R4 km-walk lerp** + the **explicit reliable carry-end release** (replacing the 500 ms timeout,
+    Section 3) — the next commit; phase-1 pose-follow is still teleport via the existing mirror drive.
+
+### Scope held
+
+Phase 1 = **trash only** (chipPile/clump + variants), **visual + position + re-skin, NoCollision** (the
+client temporarily passes through mirrored trash — the accepted phase-1 regression, Q1). Collision (the
+`garbageCollider` double-duty hull), the look-trace probe, and the client-grab direction are **PHASE 2 /
+Increment 2**. `Aprop_C` + kerfur mirrors are unchanged.

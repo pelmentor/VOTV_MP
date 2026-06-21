@@ -12,16 +12,21 @@ Legend: ☐ not started · ◐ in progress · ☑ done.
 NPC sync, WorldActor mirror (proto v80), save snapshot-on-connect, terminals,
 doors+lights+keypads, kerfur (prop⇄NPC conversion), events, voice, and the
 MTA-divergence refactor (incremental re-seed + membership-bounded sweep). The
-protocol is at **v82**. **Pile/trash sync — Increment 1 (host-grab direction) of the
-host-authoritative trash channel ([docs/piles/08](piles/08-HOST-AUTH-TRASH-CHANNEL.md)):**
+protocol is at **v82**. **Pile/trash sync — the host-authoritative trash channel
+([docs/piles/08](piles/08-HOST-AUTH-TRASH-CHANNEL.md)), HEAD `1011e512`:**
 the pile MORPH (v81) was refuted by a real hands-on; so was the s35 "BeginDeferred-POST
 is observable" link (it is `EX_CallMath` → invisible; 0 host_spawn_watcher fires). The
 GRAB (pile→clump) is **VERIFIED hands-on** (`InpActEvt_use` PRE + held-edge adopt); the
 RE-PILE (clump→pile) is now the **deterministic `UFunction::Func` thunk converter**
 (`ue_wrap/ufunction_hook`, commit `d19ae4d4`) — detection VERIFIED, the convert + the
 triple-grab-cue fix (`fea04c26`) are **AS-BUILT, deployed `BA79E705`, hands-on-PENDING**.
-**OPEN:** the client mirror-staleness dup (a robustness track). The client-grab direction
-(Increment 2, proto v83) is still DESIGN. **The day-to-day live state is
+The CLIENT mirror of trash is now a host-authoritative **`AStaticMeshActor` proxy**
+(`coop/trash_proxy`, commits `06685a9c`+`1011e512`) — NO blueprint + `AddToRoot` +
+eid→actor registry + re-skin in place → the client mirror-staleness dup is impossible by
+construction; **phase-1 proxy AS-BUILT (built, not smoked), NOT yet deployed** (visual +
+position + re-skin, NoCollision; HIGH-1/HIGH-2/MEDIUM-1 + the km-walk lerp pending per
+audit `a249b005`). The client-grab direction (Increment 2, proto v83) + proxy PHASE 2
+(collision) are still DESIGN. **The day-to-day live state is
 in the auto-memory (`MEMORY.md` index + the top `project_*` entry), NOT this
 file** — this roadmap is the phase-gate structure; the memory is the running log.
 For cross-cutting architecture truth see the new

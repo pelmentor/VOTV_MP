@@ -1,9 +1,10 @@
 # 08 — HOST-AUTHORITATIVE TRASH CHANNEL (the pile-sync redesign)
 
-> **Status (2026-06-21 session 38, HEAD `fea04c26`, deployed `BA79E705`, proto v82 — no wire change):**
+> **Status (2026-06-21 session 38+, HEAD `1011e512`, proto v82 — no wire change; deployed DLL still
+> `BA79E705`):**
 > - **GRAB (pile→clump) — [V] VERIFIED hands-on** (`[SYNC-MIRROR OK]` in the client log). Driven by the
 >   `InpActEvt_use` PRE seam (a real input event → ProcessEvent-VISIBLE) + the held-object edge adopt.
-> - **RE-PILE (clump→pile) — now the DETERMINISTIC `UFunction::Func` thunk converter — [AS-BUILT]; the
+> - **RE-PILE (clump→pile) — the DETERMINISTIC `UFunction::Func` thunk converter — [AS-BUILT]; the
 >   thunk DETECTION is [V] VERIFIED hands-on, the CONVERT flip is deployed-pending-hands-on** (commit
 >   `d19ae4d4`). A read-only observe pass (deployed `B7EEB1BF`) showed many CLEAN `[REPILE]` and the thunk's
 >   `*Result` was ptr-for-ptr the SAME pile the old death-watch's FindNearest found on every isolated re-pile
@@ -13,14 +14,17 @@
 > - **Triple grab-cue — FIXED [AS-BUILT], deployed-pending-hands-on** (commit `fea04c26`): the ctx-gate was
 >   split by packet kind (a carry pose requires `ctx == known`, a release keeps `ctx >= known`) so an
 >   ahead-of-convert carry pose no longer drives the pre-convert pile + re-fires the grab cue.
-> - **DETECTION verified, CONVERT pending the hands-on:** the next hands-on confirms the grab cue is SINGLE
->   (not triple) and the re-pile no longer vanish-returns. Do NOT mark the convert/sound VERIFIED until then.
-> - **CLIENT-grab direction (Increment 2) — [DESIGN], NOT built** (proto v83).
-> - **OPEN — the client mirror-staleness dup (the ROBUSTNESS track):** the client's join-mirror of a pile
->   goes NOT-LIVE on its own within ~10s → `OnConvert` `ResolveLiveActorByEid` returns null → "mirror
->   NOT-FOUND" → a fresh clump is spawned while the original lingers = a dup the user sees. The thunk flip
->   does NOT fix this (it is client-side staleness, NOT the host-side cluster mis-bind the flip fixes). See
->   `research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`.
+> - **CLIENT mirror of trash = the host-authoritative `AStaticMeshActor` PROXY — phase 1 [AS-BUILT], NOT
+>   smoked, NOT deployed** (commits `06685a9c` + `1011e512`). The client's mirror of a chipPile/clump is now
+>   an `AStaticMeshActor` WE own (NO blueprint, `AddToRoot`, our eid→actor registry) instead of the real
+>   self-morphing BP — so the staleness dup below is impossible BY CONSTRUCTION. Phase 1 = visual + position
+>   + re-skin, EXPLICIT NoCollision. See **"AS-BUILT — the client trash MIRROR is the host-authoritative
+>   `AStaticMeshActor` proxy"** below + `research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`.
+> - **DETECTION verified, CONVERT + the proxy pending the hands-on:** the next hands-on confirms the grab cue
+>   is SINGLE (not triple), the re-pile no longer vanish-returns, AND (once the proxy is deployed) the dup is
+>   gone + a clump survives a km-walk. Do NOT mark the convert/sound/proxy VERIFIED until then.
+> - **CLIENT-grab direction (Increment 2) — [DESIGN], NOT built** (proto v83). Pairs with proxy PHASE 2
+>   (collision — the `garbageCollider` hull).
 >
 > Supersedes **07** (the MORPH V2 re-skin + proximity land-watch — RETIRED 2026-06-21: it false-fired in
 > dense pile clusters and never wired the client→host direction; the autonomous smoke that "verified" it was
@@ -306,11 +310,73 @@ never the input seam, never the client direction. The real gates:
 
 ---
 
-## OPEN — the client mirror-staleness dup (the ROBUSTNESS track)
+## AS-BUILT — the client trash MIRROR is the host-authoritative `AStaticMeshActor` proxy (phase 1)
 
-Separate from everything above (the host-side cluster mis-bind the thunk flip fixes). On the CLIENT, a
-join-mirror of a pile (a real `actorChipPile_C`) goes **NOT-LIVE on its own within ~10s** → on the next
-`OnConvert`, `ResolveLiveActorByEid` returns null → "mirror NOT-FOUND" → the client spawns a FRESH clump
-while the original lingers = the dup the user sees. The thunk flip does NOT touch this (it is client-side
-staleness, not a host author/identity problem). Design + RCA:
-**`research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`**.
+**Commits `06685a9c` (core) + `1011e512` (hotfix). HEAD `1011e512`. [AS-BUILT — builds clean, NOT smoked,
+NOT deployed]** (the deployed DLL is still `BA79E705`; phase 1 deploys when the user is away + green-lit).
+Per [[feedback-docs-piles-living-knowledge-base]] "AS-BUILT" ≠ "VERIFIED" — do NOT mark this VERIFIED until
+the hands-on confirms the dup is gone + a clump survives a km-walk.
+
+### The dup this fixes (the ROBUSTNESS track — was OPEN, now addressed BY CONSTRUCTION)
+
+The client's mirror of a trash entity USED to be a **real `actorChipPile_C` / `prop_garbageClump_C`
+blueprint**. That BP runs its OWN ubergraph → it self-morphs / self-destructs / is GC-eligible (unrooted) on
+its own schedule, independent of the host. Within ~10 s it went **NOT-LIVE** → on the next `OnConvert`,
+`ResolveLiveActorByEid` returned null → "mirror NOT-FOUND" → the client spawned a FRESH clump while the
+original lingered = the visible DUP (RCA: the eid=4424 lifecycle in the design finding §1). This is a
+CLIENT-side staleness problem — **distinct** from the host-side cluster mis-bind the thunk flip fixes.
+
+### The fix — change the mirror's RULES OF EXISTENCE (NEW `coop/trash_proxy.{cpp,h}`)
+
+The client mirror of trash (chipPile/clump + variants) is now an **`AStaticMeshActor` WE own**, NOT the real
+BP:
+- **NO blueprint** → never self-morphs / self-destructs.
+- **`AddToRoot`** → never GC'd → never stale-index (`trash_proxy.cpp:119`).
+- **our eid→actor registry** (`g_proxies`) → on convert we **re-skin (`SetStaticMesh`) IN PLACE**, never
+  spawn-fresh → the "mirror NOT-FOUND → spawn fresh" dup path is **structurally unreachable**.
+
+So the dup is impossible by construction; the earlier 3-verdict discriminator / health-poll / serial-check
+plan (design finding §4) is **DROPPED as moot**.
+
+**Phase 1 scope: visual + position + re-skin, EXPLICIT NoCollision** (`SetActorRootCollisionEnabled(actor,
+0)`, `trash_proxy.cpp:120`). The proxy is a kinematic host-driven follower; the client player TEMPORARILY
+passes through mirrored trash (an accepted phase-1 regression, design §Q1). Collision (the `garbageCollider`
+double-duty hull — Pawn-block + grab-trace) is **PHASE 2** with the client-grab direction (Increment 2).
+Scope: trash only; `Aprop_C` + kerfur mirrors unchanged.
+
+### As-built pieces (file:line)
+
+- **`coop/trash_proxy.{cpp,h}`** — owns the eid→proxy registry + the rooting. `SpawnProxy` (idempotent: a
+  same-eid re-spawn re-skins instead of leaking a second, `:107-112`) / `ReskinProxy` (in place, binding
+  untouched, `:130-138`) / `RetireProxy` (`ClearAnyDriveFor → DestroyActor → RemoveFromRoot → unbind`, the
+  GC-window order, `:140-163`) / `IsTrashProxyClass` / `IsClumpClass` (one cached `ClassKind` lookup) /
+  `IsProxy` / `OnDisconnect` (all proxies) / `OnDisconnectForSlot` (per-slot, the CRITICAL-1 fix).
+- **ue_wrap foundation:** `reflection::RemoveFromRoot`, `engine::SetStaticMesh` +
+  `engine::GetStaticMeshComponent`, `prop::ResolvePileMesh` (the game's OWN `getChipPileType(chipType)`
+  resolver, last-good-cached).
+- **Wiring:**
+  - `remote_prop_spawn.cpp` `OnSpawn` — trash class → `SpawnProxy` + `RegisterPropMirror`, branched BEFORE the
+    BP dedup/converge/physics machinery (`:343-364`).
+  - `remote_prop.cpp` `OnConvert` — `IsProxy(E)` → `ReskinProxy` in place → return — **THE dup fix**.
+  - `remote_prop.cpp` `OnDestroy` — `IsProxy(E)` → `RetireProxy` → return (un-roots the rooted actor).
+  - `subsystems.cpp` `DisconnectSlot` — `OnDisconnectForSlot(slot)` before the generic per-slot mirror drain;
+    `DisconnectAll` — `OnDisconnect()` before `ForceRelease`.
+
+### Audit `a249b005` (post-ship): CRITICAL fixed; HIGH-1/HIGH-2/MEDIUM-1 + the lerp PENDING
+
+- **CRITICAL-1 — FIXED (`1011e512`):** a PER-SLOT disconnect drained a proxy's Prop Element WITHOUT
+  `RetireProxy` → the rooted `AStaticMeshActor` leaked. Fixed via `OnDisconnectForSlot(slot)` (retire by
+  `ownerSlot`, stamped from `senderSlot` at spawn) running BEFORE the generic drain. (The design's Q2 claimed
+  this "structurally impossible" — it was the gap.) MEDIUM-2 (cache the component) + MEDIUM-3 (fold the class
+  cache) also FIXED.
+- **STILL PENDING before the phase-1 smoke (NOT built):** **HIGH-1** (a `ToClump` that beats its spawn renders
+  as a pile — must spawn in the `wantClump` form); **HIGH-2** (the clump's per-chipType MATERIAL swap —
+  `setTex` = `SetMaterial(0, pileMesh.GetMaterial(0))`; phase 1 sets only the mesh, so clumps render with the
+  default dirtball material — needs `engine::SetComponentMaterial` + a `GetStaticMeshMaterial` reader, see the
+  `SkinProxy` TODO `trash_proxy.cpp:81-84`); **MEDIUM-1** (`FindObject`, not `StaticLoadObject`, + no
+  `/Engine/BasicShapes/Cube.Cube` fallback → a cold asset could leave a proxy invisible); and the **R4
+  km-walk lerp** + the **explicit reliable carry-end release** (replacing the 500 ms timeout).
+
+Full design + RCA: **`research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`** (§2 the
+proxy design, §6 the four mesh/collision requirements, §7 the phase split + C1/C2/C3 + Q1/Q2 + the
+AS-BUILT-phase-1 section).
