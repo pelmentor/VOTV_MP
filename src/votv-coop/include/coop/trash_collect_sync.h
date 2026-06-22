@@ -84,4 +84,8 @@ void OnDisconnect();
 // No-op if the session isn't a running client. Returns true iff sent. Game thread.
 bool DebugSendGrabIntent(uint32_t eid);
 
+// TEST-ONLY (Increment 2 harness): send a ThrowIntent{eid} from THIS client (the throw fallback when the
+// real InpActEvt_use toggle can't be driven). No-op if not a running client. Returns true iff sent. GT.
+bool DebugSendThrowIntent(uint32_t eid);
+
 }  // namespace coop::trash_collect_sync

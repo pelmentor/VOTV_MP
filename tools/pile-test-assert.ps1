@@ -192,13 +192,15 @@ $Invariants = @(
     }},
 
     # The host puppet hand-drive must run after a successful client grab (the probe proved the puppet
-    # tick won't position the clump, so the host drives it -- this is the verdict-B fix, exercised).
-    @{ Name='puppet-drive-active'; Severity='CRITICAL'; Check={
+    # tick won't position the clump, so the host drives it). The drive + the carry-pose publish are ONE
+    # loop now, so the 'HOST PUBLISH ... carry' marker (read GetActorLocation AFTER SetActorLocation to the
+    # hand) IS the proof the hand-drive ran (the FLIGHT tag is the post-throw physics, not the drive).
+    @{ Name='puppet-hand-drive'; Severity='CRITICAL'; Check={
         $succ = Count $H '\[GRAB-INTENT\] SUCCESS'
         if ($succ -eq 0) { return @{ Pass = $true; Detail = 'no GrabIntent success (test not run this scenario)' } }
-        $drv = Count $H '\[PUPPET-DRIVE\] DRIVING'
+        $drv = Count $H '\[TRASH-CARRY\] HOST PUBLISH eid=\d+ slot=\d+ carry'
         @{ Pass = ($drv -gt 0)
-           Detail = "$drv PUPPET-DRIVE DRIVING tick(s) after $succ host grab (the host drives the held clump)" }
+           Detail = "$drv carry-publish tick(s) after $succ host grab (the host hand-drove the held clump to the puppet hand)" }
     }},
 
     # The client must receive the host's authoritative ToClump echo (the proxy re-skins to a clump),
@@ -209,6 +211,60 @@ $Invariants = @(
         $echo = Count $C 'recv convert GRAB'
         @{ Pass = ($echo -gt 0)
            Detail = "$echo client ToClump convert echo(es) for $succ host grab(s)" }
+    }},
+
+    # ---- Increment 2 PHASE 2a (recognition): the REAL client path -- a true E-press (InpActEvt_use) ran
+    # OnPileGrabPre's camera-ray cone, which recognized the aimed pile proxy + sent the GrabIntent (NOT the
+    # debug bypass). This is the phase-2a aim-grab proof. CRITICAL when the test injected a real E-press
+    # (useReal=1); a fallback-bypass run (InpActEvt_use unresolved) passes as not-exercised.
+    @{ Name='clientgrab-recognition'; Severity='CRITICAL'; Check={
+        $ran = Count $C 'grab_intent_test: picked pile proxy'
+        if ($ran -eq 0) { return @{ Pass = $true; Detail = 'client-grab test not run this scenario' } }
+        $bypass = Count $C 'FALLBACK GRAB -- DebugSendGrabIntent'
+        if ($bypass -gt 0) { return @{ Pass = $true; Detail = 'InpActEvt_use unresolved -> debug bypass used (recognition not exercised)' } }
+        $rec = Count $C '\[GRAB-INTENT\] CLIENT E-PRESS aimed at pile proxy'
+        @{ Pass = ($rec -gt 0)
+           Detail = "$rec camera-ray-cone recognition fire(s) (a real E-press aimed at the pile -> SendGrabIntent, not the bypass)" }
+    }},
+
+    # ---- Increment 2 PHASE 2 carry VISIBILITY (v85): the host must PUBLISH the carry/flight pose batch
+    # AND the client must APPLY it -- the host-authoritative per-eid stream that makes a client-grabbed
+    # clump render moving on every peer (the relay/slot-0 model could not). Gated on a host grab SUCCESS.
+    @{ Name='carry-pose-published'; Severity='CRITICAL'; Check={
+        $succ = Count $H '\[GRAB-INTENT\] SUCCESS'
+        if ($succ -eq 0) { return @{ Pass = $true; Detail = 'no client grab this scenario (carry stream not exercised)' } }
+        $pub = Count $H '\[TRASH-CARRY\] HOST PUBLISH'
+        @{ Pass = ($pub -gt 0)
+           Detail = "$pub HOST PUBLISH tick(s) for $succ grab(s) (host streams the puppet-held clump pose)" }
+    }},
+    @{ Name='carry-pose-applied'; Severity='CRITICAL'; Check={
+        $pub = Count $H '\[TRASH-CARRY\] HOST PUBLISH'
+        if ($pub -eq 0) { return @{ Pass = $true; Detail = 'host published no carry poses (not exercised)' } }
+        $app = Count $C '\[TRASH-CARRY\] CLIENT APPLY'
+        @{ Pass = ($app -gt 0)
+           Detail = "$app CLIENT APPLY for $pub host PUBLISH (the client renders the clump moving via the per-eid interp)" }
+    }},
+
+    # ---- Increment 2 PHASE 2b (the client-initiated THROW): a received ThrowIntent must reach SUCCESS
+    # (released the puppet grab + applied physics velocity), not stall at a DENIED gate.
+    @{ Name='throw-intent-roundtrip'; Severity='CRITICAL'; Check={
+        $recv = Count $H '\[THROW-INTENT\] RECEIVED'
+        if ($recv -eq 0) { return @{ Pass = $true; Detail = 'no ThrowIntent received (test not run / no throw this scenario)' } }
+        $succ = Count $H '\[THROW-INTENT\] SUCCESS'
+        $den  = Count $H '\[THROW-INTENT\] DENIED'
+        @{ Pass = ($succ -gt 0)
+           Detail = "$recv RECEIVED, $succ SUCCESS, $den DENIED (a received throw must reach SUCCESS)" }
+    }},
+
+    # The thrown clump must SELF-RE-PILE: after a throw SUCCESS the clump's own ground-hit ubergraph fires
+    # the BeginDeferred thunk -> a host ToPile convert. Proves the throw->flight->re-pile chain closed.
+    @{ Name='throw-repile'; Severity='CRITICAL'; Check={
+        $succ = Count $H '\[THROW-INTENT\] SUCCESS'
+        if ($succ -eq 0) { return @{ Pass = $true; Detail = 'no throw success (not exercised)' } }
+        $repile = Count $H 'HOST RE-PILE\(thunk\)'
+        $commit = Count $H 'HOST LAND COMMIT'
+        @{ Pass = (($repile + $commit) -gt 0)
+           Detail = "$repile RE-PILE(thunk) + $commit LAND COMMIT after $succ throw (the clump self-re-piled -> ToPile)" }
     }},
 
     # ---- Crash/health: neither log should carry a SEH crash dump or our [Error] from

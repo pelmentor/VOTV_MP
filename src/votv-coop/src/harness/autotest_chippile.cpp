@@ -654,7 +654,8 @@ void RunGrabIntentTest() {
             "picking a mirrored pile + sending GrabIntent");
     ::Sleep(70000);
 
-    struct Pick { void* player = nullptr; void* pile = nullptr; uint32_t eid = 0; ue_wrap::FVector pilePos{}; float dist = 0.f; };
+    struct Pick { void* player = nullptr; void* pile = nullptr; uint32_t eid = 0; ue_wrap::FVector pilePos{};
+                  float dist = 0.f; void* useFn = nullptr; int32_t useFrame = 0; };
     auto pk = std::make_shared<Pick>();
     if (RunGT([pk](std::atomic<int>& d) {
             void* p = coop::players::Registry::Get().Local();
@@ -666,16 +667,20 @@ void RunGrabIntentTest() {
             coop::element::ElementId eid = coop::remote_prop::ResolveMirrorEidByActor(pile);
             if (eid == coop::element::kInvalidId) {
                 UE_LOGW("grab_intent_test: nearest pile proxy %p has no resolvable eid", pile); d.store(2); return; }
+            // Resolve the E-press UFunction (InpActEvt_use) so we can drive the REAL recognition path
+            // (OnPileGrabPre reading the trace), not only the debug bypass.
+            void* cls = R::FindClass(P::name::MainPlayerClass);
+            void* fn  = cls ? R::FindFunction(cls, P::name::MainPlayerUseInputEventFn) : nullptr;
             pk->player = p; pk->pile = pile; pk->eid = static_cast<uint32_t>(eid);
             pk->pilePos = E::GetActorLocation(pile); pk->dist = dist;
-            UE_LOGI("grab_intent_test: picked pile proxy=%p eid=%u pos=(%.0f,%.0f,%.0f) dist=%.0fcm",
-                    pile, pk->eid, pk->pilePos.X, pk->pilePos.Y, pk->pilePos.Z, dist);
+            pk->useFn = fn; pk->useFrame = fn ? R::FunctionFrameSize(fn) : 0;
+            UE_LOGI("grab_intent_test: picked pile proxy=%p eid=%u pos=(%.0f,%.0f,%.0f) dist=%.0fcm useFn=%p",
+                    pile, pk->eid, pk->pilePos.X, pk->pilePos.Y, pk->pilePos.Z, dist, fn);
             d.store(1);
         }) != 1) { UE_LOGW("grab_intent_test: could not pick a pile -- aborting"); return; }
 
-    // 2. Teleport the client to a standoff facing the chosen pile, so its puppet (host-driven from the
-    //    client pose) stands at the pile -- the host's grab spawns the clump there and the hand-drive holds
-    //    it in front of the puppet. (Not required for the grab to ENGAGE, but it makes the geometry sane.)
+    // 2. Teleport the client to a standoff FACING the chosen pile proxy, so its interaction trace can hit
+    //    it (the client AIMS at the proxy) and its puppet (host-driven from the client pose) stands at the pile.
     RunGT([pk](std::atomic<int>& d) {
         const ue_wrap::FVector at = E::GetActorLocation(pk->player);
         float ax = at.X - pk->pilePos.X, ay = at.Y - pk->pilePos.Y;
@@ -685,24 +690,34 @@ void RunGrabIntentTest() {
         const ue_wrap::FRotator face = LookAt(stand, pk->pilePos);
         E::TeleportTo(pk->player, stand, face);
         E::SetControlRotation(E::GetController(pk->player), face);
-        UE_LOGI("grab_intent_test: client at a standoff facing the pile; sending GrabIntent in 2s");
+        UE_LOGI("grab_intent_test: client at a standoff facing the pile; grabbing via the camera-ray cone next");
         d.store(1);
     });
-    ::Sleep(2000);
+    ::Sleep(1500);   // let the view camera settle on the pile so the cone (camera forward) points at it
 
-    // 3. SEND the GrabIntent (the client-grab REQUEST). The host validates + executes playerGrabbed on this
-    //    client's puppet + broadcasts PropConvert{ToClump}; its puppet_carry_drive holds the clump at the hand.
-    RunGT([pk](std::atomic<int>& d) {
-        const bool sent = coop::trash_collect_sync::DebugSendGrabIntent(pk->eid);
-        UE_LOGI("grab_intent_test: >>> sent GrabIntent eid=%u sent=%d -- the HOST log should now show "
-                "[GRAB-INTENT] RECEIVED -> EXEC -> SUCCESS + [PUPPET-DRIVE] DRIVING; THIS client log should "
-                "show the ToClump convert applied to proxy eid=%u <<<", pk->eid, sent ? 1 : 0, pk->eid);
+    // 3. GRAB via the REAL path: inject InpActEvt_use (the SAME ProcessEvent edge a real E-press fires) ->
+    //    OnPileGrabPre runs the camera-ray cone (EidForAimedPileProxy) -> recognizes the aimed pile proxy ->
+    //    SendGrabIntent. The client is teleported facing the pile within reach, so the cone resolves it. The
+    //    debug bypass is used ONLY if the InpActEvt_use UFunction couldn't be resolved (so the chain still runs).
+    const bool useReal = (pk->useFn != nullptr);
+    RunGT([pk, useReal](std::atomic<int>& d) {
+        if (useReal) {
+            std::vector<uint8_t> frame(pk->useFrame > 0 ? static_cast<size_t>(pk->useFrame) : 0, 0u);
+            const bool ok = R::CallFunction(pk->player, pk->useFn, frame.empty() ? nullptr : frame.data());
+            UE_LOGI("grab_intent_test: >>> REAL GRAB -- injected InpActEvt_use (ok=%d); OnPileGrabPre should log "
+                    "'[GRAB-INTENT] CLIENT E-PRESS aimed at pile proxy eid=%u (camera-ray cone)' + SendGrabIntent <<<",
+                    ok ? 1 : 0, pk->eid);
+        } else {
+            const bool sent = coop::trash_collect_sync::DebugSendGrabIntent(pk->eid);
+            UE_LOGI("grab_intent_test: >>> FALLBACK GRAB -- DebugSendGrabIntent eid=%u sent=%d (InpActEvt_use unresolved) <<<",
+                    pk->eid, sent ? 1 : 0);
+        }
         d.store(1);
     });
 
-    // 4. Hold ~12s so the host processes + drives + the convert echoes back; re-face the pile each second so
-    //    the puppet aim (hence the host hand-drive holdPoint) moves -> the harness can assert the drive tracks.
-    for (int i = 0; i < 12; ++i) {
+    // 4. CARRY ~6s -- re-face each second so the puppet aim (hence the host hand-drive holdPoint AND the
+    //    host-published carry pose) moves; the harness asserts [TRASH-CARRY] HOST PUBLISH + CLIENT APPLY.
+    for (int i = 0; i < 6; ++i) {
         ::Sleep(1000);
         RunGT([pk](std::atomic<int>& d) {
             E::SetControlRotation(E::GetController(pk->player),
@@ -710,8 +725,28 @@ void RunGrabIntentTest() {
             d.store(1);
         });
     }
-    UE_LOGI("grab_intent_test: CLIENT done -- verdict is the log-truth harness (host [GRAB-INTENT]/[PUPPET-DRIVE], "
-            "client ToClump convert applied). eid=%u", pk->eid);
+
+    // 5. THROW via the REAL toggle: inject InpActEvt_use again -> OnPileGrabPre sees ClientCarryEid (we are
+    //    carrying) -> SendThrowIntent. The host releases the puppet grab + applies physics velocity along the
+    //    puppet aim -> the clump flies (flight stream) + self-re-piles (the BeginDeferred thunk -> ToPile).
+    RunGT([pk, useReal](std::atomic<int>& d) {
+        if (useReal) {
+            std::vector<uint8_t> frame(pk->useFrame > 0 ? static_cast<size_t>(pk->useFrame) : 0, 0u);
+            const bool ok = R::CallFunction(pk->player, pk->useFn, frame.empty() ? nullptr : frame.data());
+            UE_LOGI("grab_intent_test: >>> REAL THROW -- injected InpActEvt_use while carrying (ok=%d); expect "
+                    "'[THROW-INTENT] CLIENT E-PRESS while carrying' + SendThrowIntent <<<", ok ? 1 : 0);
+        } else {
+            const bool sent = coop::trash_collect_sync::DebugSendThrowIntent(pk->eid);
+            UE_LOGI("grab_intent_test: >>> FALLBACK THROW -- DebugSendThrowIntent eid=%u sent=%d <<<", pk->eid, sent ? 1 : 0);
+        }
+        d.store(1);
+    });
+
+    // 6. Hold ~8s for the flight + re-pile (host [THROW-INTENT] SUCCESS -> flight stream -> RE-PILE thunk ->
+    //    ToPile COMMIT; client ToPile SNAP).
+    ::Sleep(8000);
+    UE_LOGI("grab_intent_test: CLIENT done eid=%u -- verdict is the log-truth harness (client recognition, host "
+            "[GRAB-INTENT]/[THROW-INTENT]/[TRASH-CARRY], client APPLY + ToPile SNAP). useReal=%d", pk->eid, useReal ? 1 : 0);
 }
 
 DWORD WINAPI ChipPileTestThread(LPVOID /*arg*/) {

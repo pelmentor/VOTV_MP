@@ -85,6 +85,13 @@ std::unordered_map<uint32_t, LandSettle> g_settle;
 // a gross reset (OnDisconnect). HOST-only, game-thread.
 std::unordered_map<uint32_t, uint8_t> g_heldBy;
 
+// CLIENT-side carry-state (the E-press grab/throw toggle). A player holds at most one trash clump, so a
+// single eid each: g_clientPendingGrab is a GrabIntent in flight (set on send, cleared when the matching
+// ToClump confirms or a different convert supersedes); g_clientCarry is the eid we are currently carrying
+// (set on the confirming ToClump, cleared on the ToPile land or an optimistic throw send). 0 = none.
+uint32_t g_clientPendingGrab = 0;
+uint32_t g_clientCarry       = 0;
+
 uint32_t g_tick = 0;
 constexpr int kLandSettleTicks = 6;   // K: > a synchronous churn re-grab (~1 frame). TUNE from the CANCEL-gap log.
 
@@ -242,7 +249,43 @@ void SendGrabIntent(coop::net::Session& s, uint32_t eid) {
     coop::net::GrabIntentPayload p{};
     p.eid = eid;
     s.SendReliable(coop::net::ReliableKind::GrabIntent, &p, sizeof(p));
-    UE_LOGI("[GRAB-INTENT] CLIENT SENT eid=%u -> host", eid);
+    g_clientPendingGrab = eid;   // a request in flight: the matching inbound ToClump confirms the carry
+    UE_LOGI("[GRAB-INTENT] CLIENT SENT eid=%u -> host (pending grab)", eid);
+}
+
+void SendThrowIntent(coop::net::Session& s, uint32_t eid) {
+    if (eid == 0u || eid == coop::element::kInvalidId) return;
+    if (s.role() != coop::net::Role::Client) {
+        UE_LOGW("[THROW-INTENT] SendThrowIntent called on a non-client -- ignoring");
+        return;
+    }
+    coop::net::ThrowIntentPayload p{};
+    p.eid = eid;
+    s.SendReliable(coop::net::ReliableKind::ThrowIntent, &p, sizeof(p));
+    if (g_clientCarry == eid) g_clientCarry = 0;   // optimistic: the ToPile land will also clear it
+    UE_LOGI("[THROW-INTENT] CLIENT SENT eid=%u -> host (carry released)", eid);
+}
+
+void NoteClientConvertObserved(uint32_t eid, bool toClump) {
+    if (eid == 0u) return;
+    if (toClump) {
+        if (eid == g_clientPendingGrab) {           // the host confirmed OUR grab -> we are now carrying it
+            g_clientCarry = eid;
+            g_clientPendingGrab = 0;
+            UE_LOGI("[GRAB-INTENT] CLIENT carry CONFIRMED eid=%u (inbound ToClump matched our request)", eid);
+        }
+    } else {                                        // ToPile (a land): if it is what we carried, the carry ended
+        if (eid == g_clientCarry) {
+            g_clientCarry = 0;
+            UE_LOGI("[THROW-INTENT] CLIENT carry ENDED eid=%u (inbound ToPile -- re-piled)", eid);
+        }
+        if (eid == g_clientPendingGrab) g_clientPendingGrab = 0;  // a grab that re-piled before we carried -> drop pending
+    }
+}
+
+coop::element::ElementId ClientCarryEid() {
+    return g_clientCarry == 0 ? coop::element::kInvalidId
+                              : static_cast<coop::element::ElementId>(g_clientCarry);
 }
 
 void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
@@ -327,6 +370,45 @@ void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
             eid, clump, senderSlot);
 }
 
+void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
+    if (eid == 0u || eid == coop::element::kInvalidId) return;
+    // GATE: the sender must currently HOLD this eid (HELD_BY). Else it's a stale/forged throw -> deny.
+    auto held = g_heldBy.find(eid);
+    if (held == g_heldBy.end() || held->second != senderSlot) {
+        UE_LOGI("[THROW-INTENT] DENIED eid=%u slot=%u -- sender does not hold this eid", eid, senderSlot);
+        return;
+    }
+    // Resolve puppet-N + the held clump (E is bound to the clump by OnGrabIntent's OnHostConvert -> RebindE).
+    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(senderSlot);
+    void* puppet = (rp && rp->valid()) ? rp->GetActor() : nullptr;
+    coop::element::Element* ce = coop::element::Registry::Get().Get(static_cast<coop::element::ElementId>(eid));
+    void* ca    = ce ? ce->GetActor() : nullptr;
+    void* clump = (ca && R::IsLiveByIndex(ca, ce->GetInternalIdx())) ? ca : nullptr;
+    if (!puppet || !clump) {
+        UE_LOGW("[THROW-INTENT] eid=%u slot=%u -- puppet/clump not live (puppet=%p clump=%p) -- releasing hold",
+                eid, senderSlot, puppet, clump);
+        ReleaseClientHold(s, static_cast<coop::element::ElementId>(eid));
+        return;
+    }
+
+    // RE (votv-puppet-grab-feasibility-RE / agent throw RE): the throw must (1) RELEASE the puppet's grab so
+    // the clump's re-pile gate (IsValid(holdPlayer.grabbing_actor)) reads NOT-held -- else it aborts the
+    // re-pile; (2) the native release applies NO impulse (the launch is inherited kinematic velocity), but a
+    // host-driven clump has none, so the host applies the throw velocity ITSELF along the puppet's synced aim
+    // (= where the client looks); (3) hit-notify ON + physics ON so the flying clump generates the ground
+    // contact that fires its OWN re-pile ubergraph -> the existing BeginDeferred thunk converts ToPile.
+    ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(puppet, clump);   // clear grabbing_actor + PHC ReleaseComponent
+    ue_wrap::engine::SetActorRootNotifyRigidBodyCollision(clump, true);  // re-pile depends on the contact stream
+    ue_wrap::engine::SetActorSimulatePhysics(clump, true);
+    ue_wrap::engine::SetActorRootCollisionEnabled(clump, /*QueryAndPhysics=*/3);  // collide + land (don't sink)
+    const ue_wrap::FVector aim = rp->GetSyncedAimDirection();
+    const ue_wrap::FVector lin{ aim.X * 600.f, aim.Y * 600.f, 400.f };  // ~6 m/s along aim + 4 m/s up (matches the SP-throw feel)
+    ue_wrap::engine::SetActorRootPhysicsVelocity(clump, lin, ue_wrap::FVector{0.f, 0.f, 0.f});  // apply AFTER SimulatePhysics(true)
+    coop::puppet_carry_drive::NoteThrown(static_cast<coop::element::ElementId>(eid));  // stop hand-drive; stream the flight
+    UE_LOGI("[THROW-INTENT] SUCCESS eid=%u slot=%u clump=%p -- puppet released + physics thrown vel=(%.0f,%.0f,%.0f); "
+            "clump flies + self-re-piles (thunk -> ToPile)", eid, senderSlot, clump, lin.X, lin.Y, lin.Z);
+}
+
 void OnGrabHolderLeft(uint8_t senderSlot) {
     for (auto it = g_heldBy.begin(); it != g_heldBy.end(); ) {
         if (it->second == senderSlot) {
@@ -338,11 +420,29 @@ void OnGrabHolderLeft(uint8_t senderSlot) {
     }
 }
 
-void ReleaseClientHold(coop::element::ElementId E) {
+void ReleaseClientHold(coop::net::Session& s, coop::element::ElementId E) {
     const uint32_t eid = static_cast<uint32_t>(E);
     if (g_heldBy.erase(eid))
         UE_LOGI("[GRAB-INTENT] ReleaseClientHold eid=%u -- clump lost before land; hold cleared (re-grabbable)", eid);
     ForgetEid(E);   // drop a stranded carry latch/settle (idempotent if the land COMMIT already closed it)
+    // Audit HIGH 2026-06-23: the trash entity vanished on the host (clump died with no re-pile). Broadcast
+    // PropDestroy(eid) so EVERY client retires the now-frozen carry proxy + clears its g_clientCarry toggle
+    // (OnDestroy -> trash_proxy::RetireProxy [drive cleared] + ClearClientCarry). Without this the requester
+    // is stuck in throw-mode for the dead eid forever (every E-press denied) and its proxy floats in mid-air.
+    coop::net::PropDestroyPayload dp{};
+    dp.key.len    = 0;            // eid-only: clients resolve the proxy by host-range eid
+    dp.elementId  = eid;
+    s.SendPropDestroy(dp);
+    UE_LOGI("[GRAB-INTENT] ReleaseClientHold eid=%u -- PropDestroy(eid) broadcast (carry ABORT: clients retire "
+            "the frozen proxy + clear the carry toggle)", eid);
+}
+
+void ClearClientCarry(uint32_t eid) {
+    if (eid != 0 && eid == g_clientCarry) {
+        g_clientCarry = 0;
+        UE_LOGI("[THROW-INTENT] CLIENT carry CLEARED eid=%u (carried proxy retired -- host aborted the carry)", eid);
+    }
+    if (eid != 0 && eid == g_clientPendingGrab) g_clientPendingGrab = 0;  // also drop a pending request for a vanished eid
 }
 
 void TickCarry(coop::net::Session& s) {
@@ -442,6 +542,8 @@ void OnDisconnect() {
     g_carry.clear();    // CLOSE-B: drop all carry latches + settles (gross reset)
     g_settle.clear();
     g_heldBy.clear();   // v84: drop all client-grab HELD_BY records
+    g_clientPendingGrab = 0;  // v85: drop the client carry-state toggle
+    g_clientCarry       = 0;
     g_tick = 0;
 }
 

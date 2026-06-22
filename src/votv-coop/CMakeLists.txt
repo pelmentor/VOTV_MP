@@ -264,6 +264,7 @@ add_library(votv-coop SHARED
     src/coop/trash_pile_sync.cpp
     src/coop/trash_proxy.cpp
     src/coop/puppet_carry_drive.cpp
+    src/coop/trash_clump_pose_stream.cpp
     src/coop/weather_sync.cpp
     src/coop/weather_fog.cpp
     src/coop/weather_lightning.cpp
@@ -276,6 +277,7 @@ add_library(votv-coop SHARED
     src/coop/net/session.cpp
     src/coop/net/session_npc.cpp
     src/coop/net/session_worldactor.cpp
+    src/coop/net/session_trashcarry.cpp
     src/coop/net/session_start.cpp
     src/coop/net/session_status.cpp
     src/coop/net/session_relay.cpp

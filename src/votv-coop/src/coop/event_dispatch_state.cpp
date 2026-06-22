@@ -719,8 +719,31 @@ void HandleStateEvent(net::Session& session,
         coop::trash_channel::OnGrabIntent(session, p.eid, static_cast<uint8_t>(msg.senderPeerSlot));
         break;
     }
-    case net::ReliableKind::ThrowIntent:        // v84 STAGED (Increment 2 phase 2) -- ID reserved, no handler yet
-    case net::ReliableKind::PileResyncRequest:  // v84 STAGED (Increment 2 phase 2) -- ID reserved, no handler yet
+    case net::ReliableKind::ThrowIntent: {       // v85 (Increment 2 phase 2): CLIENT->HOST throw of a puppet-held clump
+        if (session.role() != net::Role::Host) {
+            UE_LOGW("event_feed: ThrowIntent received on a client -- dropping");
+            break;
+        }
+        if (msg.senderPeerSlot < 1 || msg.senderPeerSlot >= net::kMaxPeers) {
+            UE_LOGW("event_feed: ThrowIntent from invalid senderPeerSlot=%d -- dropping", msg.senderPeerSlot);
+            break;
+        }
+        if (msg.payloadLen < sizeof(net::ThrowIntentPayload)) {
+            UE_LOGW("event_feed: ThrowIntent payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::ThrowIntentPayload));
+            break;
+        }
+        net::ThrowIntentPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        if (p.eid == 0) {
+            UE_LOGW("event_feed: ThrowIntent eid==0 -- dropping");
+            break;
+        }
+        UE_LOGI("[THROW-INTENT] RECEIVED eid=%u slot=%d", p.eid, msg.senderPeerSlot);
+        coop::trash_channel::OnThrowIntent(session, p.eid, static_cast<uint8_t>(msg.senderPeerSlot));
+        break;
+    }
+    case net::ReliableKind::PileResyncRequest:  // v84 STAGED (Increment 2 phase 3) -- ID reserved, no handler yet
         UE_LOGI("event_feed: STAGED ReliableKind=%u from slot=%d -- no handler yet",
                 static_cast<unsigned>(msg.kind), msg.senderPeerSlot);
         break;

@@ -53,6 +53,7 @@
 #include "coop/garbage_sync.h"
 #include "coop/trash_channel.h"
 #include "coop/puppet_carry_drive.h"
+#include "coop/trash_clump_pose_stream.h"
 #include "coop/trash_collect_sync.h"
 #include "coop/trash_proxy.h"
 #include "coop/trash_pile_sync.h"
@@ -312,6 +313,7 @@ DisconnectStats DisconnectAll() {
     coop::trash_collect_sync::OnDisconnect();
     coop::trash_channel::OnDisconnect();  // docs/piles/08: drop the per-eid trash sync-time-context map
     coop::puppet_carry_drive::OnDisconnect();  // v84 Increment 2: drop all puppet-held clump drives
+    coop::trash_clump_pose_stream::OnDisconnect();  // v85 Increment 2: drop all client per-eid carry drives
     coop::balance_sync::OnDisconnect();  // v30: reset the balance broadcast dedup
     return stats;
 }
@@ -348,6 +350,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::Interactable};  coop::npc_mirror::TickClientNpcs(); }  // v37 CLIENT: apply batch + drive mirror interp (client-only, no-op on host)
     { PP::Scope _s{PP::Bucket::Interactable};  coop::world_actor_sync::TickPoseStream(); }       // v80 HOST: read event WorldActors -> publish WorldActorPose batch (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable};  coop::world_actor_sync::TickClientWorldActors(); } // v80 CLIENT: apply batch + drive WorldActor mirror interp (client-only, no-op on host)
+    { PP::Scope _s{PP::Bucket::Interactable};  coop::trash_clump_pose_stream::TickApplyAndDrive(session); } // v85 CLIENT: apply host-auth carry/flight pose batch + per-eid interp (client-only, no-op on host)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::host_spawn_watcher::TickWatchedProps(&session); }  // M2: ambient-prop (pinecone) SetLifeSpan-expiry / consumption despawn -> PropDestroy(eid)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_convert::Tick(); }  // v67: drain deferred kerfur conversion requests/converges (cheap no-op when empty)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_command::Tick(); }  // v74: drain menu commands + advance the ownership-follow loop (cheap no-op when idle)
@@ -366,7 +369,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
       coop::trash_pile_sync::Tick(inTransition); }  // counter poll + depletion death-watch (transition-gated)
     if (isHost) { PP::Scope _s{PP::Bucket::TrashWatch};
       coop::trash_channel::TickCarry(session);          // docs/piles/08 + CLOSE-B: pending-grab TTL + land-settle commit (closes the carry latch on the real land)
-      coop::puppet_carry_drive::Tick(); }               // v84 Increment 2: drive each puppet-held clump to its hand (AFTER TickCarry so the carry latch is current)
+      coop::puppet_carry_drive::Tick(session); }        // v84/v85 Increment 2: drive each puppet-held clump to its hand + publish the host-auth carry/flight pose batch (AFTER TickCarry so the latch is current)
       // (trash_collect_sync::Tick -- the proximity re-pile death-watch -- is RETIRED 2026-06-21, RULE 2:
       //  the re-pile is caught deterministically at its BeginDeferred via the UFunction::Func thunk.)
     { PP::Scope _s{PP::Bucket::Balance};       coop::balance_sync::Tick(); }       // v30: host polls saveSlot.Points + broadcasts on change; client retries the pending mirror apply

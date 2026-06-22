@@ -163,6 +163,12 @@ public:
     // per-tick heap alloc), an EMPTY batch clears it (actors gone -> stop sending). Game thread.
     void SetLocalWorldActorPoseBatch(const std::vector<WorldActorPoseSnapshot>& batch);
 
+    // v85 (Increment 2): HOST publishes the carried-trash-clump pose batch (one TrashClumpPoseSnapshot
+    // per host-driven client-grabbed clump -- carry AND throw-flight). The net thread fan-outs ONE
+    // TrashCarryPose datagram to all peers each sendHz tick. Sibling of SetLocalWorldActorPoseBatch; an
+    // EMPTY batch clears it (no clump carried -> stop sending). Game thread.
+    void SetLocalTrashCarryBatch(const std::vector<TrashClumpPoseSnapshot>& batch);
+
     // Per-peer accessors. peerSlot is the coop::players::Registry slot
     // (0 = host, 1..kMaxPeers-1 = clients). Returns false if peerSlot is
     // out of range, that slot has no remote pose yet, or aggregate state
@@ -183,6 +189,10 @@ public:
     // new-data flag (consume-once, same as TakeRemoteNpcBatch). Returns false if no new batch since
     // the last take. Net thread fills it.
     bool TakeRemoteWorldActorBatch(std::vector<WorldActorPoseSnapshot>& out);
+
+    // v85 (Increment 2, CLIENT game thread): move out the latest received trash-clump carry batch +
+    // clear the new-data flag (consume-once, same as TakeRemoteWorldActorBatch). Net thread fills it.
+    bool TakeRemoteTrashCarryBatch(std::vector<TrashClumpPoseSnapshot>& out);
 
     // Game thread: queue a reliable message. Host fan-outs to all connected
     // clients; client sends to host. Returns false on payload-too-large or
@@ -382,6 +392,11 @@ private:
     // newest-wins-stores one received datagram for the game thread. localMutex_ / remoteMutex_ as NPC.
     int  SerializeLocalWorldActorBatch(uint8_t* buf);
     void StoreRemoteWorldActorBatch(const void* data, int len, uint32_t seq);
+    // v85 (Increment 2) trash-clump carry pose batch send/receive (session_trashcarry.cpp -- the
+    // session_worldactor.cpp clone). Same contract: Serialize builds the body after the leading
+    // PacketHeader (0 when empty / on a client); Store newest-wins-stores one received datagram.
+    int  SerializeLocalTrashCarryBatch(uint8_t* buf);
+    void StoreRemoteTrashCarryBatch(const void* data, int len, uint32_t seq);
     // v66 voice receive-side store (defined in session_voice.cpp): validate one
     // VoiceFrame datagram, queue it on the voice inbox, host-relay. Net thread.
     void StoreVoiceFrame(int routeSlot, int peerSlot, const void* data, int len);
@@ -464,6 +479,10 @@ private:
     // thread reads + fan-outs ONE WorldActorPose datagram). Empty vector = nothing to send.
     std::vector<WorldActorPoseSnapshot> localWorldActorBatch_;
     bool hasLocalWorldActorBatch_ = false;
+    // v85 (Increment 2): host carried-trash-clump pose batch (game thread writes via
+    // SetLocalTrashCarryBatch, net thread reads + fan-outs ONE TrashCarryPose datagram). Empty = none.
+    std::vector<TrashClumpPoseSnapshot> localTrashCarryBatch_;
+    bool hasLocalTrashCarryBatch_ = false;
 
     // Per-peer remote pose slots. Net thread writes (under remoteMutex_) on
     // receive; game thread reads via TryGetRemotePose(...).
@@ -494,6 +513,11 @@ private:
     std::vector<WorldActorPoseSnapshot> remoteWorldActorBatch_;
     bool     hasRemoteWorldActorBatch_ = false;
     uint32_t lastRemoteWorldActorSeq_  = 0;
+    // v85 (Increment 2): latest received trash-clump carry batch (host->client; ONE slot, host is the
+    // only sender). Net thread stores under remoteMutex_; game thread drains via TakeRemoteTrashCarryBatch.
+    std::vector<TrashClumpPoseSnapshot> remoteTrashCarryBatch_;
+    bool     hasRemoteTrashCarryBatch_ = false;
+    uint32_t lastRemoteTrashCarrySeq_  = 0;
     // Per-slot expected senderEpoch latched from the first packet arriving
     // from that slot (PR-FOUNDATION-1b v16). Zero == not yet latched;
     // subsequent packets whose header epoch doesn't match are dropped at

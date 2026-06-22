@@ -83,16 +83,50 @@ void SendGrabIntent(coop::net::Session& s, uint32_t eid);
 // No-op (logged DENIED) on any gate fail or a dead puppet/pile. Host-only. Game thread.
 void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot);
 
+// CLIENT: send a ThrowIntent{eid} to the host (the client-grab THROW, the E-press toggle while carrying).
+// No-op if `s` is not a running client. Game thread.
+void SendThrowIntent(coop::net::Session& s, uint32_t eid);
+
+// HOST: a client at peer `senderSlot` requested to throw the puppet-held trash entity `eid`. Gate: the
+// sender must currently hold `eid` (HELD_BY). On pass: release the puppet's grab (clear grabbing_actor +
+// PHC release -- REQUIRED so the clump's re-pile gate reads "not held"), enable physics + apply the throw
+// velocity along the puppet's synced aim (the re-pile is the clump's OWN ground-hit ubergraph -> the
+// existing BeginDeferred thunk converts ToPile), and NoteThrown so the host streams the flight not the
+// hand. No-op (logged DENIED) on a gate fail / dead puppet / dead clump. Host-only. Game thread.
+void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot);
+
+// ---- CLIENT carry-state (the E-press grab/throw toggle, Increment 2 phase 2) -------------------------
+// The client tracks the single trash eid its own puppet is carrying (a player holds one thing), so a
+// client E-press is a THROW when carrying and a GRAB when aimed at a pile proxy. The state is driven by
+// the convert stream the client already receives: SendGrabIntent marks a pending request; the matching
+// inbound ToClump confirms the carry; the matching ToPile (or a throw send) clears it. CLIENT-side.
+
+// CLIENT: the local player just observed an inbound PropConvert for `eid`. Reconcile the carry-state: a
+// ToClump matching our pending grab CONFIRMS the carry; a ToPile for our carried eid CLEARS it. Called from
+// remote_prop::OnConvert (client only). No-op on the host. Game thread.
+void NoteClientConvertObserved(uint32_t eid, bool toClump);
+
+// CLIENT: the trash eid the local player is currently carrying via its puppet, or kInvalidId if none. The
+// OnPileGrabPre toggle reads this: carrying -> throw it; not carrying -> grab the aimed proxy. Game thread.
+coop::element::ElementId ClientCarryEid();
+
 // HOST: peer `senderSlot` disconnected -- clear any HELD_BY it owns (the eid becomes re-grabbable). The
 // puppet vanishes on disconnect so the clump is already physics-released; this is the state cleanup +
 // a ForgetEid so a stranded carry latch can't keep the entity in limbo. Game thread.
 void OnGrabHolderLeft(uint8_t senderSlot);
 
 // HOST: the puppet-held clump for `E` was LOST without a normal land (the clump died / the puppet went
-// not-live -- puppet_carry_drive's non-land drop paths). Clear E's client hold (HELD_BY) + carry latch so
-// the eid is re-grabbable, never stranded. Idempotent (a normal land COMMIT already cleared HELD_BY -> no-op).
-// Game thread.
-void ReleaseClientHold(coop::element::ElementId E);
+// not-live -- puppet_carry_drive's non-land drop paths). Clear E's client hold (HELD_BY) + carry latch, AND
+// broadcast PropDestroy(E) so EVERY client retires the frozen proxy + clears its carry-state toggle (else a
+// client that loses a clump mid-carry is stuck in throw-mode forever, never grabbable again -- audit HIGH
+// 2026-06-23). The trash entity genuinely vanished on the host (the clump died without re-piling), so a
+// destroy is the honest authoritative edge. Idempotent. Game thread.
+void ReleaseClientHold(coop::net::Session& s, coop::element::ElementId E);
+
+// CLIENT: clear the local carry-state toggle (the player is no longer carrying anything). Called from the
+// client PropDestroy path when the carried proxy is retired (the host aborted the carry) so the next
+// E-press grabs instead of throwing a dead eid. No-op if not carrying that eid. Game thread.
+void ClearClientCarry(uint32_t eid);
 
 // ---- CLOSE-B carry latch + land-settle (host-side, 2026-06-22) ----------------------------------------
 // A trash entity E is "carrying" from the real grab (OnHostConvert kToClump while not carrying) until the

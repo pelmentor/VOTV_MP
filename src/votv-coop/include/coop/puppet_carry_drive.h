@@ -19,6 +19,8 @@
 
 #include <cstdint>
 
+namespace coop::net { class Session; }
+
 namespace coop::puppet_carry_drive {
 
 // HOST: puppet at peer `slot` just grabbed `clump` (the garbageClump in its grabbing_actor) for trash
@@ -27,12 +29,17 @@ namespace coop::puppet_carry_drive {
 // re-register for the same eid updates the clump/slot in place. Game thread.
 void NotePuppetHeld(coop::element::ElementId eid, uint8_t slot, void* clump);
 
-// HOST: per-gameplay-tick pump (called from subsystems::TickGameplay AFTER trash_channel::TickCarry,
-// so the carry latch is current before the drive guards on IsCarrying). For each registered held clump:
-// guard (clump live, puppet live, still carrying) then SetActorLocation(clump, puppetHead + aim*grabLen).
-// Drops the entry when the clump dies, the puppet leaves, or the carry latch closes (the re-pile land).
-// Game thread.
-void Tick();
+// HOST: the client THREW entity `eid` (its ThrowIntent ran -- the puppet grab was released + physics
+// velocity applied). Stop hand-driving the clump but KEEP streaming its physics-flight pose so every
+// client renders the throw arc, until the clump re-piles (the latch closes / a settle commits). Game thread.
+void NoteThrown(coop::element::ElementId eid);
+
+// HOST: per-gameplay-tick pump (called from subsystems::TickGameplay AFTER trash_channel::TickCarry, so
+// the carry latch is current before the drive guards on IsCarrying). For each registered held clump:
+// guard (latch open, clump live, puppet live); if NOT flying, SetActorLocation(clump, head + aim*grabLen);
+// then STREAM its pose into `s`'s host-authoritative TrashCarryPose batch (carry + flight). Drops the
+// entry when the clump dies, the puppet leaves, or the carry latch closes (the re-pile land). Game thread.
+void Tick(coop::net::Session& s);
 
 // HOST: peer `slot` disconnected -- drop all its held-clump drive entries. Game thread.
 void OnPeerLeft(uint8_t slot);

@@ -694,7 +694,15 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 84;  // v84: Increment 2 (chipPile CLIENT-grab direction,
+inline constexpr uint16_t kProtocolVersion = 85;  // v85: Increment 2 carry VISIBILITY -- HOST-AUTHORITATIVE
+                                                  // trash-clump carry/flight pose stream (new MsgType
+                                                  // TrashCarryPose=34 + TrashClumpPoseSnapshot, host-originated
+                                                  // per-eid batch). A client-grabbed clump is host-driven; this
+                                                  // makes every client (incl. the grabber) render it moving
+                                                  // through carry + throw-flight (the relay/slot-0 model can't).
+                                                  // eid+ctx gated; client feeds it into a per-eid ActiveDrive
+                                                  // (the extracted coop/active_drive.h interp). Prior:
+                                                  // v84: Increment 2 (chipPile CLIENT-grab direction,
                                                   // docs/piles/08) -- new CLIENT->HOST GrabIntent (78) +
                                                   // STAGED ThrowIntent (79) / PileResyncRequest (80). The host
                                                   // executes playerGrabbed on puppet-N (probe-proven) + drives
@@ -821,6 +829,17 @@ enum class MsgType : uint8_t {
                        //      mirror (element::WorldActor). Mirrors the ~14 gray saucers / mothership /
                        //      ariral ships / sky UFO / jellyfish / firetank the Character-only NPC
                        //      mirror cannot replicate (B3 split: B3a Character creatures -> kNpcAllowlist).
+    TrashCarryPose = 34, // v85 (2026-06-22, Increment 2): HOST->all carried-trash-CLUMP pose BATCH
+                       //      (unreliable, ~sendHz). HOST-AUTHORITATIVE + host-ORIGINATED: a client-
+                       //      grabbed pile's clump is driven by the host (on the requester's puppet);
+                       //      the relay can't echo a client pose back to its origin (session_relay.cpp:37)
+                       //      and a client only drives slot 0 (remote_prop.cpp), so the host originates
+                       //      this so EVERY client (incl. the grabber) renders the clump moving. Body:
+                       //      EntityPoseBatchHeader (count) + N TrashClumpPoseSnapshot. Keyed per-entry
+                       //      by trash eid; ctx-gated newest-wins. Covers carry (kinematic hold) + flight
+                       //      (physics after throw); the client feeds it into a per-eid ActiveDrive
+                       //      (trash_clump_pose_stream::TickApplyAndDrive). Ends at the ToPile convert
+                       //      (PropConvert{ToPile} -> ClearDriveForEid). Drains in TickClientCarryPoses.
     VoiceFrame = 64,   // v66 (2026-06-12): proximity VOICE CHAT -- one 20 ms / 48 kHz mono
                        //      opus frame (SVC pipeline port, MTA transport shape: voice
                        //      multiplexes over the main session, no second socket). A STREAM,
@@ -2007,6 +2026,33 @@ inline constexpr int kMaxWorldActorBatchEntries = 31;
 inline constexpr int kWorldActorPoseDatagramMax =
     static_cast<int>(sizeof(PacketHeader) + sizeof(EntityPoseBatchHeader)) +
     kMaxWorldActorBatchEntries * static_cast<int>(sizeof(WorldActorPoseSnapshot));
+
+// v85 (Increment 2, the chipPile CLIENT-grab carry): ONE host-driven trash CLUMP's pose in the
+// TrashCarryPose batch. HOST-AUTHORITATIVE and host-ORIGINATED (never relayed -- the relay skips
+// the origin, so the grabbing client could not see its OWN clump via a client pose; constraint:
+// remote_prop only drives slot 0 on a client, which the host's own carry already uses). Covers
+// BOTH the kinematic hold (the host drives the clump to the puppet's hand) AND the physics flight
+// after a throw, until the ToPile land commits. Keyed by the trash entity eid (host-minted, same
+// id space as PropConvert). `ctx` is the current carry generation (the same trash_channel ctx byte
+// as PropPoseSnapshot): the client drops a pose whose ctx != the eid's currently-adopted generation
+// so a late carry packet can't re-drive a re-skinned/re-piled proxy (IsInboundStreamCtxFresh, the
+// pile-jump/double-grab-cue guard). Transform == WorldActorPoseSnapshot (28 B) + ctx byte + pad = 32 B.
+struct TrashClumpPoseSnapshot {
+    uint32_t eid;              // 4  -- trash entity id (host-minted)
+    float    x, y, z;          // 12 -- world cm
+    float    pitch, yaw, roll; // 12 -- deg (NormalizeAxis'd by the sender)
+    uint8_t  ctx;              // 1  -- carry-gen gate (same byte as PropPoseSnapshot.ctx)
+    uint8_t  _pad[3];          // 3
+};
+static_assert(sizeof(TrashClumpPoseSnapshot) == 32, "TrashClumpPoseSnapshot must be 32 bytes");
+
+// Max carried clumps per TrashCarryPose datagram. A player carries at most one trash clump, so the
+// realistic simultaneous count is (kMaxPeers - 1) client grabs; 8 is ample headroom. Datagram
+// 20 + 4 + 8*32 = 280 B, far under MTU. Reuses EntityPoseBatchHeader (generic count+pad; RULE 2).
+inline constexpr int kMaxTrashCarryBatchEntries = 8;
+inline constexpr int kTrashCarryPoseDatagramMax =
+    static_cast<int>(sizeof(PacketHeader) + sizeof(EntityPoseBatchHeader)) +
+    kMaxTrashCarryBatchEntries * static_cast<int>(sizeof(TrashClumpPoseSnapshot));
 
 // v22: ragdoll PELVIS physics state. Sent unreliable, ~sendHz, WHILE the sender's
 // AmainPlayer_C::isRagdoll is set (the native C-key/faint/KO ragdoll). The sender
@@ -3221,16 +3267,17 @@ struct GrabIntentPayload {
 static_assert(sizeof(GrabIntentPayload) == 8, "GrabIntentPayload must be 8 bytes");
 static_assert(sizeof(GrabIntentPayload) <= 256 - 20 - 8, "GrabIntentPayload must fit one datagram");
 
-// ThrowIntentPayload (ThrowIntent=79, v84 STAGED -- ID reserved, no handler yet) -- CLIENT->HOST
-// throw of a puppet-held clump, carrying the client's local clump velocity at release. Wired only
-// when the client-initiated path (phase 2) needs an explicit release edge; today the host's
-// flight-stream + ToPile re-pile convert own the throw end-to-end.
+// ThrowIntentPayload (ThrowIntent=79, v85 -- the client-initiated throw of a puppet-held clump).
+// CLIENT->HOST, eid-only: the client has NO local clump (the clump is host-side; the client renders a
+// proxy), so it cannot measure a release velocity. The HOST derives the throw direction from the
+// requester puppet's CURRENT synced aim (which mirrors where the client is looking) -- authoritative
+// and matching the carry direction (RULE 2: no speculative client-velocity field). The host releases
+// the puppet grab + applies physics velocity; the clump self-re-piles via its own ground-hit ubergraph.
 struct ThrowIntentPayload {
-    uint32_t eid;
-    float    linVelX, linVelY, linVelZ;  // client's local clump linear velocity at throw (cm/s)
-    float    angVelX, angVelY, angVelZ;  // angular velocity (deg/s)
+    uint32_t eid;        // the trash entity eid the client requests to throw (must be the one it holds)
+    uint8_t  _pad[4];    // 8-byte alignment; bytes-beyond-eid zero
 };
-static_assert(sizeof(ThrowIntentPayload) == 28, "ThrowIntentPayload must be 28 bytes");
+static_assert(sizeof(ThrowIntentPayload) == 8, "ThrowIntentPayload must be 8 bytes");
 static_assert(sizeof(ThrowIntentPayload) <= 256 - 20 - 8, "ThrowIntentPayload must fit one datagram");
 
 // PileResyncRequestPayload (PileResyncRequest=80, v84 STAGED -- ID reserved, no handler yet) --

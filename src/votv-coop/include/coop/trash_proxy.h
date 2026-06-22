@@ -15,13 +15,12 @@
 // -> the dup is impossible BY CONSTRUCTION (the 3-verdict discriminator / health
 // poll / serial-check are all moot).
 //
-// PHASE 1 = visual + position + re-skin, EXPLICIT NoCollision. The proxy is a
-// kinematic host-driven follower (the host owns physics / grab / state); the
-// client player TEMPORARILY passes through mirrored trash (a known, accepted
-// phase-1 regression). Collision -- the garbageCollider hull, double-duty
-// Pawn-block + grab-trace -- is PHASE 2, with the client-grab direction
-// (Increment 2). Scope: trash only (chipPile / clump + variants); Aprop_C and
-// kerfur mirrors are unchanged.
+// The proxy is a kinematic host-driven follower (the host owns physics / grab /
+// state). COLLISION (phase 2, client-grab Increment 2): a PILE-form proxy is
+// QueryOnly so the client's interaction trace (TraceTypeQuery1) can AIM at it to
+// initiate a grab (ApplyProxyCollision); a CLUMP-form proxy stays NoCollision (the
+// transient carry/flight body is not grabbable). Scope: trash only (chipPile /
+// clump + variants); Aprop_C and kerfur mirrors are unchanged.
 //
 // LIFECYCLE: this module OWNS the eid->proxy registry + the rooting. Every retire
 // path funnels through RetireProxy (Destroy -> RemoveFromRoot -> unbind, in that
@@ -85,6 +84,20 @@ bool IsProxy(coop::element::ElementId eid);
 // nullptr if none. `outDistCm` (optional) gets the distance, or -1 on miss. Used by the
 // visual-verification showcase (aim the client camera at a mirrored pile). Game thread.
 void* NearestPileProxy(const ue_wrap::FVector& fromLoc, float* outDistCm);
+
+// The LIVE proxy actor for `eid`, or nullptr if `eid` is not a tracked proxy / its actor is dead.
+// Used by trash_clump_pose_stream (Increment 2) to resolve the carry/flight pose batch's per-eid
+// target. Game thread.
+void* ProxyActorForEid(coop::element::ElementId eid);
+
+// Client-grab recognition (Increment 2): the eid of the PILE-form proxy the local player is AIMING at --
+// within `maxRangeCm` of `camLoc` and most centered on the unit aim ray `camFwd` (largest cos(angle) >=
+// `minDot`). kInvalidId if none qualifies. A CAMERA-RAY CONE, not an engine trace: the proxy carries no
+// asset collision (the trace approach was disproven -- the worn pile mesh has no simple collision body), so
+// the client's OnPileGrabPre aims by math. The host re-validates the eid, so a cone mis-pick is bounded.
+// Game thread.
+coop::element::ElementId EidForAimedPileProxy(const ue_wrap::FVector& camLoc, const ue_wrap::FVector& camFwd,
+                                             float maxRangeCm, float minDot);
 
 // Retire every proxy owned by `slot` (a PER-SLOT disconnect -- a single peer
 // dropping while the session stays up). MUST be called before the generic

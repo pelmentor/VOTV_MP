@@ -6,6 +6,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
 #include "coop/remote_prop.h"       // ClearAnyDriveFor (evict the pose drive before destroying a proxy)
+#include "coop/trash_clump_pose_stream.h"  // v85: evict the per-eid carry drive before destroying a proxy
 #include "ue_wrap/engine.h"
 #include "ue_wrap/hot_path_guard.h"  // UE_ASSERT_GAME_THREAD
 #include "ue_wrap/log.h"
@@ -49,6 +50,14 @@ void ApplyProxyScale(void* actor, const ue_wrap::FVector& scale) {
     if (scale.X > 0.001f && scale.Y > 0.001f && scale.Z > 0.001f)
         E::SetActorScale3D(actor, scale);
 }
+
+// (RETIRED 2026-06-23, RULE 2: the phase-2a "give the pile-form proxy QueryOnly collision so the game's
+// interaction trace hits it, read lookatActorCurrent" approach was DISPROVEN by the harness -- the trace
+// gate logged hit=0: the worn pile mesh has no simple collision body, so SetCollisionEnabled on the
+// proxy's StaticMeshComponent is a no-op for a bTraceComplex=false trace. Recognition is now a camera-ray
+// math cone -- EidForAimedPileProxy below -- which needs NO asset collision. Proxies stay NoCollision (the
+// player passing through a mirrored pile is the pre-existing phase-1 regression; the FAITHFUL fix for both
+// movement-block AND occlusion-correct aim is a future garbageCollider-analog SHAPE component on the proxy.)
 
 // Cached per-className class-kind: IsTrashProxyClass runs once per PropSpawn (a
 // ~2000-prop join burst) and FindClass is a ~237k-entry GUObjectArray walk -- the
@@ -174,7 +183,7 @@ void* SpawnProxy(coop::element::ElementId eid, uint8_t chipType, bool isClump, i
     E::SetComponentMobility(comp, /*EComponentMobility::Movable=*/2);
     E::SetActorRotation(actor, rot);
     R::AddToRoot(actor);                                        // never GC'd -> never stale -> no dup
-    E::SetActorRootCollisionEnabled(actor, /*ECollisionEnabled::NoCollision=*/0);  // phase 1 follower
+    E::SetActorRootCollisionEnabled(actor, /*ECollisionEnabled::NoCollision=*/0);  // kinematic follower (aim-grab is a camera-ray cone, not collision)
     SkinProxy(actor, comp, chipType, isClump);
     ApplyProxyScale(actor, scale);                              // v83: host-sized (else default unit -> too small)
     g_proxies[eid] = ProxyEntry{ actor, comp, ownerSlot, isClump };
@@ -209,6 +218,7 @@ void RetireProxy(coop::element::ElementId eid) {
     // destroyed" window is moot; destroy marks PendingKill, then un-root makes the
     // memory GC-reapable (a rooted PendingKill actor would never be reaped = leak).
     coop::remote_prop::ClearAnyDriveFor(actor);
+    coop::trash_clump_pose_stream::ClearDriveForEid(eid);  // v85: drop the host-auth per-eid carry drive too
     if (actor && R::IsLive(actor)) {
         E::DestroyActor(actor);
         R::RemoveFromRoot(actor);
@@ -239,6 +249,38 @@ void* NearestPileProxy(const ue_wrap::FVector& fromLoc, float* outDistCm) {
         if (best2 < 0.f || d2 < best2) { best2 = d2; best = e.actor; }
     }
     if (outDistCm) *outDistCm = (best2 >= 0.f) ? std::sqrt(best2) : -1.f;
+    return best;
+}
+
+void* ProxyActorForEid(coop::element::ElementId eid) {
+    UE_ASSERT_GAME_THREAD("trash_proxy::ProxyActorForEid");
+    auto it = g_proxies.find(eid);
+    if (it == g_proxies.end()) return nullptr;
+    void* actor = it->second.actor;
+    return (actor && R::IsLive(actor)) ? actor : nullptr;
+}
+
+coop::element::ElementId EidForAimedPileProxy(const ue_wrap::FVector& camLoc, const ue_wrap::FVector& camFwd,
+                                             float maxRangeCm, float minDot) {
+    UE_ASSERT_GAME_THREAD("trash_proxy::EidForAimedPileProxy");
+    // Camera-ray cone: the PILE-form proxy that is within `maxRangeCm` AND most centered on the aim ray
+    // (largest dot >= minDot). `camFwd` MUST be unit length. This is the client-grab recognition -- it needs
+    // NO asset collision (the trace approach was disproven: the pile mesh has no simple collision body). The
+    // host re-validates the eid (live + IsChipPile) in OnGrabIntent, so a cone mis-pick in a dense cluster is
+    // bounded. Returns kInvalidId if nothing qualifies.
+    coop::element::ElementId best = coop::element::kInvalidId;
+    float bestDot = minDot;
+    for (const auto& kv : g_proxies) {
+        const ProxyEntry& e = kv.second;
+        if (e.isClump) continue;                          // a clump-form proxy is the transient carry -- not grabbable
+        if (!e.actor || !R::IsLive(e.actor)) continue;
+        const ue_wrap::FVector p = E::GetActorLocation(e.actor);
+        const float dx = p.X - camLoc.X, dy = p.Y - camLoc.Y, dz = p.Z - camLoc.Z;
+        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist > maxRangeCm || dist < 1.f) continue;
+        const float dot = (dx * camFwd.X + dy * camFwd.Y + dz * camFwd.Z) / dist;  // cos(angle), camFwd unit
+        if (dot > bestDot) { bestDot = dot; best = kv.first; }
+    }
     return best;
 }
 

@@ -17,6 +17,7 @@
 #include "coop/remote_prop.h"        // ResolveMirrorEidByActor (the pile-grab hook mirror eid resolve)
 #include "coop/remote_prop_spawn.h"
 #include "coop/trash_channel.h"      // NotePendingGrab (the VISIBLE-seam grab->clump link; docs/piles/08)
+#include "coop/trash_proxy.h"        // EidForPileProxyActor (Increment 2: client-grab proxy recognition)
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"     // RegisterPreObserver (the InpActEvt_use pile-grab observer)
 #include "ue_wrap/log.h"
@@ -28,6 +29,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <string>
 
 namespace coop::trash_collect_sync {
@@ -338,38 +340,75 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
     if (!self) return;
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->connected()) return;  // BOTH roles -- whoever physically presses E
+
+    // CLIENT (Increment 2, the client-grab direction): the client has NO real actorChipPile_C -- every pile it
+    // sees is an AStaticMeshActor PROXY (trash_proxy). Recognition is a CAMERA-RAY CONE (EidForAimedPileProxy):
+    // the most-centered pile proxy within range of the aim ray. (The earlier "give the proxy collision so the
+    // game's TraceTypeQuery1 trace hits it + read lookatActorCurrent" approach was DISPROVEN by the harness --
+    // the worn pile mesh has no simple collision body, so the trace never hit; RULE 2, retired 2026-06-23. A
+    // future garbageCollider-analog SHAPE component is the faithful fix for both occlusion-correct aim AND the
+    // walk-through-pile movement-block.) NO suppress-native needed: the proxy fails every native int_player_C
+    // cast on E-press, so the local grab no-ops on its own. The host re-validates + enforces one-hold-per-peer.
+    if (s->role() != coop::net::Role::Host) {
+        // TOGGLE: carrying a clump already? an E-press is a THROW (release it, regardless of aim). Else, if
+        // aimed at a mirrored pile, an E-press is a GRAB request. (A player holds at most one trash clump.)
+        const coop::element::ElementId carry = coop::trash_channel::ClientCarryEid();
+        if (carry != coop::element::kInvalidId) {
+            // Self-heal (belt-and-suspenders for the audit HIGH): if we think we're carrying but the proxy is
+            // gone (a missed/dropped host abort edge), clear the stale toggle + fall through to a fresh grab
+            // rather than throwing a dead eid forever.
+            if (!coop::trash_proxy::ProxyActorForEid(carry)) {
+                UE_LOGW("[THROW-INTENT] CLIENT carry eid=%u has NO live proxy -- stale toggle, clearing + falling "
+                        "through to grab", static_cast<unsigned>(carry));
+                coop::trash_channel::ClearClientCarry(static_cast<uint32_t>(carry));
+            } else {
+                UE_LOGI("[THROW-INTENT] CLIENT E-PRESS while carrying eid=%u -> requesting throw from host",
+                        static_cast<unsigned>(carry));
+                coop::trash_channel::SendThrowIntent(*s, static_cast<uint32_t>(carry));
+                return;
+            }
+        }
+        // Aim ray from the live view camera. Forward from the camera rotation (deg->rad): the unit vector the
+        // cone tests each pile proxy against. maxRange 400 cm (a generous reach), minDot 0.94 (~20 deg cone --
+        // forgiving so a slightly-off aim still grabs).
+        const ue_wrap::FVector  camLoc = ue_wrap::engine::GetCameraLocation();
+        const ue_wrap::FRotator camRot = ue_wrap::engine::GetCameraRotation();
+        const float d2r = 3.14159265f / 180.f;
+        const float yaw = camRot.Yaw * d2r, pitch = camRot.Pitch * d2r;
+        const float cp = std::cos(pitch);
+        const ue_wrap::FVector camFwd{ cp * std::cos(yaw), cp * std::sin(yaw), std::sin(pitch) };
+        const coop::element::ElementId eid =
+            coop::trash_proxy::EidForAimedPileProxy(camLoc, camFwd, /*maxRangeCm=*/400.f, /*minDot=*/0.94f);
+        if (eid == coop::element::kInvalidId) return;                   // not aiming at a mirrored pile within reach
+        UE_LOGI("[GRAB-INTENT] CLIENT E-PRESS aimed at pile proxy eid=%u (camera-ray cone) -> requesting grab from host",
+                static_cast<unsigned>(eid));
+        coop::trash_channel::SendGrabIntent(*s, static_cast<uint32_t>(eid));
+        return;
+    }
+
+    // HOST: aim at a REAL chipPile (it implements int_player_C -> it IS lookAtActor).
     void* aimed = ue_wrap::engine::ReadMainPlayerLookAtActor(self);  // the pile (PRE-conversion, alive)
     if (!aimed || !ue_wrap::prop::IsChipPile(aimed)) return;         // E-press not aimed at a pile
-    // PROBE-A (docs/piles/08 Step 0): the HOST grab now syncs WITHOUT arming anything here -- the BP's own
-    // BeginDeferred(clump) is caught at the host_spawn_watcher convert-spawn POST (WorldContextObject=pile
-    // -> trash_channel ToClump; the land clump->pile likewise), zero-proximity + host-authoritative. This
-    // observer's Increment-1 job is purely diagnostic: log the role, the aimed pile's eid (fwd + mirror),
-    // and which carry SLOT the clump rides (grabbing_actor vs holding_actor -- the s34 correction left this
-    // [?]) so the client-grab direction (v83) gates on the right slot. The client suppress-native +
-    // GrabIntent send is added HERE in Increment 2. Read-only; fires only when aiming at a chipPile.
+    // The HOST grab syncs WITHOUT arming anything here -- the BP's own BeginDeferred(clump) is caught at the
+    // re-pile/convert thunk; the held-edge adopts the spawned clump onto THIS pile's eid (local_streams ->
+    // AdoptPendingGrabClump) + broadcasts PropConvert{ToClump}. Log the aimed pile's eid (fwd + mirror) + the
+    // carry slots for diagnostics, then NotePendingGrab.
     coop::element::ElementId fwdEid = PT::GetPropElementIdForActor(aimed);
     coop::element::ElementId mirEid = coop::remote_prop::ResolveMirrorEidByActor(aimed);
     ue_wrap::engine::MainPlayerGrabState gs{};
     ue_wrap::engine::ReadMainPlayerGrabState(self, gs);
     const unsigned fwd = (fwdEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(fwdEid);
     const unsigned mir = (mirEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(mirEid);
-    UE_LOGI("[PILE] %s E-PRESS on pile %p -- localEid=%u mirrorEid=%u %s (carry slots: grabbingActor=%p "
+    UE_LOGI("[PILE] HOST E-PRESS on pile %p -- localEid=%u mirrorEid=%u %s (carry slots: grabbingActor=%p "
             "holdingActor=%p)",
-            s->role() == coop::net::Role::Host ? "HOST" : "CLIENT", aimed, fwd, mir,
+            aimed, fwd, mir,
             (fwd != 0 || mir != 0) ? "[TRACKED -> grab will sync]"
                                    : "[UNTRACKED -> grab will NOT sync; tracking gap]",
             gs.grabbingActor, gs.holdingActor);
-
-    // HOST: record the pending grab. The clump the BP spawns next (EX_CallMath -> invisible at spawn) is
-    // adopted onto THIS pile's eid at the held-object edge (local_streams -> AdoptPendingGrabClump), which
-    // broadcasts the PropConvert{ToClump}. The host owns its piles -> fwdEid is the authoritative local
-    // element id (fall back to the mirror eid defensively). Client grab is Increment 2 (suppress + GrabIntent).
-    if (s->role() == coop::net::Role::Host) {
-        const coop::element::ElementId grabEid =
-            (fwdEid != coop::element::kInvalidId) ? fwdEid : mirEid;
-        if (grabEid != coop::element::kInvalidId)
-            coop::trash_channel::NotePendingGrab(grabEid, ue_wrap::prop::GetChipType(aimed));
-    }
+    const coop::element::ElementId grabEid =
+        (fwdEid != coop::element::kInvalidId) ? fwdEid : mirEid;
+    if (grabEid != coop::element::kInvalidId)
+        coop::trash_channel::NotePendingGrab(grabEid, ue_wrap::prop::GetChipType(aimed));
 }
 
 void Install(coop::net::Session* session) {
@@ -441,6 +480,16 @@ bool DebugSendGrabIntent(uint32_t eid) {
         return false;
     }
     coop::trash_channel::SendGrabIntent(*s, eid);
+    return true;
+}
+
+bool DebugSendThrowIntent(uint32_t eid) {
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || !s->running() || s->role() != coop::net::Role::Client) {
+        UE_LOGW("trash_collect: DebugSendThrowIntent eid=%u -- no running client session", eid);
+        return false;
+    }
+    coop::trash_channel::SendThrowIntent(*s, eid);
     return true;
 }
 
