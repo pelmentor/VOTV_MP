@@ -134,8 +134,9 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 **The design (08, host-authoritative state machine):** the eid is a host-minted life-stable logical trash
 entity (state PILED/HELD_BY(N)/FLYING; **position is NEVER identity for the GRAB** → the cluster mis-bind is
 impossible by construction). Host owns the authoritative state; receivers drive a local visual from it.
-Client-grab = **suppress-native + `GrabIntent` → host executes the real verb** (DESIGN, Increment 2). A
-sync-time-context byte rejects stale packets (AS-BUILT, proto v82).
+Client-grab = **camera-ray cone recognition + `GrabIntent` → host executes the real verb on puppet-N + a
+host-AUTH per-eid carry pose stream + `ThrowIntent`** (the FULL CHAIN, AS-BUILT + [V harness], proto v85,
+HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rejects stale packets.
 - **GRAB (pile→clump) — [V] VERIFIED hands-on (`[SYNC-MIRROR OK]`), proto v82, commit `0e56ca39`:**
   `trash_collect_sync::OnPileGrabPre` (the `InpActEvt_use` PRE — a real input event, ProcessEvent-VISIBLE)
   records the aimed pile's eid (`trash_channel::NotePendingGrab`); `local_streams`' held-edge adopts the
@@ -156,18 +157,31 @@ sync-time-context byte rejects stale packets (AS-BUILT, proto v82).
 - **GRAB-via-thunk + the eid=0 adopt-miss close — [DESIGN], NOT built:** move the grab (pile→clump) to the
   same thunk (srcObj = tracked chipPile → kToClump), retiring the InpActEvt-PRE + held-edge adopt and
   catching the grab even when the PRE missed (an UNTRACKED clump currently skips the converter). A tightening.
-- **Increment 2 (CLIENT-grab direction) — HOST-SIDE AS-BUILT + VERIFIED [V harness]; client-INITIATED path
-  still [DESIGN]. proto v84, HEAD `2dc5d06e`, deployed `AAEC4D8F3B4341F8` (push held).** Built + harness-
-  verified the host arm: v84 `GrabIntent`(78) CLIENT→HOST + STAGED `ThrowIntent`/`PileResyncRequest`; the
-  3-place router; `trash_channel::OnGrabIntent` (validate → resolve puppet-N + pile → `playerGrabbed` on the
-  puppet → broadcast `PropConvert{kToClump}`) + NEW `coop/puppet_carry_drive.{cpp,h}` (per-tick kinematic
-  drive of the puppet-held clump to head+aim*grabLen — the host streams the clump pose, the puppet tick won't
-  position it) + `ReleaseClientHold` (hold lifetime tied to clump liveness). Synthetic test
-  `VOTVCOOP_RUN_GRAB_INTENT_TEST` (client sends a real GrabIntent): VERDICT PASS (1 RECEIVED→1 SUCCESS, 126
-  DRIVING ticks, client proxy re-skin no dup); carry regression 16/16 PASS; audit GO. Commits `81e8e687` +
-  `2dc5d06e`; `research/findings/votv-increment2-clientgrab-host-side-DESIGN-2026-06-22.md`. **STILL
-  [DESIGN] (greenlight, hands-on):** the client suppress-native at `OnPileGrabPre` + phase-2 collision (the
-  `garbageCollider` hull — a client can't aim a NoCollision proxy) + the feel.
+- **Increment 2 (CLIENT-grab direction) — the FULL CHAIN, AS-BUILT + [V harness]. proto v85, HEAD
+  `29353191`, deployed `BB94A120A969A51E` (push held).** A client AIMS at a mirrored pile, GRABS, CARRIES,
+  THROWS, it re-piles — all verified (0 CRITICAL fail) via the REAL E-press path.
+  - **Recognition = a CAMERA-RAY CONE** (`trash_proxy::EidForAimedPileProxy`) in `OnPileGrabPre` — picks the
+    most-centered pile proxy on the view-camera forward. The "suppress-native + read `lookAtActor`/
+    `lookatActorCurrent`" plan + the proxy QueryOnly collision are **RETIRED (RULE 2)**: a bare AStaticMeshActor
+    proxy can NEVER be `lookAtActor` (the `int_player_C` filter at LookAtFunction @3250) AND the worn pile mesh
+    has no simple collision body (harness `trace-gate hit=0`). No suppress-native needed (the proxy fails the
+    native cast on its own). E-press TOGGLES grab vs throw via the client carry-state.
+    `[[lesson-proxy-never-lookatactor-use-camera-cone]]`
+  - **Carry visibility = a NEW host-authoritative per-eid pose stream** (`MsgType::TrashCarryPose=34`,
+    `TrashClumpPoseSnapshot` 32B, the `StoreRemoteWorldActorBatch` pattern). A client only drives pose slot 0
+    + the relay never echoes to the origin, so the host-driven puppet-held clump's pose MUST be host-
+    originated; every client drives the proxy via a per-eid `ActiveDrive` interp (`coop/trash_clump_pose_stream`,
+    `coop/puppet_carry_drive::Tick` publishes carry + flight). Scales to N simultaneous client grabs.
+  - **Throw** = `OnThrowIntent` releases the puppet grab (the re-pile gate reads not-held) + applies physics
+    velocity along the puppet aim → the clump flies (flight stream) + self-re-piles via its own ground-hit
+    thunk → ToPile. `ThrowIntentPayload` is eid-only (the host derives the direction).
+  - **Abort (audit HIGH fix)** = a clump lost mid-carry → `ReleaseClientHold` broadcasts `PropDestroy(eid)`
+    so clients retire the frozen proxy + `ClearClientCarry` (else the client was stuck in throw-mode forever).
+  - The interp was EXTRACTED to `coop/active_drive.h` (remote_prop 1375→1222, RULE 2026-05-25; carry
+    regression confirms zero behaviour change). Finding:
+    `research/findings/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`. **NEXT (greenlight):**
+    a `garbageCollider`-analog SHAPE component on the proxy for occlusion-correct aim + movement-block (the
+    cone ignores walls; the proxy is still walk-through).
 - **CLIENT MIRROR of trash = a host-authoritative `AStaticMeshActor` PROXY — DUP-FIX (derived) + VISIBILITY +
   CARRY-FREEZE + carry-JANK + THROW-ARC + ROTATION + SOUND all [V hands-on] VERIFIED; Z-fix + LEVEL-PILE
   dup-DESTROY + FPS-fix [V harness]; proxy SCALE AS-BUILT. HEAD `a5282f57`, deployed `015F0AC9590B6B23`,

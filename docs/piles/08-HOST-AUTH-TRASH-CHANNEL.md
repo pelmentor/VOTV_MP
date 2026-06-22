@@ -1,7 +1,8 @@
 # 08 — HOST-AUTHORITATIVE TRASH CHANNEL (the pile-sync redesign)
 
-> **Status (2026-06-22 FINAL, HEAD `a5282f57`, deployed `015F0AC9590B6B23`, proto v83 — all committed, push
-> held):**
+> **Status (2026-06-23, HEAD `29353191`, deployed `BB94A120A969A51E`, proto v85 — committed, push held).
+> The CLIENT-grab FULL CHAIN is AS-BUILT + [V harness] (see the Increment-2 bullet below). Prior (still
+> true): host carry/throw/re-pile, HEAD `a5282f57`, proto v83:**
 > - **GRAB (pile→clump) — [V] VERIFIED hands-on** (`[SYNC-MIRROR OK]` in the client log). Driven by the
 >   `InpActEvt_use` PRE seam (a real input event → ProcessEvent-VISIBLE) + the held-object edge adopt.
 > - **RE-PILE (clump→pile) — the DETERMINISTIC `UFunction::Func` thunk converter — VERIFIED [V hands-on
@@ -97,12 +98,19 @@
 >   (`holdPlayer` never cleared). STILL OPEN: the WHOOSH throw sound (no ReliableKind); retire the dead
 >   `dropGrabObject` thunk (RULE 2). (The s38 grab cue / re-pile vanish-return checks were a separate track,
 >   now folded into the take-30 verified state.)
-> - **CLIENT-grab direction (Increment 2) — HOST-SIDE AS-BUILT + VERIFIED [V harness]** (proto **v84**, commits
->   `81e8e687` + `2dc5d06e`, deployed `AAEC4D8F3B4341F8`, push held): `GrabIntent` wire + 3-place router +
->   `trash_channel::OnGrabIntent` (executes `playerGrabbed` on puppet-N + broadcasts the convert) + the NEW
->   `coop/puppet_carry_drive` hand-drive. Synthetic test `VOTVCOOP_RUN_GRAB_INTENT_TEST` VERDICT PASS. See the
->   "Increment 2" section below. The **client-INITIATED path** (suppress-native + proxy PHASE 2 collision, the
->   `garbageCollider` hull, + the feel) is **[DESIGN], greenlight-gated**.
+> - **CLIENT-grab direction (Increment 2) — FULL CHAIN AS-BUILT + [V harness]** (proto **v85**, HEAD
+>   `29353191`, deployed `BB94A120A969A51E`, push held). A client AIMS at a mirrored pile, GRABS, CARRIES,
+>   THROWS, it re-piles — all verified on the log-truth harness (0 CRITICAL fail) via the REAL E-press path.
+>   **Recognition = a CAMERA-RAY CONE** (`trash_proxy::EidForAimedPileProxy`) in `OnPileGrabPre` — the
+>   trace/`lookatActorCurrent`/proxy-collision approach is **RETIRED (RULE 2)**: a bare AStaticMeshActor proxy
+>   can never be `lookAtActor` (the `int_player_C` filter at LookAtFunction @3250) AND the worn pile mesh has
+>   no simple collision body (harness `trace-gate hit=0`). **Carry visibility = a NEW host-authoritative
+>   per-eid pose stream** (`MsgType::TrashCarryPose=34`, the `StoreRemoteWorldActorBatch` pattern): a client
+>   only drives slot 0 + the relay can't echo to the grabber, so the host ORIGINATES the clump's carry/flight
+>   pose; every client drives the proxy via a per-eid `ActiveDrive`. **Throw** = `OnThrowIntent` releases the
+>   puppet grab + applies physics velocity → the clump self-re-piles via the existing thunk → ToPile. The
+>   **faithful next increment** (greenlight): a `garbageCollider`-analog SHAPE component on the proxy for
+>   occlusion-correct aim + movement-block (the cone ignores walls; the proxy is still walk-through).
 >
 > Supersedes **07** (the MORPH V2 re-skin + proximity land-watch — RETIRED 2026-06-21: it false-fired in
 > dense pile clusters and never wired the client→host direction; the autonomous smoke that "verified" it was
@@ -238,9 +246,10 @@ HOST → ALL (authoritative state change):
   PropPose{eid, ctx}                      // carry (existing held-pose stream + ctx) // [V] AS-BUILT
   PropRelease{eid, vel, ctx}              // throw                                    // [V] AS-BUILT
   PropSpawn{eid, class, xform, chipType}  // (re)scope-in incl. resync reply          // [V] existing
-  PropDestroy{eid}                        // collect/despawn (no re-pile)             // [V] AS-BUILT
-CLIENT → HOST (intent/request, NOT a state push):                                    // [DESIGN] Increment 2
-  GrabIntent{eid}   ThrowIntent{eid}   PileResyncRequest{}
+  PropDestroy{eid}                        // collect/despawn AND carry-abort          // [V] AS-BUILT
+  TrashCarryPose{[eid,xform,ctx]...}      // v85 host-AUTH per-eid carry/flight batch // [V] AS-BUILT
+CLIENT → HOST (intent/request, NOT a state push):                                    // [V] AS-BUILT (v85)
+  GrabIntent{eid}   ThrowIntent{eid}                  // PileResyncRequest{} still [DESIGN] (phase 3)
 ```
 
 **Host-grab** (host is authority AND grabber) — **[V] VERIFIED** (grab) **+ [AS-BUILT]** (re-pile):
@@ -249,17 +258,26 @@ adopts the spawned clump onto E, bumps ctx, broadcasts `PropConvert{kToClump}`. 
 (ctx-stamped). Throw → `PropRelease`. Land caught by the **`UFunction::Func` thunk converter** (commit
 `d19ae4d4`; detection VERIFIED, convert VERIFIED [V hands-on take-30]) → `PropConvert{kToPile, xform}`.
 
-**Client-grab** (the dead direction — the door `OnRequest` pattern verbatim) — **[DESIGN] Increment 2**:
+**Client-grab** (the door `OnRequest` pattern) — **[V] AS-BUILT, the FULL CHAIN, v85** (HEAD `29353191`):
 ```
-client InpActEvt_use PRE: SUPPRESS the native BP grab for THIS dispatch (null lookAtActor — the
-   device_screen ClearAimForDispatch analog — so icast(lookAtActor)→playerGrabbed fails, NO local
-   clump spawns; this kills the local eid=0 dupe at the source), then send GrabIntent{eid}.
-host OnGrabIntent (role==Host): validate state==PILED && !HELD (per-peer guard, door holdOpen_ analog);
-   EXECUTE the real grab on puppet-N: reflection::CallFunction(pile, playerGrabbed, {puppetN, hit});
-   PILED→HELD_BY(N); bump ctx; broadcast PropConvert{kToClump} to ALL incl. the requester.
-every peer mirrors the host's authoritative convert ⇒ ONE actor per eid, no local dupe.
+client OnPileGrabPre (role!=Host): a CAMERA-RAY CONE (trash_proxy::EidForAimedPileProxy) picks the aimed
+   pile proxy -> SendGrabIntent{eid}. NO suppress-native needed (the bare AStaticMeshActor proxy fails the
+   native int_player_C cast, so the local grab no-ops on its own). E-press TOGGLES: carrying -> ThrowIntent.
+   (The "null lookAtActor + read it" suppress/recognize plan is RETIRED, RULE 2 -- a proxy can't be
+   lookAtActor [int_player_C filter] + the pile mesh has no collision body; harness trace-gate hit=0.)
+host OnGrabIntent (role==Host): validate !HELD (per-peer guard, door holdOpen_ analog) + the eid is a live
+   chipPile; EXECUTE playerGrabbed(Player=puppetN); HELD_BY(N); bump ctx; broadcast PropConvert{kToClump}.
+carry: puppet_carry_drive hand-drives the clump + PUBLISHES TrashCarryPose (host-AUTH, per-eid); every
+   client drives its proxy via a per-eid ActiveDrive interp (a client only drives slot 0 + the relay can't
+   echo to the grabber -> the carry pose MUST be host-originated, the WorldActor-batch pattern).
+host OnThrowIntent: release the puppet grab (re-pile gate reads not-held) + physics velocity along the
+   puppet aim; the clump flies (flight stream) + self-re-piles via its own ground-hit thunk -> ToPile.
+abort: a clump lost mid-carry -> ReleaseClientHold broadcasts PropDestroy(eid) so clients retire the proxy +
+   clear the carry toggle (audit HIGH: else the client is stuck in throw-mode forever).
 ```
-This single move fixes BOTH the dead client direction AND the local-clump dupe (the proven door fix).
+Every peer mirrors the host's authoritative converts ⇒ ONE actor per eid, no local dupe. The faithful next
+increment (greenlight): a `garbageCollider`-analog SHAPE component on the proxy (occlusion-correct aim +
+movement-block — the cone ignores walls; the proxy is still walk-through).
 
 **MTA precedent (cited):** `CObjectSync.cpp` single-syncer (`GetSyncer`/`SetSyncer` :47/:140, syncer-gated
 `Packet_ObjectSync` :214, re-broadcast :234); `CStaticFunctionDefinitions.cpp` `AttachElements`/`Detach`
