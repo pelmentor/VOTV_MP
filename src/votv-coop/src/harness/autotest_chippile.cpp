@@ -1,4 +1,13 @@
-// harness/autotest_chippile.cpp -- Autonomous chipPile GRAB test (v81 MORPH V2 verify, 2026-06-20).
+// harness/autotest_chippile.cpp -- Autonomous chipPile GRAB/carry/throw scenario driver.
+//
+// CORRECTION (2026-06-22): the original rationale below targets the RETIRED "pile_morph" model
+// (docs/piles/07) -- that was replaced by the host-authoritative trash channel + the
+// AStaticMeshActor PROXY (docs/piles/08; trash_channel + trash_proxy). The ACTIONS here are
+// still current + faithful (the real InpActEvt_use + playerGrabbed grab, the moving carry, the
+// PHC-release re-pile); only the morph-era markers named in the prose are obsolete. The VERDICT
+// is now the log-truth harness (tools/pile-test-assert.ps1), not the 'pile_morph: ...' lines.
+// Set VOTVCOOP_PILE_SHOWCASE=1 to additionally aim the CLIENT camera at a mirrored pile + hold
+// (for an external screenshot of the client rendering -- see RunAutonomousChipPileTest CLIENT branch).
 //
 // Closes the ONE runtime-unverified link in the pile morph (docs/piles/07): does a REAL
 // E-press grab of a tracked chipPile put the morphed clump into mainPlayer.holding_actor,
@@ -427,7 +436,8 @@ void RunAutonomousChipPileTest() {
             at.Z += 400.f;                                  // lift 4 m so the fall impact triggers re-pile
             const bool tp = E::SetActorLocation(heldClump, at);
             UE_LOGI("chippile_test: Phase B re-pile -- released PHC=%d + lifted clump +400cm=%d -> expect "
-                    "fall -> impact -> re-pile -> 'pile_morph: land detected -> PropConvert{ToPile}'",
+                    "fall -> impact -> re-pile -> host '[PILE] HOST RE-PILE(thunk)' + '[TRASH-CH] HOST LAND COMMIT "
+                    "(transform re-read from the settled pile)'",
                     rel ? 1 : 0, tp ? 1 : 0);
             d.store(1);
         });
@@ -436,9 +446,11 @@ void RunAutonomousChipPileTest() {
     }
     ::Sleep(5000);  // let the clump fall + impact + re-pile + the land-watch poll catch it
 
-    UE_LOGI("chippile_test: DONE -- grab-clump-holding=%d. PASS if the host log shows 'grab armed' "
-            "+ 'ADOPTED held clump -> PropConvert{ToClump}' and the CLIENT log shows "
-            "'remote_prop::OnConvert: eid=%u re-skin -> clump'. Primary unverified link MEASURED.",
+    UE_LOGI("chippile_test: DONE -- grab-clump-holding=%d eid=%u. VERDICT is now the log-truth harness "
+            "(tools/pile-test-assert.ps1): host '[PILE] HOST GRAB ADOPT' + '[TRASH-CH] HOST carry OPEN' + "
+            "'HOST RE-PILE(thunk)' + 'LAND COMMIT'; CLIENT '[PILE] CLIENT recv convert GRAB/LAND -> PROXY "
+            "re-skinned' + 'CLIENT ToPile SNAP ... drift=~0'. (The old 'pile_morph: grab armed/ADOPTED' "
+            "markers are RETIRED -- the morph was replaced by the host-auth trash channel + proxy.)",
             sawClumpHolding ? 1 : 0, sel->eid);
 }
 

@@ -92,6 +92,18 @@ $Invariants = @(
         @{ Pass = ($n -gt 0); Detail = "$n client ToPile re-skin(s) (proxy expressed the landed pile)" }
     }},
 
+    # ---- CLIENT renders the HOST pose: the ToPile snap read-back drift must be ~0 (the proxy
+    # landed exactly where the host said). Catches a no-op snap (non-Movable), a mis-apply, or a
+    # wire corruption -- the automated "does the client show the pile in the right place" gate.
+    @{ Name='client-render-matches-host'; Severity='CRITICAL'; Check={
+        $snaps = $C | Select-String -Pattern 'CLIENT ToPile SNAP .*drift=([\d.]+)cm'
+        if ($snaps.Count -eq 0) { return @{ Pass = $true; Detail = 'no client ToPile snaps logged (no land this run)' } }
+        $drifts = @($snaps | ForEach-Object { [float]$_.Matches[0].Groups[1].Value })
+        $maxDrift = [math]::Round(($drifts | Measure-Object -Maximum).Maximum, 2)
+        @{ Pass = ($maxDrift -lt 5.0)
+           Detail = "$($snaps.Count) client ToPile snap(s), max drift=${maxDrift}cm (proxy landed at host pose; <5cm)" }
+    }},
+
     # ---- Derived pile proxy NOT self-destroyed (the user's hypothesized catch). A
     # derived pile spawn must not be followed by a DESTROY of that same eid's proxy.
     # The destroy only targets NATIVE chipPiles (lineage-filtered), so this should hold.

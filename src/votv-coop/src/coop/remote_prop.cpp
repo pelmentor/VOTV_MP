@@ -1160,6 +1160,18 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer,
             ClearAnyDriveFor(proxy);
             E::SetActorLocation(proxy, ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
             E::SetActorRotation(proxy, ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
+            // Instrumentation (harness): read the proxy's ACTUAL world transform back and log the drift vs the
+            // host's authoritative payload. drift~0 proves the snap TOOK EFFECT (the proxy is Movable, no
+            // no-op, no mis-apply) AND that the CLIENT renders the host pose -- the automated "does the client
+            // show the pile in the right place / orientation" gate (the eyeball the screenshots gave, in a log).
+            const ue_wrap::FVector  got  = E::GetActorLocation(proxy);
+            const ue_wrap::FRotator gotR = E::GetActorRotation(proxy);
+            const float dx = got.X - payload.locX, dy = got.Y - payload.locY, dz = got.Z - payload.locZ;
+            UE_LOGI("[PILE] CLIENT ToPile SNAP eid=%u applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f) "
+                    "drift=%.2fcm | rot applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f)",
+                    E, got.X, got.Y, got.Z, payload.locX, payload.locY, payload.locZ,
+                    std::sqrt(dx * dx + dy * dy + dz * dz),
+                    gotR.Pitch, gotR.Yaw, gotR.Roll, payload.rotPitch, payload.rotYaw, payload.rotRoll);
         }
         UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> PROXY re-skinned IN PLACE to %s chipType=%u "
                 "[SYNC-MIRROR OK -- no spawn-fresh, no dup]",
