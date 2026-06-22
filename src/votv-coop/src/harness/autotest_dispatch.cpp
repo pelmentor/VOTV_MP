@@ -47,6 +47,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // E-press edge), then measures whether the morphed clump lands in holding_actor and the
     // peer's mirror converts. CLIENT scan-only. Closes the one link an audit/smoke can't.
     SpawnIf("VOTVCOOP_RUN_CHIPPILE_TEST", "chipPile grab test", &ChipPileTestThread, role);
+    // Puppet-grab probe (docs/piles/08 Increment-2 gate): HOST executes playerGrabbed on the slot-1
+    // PUPPET + measures whether the puppet HOLDS the clump and the per-tick PHC maintenance tracks it
+    // to the puppet's hand (tick alive) vs floats at the spawn spot. Settles the one [?] the bytecode
+    // could not -- whether an unpossessed puppet's ReceiveTick dispatches. Client just stands.
+    SpawnIf("VOTVCOOP_RUN_PUPPET_GRAB_PROBE", "puppet-grab probe", &PuppetGrabProbeThread, role);
     // Phase 5F flashlight: both peers toggle their own flashlight; the OTHER
     // peer's puppet should reflect it via the ItemActivate wire path.
     SpawnIf("VOTVCOOP_RUN_FLASHLIGHT_TEST", "flashlight test", &FlashlightTestThread, role);

@@ -350,16 +350,43 @@ clump from a grab the PRE missed currently skips the converter) — the NEXT tig
 
 ---
 
-## Increment 2 — the CLIENT-grab direction (DESIGN, NOT built, proto v83)
+## Increment 2 — the CLIENT-grab direction (DESIGN, NOT built, proto v83→v84)
 
 The suppress-native + `GrabIntent` → host-executes-on-puppet-N path (the door `OnRequest` shape, above) + the
-PILED/HELD/FLYING state machine + the drain-resync (`PileResyncRequest`). Protocol v83. **[DESIGN.]** The
+PILED/HELD/FLYING state machine + the drain-resync (`PileResyncRequest`). **[DESIGN.]** The
 PROBE-A diagnostic (`OnPileGrabPre` logs the carry slot `grabbing_actor` vs `holding_actor`) feeds this — the
 client suppress + GrabIntent send is added at that exact seam.
 
-Open [?] (verify during Increment 2): does `reflection::CallFunction(pile, playerGrabbed, {puppetN, hit})` on
-a PUPPET drive `pickupObjectDirect` so puppet-N visibly holds the clump on the host (the verb is
-VISIBLE-re-entrant → exercisable in the smoke)?
+**The gating `[?]` is RESOLVED (2026-06-22, RE + runtime probe — `[V harness]`).** Full result:
+`research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md`. The puppet-grab probe
+(`harness/autotest_chippile.cpp::RunPuppetGrabProbe`, env `VOTVCOOP_RUN_PUPPET_GRAB_PROBE=1`, deployed
+`CDBDCFB2996A68DC`) drove `pile.playerGrabbed(Player=puppet)` on a confirmed unpossessed slot-1 puppet
+(`GetController()==null`) and asserted the host log:
+
+- **`reflection::CallFunction(playerGrabbed)` on a puppet ENGAGES the grab** — `grabbing_actor := clump` at
+  poll 0, HELD 40/40 polls (~4 s). The RE is confirmed: the grab path touches NO `GetController` /
+  PlayerController / possession state — it is all `mainPlayer_C`-member / component-relative, which a puppet
+  has. The eid identity binding the trash channel needs (`grabbing_actor`/`holdPlayer` = puppet) works.
+- **BUT the puppet does NOT auto-track the clump to its hand** — `TRACKED=0` / `FLOATING`: the clump stayed at
+  the pile's spawn spot (`dist=678cm` constant, `dZ=-68cm` ground level, `grabLen` frozen). An unpossessed
+  puppet's `ReceiveTick` does not drive the per-tick PHC `SetTargetLocationAndRotation`, so the clump never
+  reaches the puppet's hand on its own. Since the trash channel streams the clump's HOST-side pose to all
+  peers, "floats at the spawn spot on the host" = every peer renders it there — wrong.
+
+**Refined Increment-2 build (the probe added step 4):**
+1. wire `GrabIntent`/`ThrowIntent`/`PileResyncRequest` (proto v83→**v84**, the 3-place ReliableKind router
+   per `[[feedback-reliablekind-router-checklist]]`);
+2. client suppress-native (null `lookAtActor` for the dispatch) + send `GrabIntent{eid}` at the `OnPileGrabPre`
+   seam;
+3. host `OnGrabIntent` (role==Host) → validate `PILED && !HELD` → `playerGrabbed` on puppet-N → bump ctx →
+   broadcast `PropConvert{kToClump}`;
+4. **NEW (from the probe):** the host KINEMATICALLY drives the puppet-held clump's hold pose each tick
+   (`puppetCamLoc + syncedForward * grabLen`, or set the clump's actor transform to the puppet's hand
+   directly) — the same kinematic drive `local_streams` already applies to host-held props; the puppet's
+   synced aim is already streamed. Do NOT rely on the puppet tick / `grabHandle`.
+
+Plus phase-2 collision (the `garbageCollider` hull) is a separate prerequisite — a client cannot aim a
+NoCollision proxy to initiate the grab. All UNBUILT, greenlight-gated.
 
 ---
 

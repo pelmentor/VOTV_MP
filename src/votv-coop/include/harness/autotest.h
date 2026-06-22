@@ -46,6 +46,16 @@ DWORD WINAPI ClumpTestThread(LPVOID arg);
 void RunAutonomousChipPileTest();
 DWORD WINAPI ChipPileTestThread(LPVOID arg);
 
+// Puppet-grab probe (env VOTVCOOP_RUN_PUPPET_GRAB_PROBE=1). HOST-only. Settles the docs/piles/08
+// Increment-2 gating [?]: when the host executes actorChipPile_C::playerGrabbed with a PUPPET (an
+// unpossessed mainPlayer_C, GetController()==null) as the player, does the puppet HOLD the spawned
+// clump (grabbing_actor:=clump) AND does the per-tick PHC maintenance run on the unpossessed puppet
+// so the clump tracks to its hand (tick alive) vs float at the spawn spot (tick dead -> drive the PHC
+// target ourselves). The clump's host-side pose is what the trash channel streams to all peers, so this
+// is exactly what every peer will see. Read-only beyond the one pile the real grab verb consumes.
+void RunPuppetGrabProbe();
+DWORD WINAPI PuppetGrabProbeThread(LPVOID arg);
+
 // Clump VISIBILITY probe (env VOTVCOOP_RUN_CLUMPVIS_PROBE=1). Solo. Spawns a bare
 // prop_garbageClump_C in front of the player + logs whether its StaticMesh asset is
 // null (empty) or named (visible) -- gates the mannequin-model rework. Launch via mp.py clumpvis.

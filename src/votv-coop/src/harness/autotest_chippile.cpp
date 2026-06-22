@@ -463,8 +463,177 @@ void RunAutonomousChipPileTest() {
             sawClumpHolding ? 1 : 0, sel->eid);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// PUPPET-GRAB PROBE (docs/piles/08 Increment-2 gating [?]) -- VOTVCOOP_RUN_PUPPET_GRAB_PROBE=1, HOST-only.
+//
+// THE QUESTION this settles, on real logs: in the client-grab direction, the host executes the real
+// grab verb on PUPPET-N (an unpossessed mainPlayer_C, GetController()==null) via
+// reflection::CallFunction(pile, playerGrabbed, {puppetN, hit}). The RE (this session, agent-verified +
+// cited) proved the grab path -- pickupObjectDirect -> grabHandle.GrabComponentAtLocationWithRotation ->
+// per-tick PHC SetTargetLocationAndRotation -- touches NO GetController/IsLocallyControlled/PlayerController
+// state, so the grab should ENGAGE on a puppet (grabbing_actor := clump). The ONE thing the bytecode could
+// NOT prove is whether an UNPOSSESSED puppet's ReceiveTick actually dispatches -- i.e. whether the per-tick
+// PHC maintenance RUNS, so the clump tracks to the puppet's hand (camera-front) rather than floating at the
+// spawn spot. In the trash channel the host STREAMS the clump's host-side world pose (PropPose, eid-keyed)
+// to every peer, so "the clump ends up in the puppet's hand ON THE HOST" is exactly what all peers will see.
+//
+// This probe answers it WITHOUT touching any wire: find the slot-1 puppet, grab the nearest chipPile with
+// the PUPPET as the player param, then poll the grab state + geometry for ~4 s. We read, never destroy
+// beyond the one pile the real grab verb itself consumes (production-faithful: the same verb a real grab runs).
+//
+// VERDICT (logged for tools/pile-test-assert.ps1 to assert):
+//   ENGAGED  = grabbing_actor became a garbageClump at all (the core RE verdict, runtime-confirmed).
+//   HELD     = grabbing_actor stayed the clump across the window (the PHC keeps it; not dropped).
+//   TRACKED  = the clump was pulled to the puppet's hand -- horizontal dist collapsed toward ~grabLen AND/OR
+//              the clump's Z rose from ground level to hand height -> the per-tick PHC maintenance RUNS on the
+//              unpossessed puppet (tick ALIVE) -> verdict A (works as-is once the puppet aim is synced).
+//   FLOATING = held but NOT tracked (the clump stayed at the spawn spot, low Z) -> the puppet tick is
+//              suppressed -> verdict B-fallback: Increment 2 must drive SetTargetLocationAndRotation on the
+//              puppet each tick from the synced remote aim (the data the mod already streams).
+void RunPuppetGrabProbe() {
+    const bool isHost = (ReadEnv("VOTVCOOP_NET_ROLE") != "client");
+    if (!isHost) {
+        UE_LOGI("puppet_grab_probe: CLIENT -- nothing to drive (the HOST executes the grab on the puppet). "
+                "Just stand so the slot-1 puppet exists on the host.");
+        return;
+    }
+
+    // 1. Wait for the slot-1 client puppet to go LIVE in the host's world (same gate as the chipPile test).
+    UE_LOGI("puppet_grab_probe: HOST -- waiting for the slot-1 client puppet to go live (in-world)");
+    struct Pup { void* actor = nullptr; bool hasController = true; };
+    auto pup = std::make_shared<Pup>();
+    {
+        const int kWaitCapS = 150; int waitedS = 0; bool live = false;
+        while (waitedS < kWaitCapS) {
+            const int r = RunGT([pup](std::atomic<int>& d) {
+                coop::RemotePlayer* p = coop::players::Registry::Get().Puppet(/*peerSlot=*/1);
+                void* a = p ? p->GetActor() : nullptr;
+                if (a && R::IsLive(a)) { pup->actor = a; pup->hasController = (E::GetController(a) != nullptr); d.store(1); }
+                else d.store(2);
+            });
+            if (r == 1) { live = true; break; }
+            ::Sleep(1000); ++waitedS;
+        }
+        if (!live) { UE_LOGW("puppet_grab_probe: slot-1 puppet never went live in %d s -- aborting (no client?)", kWaitCapS); return; }
+    }
+    // GetController()==null is THE local-vs-puppet discriminator. A puppet must NOT have a controller; if it
+    // does, this is mis-wired (we'd be probing the real local player) -- abort rather than report a false pass.
+    if (pup->hasController) {
+        UE_LOGW("puppet_grab_probe: slot-1 actor HAS a controller -- that is NOT a puppet; aborting (mis-wired)");
+        return;
+    }
+    UE_LOGI("puppet_grab_probe: slot-1 puppet LIVE actor=%p, GetController()==null CONFIRMED (a true puppet). "
+            "+20 s margin for the world to settle, then the puppet grab", pup->actor);
+    ::Sleep(20000);
+
+    // 2. Find the nearest live chipPile to the puppet (tracked-ness is irrelevant here -- this probe tests the
+    //    raw puppet HOLD, not the coop convert wire). A pile a few metres away makes the pull-in signal strong.
+    struct Sel { void* pile = nullptr; ue_wrap::FVector pilePos{}; ue_wrap::FVector pupPos0{}; float pupYaw0 = 0.f; float dist0 = 0.f; };
+    auto sel = std::make_shared<Sel>();
+    if (RunGT([pup, sel](std::atomic<int>& d) {
+            const ue_wrap::FVector pl = E::GetActorLocation(pup->actor);
+            const ue_wrap::FRotator pr = E::GetActorRotation(pup->actor);
+            float dist = -1.f;
+            void* pile = ue_wrap::prop::FindNearestChipPile(pl, /*radiusCm=*/200000.f, &dist);
+            if (!pile) { UE_LOGW("puppet_grab_probe: NO chipPile in the world -- the save has none to grab"); d.store(2); return; }
+            sel->pile = pile; sel->pilePos = E::GetActorLocation(pile);
+            sel->pupPos0 = pl; sel->pupYaw0 = pr.Yaw; sel->dist0 = dist;
+            UE_LOGI("puppet_grab_probe: puppet@(%.0f,%.0f,%.0f) yaw=%.0f -- nearest chipPile=%p @(%.0f,%.0f,%.0f) dist=%.0fcm",
+                    pl.X, pl.Y, pl.Z, pr.Yaw, pile, sel->pilePos.X, sel->pilePos.Y, sel->pilePos.Z, dist);
+            d.store(1);
+        }) != 1) { UE_LOGW("puppet_grab_probe: no chipPile to grab -- aborting"); return; }
+
+    // 3. THE PUPPET GRAB -- call the pile's OWN playerGrabbed with the PUPPET as the player param. The RE shows
+    //    this spawns the clump (BeginDeferred), sets clump.holdPlayer:=puppet, FinishSpawning, then calls
+    //    puppet.pickupObjectDirect(clump) -> the PHC grab on the PUPPET. The pile self-destructs here. No
+    //    InpActEvt arming + no lookAtActor injection (we are not exercising the OnPileGrabPre observer / the
+    //    convert wire -- only the raw puppet hold).
+    UE_LOGI("puppet_grab_probe: >>> executing playerGrabbed on the PUPPET (the Increment-2 host-side move) <<<");
+    if (RunGT([pup, sel](std::atomic<int>& d) {
+            void* pileCls = R::ClassOf(sel->pile);
+            void* grabFn  = pileCls ? R::FindFunction(pileCls, L"playerGrabbed") : nullptr;
+            bool paramOk = false, callOk = false;
+            if (grabFn) {
+                ue_wrap::ParamFrame pf(grabFn);
+                paramOk = pf.Set<void*>(L"Player", pup->actor);   // the PUPPET grabs; HitResult left zeroed (not a gate)
+                callOk  = ue_wrap::Call(sel->pile, pf);           // the pile self-destructs HERE
+            }
+            UE_LOGI("puppet_grab_probe: playerGrabbed(puppet) fn=%p paramSet=%d call=%d -- now polling whether the "
+                    "PUPPET holds + tracks the clump", grabFn, paramOk ? 1 : 0, callOk ? 1 : 0);
+            d.store(grabFn && callOk ? 1 : 2);
+        }) != 1) { UE_LOGW("puppet_grab_probe: the playerGrabbed call failed -- aborting"); return; }
+
+    // 4. POLL the grab state + geometry for ~4 s. Track: did grabbing_actor become a clump (ENGAGED), did it
+    //    stay (HELD), and did the clump get pulled to the puppet's hand (TRACKED -> tick alive) vs float at the
+    //    spawn spot (FLOATING -> tick dead). dist = horizontal puppet->clump; dZ = clump.Z - puppet.Z (rises to
+    //    ~hand height when the PHC pulls it up off the ground); grabLen = the grab Timeline (a per-tick value).
+    int engagedPolls = 0, totalPolls = 0;
+    float distFirst = -1.f, distLast = -1.f, distMin = 1e9f, dzFirst = -1e9f, dzLast = -1e9f, grabLenLast = -1.f;
+    for (int i = 0; i < 40; ++i) {
+        ::Sleep(100);
+        ++totalPolls;
+        RunGT([pup, &engagedPolls, &distFirst, &distLast, &distMin, &dzFirst, &dzLast, &grabLenLast, i](std::atomic<int>& d) {
+            E::MainPlayerGrabState gs{};
+            if (!E::ReadMainPlayerGrabState(pup->actor, gs)) { d.store(1); return; }
+            void* clump = (gs.grabbingActor && ue_wrap::prop::IsGarbageClump(gs.grabbingActor)) ? gs.grabbingActor
+                        : (gs.holdingActor  && ue_wrap::prop::IsGarbageClump(gs.holdingActor))  ? gs.holdingActor : nullptr;
+            const bool engaged = (clump != nullptr);
+            if (engaged) ++engagedPolls;
+            float dist = -1.f, dz = -1e9f;
+            if (clump) {
+                const ue_wrap::FVector pl = E::GetActorLocation(pup->actor);
+                const ue_wrap::FVector cl = E::GetActorLocation(clump);
+                const float ddx = cl.X - pl.X, ddy = cl.Y - pl.Y;
+                dist = std::sqrt(ddx * ddx + ddy * ddy);
+                dz = cl.Z - pl.Z;
+                if (distFirst < 0.f) { distFirst = dist; dzFirst = dz; }
+                distLast = dist; dzLast = dz; grabLenLast = gs.grabLen;
+                if (dist < distMin) distMin = dist;
+            }
+            if (i < 6 || (engaged && (i % 8) == 0)) {
+                UE_LOGI("puppet_grab_probe: poll %d -- grabbing_actor=%p[clump=%d] holding_actor=%p dist=%.0fcm dZ=%.0fcm grabLen=%.1f",
+                        i, gs.grabbingActor, (gs.grabbingActor && ue_wrap::prop::IsGarbageClump(gs.grabbingActor)) ? 1 : 0,
+                        gs.holdingActor, dist, dz, gs.grabLen);
+            }
+            d.store(1);
+        });
+    }
+
+    // 5. VERDICT. ENGAGED if any poll saw a held clump; HELD if it persisted (>=70% of polls after first); the
+    //    tick-liveness (TRACKED vs FLOATING) reads from the geometry: a hand-held clump sits within ~250 cm of
+    //    the puppet AND elevated near hand height (dZ roughly -20..+160 cm, not on the ground far below); a
+    //    floating-at-spawn clump stays at the pile's distance with a low/negative dZ. We report all numbers so
+    //    the truth is in the log even where the heuristic is borderline.
+    const bool engaged = engagedPolls > 0;
+    const bool held    = engagedPolls >= (totalPolls * 7) / 10;
+    const bool nearHand = (distLast >= 0.f && distLast <= 250.f);
+    const bool atHandHeight = (dzLast > -40.f);                 // clump lifted to ~hand level, not collapsed to the ground
+    const bool pulledIn = (distFirst > 0.f && distLast >= 0.f && distLast < distFirst - 50.f);  // visibly pulled toward the hand
+    const bool tracked = engaged && (nearHand && atHandHeight);
+    UE_LOGI("puppet_grab_probe: VERDICT -- ENGAGED=%d HELD=%d TRACKED=%d | engagedPolls=%d/%d "
+            "dist first=%.0f last=%.0f min=%.0f cm | dZ first=%.0f last=%.0f cm | grabLen=%.1f | pulledIn=%d",
+            engaged ? 1 : 0, held ? 1 : 0, tracked ? 1 : 0, engagedPolls, totalPolls,
+            distFirst, distLast, distMin, dzFirst, dzLast, grabLenLast, pulledIn ? 1 : 0);
+    if (!engaged)
+        UE_LOGW("puppet_grab_probe: RESULT = NOT-ENGAGED -- playerGrabbed(puppet) did not leave a clump in "
+                "grabbing_actor/holding_actor. The RE predicted ENGAGED; investigate (param frame? clump self-freed?).");
+    else if (tracked)
+        UE_LOGI("puppet_grab_probe: RESULT = TRACKED (tick ALIVE) -- the puppet HOLDS the clump at its hand; the "
+                "per-tick PHC maintenance RUNS on the unpossessed puppet. Increment-2 host-side grab works as-is "
+                "(verdict A); the only remaining input is syncing the puppet aim, which the mod already streams.");
+    else
+        UE_LOGI("puppet_grab_probe: RESULT = FLOATING (held, tick likely DEAD) -- the clump did not reach the "
+                "puppet's hand (dist/last=%.0f cm, dZ=%.0f cm). Increment-2 must drive SetTargetLocationAndRotation "
+                "on the puppet each tick from the synced remote aim (verdict B-fallback).", distLast, dzLast);
+}
+
 DWORD WINAPI ChipPileTestThread(LPVOID /*arg*/) {
     RunAutonomousChipPileTest();
+    return 0;
+}
+
+DWORD WINAPI PuppetGrabProbeThread(LPVOID /*arg*/) {
+    RunPuppetGrabProbe();
     return 0;
 }
 
