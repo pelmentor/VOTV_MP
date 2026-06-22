@@ -428,20 +428,55 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         // freeze is the held-puppet RECREATION (updateHold rebuilds holding_actor -> a 1-frame null) firing
         // this poll edge -> it cleared g_lastHeldEid + sent a spurious PropRelease -> ctx churn -> the client
         // held carry poses (ctx ahead of known) -> frozen. HasPendingSettle could not catch it (recreation
-        // has no re-pile/settle). So SUPPRESS the release edge for the WHOLE carry (!carrying). The latch
-        // closes via: the land-settle (a drop/throw's landing re-pile -> LAND COMMIT) AND -- after the flip --
-        // the dropGrabObject UFunction::Func thunk (the PHC-grab release verb -- the real player drop/throw ->
-        // close -> THIS edge then fires -> PropRelease velocity; simulateDrop was the wrong EQUIPMENT seam,
-        // retired RULE 2). In THIS read-only build the thunk only LOGS, so a throw teleports (closes via the
-        // settle, no velocity) until the flip. NO R::IsLive, NO HasPendingSettle.
+        // has no re-pile/settle). So SUPPRESS the PropRelease (send) for the WHOLE carry (!carrying). The latch
+        // closes via the land-settle (a drop/throw's landing re-pile with no re-grab within K -> LAND COMMIT).
+        // THROW ARC (2026-06-22): the release-VERB hunt is dead -- both simulateDrop AND dropGrabObject were
+        // installed and fired ZERO times for the chipPile release (the clump's release path uses neither).
+        // Instead of detecting the release, we STREAM THROUGH it: while carrying, if g_lastHeldProp is still a
+        // LIVE clump (carry flicker OR post-release flight), keep streaming its pose under E (below) -- one
+        // continuous E-stream, the client interp shows the real arc, no verb + no velocity needed. NO HasPendingSettle.
         const bool relSkip   = carrying_;
         UE_LOGI("[REL-EDGE] eid=%u carrying=%d pendingSettle=%d -> %s",
                 (g_lastHeldEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(g_lastHeldEid),
                 carrying_ ? 1 : 0, pending_ ? 1 : 0, relSkip ? "SKIP(carrying)" : "FIRE(release)");
         if (relSkip) {
-            UE_LOGI("[PILE] HOST carry SUPPRESS release eid=%u -- !carrying gate (puppet recreation / churn / "
-                    "a real release whose latch the dropGrabObject thunk will close); keep the carry binding",
-                    static_cast<unsigned>(g_lastHeldEid));
+            // CARRY/FLIGHT CONTINUITY (throw-arc fix 2026-06-22): the release edge is suppressed while carrying
+            // (the freeze fix). But heldActor going null does NOT mean the clump is gone -- it may be (a) a
+            // 1-frame grab-state flicker mid-carry (the clump is still held at the carry position), or (b) the
+            // player REALLY released it and it is now FLYING (physics) until it re-piles. In BOTH cases
+            // g_lastHeldProp is still a LIVE clump, so KEEP STREAMING its pose under the SAME eid E -- the
+            // carry and the flight are ONE continuous E-pose-stream (the client's fixed-delay interp drives the
+            // same proxy throughout and shows the REAL arc). This needs NO release verb and NO velocity: an
+            // ALIVE clump = carry-or-flight (stream it); a churn re-pile DESTROYS the clump (!IsLive) -> fall to
+            // the gap below (await the re-grab or the land). That IsLive test is the churn/flight discriminator
+            // the elusive drop-verb was meant to be -- a re-pile kills the clump (skip), a real release leaves
+            // it flying (stream). The stream ends naturally when the clump re-piles (wherever -- end of arc OR a
+            // mid-flight contact): the re-pile thunk's ToPile re-skins the proxy + snaps it to the landed spot.
+            if (R::IsLive(g_lastHeldProp) && ue_wrap::prop::IsGarbageClump(g_lastHeldProp) &&
+                g_lastHeldEid != coop::element::kInvalidId) {
+                coop::net::PropPoseSnapshot pp{};
+                pp.key.len   = 0;                                  // clump: keyless, the eid is the identity (== carry)
+                pp.elementId = static_cast<uint32_t>(g_lastHeldEid);
+                pp.ctx       = coop::trash_channel::CtxForEid(g_lastHeldEid);
+                const auto loc = ue_wrap::engine::GetActorLocation(g_lastHeldProp);
+                const auto rot = ue_wrap::engine::GetActorRotation(g_lastHeldProp);
+                pp.x = loc.X; pp.y = loc.Y; pp.z = loc.Z;
+                pp.pitch = ue_wrap::NormalizeAxis(rot.Pitch);
+                pp.yaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+                pp.roll  = ue_wrap::NormalizeAxis(rot.Roll);
+                session.SetLocalPropPose(true, pp);
+                static uint64_t sFlight = 0;
+                if ((sFlight++ % 30) == 0)
+                    UE_LOGI("[PILE] HOST carry/flight CONTINUE eid=%u -> world(%.1f,%.1f,%.1f) (clump ALIVE: a "
+                            "carry flicker OR the post-release FLIGHT -- one continuous E-stream until re-pile)",
+                            static_cast<unsigned>(g_lastHeldEid), pp.x, pp.y, pp.z);
+                // g_lastHeldProp/Eid are intentionally KEPT (not cleared) -- the stream continues; the land
+                // path (re-pile thunk -> ToPile + the land-settle latch close) ends the carry.
+            } else {
+                UE_LOGI("[PILE] HOST carry SUPPRESS release eid=%u -- !carrying gate; clump re-piled/gone "
+                        "(!IsLive or not-a-clump) -> the gap; await the re-grab or the land-settle close",
+                        static_cast<unsigned>(g_lastHeldEid));
+            }
         } else {
         // Edge: was holding, now not (NOT carrying -- the latch was already closed by the simulateDrop thunk
         // or the land-settle, or this is a non-trash prop). Stop the PropPose stream + send PropRelease.
