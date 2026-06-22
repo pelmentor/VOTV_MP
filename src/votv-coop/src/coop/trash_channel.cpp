@@ -51,22 +51,37 @@ struct PendingGrab { bool active = false; uint32_t eid = 0; uint8_t chipType = 0
 PendingGrab g_pendingGrab;
 constexpr int kPendingGrabTtlTicks = 30;  // ~0.3-0.5s; the grab's clump enters the hand within a few frames
 
-}  // namespace
+// ---- CLOSE-B carry latch + land-settle (host-side) -- see trash_channel.h for the full model ----------
+std::unordered_map<uint32_t, uint32_t> g_carry;   // eid -> last-activity tick; PRESENCE in the map = carrying
+struct LandSettle {
+    int               countdown;  // ticks until COMMIT (a re-grab CANCELS first)
+    int               sincePile;  // ticks since the held ToPile (the ToPile->ToClump gap, logged on CANCEL)
+    uint8_t           chipType;
+    ue_wrap::FVector  loc;
+    ue_wrap::FRotator rot;
+    std::string       cls;        // the pile class to broadcast at COMMIT
+};
+std::unordered_map<uint32_t, LandSettle> g_settle;
+uint32_t g_tick = 0;
+constexpr int kLandSettleTicks = 6;   // K: > a synchronous churn re-grab (~1 frame). TUNE from the CANCEL-gap log.
 
-void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t kind, void* newActor,
-                   const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot, uint8_t chipType) {
-    if (E == 0u || E == coop::element::kInvalidId || !newActor) return;
-    const uint8_t ctx = Bump(static_cast<uint32_t>(E));   // BUMP on every transition (host-authoritative)
+std::string NarrowAscii(const std::wstring& w) {          // BP class names are ASCII -> lossless narrowing.
+    std::string s; s.reserve(w.size());
+    for (wchar_t c : w) s.push_back(static_cast<char>(c));
+    return s;
+}
 
-    RebindE(E, newActor);                                 // re-point E onto the new rendering locally
-
+// The SINGLE PropConvert send primitive (bumps ctx). OnHostConvert calls it for the OPEN (real grab) + the
+// not-carrying land; TickCarry calls it for the settle COMMIT (the real land). `why` is a log tag.
+uint8_t BroadcastConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t kind,
+                         const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot,
+                         uint8_t chipType, const std::string& cls, const char* why) {
+    const uint8_t ctx = Bump(static_cast<uint32_t>(E));
     coop::net::PropConvertPayload p{};
     p.oldEid = static_cast<uint32_t>(E);                  // bind model: oldEid == newEid == E
     p.newEid = static_cast<uint32_t>(E);
-    const std::wstring cls = R::ClassNameOf(newActor);
     p.pileClass.len = 0;
-    for (size_t i = 0; i < cls.size() && i < 63; ++i)
-        p.pileClass.data[p.pileClass.len++] = static_cast<char>(cls[i]);
+    for (size_t i = 0; i < cls.size() && i < 63; ++i) p.pileClass.data[p.pileClass.len++] = cls[i];
     p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
     p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
     p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
@@ -75,11 +90,83 @@ void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t ki
     p.kind     = kind;
     p.ctx      = ctx;
     s.SendReliable(coop::net::ReliableKind::PropConvert, &p, sizeof(p));
-    UE_LOGI("[PILE] HOST %s eid=%u ctx=%u cls='%ls' at (%.1f,%.1f,%.1f) variant=%u -> rebound E locally + "
-            "broadcast PropConvert (clients re-skin their ONE mirror of E -- zero-proximity spawn-POST link)",
-            kind == coop::net::propconvert_kind::kToClump ? "GRAB(pile->clump)" : "LAND(clump->pile)",
-            E, static_cast<unsigned>(ctx), cls.c_str(), p.locX, p.locY, p.locZ,
-            static_cast<unsigned>(chipType));
+    UE_LOGI("[TRASH-CH] HOST BROADCAST %s eid=%u ctx=%u (%s) at (%.1f,%.1f,%.1f) variant=%u",
+            kind == coop::net::propconvert_kind::kToClump ? "ToClump" : "ToPile",
+            static_cast<unsigned>(E), static_cast<unsigned>(ctx), why,
+            p.locX, p.locY, p.locZ, static_cast<unsigned>(chipType));
+    return ctx;
+}
+
+// CANCEL E's pending land-settle (a re-grab arrived -> the preceding re-pile was churn, not the land). Logs
+// the ToPile->ToClump gap (= the churn re-grab latency) -- READ THIS to tune kLandSettleTicks.
+void CancelSettle(uint32_t eid, const char* why) {
+    auto it = g_settle.find(eid);
+    if (it == g_settle.end()) return;
+    UE_LOGI("[TRASH-CH] HOST land-settle CANCEL eid=%u gap=%d ticks (%s) -- ToPile->ToClump latency (tune K from this)",
+            eid, it->second.sincePile, why);
+    g_settle.erase(it);
+}
+
+}  // namespace
+
+void OnHostConvert(coop::net::Session& s, coop::element::ElementId E, uint8_t kind, void* newActor,
+                   const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot, uint8_t chipType) {
+    if (E == 0u || E == coop::element::kInvalidId || !newActor) return;
+    const uint32_t eid     = static_cast<uint32_t>(E);
+    const bool     toClump = (kind == coop::net::propconvert_kind::kToClump);
+    const bool     carrying = (g_carry.find(eid) != g_carry.end());
+
+    RebindE(E, newActor);                                 // ALWAYS track the live actor locally (keep the rebind)
+    const std::string cls = NarrowAscii(R::ClassNameOf(newActor));
+
+    if (toClump) {
+        if (!carrying) {
+            // OPEN: the REAL grab (pile->clump, via AdoptPendingGrabClump). Broadcast the one ToClump + start
+            // the carry session; the host's churn (re-pile + auto-re-grab) is SUPPRESSED until the real land.
+            g_carry[eid] = g_tick;
+            BroadcastConvert(s, E, kind, loc, rot, chipType, cls, "GRAB OPEN");
+            UE_LOGI("[TRASH-CH] HOST carry OPEN eid=%u -- churn re-pile/re-grab suppressed until the land", eid);
+        } else {
+            // Defensive: a ToClump reaching OnHostConvert while carrying (the held-edge OnHostRegrab is the
+            // normal re-grab path; the thunk skips pile-source so it should not). Fold as churn -- rebind
+            // (done), cancel any pending settle, suppress the broadcast + ctx bump.
+            g_carry[eid] = g_tick;
+            CancelSettle(eid, "re-grab(convert)");
+            UE_LOGI("[TRASH-CH] HOST SUPPRESS ToClump eid=%u (carry re-grab) -- rebound, no broadcast/ctx", eid);
+        }
+    } else {  // kToPile
+        if (!carrying) {
+            // A re-pile we are NOT tracking as a carry (an ambient/untracked clump, or a land after we already
+            // closed) -- no churn to fold -> broadcast immediately.
+            BroadcastConvert(s, E, kind, loc, rot, chipType, cls, "LAND (not carrying)");
+        } else {
+            // CARRYING: this re-pile is EITHER a churn re-pile (a re-grab follows within K -> CancelSettle) OR
+            // the real land (no re-grab -> TickCarry COMMITs it). Hold the broadcast + ctx bump; capture the
+            // payload. A later ToPile before commit just refreshes the settle (latest wins).
+            g_carry[eid] = g_tick;
+            LandSettle ls{};
+            ls.countdown = kLandSettleTicks; ls.sincePile = 0;
+            ls.chipType  = chipType; ls.loc = loc; ls.rot = rot; ls.cls = cls;
+            g_settle[eid] = ls;
+            UE_LOGI("[TRASH-CH] HOST land-settle START eid=%u K=%d -- holding the ToPile (re-grab within K = "
+                    "churn; no re-grab = the real land)", eid, kLandSettleTicks);
+        }
+    }
+}
+
+void OnHostRegrab(coop::element::ElementId E, void* newClump) {
+    if (E == 0u || E == coop::element::kInvalidId || !newClump) return;
+    const uint32_t eid = static_cast<uint32_t>(E);
+    if (g_carry.find(eid) == g_carry.end()) return;       // not carrying -> not a churn re-grab of E
+    g_carry[eid] = g_tick;
+    RebindE(E, newClump);                                 // keep E on the live held clump (the carry stream continues)
+    CancelSettle(eid, "re-grab");                         // a re-grab proves the preceding re-pile was churn
+    UE_LOGI("[TRASH-CH] HOST carry re-grab eid=%u -- rebound onto the new held clump, settle cancelled "
+            "(churn, not the land)", eid);
+}
+
+bool IsCarrying(coop::element::ElementId E) {
+    return g_carry.find(static_cast<uint32_t>(E)) != g_carry.end();
 }
 
 uint8_t OnHostRelease(coop::element::ElementId E) {
@@ -110,12 +197,41 @@ coop::element::ElementId AdoptPendingGrabClump(coop::net::Session& s, void* held
     return E;
 }
 
-void TickPendingGrab() {
+void TickCarry(coop::net::Session& s) {
+    ++g_tick;
+    // 1. pending-grab TTL (folded from the retired TickPendingGrab).
     if (g_pendingGrab.active && --g_pendingGrab.ttl <= 0) {
         UE_LOGI("[PILE] HOST grab PENDING eid=%u expired (no clump appeared -- grab produced none / hands full)",
                 static_cast<unsigned>(g_pendingGrab.eid));
         g_pendingGrab.active = false;
     }
+    // 2. land-settles: count down; COMMIT (broadcast the held ToPile + CLOSE the latch) on timeout. A re-grab
+    //    (OnHostRegrab) cancels a settle before it can commit -> only a re-pile with NO following re-grab
+    //    survives K ticks here = the real land (drop/throw/force).
+    for (auto it = g_settle.begin(); it != g_settle.end(); ) {
+        LandSettle& ls = it->second;
+        ++ls.sincePile;
+        if (--ls.countdown <= 0) {
+            const coop::element::ElementId E = static_cast<coop::element::ElementId>(it->first);
+            BroadcastConvert(s, E, coop::net::propconvert_kind::kToPile, ls.loc, ls.rot, ls.chipType, ls.cls,
+                             "LAND COMMIT");
+            UE_LOGI("[TRASH-CH] HOST LAND COMMIT eid=%u -- no re-grab within K -> the real land; carry CLOSED",
+                    static_cast<unsigned>(E));
+            g_carry.erase(it->first);                     // CLOSE the carry latch
+            it = g_settle.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void ForgetEid(coop::element::ElementId E) {
+    const uint32_t eid = static_cast<uint32_t>(E);
+    const size_t a = g_carry.erase(eid);
+    const size_t b = g_settle.erase(eid);                 // erase BOTH (no short-circuit) so neither leaks
+    if (a || b)
+        UE_LOGI("[TRASH-CH] HOST ForgetEid eid=%u -- carry latch + settle dropped (entity retired/destroyed)",
+                static_cast<unsigned>(eid));
 }
 
 uint8_t CtxForEid(coop::element::ElementId E) {
@@ -160,6 +276,9 @@ bool IsInboundStreamCtxFresh(coop::element::ElementId E, uint8_t ctx, bool requi
 void OnDisconnect() {
     g_ctx.clear();
     g_pendingGrab = PendingGrab{};
+    g_carry.clear();    // CLOSE-B: drop all carry latches + settles (gross reset)
+    g_settle.clear();
+    g_tick = 0;
 }
 
 }  // namespace coop::trash_channel

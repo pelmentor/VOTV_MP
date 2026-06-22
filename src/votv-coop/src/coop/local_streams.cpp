@@ -304,16 +304,30 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // EX_CallMath -> invisible, so we can't catch it at spawn). AdoptPendingGrabClump rebinds E onto
             // the clump + broadcasts PropConvert{ToClump} + returns E; we cache E as the carry eid.
             coop::element::ElementId adoptedEid = coop::element::kInvalidId;
+            bool churnRegrab = false;
             if (session.role() == coop::net::Role::Host && ue_wrap::prop::IsGarbageClump(heldActor)) {
                 const auto cloc = ue_wrap::engine::GetActorLocation(heldActor);
                 const auto crot = ue_wrap::engine::GetActorRotation(heldActor);
                 adoptedEid = coop::trash_channel::AdoptPendingGrabClump(session, heldActor, cloc, crot);
+                // CLOSE-B (2026-06-22): no pending grab (NOT a player E-press) but we are mid-carry of
+                // g_lastHeldEid -> this new held clump is the host's CHURN re-grab (the game auto-re-grabbed
+                // the just-re-piled pile). Keep the carry alive: rebind the carried eid onto this clump +
+                // cancel its land-settle. WITHOUT this the eid binding is LOST here (the fresh clump is
+                // eid-less -> ResolveHeldPropEid fails -> g_lastHeldEid goes invalid -> the carry stream
+                // freezes) -- the pre-fix "stuck near the cluster" half of the bug.
+                if (adoptedEid == coop::element::kInvalidId &&
+                    g_lastHeldEid != coop::element::kInvalidId &&
+                    coop::trash_channel::IsCarrying(g_lastHeldEid)) {
+                    coop::trash_channel::OnHostRegrab(g_lastHeldEid, heldActor);
+                    churnRegrab = true;   // keep g_lastHeldEid (it is still the carried E)
+                }
                 // (The re-pile death-watch enroll is GONE 2026-06-21, RULE 2: the clump's re-pile is now
                 // caught deterministically at its EX_CallMath BeginDeferred via the UFunction::Func thunk
                 // -- trash_collect_sync::OnBeginDeferredSpawnObserve -- so no proximity watch is needed.)
             }
-            g_lastHeldEid = (adoptedEid != coop::element::kInvalidId) ? adoptedEid
-                                                                      : ResolveHeldPropEid(heldActor);
+            if (!churnRegrab)
+                g_lastHeldEid = (adoptedEid != coop::element::kInvalidId) ? adoptedEid
+                                                                          : ResolveHeldPropEid(heldActor);
             const unsigned eidLog =
                 (g_lastHeldEid == coop::element::kInvalidId) ? 0u : static_cast<unsigned>(g_lastHeldEid);
             UE_LOGI("net: NEW held actor %p cls='%ls' key='%ls' eid=%u -> %s",

@@ -1,4 +1,8 @@
-# Hands-on runbook — trash-proxy PHASE 1 — take-25 (the CARRY is NOT fixed; NO carry hands-on pending — build option 2 first)
+# Hands-on runbook — trash-proxy PHASE 1 — take-25 (dup-fix + visibility [V]; carry SUPERSEDED by take-26)
+
+> **2026-06-22:** the carry IS now built (CLOSE-B) — option 2 (the holdPlayer gate) was DISPROVEN, not built.
+> The live carry runbook is **`research/handson_runbook_2026-06-22_closeb_carry.md`** (take-26). This file's
+> dup-fix + visibility steps stay valid [V]; ignore its "build option 2 first" carry notes below.
 
 **Deployed:** `votv-coop.dll` SHA `8bc797ef` to all 4 copies (host / copy / copy2 / dev). Proto **v82**
 (UNCHANGED). Code HEAD `70d28df4`. Build CLEAN (Release).

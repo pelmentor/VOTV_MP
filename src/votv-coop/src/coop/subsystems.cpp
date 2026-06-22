@@ -361,7 +361,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
       const bool inTransition = fleeing || coop::join_progress::Active();
       coop::trash_pile_sync::Tick(inTransition); }  // counter poll + depletion death-watch (transition-gated)
     if (isHost) { PP::Scope _s{PP::Bucket::TrashWatch};
-      coop::trash_channel::TickPendingGrab(); }        // docs/piles/08: expire a grab that produced no clump
+      coop::trash_channel::TickCarry(session); }        // docs/piles/08 + CLOSE-B: pending-grab TTL + land-settle commit (closes the carry latch on the real land)
       // (trash_collect_sync::Tick -- the proximity re-pile death-watch -- is RETIRED 2026-06-21, RULE 2:
       //  the re-pile is caught deterministically at its BeginDeferred via the UFunction::Func thunk.)
     { PP::Scope _s{PP::Bucket::Balance};       coop::balance_sync::Tick(); }       // v30: host polls saveSlot.Points + broadcasts on change; client retries the pending mirror apply

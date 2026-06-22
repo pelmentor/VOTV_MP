@@ -1,9 +1,12 @@
-# chipPile carry — the CONTACT-RE-PILE CHURN root + the holdPlayer convert/ctx gate (option 2)
+# chipPile carry — the CONTACT-RE-PILE CHURN root + the CLOSE-B carry-latch fix
 
-**Date:** 2026-06-22. **Status:** root **RE-confirmed + hands-on-confirmed**; option 1 **BUILT + FAILED**;
-option 2 **DESIGN LOCKED, NOT BUILT**. Supersedes the "carry MIRRORS on a settled join / the failure was
-the JOIN RACE" conclusion in `votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md` (that conclusion
-was FALSE — see "Why the smoke lied" below).
+**Date:** 2026-06-22. **Status:** root **RE-confirmed + hands-on-confirmed**; option 1 (hit-notify) **BUILT +
+FAILED**; option 2 (holdPlayer convert/ctx gate) **DISPROVEN by the bytecode** (holdPlayer is never cleared —
+see that section); **THE FIX = CLOSE-B** (host-side carry latch + land-settle on the convert stream) —
+**DESIGN LOCKED, building**. Supersedes the "carry MIRRORS on a settled join / the failure was the JOIN
+RACE" conclusion in `votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md` (that was FALSE — see "Why
+the smoke lied" below). The filename keeps `holdplayer-gate` for link stability; the gate it names is the
+DISPROVEN option 2, not the fix.
 
 This is the canonical doc for *why the host-carry of a chipPile clump does not mirror cleanly on the client*
 and the fix that is queued. Read it before touching trash carry / the re-pile thunk / `OnHostConvert`.
@@ -76,53 +79,74 @@ mechanism, @3536); re-enable on release. **Hands-on FAILED — the churn persist
 `grabbing_actor` is risky (it's the PHC slot) and would change stock host behaviour. **Option 1 is the wrong
 layer.** REVERT it.
 
-## Option 2 — gate the CONVERT (not the re-pile) by `holdPlayer` — DESIGN LOCKED, NOT BUILT
+## Option 2 (`holdPlayer` convert/ctx gate) — DISPROVEN by the bytecode (2026-06-22)
 
-Don't fight the host's stock churn; **stop telling the client about it.** The carry state is already a
-deterministic game field — the gate just reads the wrong one. **`prop_garbageClump_C` has
-`AmainPlayer_C* holdPlayer; // 0x0240`** (CXXHeaderDump-confirmed; readable via `FindPropertyOffset("holdPlayer")`,
-recook-safe). The clump knows its holder; no player iteration. And `holdPlayer` is **valid at the re-pile
-thunk** (the gate @2884 reads it; nothing clears it before `BeginDeferred` @1722) — unlike the player-side
-`holding_actor`, which is cleared *before* the thunk (the `held->released` edge fires first).
+The queued `holdPlayer`-keyed gate is DEAD. `prop_garbageClump_C::holdPlayer` (`@0x0240`) is written
+**once**, on grab, by the PILE: `actorChipPile` `turnToPile`/`playerGrabbed` does
+`SetObjectPropertyByName(newClump, "holdPlayer", grabbingPlayer)` right AFTER
+`BeginDeferredActorSpawnFromClass` (`bp_reflection/actorChipPile.json` @8492). It is **NEVER cleared** in
+any blueprint — grep across `prop_garbageClump` / `actorChipPile` / `mainPlayer`: the clump only READS it in
+the re-pile gate (@2884 `IsValid(holdPlayer)`, @2927 `IsValid(holdPlayer.grabbing_actor)`); `mainPlayer`
+never references it. So on a REAL drop `holdPlayer` stays non-null until the clump self-destructs — the
+native gate distinguishes "still actively held" via `holdPlayer.grabbing_actor` (the PHC slot, **null during
+an E-press carry** — the churn root), NOT via `holdPlayer` itself. A convert gate keyed on
+`holdPlayer != null` would therefore SUPPRESS the real land (holdPlayer still set) → the clump stuck a clump
+forever client-side. The user predicted this exact hole ("is holdPlayer cleared before the land thunk?");
+the bytecode says no. **Disproven — do not build it.** (Also disproven en route: `holding_actor` is the
+weapon-attached equipment PUPPET that `updateHold` destroys+respawns — `updateHold[32/33/52/53]`,
+collision-off — and whether the chipPile clump even uses it is unresolvable from BP; so no `holding_actor`-
+timing gate either. `holdObjectChanged_pre/post` ARE broadcast, in `updateHold` — but they fire in the churn
+too, so not churn-silent.)
 
-**The gate (in `OnHostConvert` — both the wire send AND the ctx bump):**
-- **`clump→pile` (re-pile):** read `srcObj.holdPlayer`. **Non-null ⇒ carried ⇒ SUPPRESS** (churn re-pile;
-  no ctx bump, no broadcast). **Null ⇒ released ⇒ BROADCAST** the single land convert (real throw/drop).
-- **`pile→clump` (grab):** a per-eid **"carrying" flag**. **Not carrying ⇒ real grab ⇒ BROADCAST** + set the
-  flag. **Carrying ⇒ churn re-grab ⇒ SUPPRESS** (no ctx bump, no broadcast). The flag **sets on the real
-  grab, clears on the real land** (the `holdPlayer==null` re-pile).
-- **Keep the local rebind** so the pose-stream keeps tracking the live held clump (the stream reads the
-  engine held actor + the cached eid, not the Element's actor).
+## THE FIX — CLOSE-B: a host-side carry latch + land-settle on the convert stream (DESIGN LOCKED, 2026-06-22)
 
-**CRITICAL — the ctx bump must be gated too, not just the wire send.** `OnHostConvert` bumps the per-eid
-sync-time-context, and the carry poses are stamped with it (`CtxForEid`). If the host keeps bumping ctx
-through the churn while the client's `known` stays frozen (no broadcasts), `IsInboundStreamCtxFresh` will
-**hold** every carry pose → the carry stalls. So a suppressed (churn) convert must bump **nothing**. Net:
-ONE `pile→clump` (real grab, ctx=1) → all carry poses ctx=1 → ONE `clump→pile` (real land, ctx=2). The churn
-between sends nothing and bumps nothing.
+Resolved by proof, not the murky `holding_actor` timing: gate the convert STREAM the host already observes,
+with a per-eid latch closed by a settle. Foundations all bytecode-proven: the re-pile thunk
+(`OnBeginDeferredSpawnObserve`, clump→pile ONLY — `trash_collect_sync.cpp:76`) + the per-eid ctx map.
 
-**What option 2 does and does NOT do:** removes the **client** lag (the client sees one clump, pose-streamed,
-then one land). Does **NOT** remove the **host** churn — the host still spawns+destroys real pile/clump actors
-each cycle. That churn is **transient + self-cleaning** (the game destroys them natively; piles vanish on the
-host) = wasted spawns/s, NOT permanent garbage. Acceptable for now; suppressing the re-pile itself is option 1
-(fragile). If the host wasted-work ever shows as a perf cost, that's a separate lower-priority pass.
+**The churn as the host's plumbing sees it (the refinement that explains BOTH client symptoms):** the thunk
+catches ONLY the re-pile (kToPile); the churn RE-GRAB (pile→clump) is caught by neither the thunk (it filters
+`srcObj=clump`) nor the held-edge (no pending grab). So pre-fix the host broadcasts a stream of **kToPile
+only** → the client re-skins to PILE every churn cycle and never back → the single eid-E proxy sticks as a
+pile at the cluster, teleported + drive-cleared each cycle (`remote_prop.cpp:1148-1152`). That IS both the
+0.5–2 fps AND the "old pile doesn't disappear" — ONE root, not two bugs.
 
-**Open sub-question (the non-disappearing pile):** with option 2 the client's proxy stays a clump (carried)
-and lands once at the real spot — so the rest spot should be empty. If a pile still lingers there, it is a
-SEPARATE proxy/orphan bug, not the churn. Re-check after option 2 lands; do not assume one fix covers both
-client symptoms.
+**CLOSE-B (host-side, in `trash_channel`):**
+- **OPEN** — `OnHostConvert(kToClump)` while not carrying (the real grab, via `AdoptPendingGrabClump`):
+  broadcast the one ToClump, `carrying[E]=true`.
+- **Suppress churn re-pile** — `OnHostConvert(kToPile)` while carrying: do NOT broadcast, do NOT bump ctx;
+  `RebindE(E, pile)` locally (track the live actor); start/refresh a land-settle (capture loc/rot/chipType/
+  class, countdown K).
+- **Rebind churn re-grab** — `OnHostRegrab(E, newClump)` from the held-edge (a new held clump during carry,
+  no pending grab): `RebindE(E, clump)` + CANCEL the settle (a re-grab proves the preceding re-pile was
+  churn). Keeps the carry pose-stream alive across the churn (today the binding is LOST here → the freeze).
+- **CLOSE** — the settle reaches 0 with no re-grab: broadcast the held ToPile (the ONE real land), bump ctx,
+  `carrying[E]=false`.
+- **SAFETY** — v1: `OnDisconnect` clears all (`ForgetEid` also exists for an explicit retire). A stuck latch
+  on a dead, never-reused eid is benign (no future convert comes for it; the client's phantom clump is cleaned
+  by the existing PropDestroy when E's actor dies). The on-DESTROY `ForgetEid` hook is **v2** — it must NOT
+  hang off the generic `K2_DestroyActor` PRE (that fires on every churn re-pile clump-destroy → would
+  false-close mid-churn); it needs the guard that a churn re-pile resolves `eid=0` there (E rebinds to the
+  pile first), confirmed from the smoke. A quiet-carry-SAFE watchdog is also v2 (a tick "no-activity" timeout
+  would false-close a long km carry far from any cluster — converts≠liveness).
+
+K starts at **6 ticks** (> a synchronous re-grab); the first smoke logs the real ToPile→ToClump gap
+(`[TRASH-CH] … CANCEL eid=… gap=N`) to tune it. **Graceful (K non-critical, not a race):** K too small → a
+churn ToPile commits early, the re-grab re-opens → brief self-correcting `clump→pile→clump` flicker; K too
+large → a few frames' land-morph lag. NEITHER strands E. The settle is a host-side hold-then-commit on an
+idempotent, ctx-ordered convert — it races nothing.
 
 ## NEXT (resume here)
-1. **User to BLESS the option-2 design** (esp. the ctx-bump-must-also-be-gated point). Then BUILD:
-   `OnHostConvert` gate by `srcObj.holdPlayer` (ToPile) + a per-eid carrying flag (ToClump), suppressing the
-   ctx bump + the broadcast for churn converts; keep the local rebind. Add `prop::GetClumpHoldPlayer(clump)`
-   (or an inline `FindPropertyOffset("holdPlayer")` read) in `ue_wrap`.
-2. **REVERT option 1** (the `SetActorRootNotifyRigidBodyCollision` grab/release edges in `local_streams.cpp`)
-   — proven non-working (RULE 2).
-3. **KEEP fix #2** (`remote_prop.cpp` `OnConvert`: `pile→clump` re-skins WITHOUT teleport — `if (proxy &&
-   !wantClump)` reposition) — it's part of option 2 (the grab convert lets the pose-stream drive the position).
-4. Hands-on verify the carry mirrors cleanly (one re-skin in, smooth follow, one re-skin out), THEN re-check
-   the non-disappearing-pile symptom separately.
+1. BUILD CLOSE-B in `trash_channel.{h,cpp}` (carry latch + land-settle + `OnHostRegrab` + `TickCarry` +
+   `ForgetEid`) + the held-edge re-grab rebind in `local_streams.cpp` + `TickCarry(session)` at the host tick
+   (`subsystems.cpp:363`). Option-1 already reverted; **fix #2 KEPT** (`remote_prop.cpp:1148` — the ToPile
+   land snap is the one place the convert positions the proxy; ToClump grab re-skins without teleport).
+2. Audit (hot-path re-entry + modular size) → build Release → `deploy-all` → the take-26 runbook. Acceptance:
+   smooth carry + one form + one land-morph ~50–100 ms; **flicker during carry = raise K**; **eternal-clump
+   after drop = broken CLOSE/safety**; **0.5 fps returns = broken suppression**.
+3. v2 (post-hands-on-verify): the throw-arc fidelity (keep PropRelease velocity, gate the release edge by the
+   carry latch so a churn flicker doesn't spuriously release) + the quiet-carry-safe watchdog; then the
+   grab-via-thunk tightening (retire the InpActEvt-PRE adopt — RULE 2).
 
 ## Credit / method note
 This root was found by the **user driving the diagnosis** — rejecting three premature builds (a perf scare, a

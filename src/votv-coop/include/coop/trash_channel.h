@@ -65,9 +65,34 @@ coop::element::ElementId AdoptPendingGrabClump(coop::net::Session& s, void* held
                                                const ue_wrap::FVector& clumpLoc,
                                                const ue_wrap::FRotator& clumpRot);
 
-// HOST: decay the pending-grab TTL once per gameplay tick (clears a grab that produced no clump, so a
-// later unrelated clump pickup can't be mis-adopted). Game thread.
-void TickPendingGrab();
+// ---- CLOSE-B carry latch + land-settle (host-side, 2026-06-22) ----------------------------------------
+// A trash entity E is "carrying" from the real grab (OnHostConvert kToClump while not carrying) until the
+// real land. DURING carry the host's stock churn -- the held clump re-piles on cluster contact ~1/s and the
+// game auto-re-grabs (votv-chippile-carry-churn-...-2026-06-22) -- is SUPPRESSED: the re-pile (kToPile) is
+// NOT broadcast and ctx is NOT bumped, so the client renders ONE clump (pose-streamed), not a pile stuck at
+// the cluster re-skinned+teleported every cycle (the 2fps + non-disappearing-pile symptom, ONE root). The
+// churn re-grab rebinds E onto the new clump (OnHostRegrab) so the carry stream stays alive. The REAL land
+// is a re-pile NOT followed by a re-grab within kLandSettleTicks: the settle holds the ToPile broadcast that
+// long; a re-grab CANCELS it (churn); the timeout COMMITS it (the one land) and closes the latch. Graceful:
+// K too small -> a churn ToPile commits early, the re-grab re-opens -> a brief self-correcting
+// clump->pile->clump flicker; K too large -> the land morph lags a few frames. Neither strands E. Per-eid.
+
+// HOST: a garbage clump RE-ENTERED the hand during an active carry of E (the churn re-grab, observed at the
+// held-object edge -- NOT a fresh player grab, so no pending grab). Rebind E onto `newClump` (the carry pose
+// stream keeps tracking it) and CANCEL E's pending land-settle (a re-grab proves the preceding re-pile was
+// churn, not the land). No broadcast, no ctx bump. No-op if E is not carrying. Game thread.
+void OnHostRegrab(coop::element::ElementId E, void* newClump);
+
+// HOST: is E mid-carry (the latch is OPEN)? local_streams gates the held-edge re-grab rebind on this. Game thread.
+bool IsCarrying(coop::element::ElementId E);
+
+// HOST: per-gameplay-tick pump -- decays the pending-grab TTL AND counts down the land-settles, COMMITTING a
+// settled land (broadcast the held ToPile + close the latch) when no re-grab arrived within K. Game thread.
+void TickCarry(coop::net::Session& s);
+
+// Drop E's carry latch + land-settle (E's entity was destroyed / retired, so the latch can never close on a
+// land). Safety against a stranded latch; idempotent. Game thread.
+void ForgetEid(coop::element::ElementId E);
 
 // The current per-eid sync-time-context (for local_streams to stamp on each carry PropPose). 0 =
 // untracked / non-trash (no ctx enforcement). Game thread.
