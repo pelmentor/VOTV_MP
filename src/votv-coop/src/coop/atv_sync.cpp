@@ -20,6 +20,8 @@
 #include "ue_wrap/engine.h"          // ReadMainPlayerGrabState (grabber authority) + Get/SetActorRootPhysicsVelocity (release)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
+#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"           // FVector, FRotator, NormalizeAxis
 
 #include <atomic>
@@ -481,22 +483,13 @@ void Tick() {
     const auto nowTp = std::chrono::steady_clock::now();
     if (nowTp - g_lastRebuild >= kRebuildThrottle) {
         g_lastRebuild = nowTp;
-        // L5 (FPS, user 2026-06-23): RebuildIndex is a FULL ~237k-entry GUObjectArray walk; running it
-        // every 2s UNCONDITIONALLY (even with 0 ATVs) was a steady-state stutter source. A new ATV can only
-        // appear when the object array changes, so gate the walk on a NumObjects() high-water (a single
-        // counter read, no walk) + a periodic SAFETY walk that bounds the free-slot-reuse gap. Mirrors the
-        // proven net_pump steady-world re-seed high-water guard (net_pump.cpp:559-578).
-        static int32_t sLastNum   = -1;
-        static int     sSinceFull = 0;
-        const int32_t  curNum     = R::NumObjects();
-        const bool     changed    = (curNum != sLastNum);
-        const bool     periodic   = (++sSinceFull >= 15);   // ~30s safety (this gate runs ~0.5 Hz)
-        if (changed || periodic) {
-            sLastNum   = curNum;
-            sSinceFull = 0;
-            const size_t n = RebuildIndex();
-            UE_LOGI("[L5-WALK] atv RebuildIndex walked (changed=%d periodic=%d) -> %zu indexed",
-                    changed ? 1 : 0, periodic ? 1 : 0, n);
+        // L5 (FPS): gate the FULL ~237k-entry GUObjectArray walk on object-array growth (the shared
+        // high-water gate -- a new ATV only appears when the array grows) + profile it. One principle
+        // across all *_sync periodic rebuilds (array_growth_gate.h).
+        static coop::util::ArrayGrowthGate sRebuildGate;
+        if (coop::util::ShouldRebuild(sRebuildGate)) {
+            ue_wrap::ScopedWalkTimer _wt("atv:RebuildIndex");
+            RebuildIndex();
         }
     }
 

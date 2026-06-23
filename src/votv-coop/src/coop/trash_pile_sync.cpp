@@ -14,6 +14,8 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
+#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"
 
 #include <atomic>
@@ -237,7 +239,11 @@ void Tick(bool inTransition) {
     const auto now = Clock::now();
     if (now >= g_nextRebuild) {
         g_nextRebuild = now + kRebuildEvery;
-        RebuildIndex();
+        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new pile only appears on object-array growth
+        if (coop::util::ShouldRebuild(sRebuildGate)) {
+            ue_wrap::ScopedWalkTimer _wt("trash_pile:RebuildIndex");
+            RebuildIndex();
+        }
         // Deferred-apply retry on the same throttle.
         for (auto it = g_pending.begin(); it != g_pending.end();) {
             auto idx = g_index.find(it->first);

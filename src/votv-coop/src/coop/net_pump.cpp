@@ -39,6 +39,7 @@
 #include "ue_wrap/hot_path_guard.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
+#include "ue_wrap/walk_timer.h"  // L5: [WALK-TIME] profiling of the reaper World walk + the re-seed census
 #include "ue_wrap/sdk_profile.h"
 #include "ue_wrap/types.h"
 
@@ -379,7 +380,21 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             // expired and this resumed). At a non-gameplay world we skip BOTH: the shadows
             // sit inert and the reaper resumes + cleans them on the next gameplay entry.
             // Gameplay world is untitled_1; the menu is /Game/menu.menu.
-            void* reapWorld = R::FindObjectByClass(P::name::WorldClass);
+            // L5 (FPS): the World instance changes ~once per session (level travel), so DON'T full-walk
+            // ~237k GUObjectArray for it every 4s -- cache it + IsLiveByIndex-revalidate, re-resolving (one
+            // walk) only on a miss. A travel kills the old world -> serial bump -> IsLiveByIndex false ->
+            // re-resolve finds the new /Game/menu world, so the menu-travel RAM-balloon guard below STILL
+            // fires; the death-watch scans the Prop Registry (not reapWorld), so it is unaffected. (engine.cpp:60
+            // EnsureWorldContext caches identically but returns the immortal GameInstance -- the reaper needs
+            // the WORLD instance for its gameplay-vs-menu name check, so it keeps its own cache.)
+            static void*   g_reapWorld    = nullptr;
+            static int32_t g_reapWorldIdx = -1;
+            if (!g_reapWorld || !R::IsLiveByIndex(g_reapWorld, g_reapWorldIdx)) {
+                ue_wrap::ScopedWalkTimer _wt("reaper:FindWorld");
+                g_reapWorld    = R::FindObjectByClass(P::name::WorldClass);
+                g_reapWorldIdx = g_reapWorld ? R::InternalIndexOf(g_reapWorld) : -1;
+            }
+            void* reapWorld = g_reapWorld;
             // Allocation-free name checks (audit 2026-06-10): the old ToString
             // wstring here was the one survivor of the balloon-fix pattern in
             // this file -- 4s-throttled so never a balloon, but same pattern,
@@ -568,6 +583,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
                     sLastSteadyNum  = curNum;
                     sSinceFullWalk  = 0;
                     std::vector<void*> newProps;
+                    ue_wrap::ScopedWalkTimer _wt("reseed:KnownKeyedProps");  // L5 profile (this branch is high-water-gated)
                     const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps(&newProps);
                     if (added > 0) {
                         UE_LOGI("net_pump: steady-world re-seed adopted %zu NEW runtime-spawned keyed prop(s) "

@@ -9,6 +9,8 @@
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
+#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/windturbine.h"
 
 #include <atomic>
@@ -153,7 +155,11 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRebuild >= kRebuildThrottle) {
         g_lastRebuild = now;
-        RebuildIndex();
+        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new turbine only appears on object-array growth
+        if (coop::util::ShouldRebuild(sRebuildGate)) {
+            ue_wrap::ScopedWalkTimer _wt("turbine:RebuildIndex");
+            RebuildIndex();
+        }
         // Retry deferred applies for turbines that streamed in.
         std::vector<std::pair<std::wstring, WT::State>> ready;
         {

@@ -295,18 +295,23 @@ $Invariants = @(
            Detail = "$($succ.Count) throw(s), max still-release |vel|=${maxMag}cm/s (soft drop; pre-L4 ~871, fixed <120)" }
     }},
 
-    # ---- L5 (FPS stutter, user 2026-06-23): the atv/grime index rebuilds (full ~237k GUObjectArray walks)
-    # are now gated on a NumObjects high-water; at idle they walk only on the ~30s safety (~0.066/s combined),
-    # not every 2s (~1/s). Assert the steady-state walk rate stays low.
-    @{ Name='fps-no-idle-walk-spam'; Severity='WARN'; Check={
-        $w = $C | Select-String -Pattern '\[L5-WALK\] (atv|grime) RebuildIndex walked'
-        if ($w.Count -lt 4) { return @{ Pass = $true; Detail = "$($w.Count) L5-WALK marker(s) -- too few to rate" } }
-        $ts = @($w | ForEach-Object { if ($_.Line -match '^\[(\d\d):(\d\d):(\d\d)\]') { [int]$matches[1]*3600 + [int]$matches[2]*60 + [int]$matches[3] } })
-        $span = $ts[-1] - $ts[0]
-        if ($span -le 0) { return @{ Pass = $true; Detail = "$($w.Count) walks, span 0s" } }
-        $rate = [math]::Round($w.Count / $span, 3)
-        @{ Pass = ($rate -lt 0.3)
-           Detail = "atv+grime full-walk rate=$rate/s ($($w.Count) over ${span}s; pre-gate ~1/s, gated <0.3)" }
+    # ---- L5 (FPS stutter, user 2026-06-23, 3rd pass = COMPREHENSIVE): EVERY periodic full-GUObjectArray
+    # walk (keypad/power/window/turbine/trash_pile/atv/grime RebuildIndex + the net_pump reaper World walk +
+    # the re-seed census) is now wrapped in a ScopedWalkTimer that logs `[WALK-TIME] <pass> = <N> us` ONLY
+    # when it actually walks (>=1ms). With all gated/cached, walks are rare (array growth + the ~30s safety),
+    # so the steady-state rate is low; pre-fix the ungated set did ~5 walks / 2s = ~2.5/s. Reports the worst
+    # offender (the profile). This CATCHES a future un-gated walk -- the exact regression the first two L5
+    # fixes each missed by gating one walk at a time. (Threshold WARN until calibrated to the post-fix number.)
+    @{ Name='fps-periodic-walk-rate'; Severity='WARN'; Check={
+        $wt = $C | Select-String -Pattern '\[WALK-TIME\] (\S+) = (\d+) us'
+        if ($wt.Count -eq 0) { return @{ Pass = $true; Detail = 'no [WALK-TIME] lines -- every periodic walk gated/cheap (ideal)' } }
+        $ts = @($wt | ForEach-Object { if ($_.Line -match '^\[(\d\d):(\d\d):(\d\d)\]') { [int]$matches[1]*3600 + [int]$matches[2]*60 + [int]$matches[3] } })
+        $span = if ($ts.Count -ge 2) { $ts[-1] - $ts[0] } else { 0 }
+        $rate = if ($span -gt 0) { [math]::Round($wt.Count / $span, 3) } else { 0 }
+        $maxUs = 0; $maxName = ''
+        foreach ($m in $wt) { $u = [int]$m.Matches[0].Groups[2].Value; if ($u -gt $maxUs) { $maxUs = $u; $maxName = $m.Matches[0].Groups[1].Value } }
+        @{ Pass = ($rate -lt 1.0)
+           Detail = "$($wt.Count) periodic full-walk(s) over ${span}s = $rate/s (pre-fix ~2.5/s, gated <1.0); worst=$maxName ${maxUs}us" }
     }},
 
     # ---- L1 [PILE-DELTA] orphan histogram (INFO, user 2026-06-23): the read-only probe

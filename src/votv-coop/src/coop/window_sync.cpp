@@ -22,6 +22,8 @@
 #include "ue_wrap/base_window.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
+#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <algorithm>
 #include <atomic>
@@ -312,7 +314,11 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        RebuildIndex();
+        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new window only appears on object-array growth
+        if (coop::util::ShouldRebuild(sRebuildGate)) {
+            ue_wrap::ScopedWalkTimer _wt("window:RebuildIndex");
+            RebuildIndex();
+        }
         // RECEIVER: retry deferred applies for windows that have now streamed in.
         if (!g_pending.empty()) {
             int applied = 0, expired = 0, still = 0;

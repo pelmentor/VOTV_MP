@@ -18,6 +18,8 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/power_control.h"
 #include "ue_wrap/reflection.h"
+#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
 #include <chrono>
@@ -213,7 +215,11 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        RebuildIndex();
+        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new power-panel only appears on object-array growth
+        if (coop::util::ShouldRebuild(sRebuildGate)) {
+            ue_wrap::ScopedWalkTimer _wt("power:RebuildIndex");
+            RebuildIndex();
+        }
         // RECEIVER: retry deferred applies for panels that have now streamed in.
         std::vector<std::pair<std::wstring, uint8_t>> ready;
         {
