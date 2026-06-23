@@ -254,6 +254,39 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // invariant for everything below it.
     UE_ASSERT_GAME_THREAD("net_pump::Tick (g_puppets + ElementDeleter::Flush)");
 
+    // ---- L5 HITCH + source probe (2026-06-23, diagnostic, always-on, ~free). The user reports a
+    // PERMANENT ~3-4s frame stutter on both peers. The instrumented periodic walks (reseed 20s, *_sync,
+    // the join-tail reaper 4s-but-transient) do NOT match a permanent 3-4s -> the suspect is uninstrumented
+    // UE GC. [HITCH] times the wall-clock gap between consecutive game-thread Ticks (= the whole frame's
+    // time, including any engine stall that freezes the frame -- GC/render/physics). [HITCH-SRC] (an RAII at
+    // the end of this body) reports OUR Tick's own duration. The discriminator: a [HITCH] with NO matching
+    // [HITCH-SRC] on the same frame = the stall was ENGINE-side (the GC signature, since it is permanent +
+    // both-peers + fixed-period). If [HITCH] fires every ~3-4s with no [HITCH-SRC], GC is the root and the
+    // fix is the GC cadence (gc.TimeBetweenPurgingPendingKillObjects / incremental GC), not a walk fix.
+    {
+        using hclk = std::chrono::steady_clock;
+        static hclk::time_point sPrevTickStart{};
+        const hclk::time_point nowTp = hclk::now();
+        if (sPrevTickStart.time_since_epoch().count() != 0) {
+            const long long frameMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(nowTp - sPrevTickStart).count();
+            if (frameMs >= 40)
+                UE_LOGI("[HITCH] frame = %lld ms (>40ms stutter; if NO [HITCH-SRC] follows this frame, the "
+                        "stall was ENGINE-side -- GC/render/physics, the permanent-both-peers GC signature)",
+                        frameMs);
+        }
+        sPrevTickStart = nowTp;
+    }
+    struct TickDurLog {
+        std::chrono::steady_clock::time_point t0{std::chrono::steady_clock::now()};
+        ~TickDurLog() {
+            const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            if (ms >= 10)
+                UE_LOGI("[HITCH-SRC] net_pump::Tick itself = %lld ms (OUR code caused this frame's cost)", ms);
+        }
+    } _tickDurLog;
+
     // Perf probe (MEASURE-first 15-FPS audit; ini perf_probe=1). Init self-latches;
     // Sample self-throttles to ~1 Hz. The whole-Tick Scope brackets the body so the
     // 1 Hz report shows net_pump::Tick's own ms/frame against the per-subsystem buckets.
