@@ -1,5 +1,26 @@
 # 08 — HOST-AUTHORITATIVE TRASH CHANNEL (the pile-sync redesign)
 
+> **UPDATE 2026-06-23 (HEAD `54a3a332`) — a real two-peer HANDS-ON of the v85 chain found 5 layers; this
+> session drove them. Corrections to the status below:**
+> - **L3 carry-JITTER + L4 wild-THROW: FIXED [V hands-on + V harness]** (`92a76f27`). The carry was NOT
+>   smooth in real hands-on (it shook): the puppet-held clump was a SIMULATING physics body (the PHC spring
+>   fought our per-tick teleport) — fix = `SetActorSimulatePhysics(clump,false)` on grab (kinematic). And E
+>   FLUNG the clump (a fixed ~871 cm/s constant) — fix = INHERIT the hold-point hand velocity (still=soft
+>   drop). Harness `maxDriftCm`=0, still-release `|vel|`=0.
+> - **FPS — the "~4s stutter FIXED [V harness]" claim below is DOWNGRADED. NOT closed.** The `net_pump:559`
+>   re-seed guard + a 4-pass walk crusade (gating -> incremental tail-scan of all 7 `*_sync` walks,
+>   `5081d32e`+`54a3a332`) genuinely KILLED the periodic 237k walks (`[WALK-TIME]` 69->12), but a hands-on
+>   shows the ~3-4s hitch PERSISTS -> the walks were NEVER its root (period coincidence). Barely noticeable
+>   (cosmetic), likely UE GC (unconfirmed). **PARKED — backlog.** See
+>   [[lesson-periodic-hitch-not-the-walk-by-period-coincidence]].
+> - **L1 (level-pile client->host) + L2 (proxy interaction window/ERHHH/offset): the open functional bugs.**
+>   L1: adopt-native is DEAD (3 gates); the "level-pile dup-DESTROY" below DOES fire (~801×, the "12/871" was
+>   a log-throttle artifact); the real bug is ~70 host state-drift orphan natives — fix = reconcile after
+>   `HasLoadTailQuiesced` (the sweep already doom-removes un-mirrored chipPiles `remote_prop_spawn.cpp:1123`),
+>   `[PILE-DELTA]` probe BUILT but needs a host-drift scenario to populate. L2: mod-DRIVE the native
+>   `ui_UI_C` window via `gamemode`, suppress `PlaySound2D(use_deny)`, eye-anchor (drop the +33 head bone).
+>   See [[project-session-L3L4L5-L1L2-reckoning-2026-06-23]].
+
 > **Status (2026-06-23, HEAD `29353191`, deployed `BB94A120A969A51E`, proto v85 — committed, push held).
 > The CLIENT-grab FULL CHAIN is AS-BUILT + [V harness] (see the Increment-2 bullet below). Prior (still
 > true): host carry/throw/re-pile, HEAD `a5282f57`, proto v83:**

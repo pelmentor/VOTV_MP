@@ -46,6 +46,15 @@ REPLACED by carry/flight stream-**continuity** (`136ed779`, hands-on PENDING —
 — derived gone [V], ORIGINAL (level-placed) piles dup, root CONFIRMED (the client's native level-pile coexists
 with the proxy; the eid-race theory superseded), a read-only PILE-PROBE shipped (`29069f05`), DESTROY-fix NEXT.
 The canonical carry root + all open-item fixes: `votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+**Update (2026-06-23, HEAD `54a3a332`):** a real hands-on of the v85 chain found 5 layers.
+**L3 carry-JITTER + L4 wild-THROW FIXED [V hands-on + V harness]** (`92a76f27` — the carry shook because the
+clump SIMULATED physics vs our teleport, fix kinematic-on-grab; E flung it from a fixed 871cm/s, fix inherit
+the hand velocity). **L5 FPS PARKED** — 4 walk passes, the incremental tail-scan KILLED the walks
+(`[WALK-TIME]` 69->12) but the ~3-4s hitch HELD -> walks were never the root (likely GC, cosmetic). **L1
+orphan: adopt DEAD (3 gates), the "12/871 destroys" was a LOG artifact (fired ~801), real bug = ~70
+host-drift orphans, fix designed (reconcile after `HasLoadTailQuiesced`).** **L2 RE done** (mod-drive the
+native `ui_UI_C` window; suppress `PlaySound2D(use_deny)`; eye-anchor). Full RE + the L5 lesson:
+`votv-pile-L1orphan-L2window-L5fps-reckoning-2026-06-23.md`.
 
 **Update (2026-06-22 FINAL, HEAD `a5282f57`, deployed `015F0AC9590B6B23`, proto v83 — all committed, push held):**
 the throw-arc/probe state above is now the SHIPPED+VERIFIED final state. **Pile-landing ROTATION + throw SOUND
