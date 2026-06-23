@@ -52,6 +52,19 @@ absence-removal safety asks to confirm at build: (1) quiescence = host expressio
 not a prop still in flight); (2) the >50% valve aborts an anomalous census; (3) absence-removal ONLY for the
 >30cm true-drift class, near-miss (1-5cm) -> a tight-position re-destroy — split by the histogram tail.
 
+### UPDATE 2026-06-23 (4-test hands-on) -- the host->client carry "FREEZE" is an L1 orphan symptom, NOT a carry regression
+A 4-run hands-on isolated it with a clean CONTROL: when NO native orphan piles exist, host<->client
+interaction (piles AND clumps) is SMOOTH on both sides. The carry "freeze" (the clump updates only on
+the host's E-press, seen from the client) appears ONLY when native orphans exist AND only in the
+host-grab direction. Read (user hypothesis): the client's native orphan coexists with the proxy at ~the
+same spot, and host-grab makes the LOCAL (network-dead) native compete with the proxy carry-stream ->
+the jerky "update only on E". So absence-removal (Phase 2) would fix TWO symptoms at once -- the visible
+DUP and the carry-freeze -- which RAISES L1's priority. STATUS: strong correlation (the no-orphan
+control is decisive), but the MECHANISM is a HYPOTHESIS pending (a) a code-trace of whether a co-located
+native can throttle / mis-resolve the TrashCarryPose apply (in flight 2026-06-23), and (b) the
+definitive proof = re-run the host-grab carry WITH a drift/orphan scenario AFTER absence-removal and
+confirm the freeze is gone. NOT confirmed from the correlation alone (verify-don't-guess).
+
 ## L2 — proxy outside the native interaction system: RE done, not built
 
 The client mirror is a bare `AStaticMeshActor` proxy, invisible to the native interaction system. Hands-on
@@ -74,4 +87,16 @@ RE (durable, `research/bp_reflection/mainPlayer.json`, `ui_UI.json`):
   BONE +33cm (a nameplate lift, `remote_player.cpp:875`); native holds at the camera EYE
   (`Camera.location + fwd*grabLen`). Fix = anchor at the eye (drop the +33).
 
-## NEXT (user's re-set priority): L1 (functional) -> L2 -> puppet-init + L5-GC backlog.
+### UPDATE 2026-06-23 (4-test hands-on) -- L2 SYMPTOM 4: a proxy-clump cannot be thrown on LMB
+Hands-on: standard (native) held props throw on LMB perfectly (whoosh, mirrored). A client-grabbed
+proxy-CLUMP (pile -> cone-grab -> clump) CANNOT be thrown on LMB. Same L2 root: the proxy is invisible
+to the native interaction system, so the native LMB-throw (which acts on the native held object) never
+sees the proxy-clump, and the mod release is wired to the E toggle (InpActEvt_use -> ThrowIntent), NOT
+to the native LMB-throw input. FIX (L2-parity, like the window / ERHHH): RE the native throw-input
+UFunction (the LMB / "throw held" edge) and route it to SendThrowIntent for a cone-held proxy-clump,
+mirroring how native props throw on LMB. DESIGN Q at RE: throw-on-LMB should mirror native; the E-throw
+may then be redundant (RULE 2 -- one input) or kept as a convenience. GOOD BASELINE confirmed the SAME
+run: native prop mirror/sync + LMB whoosh-throw work perfectly -- the bugs are specifically
+orphan-induced (L1) or proxy-clump-specific (L2), NOT the base sync.
+
+## NEXT (user's re-set priority): L1 (functional, fixes DUP + carry-freeze) -> L2 (window/ERHHH/eye-anchor + LMB-throw) -> puppet-init + L5-GC backlog.

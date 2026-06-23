@@ -1,6 +1,10 @@
 # Hands-on runbook — L1 orphan CENSUS (Phase 1, read-only) — 2026-06-23
 
-**Deployed DLL SHA:** `5D4C9E1AA08DEA5E` (host + client folders confirmed).
+**Deployed DLL SHA:** `F95FC18C55586294` (host + client confirmed). Supersedes `5D4C9E1A` --
+the census now ALWAYS logs its summary (even 0 orphans); the old build was SILENT on a clean
+join (index drained empty), which read as "census broken". A clean SAME-MACHINE smoke shows
+`N=0` (correct -- bit-identical save load matches every twin); you MUST set the drift env var
+(or create real host-drift) to see N>0.
 **Proto version:** unchanged (no wire change — the census is client-local; the drift scenario
 edits the host's own world). **HEAD:** pending commit. **Push:** HELD.
 

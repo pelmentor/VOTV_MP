@@ -1281,7 +1281,12 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // the position+valve approach is the justified adaptation (RULE 2026-05-28 divergence note --
     // the >50%% valve is the partial-snapshot guard MTA gets for free from its empty-start + JOINED
     // gate). Cold path (once per join), bounded (a few dozen leftovers x a proxy-set walk each).
-    if (g_pileBindIndexBuilt && !g_pileBindIndex.empty()) {
+    // ALWAYS log when the index was built this bracket -- even 0 orphans. A CLEAN join drains the index
+    // to EMPTY (every twin matched within 1cm), and gating on non-empty made a 0-orphan join SILENT --
+    // indistinguishable from a census that never ran (the exact ambiguity the 2026-06-23 clean same-machine
+    // smoke hit: 869 built, all matched, no [PILE-CENSUS] line -> looked broken). The summary line is the
+    // proof the census ran + the count; N=0 on a clean join is the expected, INFORMATIVE result.
+    if (g_pileBindIndexBuilt) {
         int live = 0, le5 = 0, mid = 0, gt30 = 0, none = 0;
         const bool verbose = PileDeltaProbeOn();
         for (const auto& c : g_pileBindIndex) {
