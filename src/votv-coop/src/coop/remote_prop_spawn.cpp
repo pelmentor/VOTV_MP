@@ -16,6 +16,7 @@
 
 #include "coop/element/element.h"
 #include "coop/element/registry.h"
+#include "coop/ini_config.h"  // IsIniKeyTrue -- hands-on probe flags live in votv-coop.ini [dev], not bats/env
 #include "coop/kerfur_entity.h"  // GetKerfurMirrorEidForActor -- exempt host-driven kerfur mirrors in the grab-guard predicate (the SWEEP excludes mirrors structurally via pr.mirror since R3)
 #include "coop/kerfur_prop_adoption.h"  // K-6: defer a kerfur-prop fuzzy-miss to the polled adoption
 #include "coop/net/protocol.h"
@@ -264,11 +265,14 @@ int  g_pileIndexBuiltCount = 0;  // size of g_pileBindIndex at build (the L1 orp
                                  // leftovers / built = the host-drift fraction; a huge fraction = wire loss,
                                  // not divergence -> the census/removal must refuse it, like the >50%% sweep valve)
 
-// [PILE-DELTA] probe gate (L1 orphan histogram): env VOTVCOOP_PILE_DELTA_PROBE, read ONCE + cached. Ships
-// dark (off => zero cost). When on, the destroy loop's matchCount==0 branch logs the per-orphan nearest-
-// native delta so the harness can band the ~70 host-drift orphans (0-5cm near-miss vs >30cm true drift).
+// [PILE-DELTA] / per-orphan [PILE-CENSUS] probe gate (L1 orphan histogram), read ONCE + cached. Ships dark
+// (off => zero cost). When on, logs the per-orphan nearest-proxy/native deltas so we can band the host-drift
+// orphans (0-5cm near-miss vs >30cm true drift). HANDS-ON FLAG: lives in votv-coop.ini [dev]
+// `pile_delta_probe=1` (the established probe pattern -- perf_probe/leak_probe -- the user toggles in the ini,
+// NOT in the launch bats). The env is kept ONLY as the autonomous mp.py-harness override.
+// [[feedback-test-flags-in-ini-not-bats-or-env]]
 bool PileDeltaProbeOn() {
-    static const bool on = [] {
+    static const bool on = coop::ini_config::IsIniKeyTrue("pile_delta_probe") || [] {
         const char* v = std::getenv("VOTVCOOP_PILE_DELTA_PROBE");
         return v && v[0] && v[0] != '0';
     }();
