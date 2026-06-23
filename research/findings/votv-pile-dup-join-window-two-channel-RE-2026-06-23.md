@@ -1,15 +1,19 @@
 # chipPile JOIN-WINDOW DUP — the two-channel race (DECISIVE, hands-on) — 2026-06-23
 
-**Status: ROOT CONFIRMED (hands-on). Fix BUILT in THREE layers (Path 1c key + the load-tail sweep retry +
-the OnRequest pre-capture re-seed) + audit GO-WITH-NITS (0 critical); HANDS-ON take-3 PENDING. Deployed
-`06104FED9F72ED7B7DEE19F7336E2F73` (MD5), proto v86, push HELD.** See "## AS-BUILT (2026-06-23 take 3)"
-below for the DECISIVE break — take-2 STILL duped because the host captured **`0 pile save-time xforms`**
-(the eid-keyed map was EMPTY, so neither the key nor the sweep retry had anything to act on); root = the
-host's world-change re-seed is DEFERRED at the connect instant, so the live chipPiles have no eid yet. The
-take-2 section ("the REAL break was TIMING") is the SECOND layer and remains correct ONCE a key exists, but
-it was downstream of an empty map; the (a)/(b) fix-options sections lower down stay SUPERSEDED. This whole
-finding supersedes the "L1 orphan / absence-removal at the join" line — that chased a bug that **does not
-exist** (see "What is now FALSE").
+**Status: ROOT CONFIRMED (hands-on). Fix is FOUR layers; the live one is take-4 (self-seed the capture).
+fix#1 (the EMPTY save-time map) is now AUTONOMOUS-VERIFIED (smoke: P=0 -> P=870); end-to-end dup-resolution
+with a MOVED pile still needs the hands-on move-in-window. Deployed `D3C5BEA2A10799BF1CA35ABAEA9A5391` (MD5),
+proto v86, push HELD.** See "## AS-BUILT (2026-06-23 take 4)" below for the live fix. The arc:
+- take-1 = Path 1c key (match save-loaded native by save-time position). Duped: load-tail race.
+- take-2 = load-tail sweep retry (`pile_reconcile::SweepReconcileSaveTimeTwins`). Duped: the map was EMPTY.
+- take-3 = a gate to force the re-seed at OnRequest. **NEVER FIRED** (wrong predicate — VOTV's persistent
+  UWorld stays live across the prop-element mass-purge, so `IsRegistrySeededForCurrentWorld()` is always
+  true). The no-dup runs were the non-deterministic loc-dedup/doom fallback, NOT the save-time path.
+- **take-4 (LIVE) = SELF-SEED the capture** — mint the eid inline for any unseeded live chipPile so the map
+  is never empty. Autonomous smoke confirmed P:0->870.
+The take-2 "REAL break was TIMING" section remains correct ONCE a key exists, but was downstream of the
+empty map; the (a)/(b) options lower down stay SUPERSEDED. This whole finding supersedes the "L1 orphan /
+absence-removal at the join" line — that chased a bug that **does not exist** (see "What is now FALSE").
 
 ## The decisive hands-on (user, 2026-06-23)
 Setup: 6 items on a path — **2 kerfur + 4 chipPile** — host saves. Then, **in the join window** (the
@@ -180,6 +184,38 @@ overlay is SEEDED for the live world at capture time — net_pump's mass-purge r
 client connecting during the host's own world-load lands on an unseeded registry, and any eid-keyed capture
 silently records nothing. Force-seed (idempotent, gated on stale-world) at the capture, don't assume the
 periodic seed already ran.
+
+## AS-BUILT (2026-06-23 take 4) — the take-3 gate never fired; SELF-SEED the capture instead
+take-3 (force the re-seed at OnRequest, gated on `!IsRegistrySeededForCurrentWorld()`) shipped + was
+hands-on tested and **the gate never fired** — the host log still read `captured 1390 keyed-prop keys +
+0 pile save-time xforms`, with NO `forced pre-capture re-seed` line. Why: VOTV is **ONE persistent UWorld**;
+the menu->game "mass-purge" reaps PROP ELEMENTS (our registry overlay), not the UWorld, so the stamped world
+stays LIVE and `IsRegistrySeededForCurrentWorld()` returns TRUE the whole time — the predicate can't
+distinguish "world seeded" from "chipPiles purged-and-not-yet-re-minted". The take-3 hands-on showed no dup,
+but that was the **non-deterministic loc-dedup/doom fallback** (census `totalLiveNatives=0`, all natives
+consumed) — the SAME path that duped 3/4 and 4/4 in take-2; the save-time path never carried a moved pile
+because its map was still empty.
+
+**FIX (commit `5b01bc0e`):** make `CollectTrackedPileTransforms` (prop_element_tracker.cpp ~695) **self-seed**.
+A live chipPile with `eid==0` at capture is not absent — it's not-yet-re-minted. So instead of skipping it,
+mint the eid inline via `MarkPropElement(obj, L"", ClassNameOf)` (register-only, idempotent — the SAME path
+`SeedWalk_` phase 2 uses at :617) then re-read `GetPropElementIdForActor`; record the save-time position if
+the mint took, else live-pose fallback. The capture now OWNS its precondition rather than trusting a
+seed-timing gate. The minted eid is identical to the one the connect drain later broadcasts (idempotent ->
+the deferred re-seed no-ops), so the client's save-time key resolves. The failed take-3 OnRequest gate was
+removed (RULE 2).
+
+**AUTONOMOUS-VERIFIED (joinchurn, `--host-settle 0` -> connect inside the deferred-reseed window):** host
+`CollectTrackedPileTransforms self-seeded 870 unseeded live chipPile(s) -> 870 pile save-time xform(s)`
+(was 0); `captured 1390 keyed-prop keys + 870 pile save-time xforms`; client `[PILE-CENSUS] 0 live orphan`;
+sweep fired on quiescence (2210ms); joinchurn VERDICT PASS, both peers stable ~3GB. This proves **fix#1 (the
+empty map) is CLOSED**. The END-TO-END dup-resolution with a MOVED pile (save-time key -> twin-destroy/sweep)
+still needs a hands-on move-in-window OR a move-in-window autotest — joinchurn does not move piles.
+
+**Pattern (recorded [[feedback-snapshot-before-state-ready]]):** this is the THIRD-then-FOURTH timing race in
+the same saga — a snapshot/index/capture taken before the state it reads is ready (window-move; native
+load-tail; re-seed-vs-capture; and the take-3 gate's wrong readiness predicate). The cure that finally held:
+make the capture mint its own precondition, don't trust an external readiness signal.
 
 ## NEXT (build, after the 2 gate checks)
 1. Trace the save-transfer + join-load timeline: when is the scratch save taken, when does the client
