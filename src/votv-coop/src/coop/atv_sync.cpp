@@ -20,7 +20,7 @@
 #include "ue_wrap/engine.h"          // ReadMainPlayerGrabState (grabber authority) + Get/SetActorRootPhysicsVelocity (release)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"           // FVector, FRotator, NormalizeAxis
 
@@ -259,11 +259,17 @@ size_t RebuildIndex() {
     // a few seconds slow to mint its UCS key still lands in the save-set before the first joiner.)
     const bool capturing = isHost && (!s || !s->connected());
 
+    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL re-scan
+    // every ~5min (the slot-reuse backstop). A purchased ATV APPENDS, so the tail-scan catches it; the
+    // rare full safety covers any drift. The capturing baseline + purchase-detect orderings are preserved
+    // below (see the commit section): the first call scans [0, N) so the initial save-set is fully captured.
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan);
+
     struct Found { std::wstring wireKey; void* obj; int32_t idx; std::wstring realKey; };
     std::vector<Found> found;
     found.reserve(4);
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
+    for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj || !A::IsAtv(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
@@ -296,30 +302,43 @@ size_t RebuildIndex() {
     }
     // Drop entries whose ATV vanished. A HOST synth (purchased) ATV that's gone -> AtvDestroy so the
     // clients tear down their fresh-spawned mirror; clean its synth map entry.
+    //   FULL scan: `found` is authoritative (it covered [0,N)) -> drop any entry NOT in `found`.
+    //   TAIL scan: `found` is only the new tail -> a persistent live entry is NOT in `found`; prune by
+    //   IsLiveByIndex instead (drop only entries whose actor actually died). The synth AtvDestroy folds
+    //   into this prune (a gone host-synth -> announce + clean its synth map) -- same teardown, different
+    //   liveness oracle. Either way the same set is removed (a tail vanish-drop is index-cheap, O(index)).
     for (auto it = g_atvs.begin(); it != g_atvs.end();) {
-        bool present = false;
-        for (auto& f : found) if (f.wireKey == it->first) { present = true; break; }
-        if (present) { ++it; continue; }
+        bool keep;
+        if (r.isFull) {
+            keep = false;
+            for (auto& f : found) if (f.wireKey == it->first) { keep = true; break; }
+        } else {
+            keep = R::IsLiveByIndex(it->second.actor, it->second.idx);
+        }
+        if (keep) { ++it; continue; }
         if (IsSynthKey(it->first)) {
             if (isHost) SendAtvDestroy(it->first);
             if (it->second.actor) g_synthForActor.erase(it->second.actor);
         }
         it = g_atvs.erase(it);
     }
-    // Update/add (preserve interp/sender state for an existing wire key).
-    uint64_t keysHash = 0;
+    // Update/add (preserve interp/sender state for an existing wire key -- only actor/idx are touched).
     for (auto& f : found) {
-        keysHash ^= FnvKey(f.wireKey);
         AtvEntry& e = g_atvs[f.wireKey];
         e.actor = f.obj;
         e.idx   = f.idx;
     }
+    // Recompute the keys-hash over the WHOLE index (cheap, O(index)) -- on a tail scan `found` is only the
+    // new arrivals, so hashing just `found` would lose the persistent keys + thrash the dedup log.
+    uint64_t keysHash = 0;
+    for (auto& kv : g_atvs) keysHash ^= FnvKey(kv.first);
     if (g_atvs.size() != g_lastLogCount || keysHash != g_lastLogHash) {
         g_lastLogCount = g_atvs.size();
         g_lastLogHash  = keysHash;
-        UE_LOGI("atv: index rebuilt -- %zu live ATV(s), keysHash=0x%016llX "
+        UE_LOGI("atv: index rebuilt -- %zu live ATV(s), keysHash=0x%016llX (%s scan, +%zu new) "
                 "(compare host vs client for cross-peer Key stability)",
-                g_atvs.size(), static_cast<unsigned long long>(keysHash));
+                g_atvs.size(), static_cast<unsigned long long>(keysHash),
+                r.isFull ? "full" : "tail", found.size());
     }
     return g_atvs.size();
 }
@@ -483,14 +502,8 @@ void Tick() {
     const auto nowTp = std::chrono::steady_clock::now();
     if (nowTp - g_lastRebuild >= kRebuildThrottle) {
         g_lastRebuild = nowTp;
-        // L5 (FPS): gate the FULL ~237k-entry GUObjectArray walk on object-array growth (the shared
-        // high-water gate -- a new ATV only appears when the array grows) + profile it. One principle
-        // across all *_sync periodic rebuilds (array_growth_gate.h).
-        static coop::util::ArrayGrowthGate sRebuildGate;
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("atv:RebuildIndex");
-            RebuildIndex();
-        }
+        ue_wrap::ScopedWalkTimer _wt("atv:RebuildIndex");  // logs only the rare ~5min full safety
+        RebuildIndex();   // L5: INCREMENTAL -- tail-scan + a rare full safety (no 237k walk)
     }
 
     if (!s || !s->connected()) return;

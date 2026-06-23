@@ -14,7 +14,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"
 
@@ -72,9 +72,14 @@ uint64_t Fnv1a(const std::wstring& s, uint64_t h) {
 // signal for cross-peer key identity (~392 placed piles expected).
 void RebuildIndex() {
     size_t before = g_index.size();
-    std::unordered_set<std::wstring> seen;
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
+    // L5: scan only the range NextRange gives -- the array TAIL (new piles) every call, a FULL re-scan
+    // every ~60s (fullEvery=30 at the 2s throttle). trashBitsPile_C APPENDS on spawn so the tail-scan
+    // catches the common case immediately; the 60s full safety is the slot-reuse backstop (a depleted pile
+    // self-destructs + a spawner re-spawns -> a freed slot may be reused below the tail). 60s (not the 5min
+    // default) because this class churns at runtime, so a tighter backstop bounds the counter-sync delay.
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan, /*fullEvery*/ 30);
+    for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
         if (!UP::IsTrashBitsPile(obj)) continue;
@@ -82,21 +87,18 @@ void RebuildIndex() {
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;
         const std::wstring key = UP::GetInteractableKeyString(obj);
         if (key.empty() || key == L"None") continue;
-        seen.insert(key);
         auto& e = g_index[key];
         if (e.actor != obj) { e.actor = obj; e.idx = R::InternalIndexOf(obj); }
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
         e.x = loc.X; e.y = loc.Y; e.z = loc.Z;
     }
-    // Drop index entries whose key vanished from the walk WITHOUT the death-watch
-    // having adjudicated them (e.g. pre-install stale state). The death-watch path
-    // below handles live-session deaths; this is rebuild hygiene only.
+    // Prune dead entries by LIVENESS only (the incremental scan no longer builds a full `seen` set, but the
+    // original `!seen.count && !IsLiveByIndex` reduces to `!IsLiveByIndex`: a persistent LIVE entry is kept,
+    // a vanished one's actor goes not-live -> dropped). The death-watch owns live-session deaths; this is
+    // rebuild hygiene. O(index), not O(237k).
     for (auto it = g_index.begin(); it != g_index.end();) {
-        if (!seen.count(it->first) && !R::IsLiveByIndex(it->second.actor, it->second.idx)) {
-            it = g_index.erase(it);
-        } else {
-            ++it;
-        }
+        if (!R::IsLiveByIndex(it->second.actor, it->second.idx)) it = g_index.erase(it);
+        else ++it;
     }
     if (g_index.size() != before) {
         // XOR-fold of per-key FNV hashes: ORDER-INDEPENDENT, so identical key sets
@@ -239,11 +241,8 @@ void Tick(bool inTransition) {
     const auto now = Clock::now();
     if (now >= g_nextRebuild) {
         g_nextRebuild = now + kRebuildEvery;
-        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new pile only appears on object-array growth
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("trash_pile:RebuildIndex");
-            RebuildIndex();
-        }
+        ue_wrap::ScopedWalkTimer _wt("trash_pile:RebuildIndex");  // logs only the rare full safety
+        RebuildIndex();   // L5: INCREMENTAL -- tail-scan + a ~60s full safety (trashBitsPile has runtime churn)
         // Deferred-apply retry on the same throttle.
         for (auto it = g_pending.begin(); it != g_pending.end();) {
             auto idx = g_index.find(it->first);

@@ -27,7 +27,7 @@
 #include "ue_wrap/grime.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <algorithm>
@@ -163,11 +163,16 @@ size_t RebuildIndex() {
     // recomputes; dead actors drop). GT-only (RebuildIndex is game-thread-serial). [Ideal per the
     // audit is a direct RootComponent->location field read with no UFunction at all -- queued.]
     static std::unordered_map<void*, std::wstring> s_posKeyByActor;
-    std::unordered_map<void*, std::wstring> nextCache;
+    // L5: scan only the range NextRange gives -- the array TAIL (new decals) every call, a FULL re-scan
+    // every ~5min (the slot-reuse backstop). A grime decal is a level-loaded Agrime_C, so the tail-scan
+    // catches it at stream-in; the rare full safety covers any slot-reuse drift. The PosKey cache below
+    // is maintained incrementally (new actors compute + cache; the full scan rebuilds it from scratch).
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan);
+    std::unordered_map<void*, std::wstring> nextCache;  // populated only on a full scan
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(64);
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
+    for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
         if (!G::IsGrime(obj)) continue;  // cheap class-descendant filter (no alloc)
@@ -176,27 +181,37 @@ size_t RebuildIndex() {
         if (!R::IsLive(obj)) continue;
         auto cit = s_posKeyByActor.find(obj);
         std::wstring key = (cit != s_posKeyByActor.end()) ? cit->second : PosKey(obj);
-        nextCache.emplace(obj, key);
+        if (r.isFull) nextCache.emplace(obj, key);   // full scan rebuilds the cache from the live set
+        else          s_posKeyByActor.emplace(obj, key);  // tail scan: cache the NEW actor's key
         found.emplace_back(std::move(key), Ref{ obj, R::InternalIndexOf(obj) });
     }
-    s_posKeyByActor.swap(nextCache);  // keep live actors' cached keys, drop dead ones
+    if (r.isFull) s_posKeyByActor.swap(nextCache);  // keep live actors' cached keys, drop dead ones
     uint64_t posHash = 0;
+    size_t   total;
     {
         std::lock_guard<std::mutex> lk(g_indexMutex);
-        g_byKey.clear();
-        for (auto& f : found) { posHash ^= FnvKey(f.first); g_byKey[f.first] = f.second; }
+        if (r.isFull) g_byKey.clear();                         // full re-scan: rebuild from scratch
+        for (auto& f : found) g_byKey[f.first] = f.second;     // add the new (or all, on a full scan)
+        if (!r.isFull) {                                       // tail scan: prune dead entries (cheap, O(index))
+            for (auto it = g_byKey.begin(); it != g_byKey.end(); ) {
+                if (R::IsLiveByIndex(it->second.actor, it->second.idx)) ++it;
+                else { s_posKeyByActor.erase(it->second.actor); it = g_byKey.erase(it); }
+            }
+        }
+        for (auto& kv : g_byKey) posHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
+        total = g_byKey.size();
     }
-    if (found.size() != g_lastLogCount || posHash != g_lastLogHash) {
-        g_lastLogCount = found.size();
+    if (total != g_lastLogCount || posHash != g_lastLogHash) {
+        g_lastLogCount = total;
         g_lastLogHash = posHash;
-        UE_LOGI("grime: index rebuilt -- %zu live grime decal(s), posHash=0x%016llX "
+        UE_LOGI("grime: index rebuilt -- %zu live grime decal(s), posHash=0x%016llX (%s scan, +%zu new) "
                 "(compare host vs client for cross-peer position stability)",
-                found.size(), static_cast<unsigned long long>(posHash));
+                total, static_cast<unsigned long long>(posHash), r.isFull ? "full" : "tail", found.size());
     }
     if (ProbeLog())
         for (auto& f : found)
             UE_LOGI("grime[probe]: key='%ls' idx=%d actor=%p", f.first.c_str(), f.second.idx, f.second.actor);
-    return found.size();
+    return total;
 }
 
 // Apply a remote process value. adopt -> VERBATIM (host connect-snapshot); else MIN(local, wire)
@@ -374,14 +389,11 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        // L5 (FPS): gate the FULL ~237k-entry GUObjectArray walk on object-array growth (shared high-water
-        // gate -- new grime decals append UObjects) + profile it. The cheap g_pending resolution below
-        // still runs every throttle (a pending item only resolves once its actor exists = array growth).
-        static coop::util::ArrayGrowthGate sRebuildGate;
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("grime:RebuildIndex");
-            RebuildIndex();
-        }
+        // L5 (FPS): INCREMENTAL rebuild -- tail-scan only the NEW decals (the array TAIL) + a rare ~5min
+        // full safety (no 237k walk) + profile it. The cheap g_pending resolution below still runs every
+        // throttle (a pending item only resolves once its actor exists in the index).
+        ue_wrap::ScopedWalkTimer _wt("grime:RebuildIndex");  // logs only the rare ~5min full safety
+        RebuildIndex();
         if (!g_pending.empty()) {
             int applied = 0, expired = 0, still = 0;
             for (auto it = g_pending.begin(); it != g_pending.end();) {

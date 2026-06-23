@@ -72,7 +72,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/passwordlock.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
@@ -170,10 +170,15 @@ void* ResolveFast(const std::wstring& key) {
 // (cross-peer Key stability signal) only on change.
 size_t RebuildIndex() {
     if (!PL::EnsureResolved()) return 0;
+    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL
+    // re-scan every ~5min (the slot-reuse backstop). A keypad is a level-loaded ApasswordLock_C, so
+    // the tail-scan catches it at load; static actors rarely reuse slots, so the rare full safety
+    // covers any drift.
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan);
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(32);
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
+    for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj || !PL::IsPasswordLock(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
@@ -184,19 +189,28 @@ size_t RebuildIndex() {
         found.emplace_back(std::move(key), Ref{ obj, R::InternalIndexOf(obj) });
     }
     uint64_t keysHash = 0;
+    size_t   total;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        g_index.clear();
-        for (auto& f : found) { keysHash ^= FnvKey(f.first); g_index[f.first] = f.second; }
+        if (r.isFull) g_index.clear();                         // full re-scan: rebuild from scratch
+        for (auto& f : found) g_index[f.first] = f.second;     // add the new (or all, on a full scan)
+        if (!r.isFull) {                                       // tail scan: prune dead entries (cheap, O(index))
+            for (auto it = g_index.begin(); it != g_index.end(); ) {
+                if (R::IsLiveByIndex(it->second.actor, it->second.idx)) ++it;
+                else it = g_index.erase(it);
+            }
+        }
+        for (auto& kv : g_index) keysHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
+        total = g_index.size();
     }
-    if (found.size() != g_lastLogCount || keysHash != g_lastLogHash) {
-        g_lastLogCount = found.size();
+    if (total != g_lastLogCount || keysHash != g_lastLogHash) {
+        g_lastLogCount = total;
         g_lastLogHash = keysHash;
-        UE_LOGI("keypad: index rebuilt -- %zu live keyed keypad(s), keysHash=0x%016llX "
+        UE_LOGI("keypad: index rebuilt -- %zu live keyed keypad(s), keysHash=0x%016llX (%s scan, +%zu new) "
                 "(compare host vs client for cross-peer Key stability)",
-                found.size(), static_cast<unsigned long long>(keysHash));
+                total, static_cast<unsigned long long>(keysHash), r.isFull ? "full" : "tail", found.size());
     }
-    return found.size();
+    return total;
 }
 
 // RECEIVER apply: drive `actor`'s typed buffer to `want` by replaying the digit delta via
@@ -486,11 +500,8 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new keypad only appears on object-array growth
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("keypad:RebuildIndex");
-            RebuildIndex();
-        }
+        ue_wrap::ScopedWalkTimer _wt("keypad:RebuildIndex");  // logs only the rare ~5min full safety
+        RebuildIndex();   // L5: INCREMENTAL -- tail-scan + a rare full safety (no 237k walk)
         // RECEIVER: retry deferred applies for keypads that have now streamed in.
         std::vector<std::pair<std::wstring, Pending>> ready;
         {

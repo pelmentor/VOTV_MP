@@ -9,7 +9,7 @@
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/windturbine.h"
 
@@ -111,22 +111,37 @@ bool PayloadFinite(const coop::net::TurbineStatePayload& p) {
     return true;
 }
 
-// Full walk -> rebuild the posKey->actor index (~13 static actors; runs at most
-// every 2 s and the set virtually never changes -- level streaming robustness).
+// Rebuild the posKey->actor index (~13 static actors; the set virtually never changes).
+// L5: scan only the range NextRange gives -- the array TAIL (new turbines) every call, a FULL
+// re-scan every ~5min (the slot-reuse backstop). A turbine is a level-loaded windturbine_C, so the
+// tail-scan catches it at stream-in; static actors rarely reuse slots, so the rare full safety
+// covers any drift. WT::IsTurbine is the same cheap class-descendant filter the old
+// FindObjectsByClass(L"windturbine_C") applied, now run per-object on the tail range.
 void RebuildIndex() {
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan);
     std::vector<std::pair<std::wstring, Ref>> found;
-    for (void* obj : R::FindObjectsByClass(L"windturbine_C")) {
-        if (!obj || !R::IsLive(obj)) continue;
+    for (int32_t i = r.begin; i < r.end; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj || !WT::IsTurbine(obj) || !R::IsLive(obj)) continue;
         found.emplace_back(PosKey(obj), Ref{ obj, R::InternalIndexOf(obj) });
     }
+    size_t total;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
-        g_index.clear();
-        for (auto& f : found) g_index[f.first] = f.second;
+        if (r.isFull) g_index.clear();                         // full re-scan: rebuild from scratch
+        for (auto& f : found) g_index[f.first] = f.second;     // add the new (or all, on a full scan)
+        if (!r.isFull) {                                       // tail scan: prune dead entries (cheap, O(index))
+            for (auto it = g_index.begin(); it != g_index.end(); ) {
+                if (R::IsLiveByIndex(it->second.actor, it->second.idx)) ++it;
+                else it = g_index.erase(it);
+            }
+        }
+        total = g_index.size();
     }
-    if (found.size() != g_lastLogCount) {
-        g_lastLogCount = found.size();
-        UE_LOGI("turbine: index rebuilt -- %zu turbine(s)", found.size());
+    if (total != g_lastLogCount) {
+        g_lastLogCount = total;
+        UE_LOGI("turbine: index rebuilt -- %zu turbine(s)", total);
     }
 }
 
@@ -155,11 +170,8 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRebuild >= kRebuildThrottle) {
         g_lastRebuild = now;
-        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new turbine only appears on object-array growth
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("turbine:RebuildIndex");
-            RebuildIndex();
-        }
+        ue_wrap::ScopedWalkTimer _wt("turbine:RebuildIndex");  // logs only the rare ~5min full safety
+        RebuildIndex();   // L5: INCREMENTAL -- tail-scan + a rare full safety (no 237k walk)
         // Retry deferred applies for turbines that streamed in.
         std::vector<std::pair<std::wstring, WT::State>> ready;
         {

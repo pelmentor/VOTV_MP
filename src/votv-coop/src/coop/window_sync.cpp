@@ -22,8 +22,8 @@
 #include "ue_wrap/base_window.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/util/array_growth_gate.h"  // L5: the shared periodic-walk high-water gate
-#include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
+#include "coop/util/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "ue_wrap/walk_timer.h"                  // L5: [WALK-TIME] profiling (logs only the rare full safety)
 
 #include <algorithm>
 #include <atomic>
@@ -90,10 +90,14 @@ void* ResolveFast(const std::wstring& key) {
 // Key stability (AbaseWindow_C is an Aactor_save_C -- its Key should be stable like doors).
 size_t RebuildIndex() {
     if (!BW::EnsureResolved()) return 0;
+    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL re-scan
+    // every ~5min (the slot-reuse backstop). A window is a level-loaded AbaseWindow_C, so the tail-scan
+    // catches it at load; static actors rarely reuse slots, so the rare full safety covers any drift.
+    static coop::util::IncrementalObjectScan sScan;
+    const auto r = coop::util::NextRange(sScan);
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(8);
-    const int32_t n = R::NumObjects();
-    for (int32_t i = 0; i < n; ++i) {
+    for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
         if (!BW::IsBaseWindow(obj)) continue;  // cheap class-descendant filter (no alloc)
@@ -105,22 +109,31 @@ size_t RebuildIndex() {
         found.emplace_back(std::move(key), Ref{ obj, R::InternalIndexOf(obj) });
     }
     uint64_t keysHash = 0;
+    size_t   total;
     {
         std::lock_guard<std::mutex> lk(g_indexMutex);
-        g_byKey.clear();
-        for (auto& f : found) { keysHash ^= FnvKey(f.first); g_byKey[f.first] = f.second; }
+        if (r.isFull) g_byKey.clear();                         // full re-scan: rebuild from scratch
+        for (auto& f : found) g_byKey[f.first] = f.second;     // add the new (or all, on a full scan)
+        if (!r.isFull) {                                       // tail scan: prune dead entries (cheap, O(index))
+            for (auto it = g_byKey.begin(); it != g_byKey.end(); ) {
+                if (R::IsLiveByIndex(it->second.actor, it->second.idx)) ++it;
+                else it = g_byKey.erase(it);
+            }
+        }
+        for (auto& kv : g_byKey) keysHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
+        total = g_byKey.size();
     }
-    if (found.size() != g_lastLogCount || keysHash != g_lastLogHash) {
-        g_lastLogCount = found.size();
+    if (total != g_lastLogCount || keysHash != g_lastLogHash) {
+        g_lastLogCount = total;
         g_lastLogHash = keysHash;
-        UE_LOGI("window: index rebuilt -- %zu live keyed window(s), keysHash=0x%016llX "
+        UE_LOGI("window: index now %zu live keyed window(s), keysHash=0x%016llX (%s scan, +%zu new) "
                 "(compare host vs client for cross-peer Key stability)",
-                found.size(), static_cast<unsigned long long>(keysHash));
+                total, static_cast<unsigned long long>(keysHash), r.isFull ? "full" : "tail", found.size());
     }
     if (ProbeLog())
         for (auto& f : found)
             UE_LOGI("window[probe]: key='%ls' idx=%d actor=%p", f.first.c_str(), f.second.idx, f.second.actor);
-    return found.size();
+    return total;
 }
 
 // Apply a remote clean value. adopt -> VERBATIM (connect-snapshot: the joiner adopts the
@@ -314,11 +327,8 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        static coop::util::ArrayGrowthGate sRebuildGate;  // L5 (FPS): a new window only appears on object-array growth
-        if (coop::util::ShouldRebuild(sRebuildGate)) {
-            ue_wrap::ScopedWalkTimer _wt("window:RebuildIndex");
-            RebuildIndex();
-        }
+        ue_wrap::ScopedWalkTimer _wt("window:RebuildIndex");  // logs only the rare ~5min full safety
+        RebuildIndex();   // L5: INCREMENTAL -- tail-scan only the new objects + a rare full safety (no 237k walk)
         // RECEIVER: retry deferred applies for windows that have now streamed in.
         if (!g_pending.empty()) {
             int applied = 0, expired = 0, still = 0;
