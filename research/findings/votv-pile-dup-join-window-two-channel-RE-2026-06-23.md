@@ -79,6 +79,41 @@ position-dedup can't reconcile because they diverged in the window. The clean fi
   a CLIENT-minted eid, the proxy carries the HOST eid; if so, (a) is the path, or (c) a post-load
   reconcile that links them by the pile's stable level-identity, not distance.)
 
+## AS-BUILT (2026-06-23 take 2) — the REAL break was TIMING, not the key; fixed at the sweep
+The first build (Path 1c: stamp the join snapshot with the pile's save-time position, match the client
+native against it) shipped + was hands-on tested and STILL DUPED. The log chain RE'd the break precisely
+and it was **NOT the key**: the map built (870 xforms), the wire stamped the save-time key (`[PILE-DELTA]
+matchPos = @old`, not loc@new), and the matchKey was **bit-for-bit correct** (`matchKey eid 2278 =
+(1681.2,-265.5,6124.6)` == the census orphan @old to 0.1cm). The break is a **LOAD-TAIL TIMING RACE**: the
+pile-bind index is built ONCE at world-ready when the moved piles' proxies drain FIRST, but the client's
+async native-pile load-tail is STILL draining — the native@old has not loaded/indexed yet (`nearestNative
+856cm` at index build), so the twin-destroy can't match it. By the post-quiescence divergence sweep (~10s
+later) the native@old IS present (the orphan census sees all 4 @old). **world-ready ≠ native loaded** — the
+edge we had NOT considered (the float/re-seed edges we closed earlier were closed correctly; the key is
+exact). Why only the 4 MOVED piles dup (not all 871): the race hits every pile whose proxy drains before
+its native loads, but an UNMOVED pile's late native sits UNDER its co-located proxy (invisible overlap,
+census `proxyMatched`), while a MOVED pile's native@old and proxy@new are SEPARATED → visible dup (census
+`gt30`). The run: `proxyMatched=866, orphans=4 (gt30)`.
+
+**FIX (commit `124fbc9d`):** retry the save-time twin-destroy at the **post-quiescence sweep**, where the
+late natives are loaded. `TryDestroyTwin` records a save-time-key MISS in `g_pendingSaveTimeTwin`;
+`pile_reconcile::SweepReconcileSaveTimeTwins()` (called from `RunDivergenceSweep_` before `LogCensus`, which
+runs ONLY post-`kSweepQuiesceScans`-quiescence) fresh-walks the now-loaded natives and destroys the
+native within 1cm + same chipType per pending key. Absence-removal Phase-2 **keyed by save-time** (not blind
+proximity → no dense-cluster hazard) + its own >50%-of-live-natives abort-valve. This also closes a hole
+the Registry doom STRUCTURALLY misses (a level-native chipPile enters the Prop Registry lazily, so
+`SnapshotActorsByType(Prop)` never enumerates it → only this keyed-by-save-time retry removes it). Audit
+verdict GO (0 CRITICAL/HIGH). **Hands-on PENDING** (deployed `F9B6589E1F62955F`, proto v86).
+
+### Known caveat (audit MEDIUM, follow-up — NOT yet fixed)
+The pending set is bracket-scoped (cleared in `pile_reconcile::Reset()` at `BeginClaimTracking`) but its
+CONSUMER fires a bracket LATER (the deferred sweep). A host RE-BRACKET between the world-ready burst and the
+deferred sweep (level travel / a racing re-seed bracket during the multi-second quiesce window) calls
+`Reset()` → wipes `g_pendingSaveTimeTwin` → the in-flight save-time twin-destroys silently no-op → dup
+persists. It **fails SAFE** (never an over-destroy) and is largely self-healing (the new bracket re-expresses
++ re-reconciles), and it does NOT affect the single-join in-window-drop repro. Fix-if-needed: decouple the
+pending set from the bracket Reset (survive a re-bracket), or re-arm it on the new bracket.
+
 ## NEXT (build, after the 2 gate checks)
 1. Trace the save-transfer + join-load timeline: when is the scratch save taken, when does the client
    signal load-complete, when does a host grab/move broadcast its convert relative to that — confirm the
