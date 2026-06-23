@@ -481,7 +481,23 @@ void Tick() {
     const auto nowTp = std::chrono::steady_clock::now();
     if (nowTp - g_lastRebuild >= kRebuildThrottle) {
         g_lastRebuild = nowTp;
-        RebuildIndex();
+        // L5 (FPS, user 2026-06-23): RebuildIndex is a FULL ~237k-entry GUObjectArray walk; running it
+        // every 2s UNCONDITIONALLY (even with 0 ATVs) was a steady-state stutter source. A new ATV can only
+        // appear when the object array changes, so gate the walk on a NumObjects() high-water (a single
+        // counter read, no walk) + a periodic SAFETY walk that bounds the free-slot-reuse gap. Mirrors the
+        // proven net_pump steady-world re-seed high-water guard (net_pump.cpp:559-578).
+        static int32_t sLastNum   = -1;
+        static int     sSinceFull = 0;
+        const int32_t  curNum     = R::NumObjects();
+        const bool     changed    = (curNum != sLastNum);
+        const bool     periodic   = (++sSinceFull >= 15);   // ~30s safety (this gate runs ~0.5 Hz)
+        if (changed || periodic) {
+            sLastNum   = curNum;
+            sSinceFull = 0;
+            const size_t n = RebuildIndex();
+            UE_LOGI("[L5-WALK] atv RebuildIndex walked (changed=%d periodic=%d) -> %zu indexed",
+                    changed ? 1 : 0, periodic ? 1 : 0, n);
+        }
     }
 
     if (!s || !s->connected()) return;

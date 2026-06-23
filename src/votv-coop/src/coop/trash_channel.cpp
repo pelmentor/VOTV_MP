@@ -16,6 +16,7 @@
 #include "ue_wrap/reflection.h"  // ClassNameOf / ClassOf / FindFunction
 #include "ue_wrap/types.h"       // FVector / FRotator / NormalizeAxis
 
+#include <cmath>      // std::sqrt -- clamp the inherited throw velocity (L4)
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -356,6 +357,15 @@ void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
         return;
     }
 
+    // L3 (carry-jitter root fix): take the clump OUT of the physics solver for the duration of the carry.
+    // playerGrabbed engaged the puppet's PhysicsHandleComponent on a still-SIMULATING body, but the puppet
+    // tick never advances the PHC target (probe verdict FLOATING), so the PHC spring (frozen at the grab
+    // spot) + gravity FIGHT our per-tick SetActorLocation teleport (puppet_carry_drive) -- the body
+    // oscillates, and the host reads that jittered pose back into the carry stream so every peer shakes.
+    // A kinematic body honors SetActorLocation exactly, with no spring/gravity to fight, so our drive is the
+    // sole authority and the published pose is clean. Re-enabled (false->true) at OnThrowIntent for the arc.
+    ue_wrap::engine::SetActorSimulatePhysics(clump, false);
+
     // Record HELD_BY before the convert (OnHostConvert opens the carry latch). Then convert E onto the clump
     // (bumps ctx + broadcasts PropConvert{kToClump} to ALL incl. the requester) + register the per-tick hand
     // drive (the puppet's own tick won't position the clump -- the probe's verdict).
@@ -401,8 +411,21 @@ void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
     ue_wrap::engine::SetActorRootNotifyRigidBodyCollision(clump, true);  // re-pile depends on the contact stream
     ue_wrap::engine::SetActorSimulatePhysics(clump, true);
     ue_wrap::engine::SetActorRootCollisionEnabled(clump, /*QueryAndPhysics=*/3);  // collide + land (don't sink)
-    const ue_wrap::FVector aim = rp->GetSyncedAimDirection();
-    const ue_wrap::FVector lin{ aim.X * 600.f, aim.Y * 600.f, 400.f };  // ~6 m/s along aim + 4 m/s up (matches the SP-throw feel)
+    // L4 (wild-throw root fix): native E is the ONLY release input and the launch is the body's INHERITED
+    // hand/camera motion at release (a still player -> ~0 -> a soft drop; a flick -> a real throw), NOT a
+    // fixed impulse. The old constant {aim*600, +400} fired a flat ~871 cm/s on EVERY E = always a hard
+    // throw, never a drop. puppet_carry_drive tracks the hold point's smoothed per-tick velocity (the
+    // kinematic analog of the native PHC's inherited tracked velocity) -- use THAT, clamped to a brisk-human
+    // max (a raw teleport delta on a fast flick can spike far past any real throw; the native PHC spring is
+    // damped, so we cap the bound). Direction comes from the actual hand motion, not the aim, so a soft drop
+    // falls straight down under gravity while a forward flick flies forward -- exactly the native feel.
+    ue_wrap::FVector lin = coop::puppet_carry_drive::HandVelocityForEid(static_cast<coop::element::ElementId>(eid));
+    constexpr float kMaxThrowCmS = 650.f;   // ~6.5 m/s -- above this is a teleport-delta artifact, not a human throw
+    const float sp2 = lin.X * lin.X + lin.Y * lin.Y + lin.Z * lin.Z;
+    if (sp2 > kMaxThrowCmS * kMaxThrowCmS) {
+        const float sc = kMaxThrowCmS / std::sqrt(sp2);
+        lin.X *= sc; lin.Y *= sc; lin.Z *= sc;
+    }
     ue_wrap::engine::SetActorRootPhysicsVelocity(clump, lin, ue_wrap::FVector{0.f, 0.f, 0.f});  // apply AFTER SimulatePhysics(true)
     coop::puppet_carry_drive::NoteThrown(static_cast<coop::element::ElementId>(eid));  // stop hand-drive; stream the flight
     UE_LOGI("[THROW-INTENT] SUCCESS eid=%u slot=%u clump=%p -- puppet released + physics thrown vel=(%.0f,%.0f,%.0f); "

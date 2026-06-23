@@ -20,6 +20,7 @@
 #include <cstdint>
 
 namespace coop::net { class Session; }
+namespace ue_wrap { struct FVector; }
 
 namespace coop::puppet_carry_drive {
 
@@ -33,6 +34,13 @@ void NotePuppetHeld(coop::element::ElementId eid, uint8_t slot, void* clump);
 // velocity applied). Stop hand-driving the clump but KEEP streaming its physics-flight pose so every
 // client renders the throw arc, until the clump re-piles (the latch closes / a settle commits). Game thread.
 void NoteThrown(coop::element::ElementId eid);
+
+// HOST: the current SMOOTHED hand velocity (cm/s) of the puppet-held clump for `eid`, derived from the
+// per-tick motion of the hold point (head + aim*grabLen). trash_channel::OnThrowIntent releases the clump
+// with THIS velocity so the throw inherits the player's actual hand/camera motion (native PHC semantics:
+// still -> ~0 -> a soft drop; a flick -> a real throw) instead of a fixed impulse. Zero if `eid` is not
+// held, is in flight, or has no sample yet. Caller clamps to a sane max. Game thread.
+ue_wrap::FVector HandVelocityForEid(coop::element::ElementId eid);
 
 // HOST: per-gameplay-tick pump (called from subsystems::TickGameplay AFTER trash_channel::TickCarry, so
 // the carry latch is current before the drive guards on IsCarrying). For each registered held clump:

@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>   // getenv -- the read-only [PILE-DELTA] probe gate (L1 orphan histogram)
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -260,6 +261,17 @@ std::vector<PileBindCandidate> g_pileBindIndex;
 bool g_pileBindIndexBuilt = false;
 int  g_pileBindCount = 0;  // per-bracket bind counter (throttles the log)
 
+// [PILE-DELTA] probe gate (L1 orphan histogram): env VOTVCOOP_PILE_DELTA_PROBE, read ONCE + cached. Ships
+// dark (off => zero cost). When on, the destroy loop's matchCount==0 branch logs the per-orphan nearest-
+// native delta so the harness can band the ~70 host-drift orphans (0-5cm near-miss vs >30cm true drift).
+bool PileDeltaProbeOn() {
+    static const bool on = [] {
+        const char* v = std::getenv("VOTVCOOP_PILE_DELTA_PROBE");
+        return v && v[0] && v[0] != '0';
+    }();
+    return on;
+}
+
 void ResetPileBindIndex() {
     g_pileBindIndex.clear();
     g_pileBindIndex.shrink_to_fit();
@@ -418,7 +430,36 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
                             payload.elementId, loc.X, loc.Y, loc.Z, matchCount);
                 }
                 // matchCount == 0: a DERIVED pile (no native twin) -- nothing to destroy, no log (the common
-                // gameplay case; a join with N level piles destroys exactly its N twins).
+                // gameplay case; a join with N level piles destroys exactly its N twins). EXCEPT when the
+                // [PILE-DELTA] probe is on: during the join bracket every proxy is a LEVEL pile, so a no-match
+                // here is a host-DRIFT candidate (the native is not at the proxy's pose). Log its nearest-
+                // native delta so the harness can band the orphans (read-only; no destroy, no index mutation).
+                else if (PileDeltaProbeOn() && !g_pileBindIndex.empty()) {
+                    float bestD2 = 3.4e38f; int bestI = -1;
+                    for (int i = 0; i < static_cast<int>(g_pileBindIndex.size()); ++i) {
+                        const auto& c = g_pileBindIndex[i];
+                        if (!R::IsLiveByIndex(c.actor, c.idx)) continue;       // no deref of a GC'd ptr
+                        const float dx = c.x - loc.X, dy = c.y - loc.Y, dz = c.z - loc.Z;
+                        const float d2 = dx * dx + dy * dy + dz * dz;
+                        if (d2 < bestD2) { bestD2 = d2; bestI = i; }
+                    }
+                    if (bestI >= 0) {
+                        const auto& c = g_pileBindIndex[bestI];
+                        // A native still IN the index is UNCLAIMED (a 1cm match pops it), so a nearby chipType-
+                        // matching entry is likely this pile's drifted twin; a >30cm nearest = a real orphan
+                        // (host removed/moved the pile far). nativeEid confirms FACT 1 (expect kInvalidId).
+                        const uint32_t nativeEid = static_cast<uint32_t>(
+                            coop::prop_element_tracker::GetPropElementIdForActor(c.actor));
+                        UE_LOGI("[PILE-DELTA] eid=%u proxyLoc=(%.1f,%.1f,%.1f) chipType=%u nearestNative_d=%.1fcm "
+                                "nearestChipTypeMatch=%d nativeEid=%u",
+                                payload.elementId, loc.X, loc.Y, loc.Z, static_cast<unsigned>(payload.chipType),
+                                std::sqrt(bestD2), (c.chipType == payload.chipType) ? 1 : 0, nativeEid);
+                    } else {
+                        UE_LOGI("[PILE-DELTA] eid=%u proxyLoc=(%.1f,%.1f,%.1f) chipType=%u nearestNative_d=NONE "
+                                "(no live native in the index)",
+                                payload.elementId, loc.X, loc.Y, loc.Z, static_cast<unsigned>(payload.chipType));
+                    }
+                }
             }
         } else {
             UE_LOGW("remote_prop::OnSpawn: trash proxy spawn FAILED for eid=%u class='%ls'",

@@ -2,6 +2,7 @@
 
 #include "coop/puppet_carry_drive.h"
 
+#include "coop/active_drive.h"       // NowMs -- timestamp the hand-velocity samples (L4 inherit-velocity throw)
 #include "coop/net/protocol.h"       // TrashClumpPoseSnapshot (the carry pose batch entry)
 #include "coop/net/session.h"        // SetLocalTrashCarryBatch (host publish)
 #include "coop/players_registry.h"
@@ -12,6 +13,7 @@
 #include "ue_wrap/reflection.h"      // IsLiveByIndex / InternalIndexOf
 #include "ue_wrap/types.h"           // FVector / FRotator / NormalizeAxis
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -36,6 +38,18 @@ struct PuppetHeld {
     // (physics) pose each tick so every client renders the throw ARC, until the clump re-piles (the latch
     // closes / a settle commits) -> the entry is dropped + the ToPile convert snaps the proxy.
     bool     flying = false;
+    // L4 (inherit-hand-velocity throw): the hold point last drive tick + its timestamp, and an EMA of the
+    // per-tick hand velocity (cm/s). At a ThrowIntent the host releases with THIS velocity (the kinematic
+    // analog of the native PHC's inherited tracked velocity) instead of a fixed impulse -- a still player ->
+    // ~0 -> a soft drop; a flick -> a real throw. EMA-smoothed here + clamped at release (a raw teleport
+    // delta on a fast flick spikes far past any human throw; the native PHC spring is damped).
+    ue_wrap::FVector lastHold{0.f, 0.f, 0.f};
+    uint64_t         lastHoldMs  = 0;
+    bool             hasLastHold = false;
+    ue_wrap::FVector handVel{0.f, 0.f, 0.f};   // EMA of the hand velocity, cm/s
+    float            maxDriftCm  = 0.f;        // L3 harness metric: worst inter-tick drift of the clump from
+                                               // its commanded hold (kinematic -> ~0; a physics-fought body
+                                               // drifts = the carry-shake signature the host would publish)
 };
 
 std::vector<PuppetHeld> g_held;  // GT-only; at most one per peer (carry AND flight, distinguished by `flying`)
@@ -72,6 +86,13 @@ void NoteThrown(coop::element::ElementId eid) {
             return;
         }
     }
+}
+
+ue_wrap::FVector HandVelocityForEid(coop::element::ElementId eid) {
+    const uint32_t e = static_cast<uint32_t>(eid);
+    for (const auto& h : g_held)
+        if (h.eid == e && !h.flying) return h.handVel;   // flight reads physics, not the (stale) hand EMA
+    return ue_wrap::FVector{0.f, 0.f, 0.f};
 }
 
 void Tick(coop::net::Session& s) {
@@ -113,6 +134,16 @@ void Tick(coop::net::Session& s) {
                 it = g_held.erase(it);
                 continue;
             }
+            // L3 jitter metric (harness): how far did the clump DRIFT from last tick's commanded hold,
+            // measured BEFORE we re-command it? A kinematic body stays exactly where we put it -> ~0; a
+            // simulating body fought by the PHC spring + gravity drifts between ticks = the carry-shake the
+            // host would otherwise publish. The autonomous harness asserts maxDriftCm < a small threshold.
+            if (it->hasLastHold) {
+                const ue_wrap::FVector cur = E::GetActorLocation(it->clump);
+                const float ddx = cur.X - it->lastHold.X, ddy = cur.Y - it->lastHold.Y, ddz = cur.Z - it->lastHold.Z;
+                const float drift = std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+                if (drift > it->maxDriftCm) it->maxDriftCm = drift;
+            }
             // Drive: position the held clump at the puppet's hand = head + syncedAim * grabLen. The puppet's
             // synced aim is already streamed (curYaw_/curPitch_), so the clump tracks where the remote player
             // looks. SetActorLocation is a teleport that wins over the (un-driven, frozen) PHC target.
@@ -122,6 +153,23 @@ void Tick(coop::net::Session& s) {
                                          head.Y + fwd.Y * kGrabLenCm,
                                          head.Z + fwd.Z * kGrabLenCm };
             E::SetActorLocation(it->clump, hold);
+            // L4: track the hold point's SMOOTHED velocity (cm/s) so a ThrowIntent can release with the
+            // inherited hand motion. EMA damps the single-frame teleport-delta spikes (emulates the native
+            // PHC spring's damped response); direction is the real hand motion, not the aim.
+            const uint64_t nowMs = coop::active_drive::NowMs();
+            if (it->hasLastHold && nowMs > it->lastHoldMs) {
+                const float dt = static_cast<float>(nowMs - it->lastHoldMs) * 0.001f;
+                if (dt > 1e-4f) {
+                    const ue_wrap::FVector inst{ (hold.X - it->lastHold.X) / dt,
+                                                 (hold.Y - it->lastHold.Y) / dt,
+                                                 (hold.Z - it->lastHold.Z) / dt };
+                    constexpr float kEma = 0.35f;
+                    it->handVel.X += kEma * (inst.X - it->handVel.X);
+                    it->handVel.Y += kEma * (inst.Y - it->handVel.Y);
+                    it->handVel.Z += kEma * (inst.Z - it->handVel.Z);
+                }
+            }
+            it->lastHold = hold; it->lastHoldMs = nowMs; it->hasLastHold = true;
         }
         // STREAM the clump's CURRENT pose (hand pos when carrying, physics pos when flying) to ALL peers so
         // every client renders the carry + the throw arc. Host-authoritative + host-originated (the relay
@@ -139,9 +187,9 @@ void Tick(coop::net::Session& s) {
         if (batch.size() < static_cast<size_t>(coop::net::kMaxTrashCarryBatchEntries))
             batch.push_back(snap);
         if ((sTick % 60) == 0)
-            UE_LOGI("[TRASH-CARRY] HOST PUBLISH eid=%u slot=%u %s -> (%.1f,%.1f,%.1f) ctx=%u",
+            UE_LOGI("[TRASH-CARRY] HOST PUBLISH eid=%u slot=%u %s -> (%.1f,%.1f,%.1f) ctx=%u maxDriftCm=%.2f",
                     it->eid, it->slot, it->flying ? "FLIGHT" : "carry", loc.X, loc.Y, loc.Z,
-                    static_cast<unsigned>(snap.ctx));
+                    static_cast<unsigned>(snap.ctx), it->maxDriftCm);
         ++it;
     }
     // Publish only when streaming, or ONCE to clear when a carry just ended (empty batch + g_wasStreaming).

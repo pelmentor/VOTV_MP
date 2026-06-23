@@ -267,6 +267,64 @@ $Invariants = @(
            Detail = "$repile RE-PILE(thunk) + $commit LAND COMMIT after $succ throw (the clump self-re-piled -> ToPile)" }
     }},
 
+    # ---- L3 (carry jitter, user 2026-06-23): the client->host carry must NOT shake. The host drives the
+    # puppet-held clump KINEMATIC (SetActorSimulatePhysics false on grab) so it stays at its commanded hold;
+    # maxDriftCm is the worst inter-tick drift of the clump from that hold. Kinematic -> ~0; the pre-L3
+    # simulating body (PHC spring vs gravity vs our teleport) oscillated -> large drift, which the host then
+    # published = the carry-shake every peer saw.
+    @{ Name='carry-no-jitter'; Severity='CRITICAL'; Check={
+        $pub = Matches $H '\[TRASH-CARRY\] HOST PUBLISH .* maxDriftCm=([\d.]+)'
+        if ($pub.Count -eq 0) { return @{ Pass = $true; Detail = 'no carry publish (not exercised)' } }
+        $drifts = @($pub | ForEach-Object { [float]$_.Matches[0].Groups[1].Value })
+        $maxDrift = [math]::Round(($drifts | Measure-Object -Maximum).Maximum, 2)
+        @{ Pass = ($maxDrift -lt 10.0)
+           Detail = "max inter-tick clump drift=${maxDrift}cm during carry (kinematic ~0; pre-L3 physics-fight oscillated; <10cm)" }
+    }},
+
+    # ---- L4 (wild throw, user 2026-06-23): the autotest releases while STANDING STILL, so the host's
+    # INHERITED hand velocity is ~0 = a soft drop. The pre-L4 bug applied a fixed ~871 cm/s on EVERY E.
+    # Assert the still-release magnitude is low (a drop, not a throw). A flick release would be >0 (tested by hand).
+    @{ Name='throw-soft-release'; Severity='CRITICAL'; Check={
+        $succ = Matches $H '\[THROW-INTENT\] SUCCESS .*vel=\(([-0-9.]+),([-0-9.]+),([-0-9.]+)\)'
+        if ($succ.Count -eq 0) { return @{ Pass = $true; Detail = 'no throw success (not exercised)' } }
+        $mags = @($succ | ForEach-Object {
+            $vx=[float]$_.Matches[0].Groups[1].Value; $vy=[float]$_.Matches[0].Groups[2].Value; $vz=[float]$_.Matches[0].Groups[3].Value
+            [math]::Sqrt($vx*$vx + $vy*$vy + $vz*$vz) })
+        $maxMag = [math]::Round(($mags | Measure-Object -Maximum).Maximum, 1)
+        @{ Pass = ($maxMag -lt 120.0)
+           Detail = "$($succ.Count) throw(s), max still-release |vel|=${maxMag}cm/s (soft drop; pre-L4 ~871, fixed <120)" }
+    }},
+
+    # ---- L5 (FPS stutter, user 2026-06-23): the atv/grime index rebuilds (full ~237k GUObjectArray walks)
+    # are now gated on a NumObjects high-water; at idle they walk only on the ~30s safety (~0.066/s combined),
+    # not every 2s (~1/s). Assert the steady-state walk rate stays low.
+    @{ Name='fps-no-idle-walk-spam'; Severity='WARN'; Check={
+        $w = $C | Select-String -Pattern '\[L5-WALK\] (atv|grime) RebuildIndex walked'
+        if ($w.Count -lt 4) { return @{ Pass = $true; Detail = "$($w.Count) L5-WALK marker(s) -- too few to rate" } }
+        $ts = @($w | ForEach-Object { if ($_.Line -match '^\[(\d\d):(\d\d):(\d\d)\]') { [int]$matches[1]*3600 + [int]$matches[2]*60 + [int]$matches[3] } })
+        $span = $ts[-1] - $ts[0]
+        if ($span -le 0) { return @{ Pass = $true; Detail = "$($w.Count) walks, span 0s" } }
+        $rate = [math]::Round($w.Count / $span, 3)
+        @{ Pass = ($rate -lt 0.3)
+           Detail = "atv+grime full-walk rate=$rate/s ($($w.Count) over ${span}s; pre-gate ~1/s, gated <0.3)" }
+    }},
+
+    # ---- L1 [PILE-DELTA] orphan histogram (INFO, user 2026-06-23): the read-only probe
+    # (VOTVCOOP_PILE_DELTA_PROBE) logs, per level-pile proxy the 1cm destroy did NOT match, the distance to
+    # the nearest client native. This INFO row splits the orphans into bands so we pick the L1 fix by the tail:
+    # 0-5cm = a near-miss (tight-position destroy), >30cm = a real host-drift orphan (absence-removal). Never fails.
+    @{ Name='pile-delta-histogram'; Severity='INFO'; Check={
+        $pd = $C | Select-String -Pattern '\[PILE-DELTA\].*nearestNative_d=([\d.]+|NONE)'
+        if ($pd.Count -eq 0) { return @{ Pass = $true; Detail = 'no [PILE-DELTA] lines (probe off or no orphans)' } }
+        $near=0; $mid=0; $far=0; $none=0
+        foreach ($m in $pd) {
+            $v = $m.Matches[0].Groups[1].Value
+            if ($v -eq 'NONE') { $none++ }
+            else { $d=[float]$v; if ($d -le 5) {$near++} elseif ($d -le 30) {$mid++} else {$far++} }
+        }
+        @{ Pass = $true; Detail = "orphan deltas: $near in 0-5cm (tight-pos), $mid in 5-30cm, $far in >30cm (absence), $none NONE ($($pd.Count) total)" }
+    }},
+
     # ---- Crash/health: neither log should carry a SEH crash dump or our [Error] from
     # the DLL during the scenario.
     @{ Name='no-crash-or-error'; Severity='CRITICAL'; Check={

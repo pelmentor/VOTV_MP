@@ -715,9 +715,9 @@ void RunGrabIntentTest() {
         d.store(1);
     });
 
-    // 4. CARRY ~6s -- re-face each second so the puppet aim (hence the host hand-drive holdPoint AND the
-    //    host-published carry pose) moves; the harness asserts [TRASH-CARRY] HOST PUBLISH + CLIENT APPLY.
-    for (int i = 0; i < 6; ++i) {
+    // 4a. CARRY ~3s MOVING -- re-face each second so the puppet aim (hence the host hand-drive holdPoint AND
+    //     the host-published carry pose) moves; exercises [TRASH-CARRY] HOST PUBLISH + CLIENT APPLY.
+    for (int i = 0; i < 3; ++i) {
         ::Sleep(1000);
         RunGT([pk](std::atomic<int>& d) {
             E::SetControlRotation(E::GetController(pk->player),
@@ -725,10 +725,17 @@ void RunGrabIntentTest() {
             d.store(1);
         });
     }
+    // 4b. CARRY ~3s STILL -- STOP re-facing/moving so (i) the L3 jitter metric `maxDriftCm` proves the clump
+    //     does NOT drift from its commanded hold (kinematic carry, no PHC-spring/gravity fight), and (ii) the
+    //     host's hand-velocity EMA decays to ~0 so the next E is a SOFT release, not a fixed-impulse throw.
+    UE_LOGI("grab_intent_test: >>> STILL-CARRY 3s (L3: maxDriftCm should stay ~0; L4: handVel decays for a soft release) <<<");
+    ::Sleep(3000);
 
-    // 5. THROW via the REAL toggle: inject InpActEvt_use again -> OnPileGrabPre sees ClientCarryEid (we are
-    //    carrying) -> SendThrowIntent. The host releases the puppet grab + applies physics velocity along the
-    //    puppet aim -> the clump flies (flight stream) + self-re-piles (the BeginDeferred thunk -> ToPile).
+    // 5. SOFT RELEASE via the REAL toggle: inject InpActEvt_use again while STANDING STILL -> OnPileGrabPre
+    //    sees ClientCarryEid -> SendThrowIntent. Because the hand was still, the host's INHERITED release
+    //    velocity is ~0 (a gentle drop), NOT the old fixed ~871 cm/s wild throw (L4). The host releases the
+    //    puppet grab + applies that velocity -> the clump drops/flies + self-re-piles (BeginDeferred -> ToPile).
+    UE_LOGI("grab_intent_test: >>> SOFT RELEASE (still) -- expect [THROW-INTENT] SUCCESS vel ~0 (a drop, not a wild throw) <<<");
     RunGT([pk, useReal](std::atomic<int>& d) {
         if (useReal) {
             std::vector<uint8_t> frame(pk->useFrame > 0 ? static_cast<size_t>(pk->useFrame) : 0, 0u);

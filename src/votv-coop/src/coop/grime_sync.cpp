@@ -372,7 +372,22 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastRetry >= kRetryRebuildThrottle) {
         g_lastRetry = now;
-        RebuildIndex();
+        // L5 (FPS, user 2026-06-23): RebuildIndex is a FULL ~237k-entry GUObjectArray walk; running it
+        // every throttle UNCONDITIONALLY was a steady-state stutter source. New grime decals append
+        // UObjects, so gate the walk on a NumObjects() high-water + a periodic SAFETY walk (mirrors the
+        // net_pump re-seed / atv_sync guard). The cheap g_pending resolution below still runs every
+        // throttle -- a pending item only resolves once its actor exists, which itself grows NumObjects.
+        static int32_t sLastNum   = -1;
+        static int     sSinceFull = 0;
+        const int32_t  curNum     = R::NumObjects();
+        const bool     changed    = (curNum != sLastNum);
+        const bool     periodic   = (++sSinceFull >= 15);   // ~30s safety
+        if (changed || periodic) {
+            sLastNum = curNum; sSinceFull = 0;
+            const size_t n = RebuildIndex();
+            UE_LOGI("[L5-WALK] grime RebuildIndex walked (changed=%d periodic=%d) -> %zu indexed",
+                    changed ? 1 : 0, periodic ? 1 : 0, n);
+        }
         if (!g_pending.empty()) {
             int applied = 0, expired = 0, still = 0;
             for (auto it = g_pending.begin(); it != g_pending.end();) {
