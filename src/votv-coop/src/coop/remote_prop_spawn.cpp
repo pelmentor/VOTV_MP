@@ -598,6 +598,21 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
             ue_wrap::FVector{payload.locX, payload.locY, payload.locZ},
             kFuzzyRadiusCm,
             propNameW == L"None" ? std::wstring() : propNameW);
+    // ANTI-COLLISION GATE (kerfur-only, 2026-06-24 fuzzy-gate fix#1; see kerfur_prop_adoption.cpp + the
+    // 14:05 RCA). For a kerfur PROP the Aprop_Key is cross-peer-stable (save-persisted), so a 30cm fuzzy
+    // match whose key DIFFERS from the wire key is a DIFFERENT kerfur -- never rekey/steal it (the same
+    // collision class as the deferred 500cm path). Drop the match -> fall through to fresh-spawn. Strictly
+    // kerfur-gated: NON-kerfur props (mushroom/garbage spawners with per-peer-divergent keys) KEEP the
+    // intended Gap-I-1 divergent-key dedup unchanged (RULE 1 -- no regression to that path).
+    if (fuzzy && classW.find(L"prop_kerfurOmega") != std::wstring::npos) {
+        const std::wstring fuzzyKey = ue_wrap::prop::GetKeyString(fuzzy);
+        if (!fuzzyKey.empty() && fuzzyKey != L"None" && fuzzyKey != keyW) {
+            UE_LOGI("remote_prop::OnSpawn: kerfur fuzzy match (wire key '%ls') resolves to a neighbor with a "
+                    "DIFFERENT key '%ls' -- anti-collision: not stealing it, fresh-spawning instead",
+                    keyW.c_str(), fuzzyKey.c_str());
+            fuzzy = nullptr;
+        }
+    }
     if (fuzzy) {
         // P2 claim: same as the exact-key path -- the fuzzy match binds this
         // pre-existing client actor to the host's prop; protect it from the

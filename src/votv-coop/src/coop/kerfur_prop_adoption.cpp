@@ -13,6 +13,7 @@
 #include "coop/remote_prop.h"          // RegisterPropMirror
 #include "coop/remote_prop_spawn.h"    // OnSpawn (fresh-spawn fallback) + RecordClaimIfTracking + HasLoadTailQuiesced
 #include "ue_wrap/engine.h"            // GetActorLocation + SetActorSimulatePhysics
+#include "ue_wrap/prop.h"              // GetKeyString (anti-collision gate: candidate's own Aprop_Key)
 #include "ue_wrap/hot_path_guard.h"    // UE_ASSERT_GAME_THREAD
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
@@ -76,7 +77,9 @@ bool BindAsMirror(const Pending& e, void* obj) {
 }
 
 // A candidate local kerfur prop actor found in the GUObjectArray scan (one walk feeds all pending).
-struct Cand { void* obj; void* cls; float x, y, z; };
+// `key` = the actor's own Aprop_C.Key (cross-peer-stable for SAVE-loaded kerfurs; empty/None for a
+// not-yet-keyed late-mint twin). Drives the anti-collision gate in the match loop.
+struct Cand { void* obj; void* cls; float x, y, z; std::wstring key; };
 
 // One throttled scan: collect untracked (non-mirror) live kerfur PROP candidates, then bind each
 // pending entry to its NEAREST same-class unclaimed candidate, or fresh-spawn on quiescence/timeout.
@@ -104,7 +107,7 @@ void ResolvePending() {
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;       // CDO
         const auto loc = ue_wrap::engine::GetActorLocation(obj);
-        cands.push_back(Cand{obj, cls, loc.X, loc.Y, loc.Z});
+        cands.push_back(Cand{obj, cls, loc.X, loc.Y, loc.Z, ue_wrap::prop::GetKeyString(obj)});
     }
 
     void* localPlayer = coop::players::Registry::Get().Local();
@@ -117,11 +120,29 @@ void ResolvePending() {
             g_pending.pop_back();
             continue;
         }
+        // ANTI-COLLISION GATE (2026-06-24, fuzzy-gate fix#1; doc kerfur/06 + the 14:05 RCA). The
+        // class+pose match below is a 500cm fuzzy fallback. A candidate that carries its OWN real,
+        // cross-peer-stable Aprop_Key exact-BELONGS to the host kerfur with that key (it WILL exact-key
+        // bind to it -- save-loaded kerfur keys are persisted + identical on both peers, log-proven 14:05:
+        // the 4 save-off neighbors all `resolves to live actor` by key). A kerfur whose own broadcast key
+        // is a DIFFERENT key (e.g. a runtime-turned-off kerfur with a fresh per-load key, or any keyless
+        // pending) must NOT steal that neighbor via fuzzy -- that WAS the 14:05 5-vs-4 collision (xXPHX
+        // [eid 3147] grabbed Nrby's actor 206cm away BEFORE Nrby's exact bind claimed it -> two host eids
+        // on one client actor -> 4 visible). Skip any candidate whose key is real (non-empty/non-None) AND
+        // != this pending kerfur's broadcast key. Ordering-INDEPENDENT (we gate on the candidate's identity
+        // key, not its current bind state -> the "poll ran before the exact bind" race is closed). A legit
+        // twin is NOT skipped: same save key (candKey == pendKey -> a class+pose retry of the exact match)
+        // or a not-yet-minted late twin (candKey empty). A pending kerfur left with no valid candidate then
+        // falls through to fresh-spawn/defer (fix#1 turns the collision into a clean "no body yet" =
+        // symptom 2; the body is fix#2 active-at-blob->off). [[project-kerfur-off-state-no-replicate-backlog-2026-06-24]].
+        const std::wstring pendKey = KeyToW(e.payload.key);
         int   bestIdx = -1;
         float bestD2  = kMaxBindDist2;
         for (size_t c = 0; c < cands.size(); ++c) {
             if (cands[c].cls != e.actorClass) continue;       // exact skin class (same save)
             if (claimed.count(cands[c].obj) > 0) continue;    // taken by another pending this scan
+            if (!cands[c].key.empty() && cands[c].key != L"None" &&
+                cands[c].key != pendKey) continue;            // exact-belongs to a DIFFERENT kerfur -> never steal
             const float dx = cands[c].x - e.x, dy = cands[c].y - e.y, dz = cands[c].z - e.z;
             const float d2 = dx * dx + dy * dy + dz * dz;
             if (d2 < bestD2) { bestIdx = static_cast<int>(c); bestD2 = d2; }
@@ -147,8 +168,15 @@ void ResolvePending() {
             UE_LOGW("kerfur-prop-adopt: eid=%u class='%ls' -- no local twin (%s); fresh-spawning a mirror",
                     e.payload.elementId, e.classW.c_str(),
                     quiesced ? "load tail quiesced" : "last-resort timeout");
+            // OBS-2 ROOT FIX (2026-06-24): pass deferKerfur in the CORRECT slot. The prior call
+            // `OnSpawn(e.payload, 0, localPlayer, /*deferKerfur=*/false)` bound `false` to param #4
+            // (fromConvert), leaving deferKerfur at its DEFAULT true -> the "fresh-spawn" re-entered the
+            // K-6 defer, Arm()'d the already-pending eid (silent refresh+return), spawned nothing, and
+            // ResolvePending then popped the entry -> the kerfur was DROPPED forever (host broadcasts each
+            // prop once; no retry). Explicit fromConvert=false + deferKerfur=false re-enables the one-shot
+            // fresh-spawn fallback the comment always intended.
             coop::remote_prop_spawn::OnSpawn(e.payload, /*senderSlot=*/0, localPlayer,
-                                             /*deferKerfur=*/false);
+                                             /*fromConvert=*/false, /*deferKerfur=*/false);
             resolved = true;
         }
         if (resolved) {

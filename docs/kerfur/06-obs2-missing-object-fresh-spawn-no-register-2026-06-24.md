@@ -1,8 +1,19 @@
 # 06 — OBS-2: a save kerfur OBJECT missing on the client (fresh-spawn OnSpawn'd but never registered a mirror)
 
-**Status: ROOT PINNED (2026-06-24, log+code proven). NOT built (diagnosis-first; awaiting greenlight + one
-fix-shape edge below). Separate from the reverse follow-ghost (doc 05, CLOSED) -- surfaced in the same 13:15
-verify session.**
+**Status: ROOT PINNED + FIX VERIFIED hands-on (clean-bracket run 14:59:48) -> COMMITTED. The arg-slot fix
+(deferKerfur correct slot) is the complete fix: the probe fired `[OBS-2 PROBE] eid=3147: TWIN ABSENT` at
+quiescence -> `no local twin (load tail quiesced)` -> `spawned ... prop_kerfurOmega_C` -> a distinct mirror.
+TWIN ABSENT confirmed -> NO BindAsMirror class-family widening needed (arg-fix alone closes OBS-2). Probe
+REMOVED (diagnostic served its purpose). Deployed MD5 `F419F594` (probe-free). Push HELD. Surfaced/closed
+alongside the fuzzy-gate (doc 07) -- the fuzzy-gate routes the window-turned-off kerfur into THIS fresh-spawn
+path, which is how the OBS-2 fix finally got exercised + verified.**
+
+> **AS-BUILT (this build, uncommitted):** (1) ROOT FIX -- `OnSpawn(e.payload, 0, localPlayer, /*fromConvert=*/false,
+> /*deferKerfur=*/false)` (deferKerfur in the correct slot) re-enables the fresh-spawn fallback. (2) PROBE -- the
+> quiescence fresh-spawn branch logs `[OBS-2 PROBE] ... TWIN PRESENT/ABSENT` (nearest untracked kerfur-prop actor
+> within the bind radius + its leaf class + class-match-to-pending) so the hands-on reveals absent-vs-present.
+> Probe is diagnostic-only (removed before the final commit). NON-DETERMINISTIC repro: OBS-2 only fires when a
+> kerfur loses the index-seed race and is DEFERRED -> the runbook directs multiple connect cycles.
 
 ## ROOT (CERTAIN -- log + code proven): a positional-argument-slot bug disables the deferred-kerfur fresh-spawn fallback
 The fresh-spawn fallback call in [kerfur_prop_adoption.cpp:150-151](../../src/votv-coop/src/coop/kerfur_prop_adoption.cpp#L150-L151) is:
