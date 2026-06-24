@@ -19,6 +19,7 @@
 #include "coop/net/session.h"
 #include "coop/npc_adoption.h"
 #include "coop/kerfur_prop_adoption.h"  // K-6: deferred prop-form kerfur adoption (driven from the client tick)  // v75: deferred class-match adoption for save-persisted NPCs
+#include "coop/kerfur_reconcile.h"  // scope A v1: arm the off->active dup retire from the carried save-time key
 #include "coop/remote_prop_spawn.h"  // TickClientReconcile (deferred prop divergence sweep)
 #include "coop/dev/kerfur_census.h"  // DIAGNOSTIC: one-shot kerfur census at quiescence (forward-dup root)
 #include "coop/npc_sync.h"
@@ -164,6 +165,22 @@ void OnEntitySpawn(const coop::net::EntitySpawnPayload& payload) {
                 "rejecting (eid=%u; peer is broadcasting non-NPC EntitySpawn?)",
                 classW.c_str(), payload.elementId);
         return;
+    }
+    // scope A v1 (kerfur off->active dup retire): a kerfur that was OFF in the transferred save and the
+    // host turned ON in the join window carries its blob-instant SAVE-TIME pos here. THIS npc channel
+    // reaches the joiner (the KerfurConvert that would have linked it FAILS to send mid-join -- hands-on
+    // 16:37 root). Arm a retire of the client's stale local off-prop at that exact key; the quiescence-
+    // driven sweep (kerfur_convert::PollKerfurConversions -> kerfur_reconcile::SweepReconcileSaveTimeKerfurs)
+    // destroys it once the local off-prop has async-loaded. Independent of how the NPC mirror itself
+    // materializes below (adopt-local / fresh-spawn). Keyed by the host eid (unique, idempotent).
+    if (payload.hasMatchPos &&
+        std::isfinite(payload.matchX) && std::isfinite(payload.matchY) && std::isfinite(payload.matchZ) &&
+        std::fabs(payload.matchX) <= coop::net::kMaxCoord &&
+        std::fabs(payload.matchY) <= coop::net::kMaxCoord &&
+        std::fabs(payload.matchZ) <= coop::net::kMaxCoord) {
+        ue_wrap::FVector key;
+        key.X = payload.matchX; key.Y = payload.matchY; key.Z = payload.matchZ;
+        coop::kerfur_reconcile::ArmPendingRetire(payload.elementId, key);
     }
     // v75: route by whether the joining client has a LOCAL TWIN of this NPC (savePersisted).
     // savePersisted=1 -> a save object (the kerfur) the client ALSO loaded from the transferred

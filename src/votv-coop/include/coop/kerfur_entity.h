@@ -90,6 +90,13 @@ Form                     GetFormForKerfurId(coop::element::ElementId kerfurId);
 // KerfurId, so the client K<->eid maps + RegisterClientKerfur of the K-3 scaffolding were removed.)
 bool IsKerfurEid(coop::element::ElementId currentEid);
 
+// HOST only: the blob-instant SAVE-TIME position of the kerfur currently at `currentEid` (the npc
+// EntitySpawn builders read it to carry the off->active dup RETIRE key to a joiner). Returns true + fills
+// out* IFF this kerfur was OFF at the blob instant and the host turned it ON in the join window (so
+// BindFormActor bootstrapped rec.saveTimePos from g_blobKerfurXforms). False for an always-active kerfur
+// or a non-kerfur eid -> the builder leaves hasMatchPos=0 (no client off-prop to retire). Game thread.
+bool GetSaveTimePosForEid(coop::element::ElementId currentEid, float& outX, float& outY, float& outZ);
+
 // ---- K-5 CLIENT held-pose eid map ------------------------------------------------------------------
 // A kerfur prop on a CLIENT is a host-owned MIRROR (m_mirror=true, host-range eid) -- NOT in
 // prop_element_tracker's local g_actorToPropElementId map, so GetPropElementIdForActor returns

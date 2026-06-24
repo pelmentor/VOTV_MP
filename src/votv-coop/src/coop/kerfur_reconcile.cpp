@@ -90,41 +90,14 @@ void Reset() {
     g_pendingRetire.clear();
 }
 
-int RetireLocalOffPropAtSaveTime(uint32_t kerfurId, const ue_wrap::FVector& saveTimePos) {
-    UE_ASSERT_GAME_THREAD("kerfur_reconcile::RetireLocalOffPropAtSaveTime");
-    if (!IsClient()) return 0;  // host owns its kerfurs -- never retires
-    std::vector<LocalOffProp> cands;
-    CollectLocalOffPropKerfurs(cands);
-    int matchCount = 0, matchIdx = -1;
-    for (int i = 0; i < static_cast<int>(cands.size()); ++i) {
-        const float dx = cands[i].x - saveTimePos.X, dy = cands[i].y - saveTimePos.Y,
-                    dz = cands[i].z - saveTimePos.Z;
-        if (dx * dx + dy * dy + dz * dz > kRetireR2Cm) continue;
-        if (!R::IsLiveByIndex(cands[i].actor, cands[i].idx)) continue;
-        ++matchCount;
-        matchIdx = i;
-    }
-    if (matchCount == 1) {
-        RetireActor(cands[matchIdx].actor);
-        UE_LOGI("kerfur_reconcile: RETIRED stale local off-prop kerfur at save-time (%.1f,%.1f,%.1f) K=%u "
-                "-- host turned it ON in the join window; the active NPC is the sole form now (dup fixed)",
-                saveTimePos.X, saveTimePos.Y, saveTimePos.Z, kerfurId);
-        return 1;
-    }
-    if (matchCount > 1) {
-        UE_LOGW("kerfur_reconcile: RETIRE SKIP K=%u at (%.1f,%.1f,%.1f) -- %d local off-prop kerfurs within "
-                "1cm (ambiguous) -> keeping all (never retire the wrong one)",
-                kerfurId, saveTimePos.X, saveTimePos.Y, saveTimePos.Z, matchCount);
-        return 0;
-    }
-    // matchCount == 0: the local off-prop has not async-loaded yet (KerfurConvert raced the load tail).
-    // The CALLER records this for the post-quiescence retry (ArmPendingRetire); nothing to do here.
-    return 0;
-}
-
-void ArmPendingRetire(uint32_t kerfurId, const ue_wrap::FVector& saveTimePos) {
+void ArmPendingRetire(uint32_t hostEid, const ue_wrap::FVector& saveTimePos) {
     UE_ASSERT_GAME_THREAD("kerfur_reconcile::ArmPendingRetire");
-    g_pendingRetire[kerfurId] = saveTimePos;  // idempotent per K (a re-broadcast refreshes the key)
+    const bool isNew = (g_pendingRetire.find(hostEid) == g_pendingRetire.end());
+    g_pendingRetire[hostEid] = saveTimePos;  // idempotent per host eid (a re-announce refreshes the key)
+    if (isNew)  // log once per kerfur (not on every connect-snapshot re-announce)
+        UE_LOGI("kerfur_reconcile: ARMED off->active retire eid=%u at save-time (%.1f,%.1f,%.1f) "
+                "(from npc EntitySpawn -- the channel that reaches the joiner; quiescence sweep will retire "
+                "the stale local off-prop)", hostEid, saveTimePos.X, saveTimePos.Y, saveTimePos.Z);
 }
 
 int SweepReconcileSaveTimeKerfurs() {
@@ -141,7 +114,8 @@ int SweepReconcileSaveTimeKerfurs() {
     std::vector<bool> consumed(cands.size(), false);
     std::vector<void*> toRetire;
     toRetire.reserve(pendingN);
-    for (const auto& [kerfurId, key] : g_pendingRetire) {
+    for (const auto& [hostEid, key] : g_pendingRetire) {
+        (void)hostEid;
         int matchCount = 0, matchIdx = -1;
         for (int i = 0; i < static_cast<int>(cands.size()); ++i) {
             if (consumed[i]) continue;

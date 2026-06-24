@@ -166,6 +166,21 @@ bool IsKerfurEid(coop::element::ElementId currentEid) {
     return g_eidToKerfurId.count(currentEid) != 0;
 }
 
+bool GetSaveTimePosForEid(coop::element::ElementId currentEid, float& outX, float& outY, float& outZ) {
+    // scope A v1: the blob-instant SAVE-TIME position of the kerfur currently at `currentEid`, IFF it was
+    // bootstrapped at a join-window turn-on (BindFormActor stamped rec.saveTimePos from g_blobKerfurXforms).
+    // A kerfur that was already ACTIVE at blob (never converted) has no anchor -> returns false -> the npc
+    // EntitySpawn builder leaves hasMatchPos=0 (nothing to retire). Host-side; HOST only in practice.
+    if (currentEid == coop::element::kInvalidId) return false;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    auto eit = g_eidToKerfurId.find(currentEid);
+    if (eit == g_eidToKerfurId.end()) return false;
+    auto rit = g_byKerfurId.find(eit->second);
+    if (rit == g_byKerfurId.end() || !rit->second.hasSaveTimePos) return false;
+    outX = rit->second.saveTimePosX; outY = rit->second.saveTimePosY; outZ = rit->second.saveTimePosZ;
+    return true;
+}
+
 // ---- K-5 CLIENT held-pose map -----------------------------------------------------------------------
 
 void NotifyKerfurPropMirrorBound(void* actor, coop::element::ElementId eid) {
@@ -241,8 +256,6 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
     if (!newActor || newEid == coop::element::kInvalidId) return coop::element::kInvalidId;
 
     coop::element::ElementId k = coop::element::kInvalidId;
-    bool  haveSaveTimePos = false;       // scope A: snapshot the record's anchor under the lock for the payload
-    float stX = 0.f, stY = 0.f, stZ = 0.f;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         auto eit = g_eidToKerfurId.find(oldEid);
@@ -276,9 +289,11 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
         if (newForm == Form::Npc) rec.npcClassName = cn; else rec.propClassName = cn;
         g_actorToKerfurId[newActor] = k;
         g_eidToKerfurId[newEid]     = k;
-        // scope A: bootstrap the save-time anchor from the blob map at the FIRST conversion (oldEid is
+        // scope A v1: bootstrap the save-time anchor from the blob map at the FIRST conversion (oldEid is
         // the off-prop eid captured in g_blobKerfurXforms when a join-window turn-on fires); carry it
-        // forward across every subsequent flip on this K.
+        // forward across every subsequent flip on this K. The connect-snapshot npc EntitySpawn builder
+        // reads it via GetSaveTimePosForEid and carries it to the joiner (NOT the KerfurConvert, whose
+        // SendReliable fails mid-join -- hands-on 16:37).
         if (!rec.hasSaveTimePos) {
             ue_wrap::FVector sv;
             if (coop::save_transfer::TryGetSaveTimeKerfurXformAnySlot(oldEid, sv)) {
@@ -286,8 +301,6 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
                 rec.hasSaveTimePos = true;
             }
         }
-        haveSaveTimePos = rec.hasSaveTimePos;
-        stX = rec.saveTimePosX; stY = rec.saveTimePosY; stZ = rec.saveTimePosZ;
     }
 
     // Broadcast the SOLE conversion-transition packet (host fan-out to all peers).
@@ -297,8 +310,6 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
     p.newEid   = static_cast<uint32_t>(newEid);
     p.toForm   = (newForm == Form::Prop) ? 1u : 0u;
     p.rejected = 0;
-    p.hasMatchPos = haveSaveTimePos ? 1u : 0u;  // scope A: carry the save-time retire key
-    p.matchX = stX; p.matchY = stY; p.matchZ = stZ;
     p.locX = locX; p.locY = locY; p.locZ = locZ;
     p.rotPitch = rotPitch; p.rotYaw = rotYaw; p.rotRoll = rotRoll;
     p.newClassName.len = 0;

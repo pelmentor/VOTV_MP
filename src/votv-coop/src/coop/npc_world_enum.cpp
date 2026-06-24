@@ -135,6 +135,15 @@ int RegisterExistingWorldNpcs(NpcEnumOrigin origin) {
             // the immediate-relief fix; it stays under the redesign.) See the header.
             p.savePersisted =
                 (origin == NpcEnumOrigin::ConnectEdge && ue_wrap::kerfur::HasSaveKey(obj)) ? 1 : 0;
+            // scope A v1: carry the off->active dup RETIRE key for a window-turned-ON kerfur (see
+            // npc_pose_host.cpp). Covers a kerfur first-registered DURING this enum; an already-tracked
+            // turn-on kerfur reaches the joiner via npc_pose_host's connect-snapshot instead (also stamped).
+            // Unlike savePersisted (ConnectEdge-only), this stamps for ANY origin -- harmless: a
+            // MidSessionConverge turn-on reaches already-connected peers who have no stale local off-prop,
+            // so their quiescence sweep finds 0 matches and retires nothing.
+            p.hasMatchPos = 0;
+            if (coop::kerfur_entity::GetSaveTimePosForEid(eid, p.matchX, p.matchY, p.matchZ))
+                p.hasMatchPos = 1;
             if (!s->SendEntitySpawn(p)) {
                 UE_LOGW("npc-sync[world-enum]: SendEntitySpawn failed for newly-registered eid=%u",
                         p.elementId);

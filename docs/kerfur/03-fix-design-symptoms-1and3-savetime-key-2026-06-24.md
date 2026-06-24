@@ -1,9 +1,28 @@
 # 03 — FIX DESIGN: forward off->active dup save-time-keyed RETIRE (scope A)
 
-**Status: BUILT + DEPLOYED (2026-06-24, MD5 `E27D176C`, proto v87). HANDS-ON PENDING (runbook
-`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). Perf audit PASS; correctness audit found one HIGH
-(sweep-liveness coupled to the pile bracket) ROOT-FIXED pre-deploy. NOT marked VERIFIED -- awaiting the hands-on.**
-Covers the forward off->active dup (doc 07: 15:43 dup + 15:41 skew). Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+**Status: BUILT v1 + DEPLOYED (2026-06-24, MD5 `D8A3D89E`, proto v88). HANDS-ON PENDING (runbook
+`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). Perf + correctness audits PASS (no CRITICAL/HIGH).
+NOT marked VERIFIED -- awaiting the hands-on.** Covers the forward off->active dup (doc 07: 15:43/16:37 dup +
+15:41 skew). Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+
+> **v1 PIVOT (2026-06-24, after the 16:37 hands-on FAILED the convert-driven v0):** the retire trigger moved
+> from the KerfurConvert to the **npc EntitySpawn channel**. WHY: v0 (commit `6c668b9d`, MD5 `E27D176C`, proto
+> v87) carried the save-time key on the KerfurConvert + triggered the retire in `OnKerfurConvert`. Hands-on 16:37
+> proved the dup PERSISTED -- root: a join-window turn-on's `SendReliable(KerfurConvert)` FAILS (host log
+> 16:37:10: "SendReliable(KerfurConvert) failed"; the joiner isn't ready for reliable gameplay mid save-transfer),
+> the convert is one-shot (no retry) -> `OnKerfurConvert` never ran on the client -> the retire never fired. The
+> active form reached the client ONLY via the npc channel (`npc-adopt eid=3149` at 16:37:16). This is EXACTLY
+> what doc 03 lines 17-19 + Q3 prescribed ("carry on KerfurConvert AND the connect-snapshot EntitySpawn") -- v0
+> implemented only the convert; v1 implements the EntitySpawn (the channel that reaches the joiner). **v1 as-built:**
+> host stamps the off->active kerfur's `KerfurRecord.saveTimePos` onto its npc EntitySpawn
+> (`kerfur_entity::GetSaveTimePosForEid` -> `npc_pose_host::QueueConnectBroadcastForSlot` +
+> `npc_world_enum`, EntitySpawnPayload 96->108 +hasMatchPos+matchX/Y/Z); client arms a retire from
+> `npc_mirror::OnEntitySpawn` (`kerfur_reconcile::ArmPendingRetire`); the quiescence sweep
+> (`kerfur_convert::PollKerfurConversions` -> `SweepReconcileSaveTimeKerfurs`, bracket-independent) retires the
+> stale local off-prop by the 1cm save-time key (a GUObjectArray walk -- the local save off-prop is NOT key-
+> resolvable in remote_prop's maps, 16:37 "no local match (key or eid)"). The KerfurConvert carry + the
+> `OnKerfurConvert` retire were REMOVED (RULE 2; KerfurConvert reverted 116->104). `kerfur_reconcile` retire
+> logic unchanged -- only the TRIGGER moved.
 
 > **AS-BUILT (2026-06-24) -- the RETIRE path, scoped per RULE 1.** The build is the save-time-keyed RETIRE
 > (the load-bearing piece the user required), NOT the full off-stays-off exact-bind companion (doc design

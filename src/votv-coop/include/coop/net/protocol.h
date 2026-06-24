@@ -694,11 +694,14 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 87;  // v87: scope A kerfur off->active dup RETIRE --
-                                                  // KerfurConvertBroadcastPayload 104->116 (+hasMatchPos
-                                                  // +matchX/Y/Z: the kerfur's blob-instant SAVE-TIME
-                                                  // position, carried on a join-window turn-on so the
-                                                  // client retires its stale local off-prop). Prior:
+inline constexpr uint16_t kProtocolVersion = 88;  // v88: scope A v1 kerfur off->active dup RETIRE on the
+                                                  // NPC CHANNEL -- EntitySpawnPayload 96->108 (+hasMatchPos
+                                                  // +matchX/Y/Z: a join-window-turned-ON kerfur's SAVE-TIME
+                                                  // pos, carried on the npc EntitySpawn that DOES reach the
+                                                  // joiner; the client retires its stale local off-prop).
+                                                  // Replaces v87's convert-driven carry (KerfurConvert
+                                                  // SendReliable FAILS mid-join -> retire never fired,
+                                                  // hands-on 16:37). KerfurConvert reverted 116->104. Prior:
                                                   // v86: Path 1c join-window pile DUP fix -- PropSpawnPayload
                                                   // 200->212 (+hasMatchPos +matchX/Y/Z: the pile's SAVE-TIME
                                                   // position, stamped on the join snapshot from the host's
@@ -2188,16 +2191,12 @@ struct KerfurConvertBroadcastPayload {
     uint32_t      newEid;        // 4  -- the new-form's host-range wire eid (the Npc/Prop mirror id to install)
     uint8_t       toForm;        // 1  -- 0 = NPC (prop->NPC turn on), 1 = prop (NPC->prop turn_off)
     uint8_t       rejected;      // 1  -- 1 = host refused (sentient/kill); 0 = success
-    uint8_t       hasMatchPos;   // 1  -- scope A (kerfur off->active dup retire): 1 => matchX/Y/Z carry this
-                                 //       kerfur's SAVE-TIME position (the blob-instant off-prop pos). On a
-                                 //       turn-ON the client retires its stale local off-prop matched at that key.
-    uint8_t       _pad;          // 1
+    uint8_t       _pad[2];       // 2
     float         locX, locY, locZ;            // 12 -- new-form actor world location
     float         rotPitch, rotYaw, rotRoll;   // 12 -- new-form actor rotation
     WireClassName newClassName;  // 64 -- the new-form class (e.g. "prop_kerfurOmega_C"); empty on reject
-    float         matchX, matchY, matchZ;      // 12 -- save-time position (world cm); valid iff hasMatchPos
 };
-static_assert(sizeof(KerfurConvertBroadcastPayload) == 116, "KerfurConvertBroadcastPayload must be 116 bytes (scope A: +matchX/Y/Z save-time retire key)");
+static_assert(sizeof(KerfurConvertBroadcastPayload) == 104, "KerfurConvertBroadcastPayload must be 104 bytes");
 static_assert(sizeof(KerfurConvertBroadcastPayload) <= 256 - 20 - 8,
               "KerfurConvertBroadcastPayload must fit in one reliable datagram");
 
@@ -2881,11 +2880,19 @@ struct EntitySpawnPayload {
                                    //      PRESENCE of a key (= is-a-save-object) is portable, not its value.
                                    //      See research/findings/votv-kerfurOmega-coop-double-and-camera-
                                    //      RE-2026-06-14.md sec "CORRECTION" + sec 11.
-    uint8_t       _pad2[3];        // 3 -- align loc to 4 (was the tail of WireKey)
+    uint8_t       hasMatchPos;     // 1 -- scope A v1 (kerfur off->active dup retire): 1 => matchX/Y/Z carry
+                                   //      this NPC's SAVE-TIME position. Set ONLY for a kerfur that was OFF
+                                   //      in the transferred save and the host turned ON in the join window
+                                   //      (KerfurRecord.saveTimePos). The joining client arms a retire of its
+                                   //      stale local off-prop at that key (kerfur_reconcile) -- the active
+                                   //      form rides THIS npc channel (which reaches the client), unlike the
+                                   //      KerfurConvert reliable that fails mid-join (hands-on 16:37 root).
+    uint8_t       _pad2[2];        // 2 -- align loc to 4 (was 3 with WireKey tail; hasMatchPos took one byte)
     float         locX, locY, locZ;            // 12 -- world cm at spawn time
     float         rotPitch, rotYaw, rotRoll;   // 12 -- FRotator
+    float         matchX, matchY, matchZ;      // 12 -- save-time position (world cm); valid iff hasMatchPos
 };
-static_assert(sizeof(EntitySpawnPayload) == 96, "EntitySpawnPayload must be 96 bytes (v75: savePersisted replaces WireKey)");
+static_assert(sizeof(EntitySpawnPayload) == 108, "EntitySpawnPayload must be 108 bytes (scope A v1: +hasMatchPos +matchX/Y/Z kerfur save-time retire key)");
 static_assert(sizeof(EntitySpawnPayload) <= 256 - 20 - 8,
               "EntitySpawnPayload must fit in one reliable datagram");
 
