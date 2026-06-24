@@ -8,6 +8,7 @@
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"             // GetSession (the shared client gate)
 #include "coop/prop_element_tracker.h" // UnmarkKnownKeyedProp (silence the K2_DestroyActor PRE observer)
+#include "coop/save_time_retire_util.h" // FindExactMatch + UnmarkAndDestroy (the shared kernel)
 #include "ue_wrap/engine.h"            // GetActorLocation + DestroyActor
 #include "ue_wrap/hot_path_guard.h"    // UE_ASSERT_GAME_THREAD
 #include "ue_wrap/log.h"
@@ -28,13 +29,8 @@ namespace R = ue_wrap::reflection;
 // Keyed by the broadcast K; retried at the post-quiescence sweep. Game-thread only (no mutex).
 std::unordered_map<uint32_t, ue_wrap::FVector> g_pendingRetire;
 
-constexpr float kRetireR2Cm = 1.0f;  // 1 cm^2 -- exact (the save round-trip is bit-for-bit; both peers
-                                     // loaded the same save, so the local off-prop sits at the host's
-                                     // captured save-time position). Position uniqueness (no two kerfurs
-                                     // share a save position to <1cm) makes the match unambiguous in
-                                     // practice; the ambiguous->skip guard below keeps it FAIL-SAFE if two
-                                     // off-kerfurs ever sat <1cm apart (audit M3: skip both, dup persists,
-                                     // never retire the wrong one) -- a coverage gap, never a wrong destroy.
+// The 1cm exact match + ambiguous->skip + retire is the shared mirror-identity kernel
+// (coop/save_time_retire_util.h, kExactMatchR2Cm); the comment there carries the rationale.
 
 bool IsClient() {
     auto* s = coop::npc_sync::GetSession();
@@ -76,14 +72,6 @@ void CollectLocalOffPropKerfurs(std::vector<LocalOffProp>& out) {
     }
 }
 
-// Drop the actor's local eid FIRST (silence the K2_DestroyActor PRE observer -- no stray PropDestroy on a
-// superseded client eid; the same fresh-mirror invariant pile_reconcile + the adopt-bind path enforce),
-// then destroy it. Game thread.
-void RetireActor(void* actor) {
-    coop::prop_element_tracker::UnmarkKnownKeyedProp(actor);
-    ue_wrap::engine::DestroyActor(actor);
-}
-
 }  // namespace
 
 void Reset() {
@@ -116,16 +104,11 @@ int SweepReconcileSaveTimeKerfurs() {
     toRetire.reserve(pendingN);
     for (const auto& [hostEid, key] : g_pendingRetire) {
         (void)hostEid;
-        int matchCount = 0, matchIdx = -1;
-        for (int i = 0; i < static_cast<int>(cands.size()); ++i) {
-            if (consumed[i]) continue;
-            const float dx = cands[i].x - key.X, dy = cands[i].y - key.Y, dz = cands[i].z - key.Z;
-            if (dx * dx + dy * dy + dz * dz > kRetireR2Cm) continue;
-            if (!R::IsLiveByIndex(cands[i].actor, cands[i].idx)) continue;
-            ++matchCount;
-            matchIdx = i;
-        }
-        if (matchCount == 1) { consumed[matchIdx] = true; toRetire.push_back(cands[matchIdx].actor); }
+        // No secondary tie-break for kerfur (position alone is the key; correctly-adopted off-props are
+        // host mirrors, already excluded from `cands`). Ambiguous(>1)/absent(0) -> -1 -> retire nothing.
+        const int matchIdx = coop::save_time_retire_util::FindExactMatch(
+            cands, consumed, key, [](const LocalOffProp&) { return true; });
+        if (matchIdx >= 0) { consumed[matchIdx] = true; toRetire.push_back(cands[matchIdx].actor); }
     }
 
     // NO >50% ratio-valve here (REMOVED 2026-06-24, hands-on 17:06 root). A ratio valve was mis-ported
@@ -139,7 +122,7 @@ int SweepReconcileSaveTimeKerfurs() {
     // deliberate host turn-on) matched by the EXACT 1cm save-time key under position uniqueness +
     // ambiguous(>1)->skip + the non-mirror IsKerfurPropClass gate -- so the retire set is intrinsically
     // bounded + precise, and no ratio guard fits or is needed.
-    for (void* actor : toRetire) RetireActor(actor);
+    for (void* actor : toRetire) coop::save_time_retire_util::UnmarkAndDestroy(actor);
     UE_LOGI("kerfur_reconcile: sweep-retire -- %zu of %zu pending save-time kerfur retire(s) at "
             "post-quiescence (the late-loaded stale local off-prop destroyed; the active NPC is the sole "
             "form -- join-window off->active dup fixed)",

@@ -9,6 +9,7 @@
 
 #include "coop/ini_config.h"  // IsIniKeyTrue -- the [PILE-DELTA] probe flag (votv-coop.ini [dev], not bats/env)
 #include "coop/prop_element_tracker.h"  // UnmarkKnownKeyedProp / GetPropElementIdForActor
+#include "coop/save_time_retire_util.h"  // FindExactMatch + UnmarkAndDestroy + kExactMatchR2Cm (shared kernel)
 #include "coop/trash_proxy.h"  // NearestPileProxy (the census)
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
@@ -122,7 +123,10 @@ void TryDestroyTwin(const coop::net::PropSpawnPayload& payload,
                     bool isSaveTimeKey,
                     const std::unordered_set<void*>& claimed) {
     EnsureIndex(claimed);
-    constexpr float kDestroyR2Cm = 1.0f;  // 1 cm^2 -- the probe confirmed a bit-exact (1cm) twin
+    // Inline match (NOT save_time_retire_util::FindExactMatch): this path does an O(1) swap-pop CONSUME
+    // from g_pileBindIndex on a match (lines below), which the non-mutating index-return kernel cannot
+    // model; keep it inline. The 1cm + ambiguous(>1)->skip policy is the same as the shared kernel.
+    constexpr float kDestroyR2Cm = coop::save_time_retire_util::kExactMatchR2Cm;  // 1 cm^2 -- bit-exact twin
     int matchCount = 0, matchIdx = -1;
     for (int i = 0; i < static_cast<int>(g_pileBindIndex.size()); ++i) {
         const auto& c = g_pileBindIndex[i];
@@ -140,8 +144,7 @@ void TryDestroyTwin(const coop::net::PropSpawnPayload& payload,
         // Drop its client-minted eid from the tracker FIRST so the K2_DestroyActor PRE observer
         // stays silent (keyless + no eid) -- no stray PropDestroy on the superseded client eid
         // (the same fresh-mirror invariant the adopt-bind path enforces, audit 2026-06-10).
-        coop::prop_element_tracker::UnmarkKnownKeyedProp(native);
-        ue_wrap::engine::DestroyActor(native);
+        coop::save_time_retire_util::UnmarkAndDestroy(native);
         if (g_pileBindCount < 8 || (g_pileBindCount % 200) == 0)
             UE_LOGI("[PILE] DESTROY native level-pile twin eid=%u at (%.1f,%.1f,%.1f) chipType=%u -- "
                     "proxy is the sole mirror now (dup fixed; %zu native(s) left in index)",
@@ -292,7 +295,7 @@ int SweepReconcileSaveTimeTwins() {
     // FRESH GC-robust walk of live native chipPiles (the world-ready index is stale: built BEFORE
     // these natives async-loaded; the same reason LogCensus re-walks). Pointer-compare class filter
     // before any read; no stored internal indices (a sweep-time mass-purge stales them).
-    struct LiveNative { void* actor; int32_t idx; float x, y, z; uint8_t chipType; bool consumed; };
+    struct LiveNative { void* actor; int32_t idx; float x, y, z; uint8_t chipType; };
     std::vector<LiveNative> natives;
     const int32_t n = R::NumObjects();
     for (int32_t i = 0; i < n; ++i) {
@@ -301,27 +304,23 @@ int SweepReconcileSaveTimeTwins() {
         if (!ue_wrap::prop::IsChipPile(o)) continue;                   // real actorChipPile_C only (NOT our proxy)
         if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;   // CDO
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(o);
-        natives.push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z, ue_wrap::prop::GetChipType(o), false});
+        natives.push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z, ue_wrap::prop::GetChipType(o)});
     }
 
-    // Match each pending save-time key to the now-loaded native within 1cm + same chipType. Claim-track
-    // (consumed) so two keys never claim one native. 1cm is exact (the save round-trip is bit-for-bit;
-    // the key IS the native's loaded position -- proven by the 2026-06-23 hands-on: census orphan @old
-    // == matchKey @old to 0.1cm).
-    constexpr float kR2Cm = 1.0f;
+    // Match each pending save-time key to the now-loaded native within 1cm + same chipType via the shared
+    // mirror-identity kernel (claim-track so two keys never claim one native; ambiguous(>1)->skip never
+    // destroys the wrong one). 1cm is exact (the save round-trip is bit-for-bit; the key IS the native's
+    // loaded position -- proven by the 2026-06-23 hands-on: census orphan @old == matchKey @old to 0.1cm).
+    std::vector<bool> consumedFlags(natives.size(), false);
     std::vector<void*> toRemove;
     toRemove.reserve(pendingN);
     for (const auto& [eid, p] : g_pendingSaveTimeTwin) {
-        for (auto& nv : natives) {
-            if (nv.consumed) continue;
-            if (nv.chipType != p.chipType) continue;
-            const float dx = nv.x - p.x, dy = nv.y - p.y, dz = nv.z - p.z;
-            if (dx * dx + dy * dy + dz * dz > kR2Cm) continue;
-            if (!R::IsLiveByIndex(nv.actor, nv.idx)) continue;
-            nv.consumed = true;
-            toRemove.push_back(nv.actor);
-            break;
-        }
+        (void)eid;
+        const ue_wrap::FVector key{p.x, p.y, p.z};
+        const int idx = coop::save_time_retire_util::FindExactMatch(
+            natives, consumedFlags, key,
+            [&p](const LiveNative& nv) { return nv.chipType == p.chipType; });
+        if (idx >= 0) { consumedFlags[idx] = true; toRemove.push_back(natives[idx].actor); }
     }
 
     // SAFETY VALVE (mirrors RunDivergenceSweep_'s >50% valve): removing MORE THAN HALF the live native
@@ -335,13 +334,11 @@ int SweepReconcileSaveTimeTwins() {
         return 0;
     }
 
-    for (void* native : toRemove) {
+    for (void* native : toRemove)
         // Drop the client-minted eid FIRST so the K2_DestroyActor PRE observer stays silent (no stray
         // PropDestroy on the superseded client eid) -- the same fresh-mirror invariant the world-ready
         // twin-destroy enforces.
-        coop::prop_element_tracker::UnmarkKnownKeyedProp(native);
-        ue_wrap::engine::DestroyActor(native);
-    }
+        coop::save_time_retire_util::UnmarkAndDestroy(native);
     UE_LOGI("[PILE-1C] sweep-reconcile -- %zu of %zu pending save-time twin(s) removed at post-quiescence "
             "(the late-loaded native@old destroyed; the proxy@new is the sole mirror -- join-window dup fixed)",
             toRemove.size(), pendingN);
