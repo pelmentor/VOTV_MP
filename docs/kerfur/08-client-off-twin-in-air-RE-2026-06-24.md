@@ -47,6 +47,18 @@ fresh-spawn sits at the NPC's standing height; the mirror is kinematic (no physi
 the real local off-prop has physics and settles to the ground. This is the convert-ghost/adoption handoff
 family (kin to OBS-2 / doc 04 camera), NOT mirror-identity, NOT the extract.
 
+## Autonomous re-confirmation (2026-06-24, kerfurtoggle smoke on the instant-world build d7b535d7)
+A `mp.py kerfurtoggle` run reproduced it deterministically: client turn-off at 21:02:00 ->
+`remote_prop::OnSpawn: kerfur fuzzy match ... resolves to a neighbor with a DIFFERENT key ... anti-collision:
+not stealing it, fresh-spawning instead` -> `kerfur-prop-adopt eid=3218 ... no local twin ... fresh-spawning a
+mirror` -> harness verdict `PROP ADOPT FAILED ... + 1 orphan-destroy: an adopt MISSED and the ghost timed out
+(a transient dupe before cleanup)`. This IS the twin (fresh-spawn instead of adopt-the-parked-ghost, then the
+orphan-destroy cleanup). Two things it PROVED: (1) NOT an instant-world regress -- `mirror_defer` was DISARMED
+(quiescence-reveal 21:01:34) before the toggle (21:02:00), so OnMirrorSpawned no-op'd (the IsArmed gate); (2)
+NOT an extract regress -- the Gap-I-1 fuzzy machinery is intact (it de-duped `prop_camera_good_C` within 30cm
+the same run); only the kerfur convert-ghost<->adoption handoff fresh-spawns. The harness "FAIL" is it expecting
+an adopt the (correct) anti-collision gate refuses -- the documented pre-existing twin, cosmetic.
+
 ## End-state is correct (cosmetic)
 The dup self-resolves (the orphan/backup cleanup deletes one) -> a VISIBLE flicker, not a persistent dup.
 Matches the user's "world mirrors well, but an annoying artifact." So this is a TIMING/visual problem ->
