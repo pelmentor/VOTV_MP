@@ -410,7 +410,13 @@ HRESULT STDMETHODCALLTYPE PresentDetour(IDXGISwapChain* sc, UINT sync, UINT flag
     // Render when an interactive surface is open OR the always-on passive HUD has
     // something to show (a nameplate / chat line) -- so the HUD overlays during play
     // without needing F1/tilde. HudActive() is a lock-free pair of atomics.
-    if (g_imguiReady.load(std::memory_order_acquire) && (AnyOpen() || ui::hud::IsActive())) {
+    // Also render while the instant-world curtain is active: it must keep drawing for its 0.4s
+    // alpha-fade AFTER the loading panel drops at SnapshotComplete (Complete() makes LoadingOpen
+    // false in the same drain tick as BeginDismiss), else the fade is skipped and the cover snaps.
+    // Added to the RENDER gate only (NOT AnyOpen, which also gates input/cursor) -- the curtain is
+    // purely visual + non-interactive.
+    if (g_imguiReady.load(std::memory_order_acquire) &&
+        (AnyOpen() || ui::hud::IsActive() || coop::join_curtain::IsActive())) {
         g_inFrame.store(true, std::memory_order_release);
         if (!g_rtv) CreateRTV(sc);  // recreate after a resize
         RenderFrameGuarded();

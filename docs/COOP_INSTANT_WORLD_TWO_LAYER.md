@@ -114,13 +114,48 @@ deferred-visibility hooks at the 2 chokes + a reveal driver (2 reveal events: se
 tail-at-quiescence), 2 new UFunction resolves (`SetActorHiddenInGame`, `SetActorEnableCollision` via AOB/
 reflection). ~150-250 LOC. No wire/protocol change. Backup untouched. One-feature files per the modular rule.
 
-## Open questions for review
-- The confirmed/pending partition: is reusing the existing pending sets sufficient, or are there mirror
-  kinds with no pending-set membership that still dance (e.g. an NPC mirror that pops in late but is never
-  "pending")? Audit each spawn path's pending membership before coding.
-- Curtain mechanism: full-viewport ImGui opaque window (simplest, no UFunction) vs UE `ClientSetCameraFade`
-  (engine-native fade, +1 UFunction). Recommend ImGui first.
-- The residual post-lift local reposition: measure in hands-on before deciding whether to add re-hide.
+## Open (a) AUDIT -- CLEAN (2026-06-24, agent + own cross-check). SEAM 3 ROBUST -> cleared to build.
+Every fresh mirror is confirmed-safe-at-lift OR in an existing pending set -- NO third category.
+- **(a1) funnel:** all fresh mirror spawns route through the 2 chokes (props/kerfur-props/proxies via
+  `OnSpawn`, NPCs via `SpawnFreshNpcMirror`). Bind-local paths (exact-key/fuzzy/keyless/adopt) create NO new
+  actor -> SEAM-1 curtain covers their reposition jumps. ONE bypass: the remote-player PUPPET
+  (`net_pump.cpp:934`) -- no local twin (no dup), never hidden (not stuck) -> cosmetic, OUT OF SCOPE.
+- **(a2) reveal reach:** every fresh mirror is Install'd into `MirrorManager<Prop>`/`<Npc>` (the trash proxy
+  IS a `MirrorManager<Prop>` element, not only `trash_proxy`'s local map) -> the quiescence full-walk
+  backstop catches all -> NO stuck-hidden possible.
+- **(a3) whitelist:** CONFIRMED = exact-key/fuzzy/keyless binds + host-only-transient fresh-spawns. HOLD =
+  `g_pendingSaveTimeTwin` (pile) / `g_pendingRetire` (kerfur off->active) / adoption + ghost-sweep pending.
+
+### 3 build refinements (folded in; backup untouched)
+1. **Proxy hide placement:** hide in `trash_proxy::SpawnProxy` (proxy born by E::SpawnActor, NOT the OnSpawn
+   BeginDeferred pipeline); **Hide-only** (proxies already collision-less, `trash_proxy.cpp:186`); NOT on the
+   idempotent re-spawn convergence return (`trash_proxy.cpp:165-169`).
+2. **Hide AFTER register:** place the deferred-hide after `RegisterPropMirror`/`Install` (OnSpawn:947 /
+   npc_mirror Install) so an actor is never hidden-but-unenumerable.
+3. **Confirmed test checks the 2 save-time sets:** lift-reveal gates on new `IsPendingSaveTimeTwin(eid)`
+   (pile_reconcile) + `IsPendingKerfurRetire(eid)` (kerfur_reconcile) predicates -- their LOCAL twins are
+   still visible at lift = the dup-flash to avoid.
+
+### Post-deploy audit (2026-06-24, code-reviewer agent) -- 2 fixes applied, 2 modularity flags
+No CRITICAL. PASS on perf (spawn hooks O(1), join-burst-only via IsArmed gate; reveals iterate g_hidden once;
+curtain Render O(1)), thread-safety (mirror_defer game-thread-asserted; join_curtain atomic state + read-only
+Render), correctness (IsArmed gate / g_revealed guard / liveness-gated reveal / hasMatchPos on both payloads /
+collision asymmetry), and backup-untouched (git diff reconcile = 0). FIXED: (1) the curtain fade is rendered
+via a curtain-aware RENDER gate (`AnyOpen() || hud::IsActive() || join_curtain::IsActive()`) so the 0.4s
+alpha-fade isn't skipped when the loading panel drops at SnapshotComplete; (2) `mirror_defer::Arm()` now
+reveals-then-clears (a soft re-bracket can't strand a hidden mirror). MODULARITY FLAGS (not blocking, no
+extraction done autonomously): `engine.cpp` 884 LOC and `remote_prop_spawn.cpp` 1401 LOC are past the 800 soft
+cap. Reasoning to NOT extract now: `engine.cpp` is the cohesive home for ALL AActor UFunction thunks
+(GetActorLocation / SetActorTickEnabled / ... / SetActorHiddenInGame are siblings, one concern) -- splitting
+only the 2 visibility ones would be inconsistent; a real split is an engine-wide by-concern refactor.
+`remote_prop_spawn.cpp`'s OnSpawn convergence triple is tightly coupled to the shared claim state -- a separate
+planned extraction, not triggered by +23 wiring lines. Both flagged for a future dedicated refactor.
+
+### Decisions
+- Curtain = **ImGui full-viewport cover with ALPHA-FADE dismissal** (~0.3-0.5s, 1->0 on SnapshotComplete; NOT
+  UE `ClientSetCameraFade` -- our surface, our trigger, smooth reveal). NOT a hard snap.
+- The residual post-lift LOCAL reposition (rare) + the puppet spawn-pop: measure in hands-on before adding a
+  re-hide. Do NOT over-build now.
 
 ## Approaches considered (the assessment that led to this hybrid)
 | approach | scale | risk to backup | coverage | chosen |

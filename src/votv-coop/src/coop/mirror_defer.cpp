@@ -46,6 +46,10 @@ void RevealRec(const HiddenRec& r) {
 
 void Arm() {
     UE_ASSERT_GAME_THREAD("mirror_defer::Arm");
+    // Reveal any stale hidden mirrors from a PRIOR bracket before re-arming (a soft re-bracket -- two
+    // SnapshotBegin without a disconnect in between -- would otherwise strand them invisible). Liveness-gated,
+    // so a full teardown's dead actors are a harmless no-op. Same reveal-then-clear discipline as Reset().
+    for (auto& kv : g_hidden) RevealRec(kv.second);
     g_armed = true;
     g_hidden.clear();
     g_revealed.clear();
