@@ -128,17 +128,17 @@ int SweepReconcileSaveTimeKerfurs() {
         if (matchCount == 1) { consumed[matchIdx] = true; toRetire.push_back(cands[matchIdx].actor); }
     }
 
-    // SAFETY VALVE (mirrors pile_reconcile + RunDivergenceSweep_'s >50% valve): retiring MORE THAN HALF
-    // the live local off-prop kerfurs is not a handful of window turn-ons -- it is a racing/incomplete
-    // bracket. Refuse it; the off-props stay.
-    if (!cands.empty() && static_cast<int>(toRetire.size()) * 2 > static_cast<int>(cands.size())) {
-        UE_LOGW("kerfur_reconcile: sweep-retire ABORTED -- %zu of %zu live local off-prop kerfur(s) "
-                "(>50%%); racing/incomplete bracket, not divergence -- keeping all",
-                toRetire.size(), cands.size());
-        g_pendingRetire.clear();
-        return 0;
-    }
-
+    // NO >50% ratio-valve here (REMOVED 2026-06-24, hands-on 17:06 root). A ratio valve was mis-ported
+    // from pile_reconcile, where the denominator is ALL live native piles (claimed + unclaimed) so >50%
+    // genuinely flags a racing bracket. Here `cands` is ONLY non-mirror LOCAL off-prop kerfurs -- every
+    // correctly-adopted off-prop is a host MIRROR, excluded from `cands` -- so the denominator IS the
+    // stale set, and the CORRECT action (retire the lone stale off-prop) is always 100% -> the valve
+    // false-aborted the exact case it should allow (17:06: "sweep-retire ABORTED -- 1 of 1 (>50%)" while
+    // the off-prop sat on its exact save-time key). The kerfur racing-bracket mode is "off-prop not loaded
+    // -> 0 matches" (handled below by no-match), never over-match: each retire is one ARMED pending (a
+    // deliberate host turn-on) matched by the EXACT 1cm save-time key under position uniqueness +
+    // ambiguous(>1)->skip + the non-mirror IsKerfurPropClass gate -- so the retire set is intrinsically
+    // bounded + precise, and no ratio guard fits or is needed.
     for (void* actor : toRetire) RetireActor(actor);
     UE_LOGI("kerfur_reconcile: sweep-retire -- %zu of %zu pending save-time kerfur retire(s) at "
             "post-quiescence (the late-loaded stale local off-prop destroyed; the active NPC is the sole "

@@ -1,8 +1,16 @@
 # Hands-on runbook — scope A v1: kerfur forward off->active dup RETIRE (NPC channel)
 
-**Deployed:** MD5 `D8A3D89EA650B0E1FA9FA4011B7DE967` (short `D8A3D89E`) on HOST + CLIENT + CLIENT2 + DEV.
+**Deployed:** MD5 `39455EC694E0CB1E90598B6524EB5E44` (short `39455EC6`) on HOST + CLIENT + CLIENT2 + DEV.
 Build clean. **Proto v88** (EntitySpawnPayload 96->108) -- BOTH peers MUST run this DLL. Audited: perf PASS +
-correctness PASS (no CRITICAL/HIGH; 2 benign LOW documented).
+correctness PASS (no CRITICAL/HIGH).
+
+> **v1.1 (2026-06-24, after the 17:06 PARTIAL):** the 17:06 run got the carry+arm+sweep+match ALL working
+> (`ARMED ... (from npc EntitySpawn)` + the off-prop sat on its EXACT save-time key) but the retire was vetoed
+> by a `>50%` abort valve (`sweep-retire ABORTED -- 1 of 1 (>50%)`). That valve was mis-ported from
+> pile_reconcile: here the denominator is ONLY non-mirror local off-props (correctly-adopted ones are
+> mirrors, excluded), so retiring the lone stale off-prop is always 100% -> false abort. **The valve is
+> REMOVED** (the safety is the exact 1cm key + uniqueness + ambiguous-skip + non-mirror gate). Now the
+> sweep should RETIRE (no ABORTED line).
 
 ## What changed vs the failed 6c668b9d (16:37)
 The 16:37 run FAILED because the retire was triggered by the KerfurConvert, and a join-window turn-on's
@@ -35,8 +43,8 @@ CLIENT (the fix chain):
 3. `[KERFUR CENSUS] ... TOTAL ... (0 UNCLAIMED)` -- the dup is gone.
 
 NOT expected (failure signatures): an `ARMED` line but NO `sweep-retire` (the off-prop never matched -- paste
-the census); `sweep-retire ABORTED ... >50%` (racing bracket -- reconnect clean); a census `*** UNCLAIMED ***`
-prop still present (dup persists).
+the census + position); a census `*** UNCLAIMED ***` prop still present (dup persists). (The `sweep-retire
+ABORTED ... >50%` line from 17:06 should NO LONGER appear -- that valve was removed.)
 
 ## Acceptance (the 6 criteria)
 1. **save-time pos on the npc channel:** the client `kerfur_reconcile: ARMED ... (from npc EntitySpawn)` line

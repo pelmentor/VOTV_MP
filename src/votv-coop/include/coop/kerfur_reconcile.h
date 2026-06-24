@@ -45,9 +45,10 @@ void ArmPendingRetire(uint32_t hostEid, const ue_wrap::FVector& saveTimePos);
 // Post-quiescence retire of every armed pending. Driven from kerfur_convert::PollKerfurConversions (the
 // CLIENT poll, already load-tail-quiescence-gated, bracket-INDEPENDENT) so it fires even when no pile
 // bracket armed (the SnapshotBegin-lost flake). For each pending (hostEid -> save-time key) a FRESH
-// GUObjectArray walk finds the now-loaded LOCAL (non-mirror) off-prop within 1 cm and retires it. SAFETY:
-// a >50%-of-live-local-off-prop-kerfurs abort-valve refuses a removal that big = a racing bracket.
-// Returns the count retired; clears the pending set (so it self-limits to one pass per arming). Game thread.
+// GUObjectArray walk finds the LOCAL (non-mirror) off-prop within 1 cm and retires it. SAFETY = the EXACT
+// 1cm key + position uniqueness + ambiguous(>1)->skip + the non-mirror IsKerfurPropClass gate (NO ratio
+// valve -- it false-aborted the lone-stale-off-prop case, hands-on 17:06; the cpp explains why). Returns
+// the count retired; clears the pending set (self-limits to one pass per arming). Game thread.
 int SweepReconcileSaveTimeKerfurs();
 
 }  // namespace coop::kerfur_reconcile
