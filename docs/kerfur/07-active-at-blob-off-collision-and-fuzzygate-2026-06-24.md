@@ -111,8 +111,13 @@ partially reconciles; doesn't -> survives whole). The census for 15:41 was trunc
 generalize candidate (`docs/COOP_MIRROR_IDENTITY_WINDOW_RACE.md`). NOT a retire-authority instance (census
 ruled out the untracked-NPC path).
 
-**NEXT: build scope A** (doc 03, design ready) -- it closes the forward dup + the position-skew. Census probe
-STAYS (new rule 2026-06-24: RULE 2 does not apply to probes/diagnostics/tools).
+**scope A BUILT + DEPLOYED (2026-06-24, MD5 `E27D176C`, proto v87):** the save-time-keyed RETIRE (host carries
+each off-kerfur's blob-instant save-time pos on the KerfurConvert turn-on; client retires its stale local off-prop
+at the 1cm key, immediate + post-quiescence backstop driven by the kerfur poll so it fires even on the
+bracket-not-armed flake). HANDS-ON PENDING (`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). The
+off-stays-off exact-bind half of doc 03 was scoped OUT (already clean at the 15:00 run under fuzzy-gate fix#1 --
+RULE 1, do not churn the working adoption/snapshot paths). Census probe STAYS (RULE 2 exempts
+probes/diagnostics/tools). See doc 03 AS-BUILT for the component map + the H1 audit fix.
 
 ## FIX#2 -- active-at-blob -> OFF body (NOT built; SEPARATE design pass)
 The host-turned-off kerfur's client twin is an ACTIVE NPC; giving it the correct off-prop body means either

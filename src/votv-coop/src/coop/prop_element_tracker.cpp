@@ -738,6 +738,41 @@ void CollectTrackedPileTransforms(
                 minted, out.size());
 }
 
+void CollectTrackedKerfurTransforms(
+    std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out) {
+    // scope A (kerfur off->active dup retire, 2026-06-24): the host's save-time OFF-form-kerfur positions,
+    // keyed by host eid. Identical mechanism to CollectTrackedPileTransforms (blob-instant capture +
+    // self-seed) but gated to the kerfur prop lineage (prop_kerfurOmega_C + skins). A kerfur off-prop is
+    // a KEYED Aprop (registered with its Aprop_Key by the normal seed), so the self-seed mints with the
+    // real key, not the keyless chipPile placeholder. The host stamps this position onto the KerfurConvert
+    // when it turns the kerfur ON in the join window; the joining client then RETIRES its stale local
+    // off-prop matched at this exact key (the off-prop the host no longer expresses as off). One
+    // GUObjectArray walk, game thread (engine reads + register-only mints, no broadcast).
+    const int32_t n = R::NumObjects();
+    int minted = 0;
+    for (int32_t i = 0; i < n; ++i) {
+        void* obj = R::ObjectAt(i);
+        if (!obj) continue;
+        void* cls = R::ClassOf(obj);
+        if (!cls || !coop::kerfur_entity::IsKerfurPropClass(cls)) continue;  // off-form kerfurs only
+        if (!R::IsLive(obj)) continue;
+        if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;       // CDO
+        coop::element::ElementId eid = GetPropElementIdForActor(obj);
+        if (eid == coop::element::kInvalidId || eid == 0u) {
+            const std::wstring key = ue_wrap::prop::GetInteractableKeyString(obj);  // kerfur off-prop is keyed
+            MarkPropElement(obj, (key == L"None") ? std::wstring() : key, R::ClassNameOf(obj));
+            eid = GetPropElementIdForActor(obj);  // resolves in-call (minted before return)
+            if (eid == coop::element::kInvalidId || eid == 0u)
+                continue;  // mint declined (registry full) -> no save-time key for this kerfur (live-pose fallback)
+            ++minted;
+        }
+        out[eid] = ue_wrap::engine::GetActorLocation(obj);
+    }
+    if (minted > 0)
+        UE_LOGI("prop_element_tracker: CollectTrackedKerfurTransforms self-seeded %d unseeded live "
+                "kerfur off-prop(s) -> %zu kerfur save-time xform(s)", minted, out.size());
+}
+
 bool HasSeededOnce() {
     return g_seededOnce.load(std::memory_order_acquire);
 }

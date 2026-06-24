@@ -222,6 +222,7 @@ add_library(votv-coop SHARED
     src/coop/kerfur_menu_input.cpp
     src/coop/kerfur_entity.cpp
     src/coop/kerfur_prop_adoption.cpp
+    src/coop/kerfur_reconcile.cpp
     src/coop/keypad_sync.cpp
     src/coop/time_sync.cpp
     src/coop/sky_sync.cpp

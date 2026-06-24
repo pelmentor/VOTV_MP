@@ -9,6 +9,7 @@
 #include "coop/element/registry.h"
 #include "coop/net/protocol.h"   // KerfurConvertBroadcastPayload + ReliableKind (the BindFormActor wire)
 #include "coop/net/session.h"
+#include "coop/save_transfer.h"  // scope A: TryGetSaveTimeKerfurXformAnySlot (blob-instant off-prop pos)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
@@ -41,6 +42,12 @@ struct KerfurRecord {
     int32_t                  idx         = -1;
     std::string              npcClassName;
     std::string              propClassName;
+    // scope A (kerfur off->active dup retire): the kerfur's blob-instant SAVE-TIME position. Bootstrapped
+    // at the FIRST conversion from g_blobKerfurXforms[oldEid] (an off-prop turned ON in the join window),
+    // then carried across every subsequent flip on the same K. The KerfurConvert broadcast stamps it as
+    // matchX/Y/Z so the joining client retires its stale local off-prop at the exact key.
+    float                    saveTimePosX = 0.f, saveTimePosY = 0.f, saveTimePosZ = 0.f;
+    bool                     hasSaveTimePos = false;
 };
 
 std::mutex g_mutex;  // guards every table below (game thread in practice; locked for the worker-thread predicates)
@@ -234,6 +241,8 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
     if (!newActor || newEid == coop::element::kInvalidId) return coop::element::kInvalidId;
 
     coop::element::ElementId k = coop::element::kInvalidId;
+    bool  haveSaveTimePos = false;       // scope A: snapshot the record's anchor under the lock for the payload
+    float stX = 0.f, stY = 0.f, stZ = 0.f;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         auto eit = g_eidToKerfurId.find(oldEid);
@@ -267,6 +276,18 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
         if (newForm == Form::Npc) rec.npcClassName = cn; else rec.propClassName = cn;
         g_actorToKerfurId[newActor] = k;
         g_eidToKerfurId[newEid]     = k;
+        // scope A: bootstrap the save-time anchor from the blob map at the FIRST conversion (oldEid is
+        // the off-prop eid captured in g_blobKerfurXforms when a join-window turn-on fires); carry it
+        // forward across every subsequent flip on this K.
+        if (!rec.hasSaveTimePos) {
+            ue_wrap::FVector sv;
+            if (coop::save_transfer::TryGetSaveTimeKerfurXformAnySlot(oldEid, sv)) {
+                rec.saveTimePosX = sv.X; rec.saveTimePosY = sv.Y; rec.saveTimePosZ = sv.Z;
+                rec.hasSaveTimePos = true;
+            }
+        }
+        haveSaveTimePos = rec.hasSaveTimePos;
+        stX = rec.saveTimePosX; stY = rec.saveTimePosY; stZ = rec.saveTimePosZ;
     }
 
     // Broadcast the SOLE conversion-transition packet (host fan-out to all peers).
@@ -276,6 +297,8 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
     p.newEid   = static_cast<uint32_t>(newEid);
     p.toForm   = (newForm == Form::Prop) ? 1u : 0u;
     p.rejected = 0;
+    p.hasMatchPos = haveSaveTimePos ? 1u : 0u;  // scope A: carry the save-time retire key
+    p.matchX = stX; p.matchY = stY; p.matchZ = stZ;
     p.locX = locX; p.locY = locY; p.locZ = locZ;
     p.rotPitch = rotPitch; p.rotYaw = rotYaw; p.rotRoll = rotRoll;
     p.newClassName.len = 0;

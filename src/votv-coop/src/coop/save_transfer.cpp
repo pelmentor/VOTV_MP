@@ -108,6 +108,16 @@ std::unordered_set<std::wstring> g_blobKeys[coop::net::kMaxPeers];
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
     g_blobPileXforms[coop::net::kMaxPeers];
 
+// scope A (kerfur off->active dup retire, 2026-06-24): the SAVE-TIME position of every live OFF-form
+// kerfur at the blob instant, keyed by host eid. Captured alongside g_blobPileXforms (same OnRequest
+// instant == the positions the joiner loads its kerfur natives at). Read via
+// TryGetSaveTimeKerfurXformAnySlot at BindFormActor (the host stamps it onto the KerfurConvert when it
+// turns a kerfur ON in the join window) so the client retires its stale local off-prop at the exact key.
+// Same lifetime/threading as g_blobPileXforms -- it OUTLIVES the snapshot (window turn-ons fire during
+// the client load-tail) and is cleared only at CancelForSlot / OnDisconnect (bounded; no per-session leak).
+std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
+    g_blobKerfurXforms[coop::net::kMaxPeers];
+
 // How many chunks one TickHost pass may push per slot. 4 x 56KB at 60 Hz = ~13
 // MB/s ceiling; the GNS send buffer's backpressure (send failure -> stop, retry
 // next tick) is the real pacer on slower links.
@@ -362,9 +372,15 @@ void OnRequest(int peerSlot) {
             // path only (the stale-fallback leaves it empty -> the receiver uses the live pose).
             g_blobPileXforms[peerSlot].clear();
             coop::prop_element_tracker::CollectTrackedPileTransforms(g_blobPileXforms[peerSlot]);
-            UE_LOGI("save_transfer: slot %d -- captured %zu keyed-prop keys + %zu pile save-time xforms "
-                    "at blob instant (R2 + Path 1c baselines)",
-                    peerSlot, g_blobKeys[peerSlot].size(), g_blobPileXforms[peerSlot].size());
+            // scope A: capture every live OFF-form kerfur's save-time position (keyed by host eid) at this
+            // SAME blob instant -- the positions the joiner loads its kerfur natives at. The host stamps it
+            // onto the KerfurConvert at a window turn-on so the client retires its stale local off-prop.
+            g_blobKerfurXforms[peerSlot].clear();
+            coop::prop_element_tracker::CollectTrackedKerfurTransforms(g_blobKerfurXforms[peerSlot]);
+            UE_LOGI("save_transfer: slot %d -- captured %zu keyed-prop keys + %zu pile + %zu kerfur "
+                    "save-time xforms at blob instant (R2 + Path 1c + scope A baselines)",
+                    peerSlot, g_blobKeys[peerSlot].size(), g_blobPileXforms[peerSlot].size(),
+                    g_blobKerfurXforms[peerSlot].size());
             return;
         }
         UE_LOGW("save_transfer: slot %d -- live scratch '%ls.sav' unreadable after capture; "
@@ -423,6 +439,7 @@ void CancelForSlot(int peerSlot) {
     g_host[peerSlot] = HostStream{};
     g_blobKeys[peerSlot].clear();  // R2: drop any unconsumed blob baseline
     g_blobPileXforms[peerSlot].clear();  // v86 Path 1c: drop the unconsumed save-time pile map
+    g_blobKerfurXforms[peerSlot].clear();  // scope A: drop the unconsumed save-time kerfur map
 }
 
 // v86 Path 1c: the save-time position of pile `eid` captured at the blob instant for
@@ -435,6 +452,17 @@ bool TryGetSaveTimePileXform(int peerSlot, coop::element::ElementId eid, ue_wrap
     if (it == m.end()) return false;
     out = it->second;
     return true;
+}
+
+bool TryGetSaveTimeKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out) {
+    // The host turn-on broadcast (KerfurConvert) is a single fan-out, not per-joiner, and a kerfur
+    // off-prop's host eid is unique -- so search all active slots' blob maps and take the first hit.
+    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
+        const auto& m = g_blobKerfurXforms[slot];
+        auto it = m.find(eid);
+        if (it != m.end()) { out = it->second; return true; }
+    }
+    return false;
 }
 
 void SendBlobDivergenceDeletes(int peerSlot) {
@@ -566,6 +594,7 @@ void OnDisconnect() {
         g_host[slot] = HostStream{};
         g_blobKeys[slot].clear();  // R2: no blob baseline survives a session end
         g_blobPileXforms[slot].clear();  // v86 Path 1c: nor the save-time pile map
+        g_blobKerfurXforms[slot].clear();  // scope A: nor the save-time kerfur map
     }
 }
 

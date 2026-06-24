@@ -19,6 +19,7 @@
 #include "coop/ini_config.h"  // IsIniKeyTrue -- hands-on probe flags live in votv-coop.ini [dev], not bats/env
 #include "coop/kerfur_entity.h"  // GetKerfurMirrorEidForActor -- exempt host-driven kerfur mirrors in the grab-guard predicate (the SWEEP excludes mirrors structurally via pr.mirror since R3)
 #include "coop/kerfur_prop_adoption.h"  // K-6: defer a kerfur-prop fuzzy-miss to the polled adoption
+#include "coop/kerfur_reconcile.h"  // scope A: post-quiescence retry of the kerfur off->active dup retire
 #include "coop/net/protocol.h"
 #include "coop/npc_sync.h"  // IsAllowlistedClass -- the NPC half of the load-tail quiescence probe
 #include "coop/pile_reconcile.h"  // extracted 2026-06-23: keyless-pile join twin-destroy / adopt / census
@@ -1187,6 +1188,9 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // with its own >50% abort-valve. Runs BEFORE the census so the census reflects the removals.
     coop::pile_reconcile::SweepReconcileSaveTimeTwins();
     coop::pile_reconcile::LogCensus();  // extracted 2026-06-23 (FRESH GC-robust walk; no-op if no index built)
+    // NOTE: the kerfur off->active retire sweep (scope A) is NOT driven here -- it runs from the kerfur
+    // client poll (kerfur_convert::PollKerfurConversions, also quiescence-gated) so it fires even when no
+    // pile bracket armed (the SnapshotBegin-lost flake leaves g_sweepPending false). Single driver, RULE 2.
 
     g_claimedActors.clear();
     g_claimTrackingActive = false;
@@ -1370,6 +1374,7 @@ void ResetClaimTracking() {
     g_sweepStableScans = 0;
     g_sweepLastUnsettledCount = -1;
     coop::pile_reconcile::Reset();  // dangling-pointer hygiene across sessions (mirrors the claim set)
+    coop::kerfur_reconcile::Reset();  // scope A: drop any unconsumed save-time kerfur retire across sessions
 }
 
 }  // namespace coop::remote_prop_spawn

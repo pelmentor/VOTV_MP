@@ -86,6 +86,15 @@ void CancelForSlot(int peerSlot);
 // Game thread.
 bool TryGetSaveTimePileXform(int peerSlot, coop::element::ElementId eid, ue_wrap::FVector& out);
 
+// scope A (kerfur off->active dup retire, 2026-06-24): the SAVE-TIME position of OFF-form kerfur `eid`,
+// captured at the blob instant (OnRequest), searched across ALL active peer slots' blob maps (the host
+// turn-on broadcast that carries this is a single fan-out, not per-joiner, and a kerfur off-prop's host
+// eid is unique). Returns false (out untouched) if no slot captured this eid (stale-fallback join, a
+// kerfur bought after the save, or one already ACTIVE at every blob instant). The host stamps it onto the
+// KerfurConvert at BindFormActor so the joining client retires its stale local off-prop at the exact key.
+// Game thread.
+bool TryGetSaveTimeKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out);
+
 // R2 (2026-06-17, MTA Packet_EntityRemove): send EXPLICIT per-key PropDestroy to
 // `peerSlot` for every keyed prop its save-transfer BLOB contained that the host's
 // LIVE world no longer has (e.g. a prop the host grabbed/destroyed/converted during

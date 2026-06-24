@@ -694,7 +694,12 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 86;  // v86: Path 1c join-window pile DUP fix -- PropSpawnPayload
+inline constexpr uint16_t kProtocolVersion = 87;  // v87: scope A kerfur off->active dup RETIRE --
+                                                  // KerfurConvertBroadcastPayload 104->116 (+hasMatchPos
+                                                  // +matchX/Y/Z: the kerfur's blob-instant SAVE-TIME
+                                                  // position, carried on a join-window turn-on so the
+                                                  // client retires its stale local off-prop). Prior:
+                                                  // v86: Path 1c join-window pile DUP fix -- PropSpawnPayload
                                                   // 200->212 (+hasMatchPos +matchX/Y/Z: the pile's SAVE-TIME
                                                   // position, stamped on the join snapshot from the host's
                                                   // g_blobPileXforms map; the client twin-destroy matches the
@@ -2183,12 +2188,16 @@ struct KerfurConvertBroadcastPayload {
     uint32_t      newEid;        // 4  -- the new-form's host-range wire eid (the Npc/Prop mirror id to install)
     uint8_t       toForm;        // 1  -- 0 = NPC (prop->NPC turn on), 1 = prop (NPC->prop turn_off)
     uint8_t       rejected;      // 1  -- 1 = host refused (sentient/kill); 0 = success
-    uint8_t       _pad[2];       // 2
+    uint8_t       hasMatchPos;   // 1  -- scope A (kerfur off->active dup retire): 1 => matchX/Y/Z carry this
+                                 //       kerfur's SAVE-TIME position (the blob-instant off-prop pos). On a
+                                 //       turn-ON the client retires its stale local off-prop matched at that key.
+    uint8_t       _pad;          // 1
     float         locX, locY, locZ;            // 12 -- new-form actor world location
     float         rotPitch, rotYaw, rotRoll;   // 12 -- new-form actor rotation
     WireClassName newClassName;  // 64 -- the new-form class (e.g. "prop_kerfurOmega_C"); empty on reject
+    float         matchX, matchY, matchZ;      // 12 -- save-time position (world cm); valid iff hasMatchPos
 };
-static_assert(sizeof(KerfurConvertBroadcastPayload) == 104, "KerfurConvertBroadcastPayload must be 104 bytes");
+static_assert(sizeof(KerfurConvertBroadcastPayload) == 116, "KerfurConvertBroadcastPayload must be 116 bytes (scope A: +matchX/Y/Z save-time retire key)");
 static_assert(sizeof(KerfurConvertBroadcastPayload) <= 256 - 20 - 8,
               "KerfurConvertBroadcastPayload must fit in one reliable datagram");
 

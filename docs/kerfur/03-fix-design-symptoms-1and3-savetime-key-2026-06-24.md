@@ -1,8 +1,39 @@
-# 03 — FIX DESIGN (DRAFT): symptoms 1+3 shared save-time EXACT-key reconcile
+# 03 — FIX DESIGN: forward off->active dup save-time-keyed RETIRE (scope A)
 
-**Status: DESIGN READY + GREENLIT TO BUILD (2026-06-24). Root CENSUS-PINNED to identity-key; edges vetted; the
-forward off->active dup (doc 07) is EXACTLY this scenario. NOT YET built -- this is the NEXT build.**
-Covers symptom 1 (window dup) + symptom 3 (identity-collision). Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+**Status: BUILT + DEPLOYED (2026-06-24, MD5 `E27D176C`, proto v87). HANDS-ON PENDING (runbook
+`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). Perf audit PASS; correctness audit found one HIGH
+(sweep-liveness coupled to the pile bracket) ROOT-FIXED pre-deploy. NOT marked VERIFIED -- awaiting the hands-on.**
+Covers the forward off->active dup (doc 07: 15:43 dup + 15:41 skew). Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+
+> **AS-BUILT (2026-06-24) -- the RETIRE path, scoped per RULE 1.** The build is the save-time-keyed RETIRE
+> (the load-bearing piece the user required), NOT the full off-stays-off exact-bind companion (doc design
+> below). WHY scoped down: the off-stays-off symptoms 1+3 (two off-props window dup/collision) were already
+> CLEAN at the 15:00 clean-bracket run under fuzzy-gate fix#1 (5-off/1-active both peers) -> touching the
+> working adoption/snapshot off-prop paths would risk a regression for no open bug (RULE 1: fix the confirmed
+> root, do not churn what works). The CONFIRMED-open bug is purely the forward off->active dup, which the
+> RETIRE closes. Components built:
+> - **Capture** `g_blobKerfurXforms[slot][propEid]=P_save` at the blob instant (`save_transfer::OnRequest` ->
+>   `prop_element_tracker::CollectTrackedKerfurTransforms`, self-seed, kerfur-prop-gated). Same lifetime as
+>   `g_blobPileXforms` (cleared at Cancel/Disconnect -- outlives the snapshot, satisfies edge 3 without a new
+>   8s deadline; matches the proven pile precedent).
+> - **Carry** on the KerfurConvert: `KerfurRecord.saveTimePos` (bootstrapped at the first `BindFormActor` from
+>   `g_blobKerfurXforms[oldEid]`, carried across flips) -> `KerfurConvertBroadcastPayload.matchX/Y/Z +
+>   hasMatchPos` (proto 104->116).
+> - **RETIRE** `coop/kerfur_reconcile.{cpp,h}` (NEW, 175 LOC): on a turn-on (`OnKerfurConvert` toNpc) destroy the
+>   client's stale LOCAL (non-mirror) off-prop within 1cm of the save-time key; if the native has not loaded yet
+>   (`!HasLoadTailQuiesced`) arm a pending retire retried at the post-quiescence sweep. >50% abort valve +
+>   ambiguous(>1)->skip (fail-safe).
+> - **Sweep driver (the H1 audit fix):** the post-quiescence sweep runs from `kerfur_convert::PollKerfur
+>   Conversions` (the kerfur client poll, already quiescence-gated), NOT `RunDivergenceSweep_` -- so it fires
+>   even when no pile bracket armed (the SnapshotBegin-lost flake leaves `g_sweepPending` false). Single driver.
+> - **Build sub-question RESOLVED:** the divergence sweep WOULD doom an unclaimed keyed local off-prop, but a
+>   kerfur off-prop survives when it was fuzzy-adopted into a MIRROR (sweep-exempt via `pr.mirror`) or the
+>   bracket flaked -> so `kerfur_reconcile` walks the kerfur props ITSELF (CollectLocalOffPropKerfurs), it does
+>   NOT reuse the sweep's propPairs.
+> - **Fallback:** if `hasMatchPos==0` (a kerfur with no blob capture -- bought post-save), the retire keys off
+>   the new NPC's spawn pose (`p.locX/Y/Z`), which == the off-prop's save position for a turn-on-without-move.
+
+> **CENSUS PIN (2026-06-24, doc 07 + `research/kerfur_forward_census_1543/`):** the forward off->active dup's
 
 > **CENSUS PIN (2026-06-24, doc 07 + `research/kerfur_forward_census_1543/`):** the forward off->active dup's
 > silent half = an **UNCLAIMED `prop_kerfurOmega_C`** (Nrby, a stale local off-prop the host no longer has as

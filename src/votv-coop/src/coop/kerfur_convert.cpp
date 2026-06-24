@@ -33,6 +33,7 @@
 #include "coop/npc_mirror.h"     // OnEntityDestroy + adopt/spawn mirror helpers (client apply)
 #include "coop/npc_sync.h"       // RegisterHostNpcSilent / ReleaseNpcElementSilent (silent host ops)
 #include "coop/kerfur_entity.h"  // BindFormActor / BroadcastConvertRejected + the resolved classes
+#include "coop/kerfur_reconcile.h"  // scope A: retire a stale local off-prop on a join-window turn-on
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
 #include "coop/remote_prop.h"        // OnDestroy (eid teardown of the old prop mirror in OnKerfurConvert)
@@ -587,6 +588,12 @@ void PollKerfurConversions() {
     // the host has no transferred-save load tail -- its own kerfurs are stable from boot,
     // so it polls immediately and only ever sees real host-side conversions.
     if (isClient && !coop::remote_prop_spawn::HasLoadTailQuiesced()) return;
+    // scope A (kerfur off->active dup retire): post-quiescence retry of any retire that MISSED at
+    // KerfurConvert-apply (its stale local off-prop had not async-loaded yet). Driven HERE -- the client
+    // poll, already load-tail-quiescence-gated -- NOT the pile divergence sweep, so it fires even when no
+    // pile bracket armed (the SnapshotBegin-lost / bracket-not-armed flake; the sweep there is gated on
+    // g_sweepPending). Zero cost when nothing is pending (empty-set early-out); self-clears each run.
+    if (isClient) coop::kerfur_reconcile::SweepReconcileSaveTimeKerfurs();
     std::unordered_set<uint32_t> seen;
 
     // turn_OFF: a kerfur NPC mirror whose actor died.
@@ -869,6 +876,24 @@ void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& p, void* lo
     }
     MaterializeKerfurMirror(toNpc, newEid, classW, p.locX, p.locY, p.locZ,
                             p.rotPitch, p.rotYaw, p.rotRoll, localPlayer);
+    if (toNpc) {
+        // scope A (forward off->active dup retire): the host turned this kerfur ON. If it was OFF in the
+        // transferred save and turned ON in the JOIN window, the client never adopted its local off-prop
+        // as the oldEid mirror (the host stopped expressing it as off), so the OnDestroy(oldEid) above
+        // could not reach it -- it survives as a dup beside the new active NPC (census 15:43). Retire it
+        // by the host's carried SAVE-TIME key (matchX/Y/Z; fall back to the new NPC's spawn pose, which
+        // equals the off-prop's save position for a turn-on that did not move the kerfur).
+        ue_wrap::FVector key;
+        key.X = p.hasMatchPos ? p.matchX : p.locX;
+        key.Y = p.hasMatchPos ? p.matchY : p.locY;
+        key.Z = p.hasMatchPos ? p.matchZ : p.locZ;
+        if (coop::kerfur_reconcile::RetireLocalOffPropAtSaveTime(p.kerfurId, key) == 0 &&
+            !coop::remote_prop_spawn::HasLoadTailQuiesced()) {
+            // The local off-prop has not async-loaded yet (KerfurConvert raced the load tail) -> retry at
+            // the post-quiescence sweep. Only while still loading -- a quiesced miss is genuinely nothing.
+            coop::kerfur_reconcile::ArmPendingRetire(p.kerfurId, key);
+        }
+    }
     UE_LOGI("kerfur_convert[client]: applied KerfurConvert K=%u %s oldEid=%u -> newEid=%u class='%ls'",
             p.kerfurId, toNpc ? "->NPC(turn-on)" : "->prop(turn_off)", p.oldEid, p.newEid, classW.c_str());
 }

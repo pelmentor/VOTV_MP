@@ -174,6 +174,16 @@ void CollectTrackedKeyedPropKeys(std::unordered_set<std::wstring>& out);
 void CollectTrackedPileTransforms(
     std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out);
 
+// scope A (kerfur off->active dup retire, 2026-06-24): collect the SAVE-TIME position of every live
+// OFF-FORM kerfur (prop_kerfurOmega_C + skins), keyed by its host ElementId. Same blob-instant capture
+// + self-seed (mint an unseeded eid inline, idempotent) as CollectTrackedPileTransforms, but gated to
+// the kerfur prop lineage. The host carries this position onto the KerfurConvert when it turns the
+// kerfur ON in the join window, so the joining client can RETIRE its stale local off-prop (whose host
+// no longer expresses it as off) matched at the exact save-time key. One GUObjectArray walk, game
+// thread, cold connect-edge cost.
+void CollectTrackedKerfurTransforms(
+    std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out);
+
 // ---- One-shot seed -------------------------------------------------------
 // GUObjectArray walk that populates KnownKeyedProps + creates Prop Element
 // shadows for every live keyed-interactable. Internal latch; safe to
