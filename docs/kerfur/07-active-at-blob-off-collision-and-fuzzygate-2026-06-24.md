@@ -111,13 +111,13 @@ partially reconciles; doesn't -> survives whole). The census for 15:41 was trunc
 generalize candidate (`docs/COOP_MIRROR_IDENTITY_WINDOW_RACE.md`). NOT a retire-authority instance (census
 ruled out the untracked-NPC path).
 
-**scope A BUILT + DEPLOYED (2026-06-24, MD5 `E27D176C`, proto v87):** the save-time-keyed RETIRE (host carries
-each off-kerfur's blob-instant save-time pos on the KerfurConvert turn-on; client retires its stale local off-prop
-at the 1cm key, immediate + post-quiescence backstop driven by the kerfur poll so it fires even on the
-bracket-not-armed flake). HANDS-ON PENDING (`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). The
-off-stays-off exact-bind half of doc 03 was scoped OUT (already clean at the 15:00 run under fuzzy-gate fix#1 --
-RULE 1, do not churn the working adoption/snapshot paths). Census probe STAYS (RULE 2 exempts
-probes/diagnostics/tools). See doc 03 AS-BUILT for the component map + the H1 audit fix.
+**scope A VERIFIED (hands-on 17:23, 2026-06-24, MD5 `39455EC6`, proto v88, v1.1):** the forward off->active
+kerfur dup is FIXED. Three iterations: v0 convert-driven FAILED 16:37 (SendReliable(KerfurConvert) fails
+mid-join), v1 npc-channel PARTIAL 17:06 (carry+arm+sweep worked, >50% valve false-aborted), v1.1 valve-removed
+PASS 17:23 (`sweep-retire 1 of 1 destroyed`, off-prop vanished, 6/6). The KEY LESSON: the save-time key must
+ride the npc EntitySpawn (the channel that reaches the joiner), NOT the KerfurConvert (fails mid-join) -- and a
+ratio valve is denominator-dependent (mis-port from pile_reconcile false-aborted). See doc 03 VERIFIED block +
+`docs/COOP_MIRROR_IDENTITY_WINDOW_RACE.md` (now N=3). Census probe STAYS (RULE 2 exempts probes).
 
 ## FIX#2 -- active-at-blob -> OFF body (NOT built; SEPARATE design pass)
 The host-turned-off kerfur's client twin is an ACTIVE NPC; giving it the correct off-prop body means either

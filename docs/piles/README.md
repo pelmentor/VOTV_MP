@@ -1,17 +1,24 @@
 # Piles — the complete knowledge base (ambient trash pile coop sync)
 
-> **LATEST (2026-06-23) — the JOIN-WINDOW DUP is BUILT (Path 1c + load-tail timing fix), audit GO, HANDS-ON
-> take-2 PENDING.** A chipPile the host MOVES during the join-load window duped on the client (save-loaded
-> native@old + replay-snapshot proxy@new, >1cm → the 1cm dedup goes blind). FIX: the host stamps each join
-> snapshot pile with its SAVE-TIME position (`save_transfer` g_blobPileXforms map, keyed by host eid); the
-> client twin-destroy matches the native by that frozen key. Take-1 proved the key is bit-for-bit correct
-> but the world-ready twin-destroy runs BEFORE the native async-loads (a load-tail timing race), so the
-> retry now fires at the POST-QUIESCENCE sweep (`pile_reconcile::SweepReconcileSaveTimeTwins`, >50% valve).
-> NEW module `coop/pile_reconcile.{h,cpp}` (extracted from remote_prop_spawn.cpp). Commits `b2b3ad46`
-> (extract) · `4c286cae` (stamp/match) · `e876aa09` (NaN) · `c7b6581e` (in-game cues) · `124fbc9d` (sweep
-> timing fix). Deployed `F9B6589E1F62955F`, proto **v86**, HEAD `81de32dd`, push HELD. Canonical RE +
-> as-built: `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`. The older
-> "native-destroy fix not built" / take-31/32 framing further down is HISTORICAL.
+> **L1 JOIN-WINDOW DUP (host MOVES a SAVE-LOADED pile in-window) = VERIFIED + PUSHED (origin/main `960e4650`).**
+> A save-loaded chipPile the host moves during the join-load window duped (native@old + proxy@new, >1cm → the
+> 1cm dedup blind). FIX: the host stamps each join-snapshot pile with its SAVE-TIME position
+> (`save_transfer::g_blobPileXforms`, host-eid-keyed, self-seeded); the client twin-destroy matches the native
+> by that frozen key, retried at the POST-QUIESCENCE sweep (`pile_reconcile::SweepReconcileSaveTimeTwins`,
+> >50% valve). Module `coop/pile_reconcile.{h,cpp}`. Canonical RE:
+> `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`.
+>
+> **NEW OPEN (2026-06-24, hands-on 17:23, NOT yet fully diagnosed) — pile GRABBED-AND-DROPPED/MOVED in the
+> connect window dups (a DIFFERENT scenario from L1).** The user moved a pile near the kerfurs during the join
+> window; it re-piled host-side as a HIGH/late eid (`[PILE] HOST RE-PILE(thunk) eid=5283`) and the client showed
+> `[PILE-DELTA] eid=5283 ... nearestNative_d=NONE (no live native in the index)` -> a window-SPAWNED pile
+> (post-blob -> NO `g_blobPileXforms` save-time key) reached the client as a proxy with no save-native to
+> reconcile -> apparent dup. NOT L1 (L1 = a pile PRESENT at blob the host moves; the save-time key matches). It
+> is the **window-SPAWN / held-pile-in-window** edge -- overlaps [[project-prop-appearance-delay-backlog-2026-06-23]]
+> (a grabbed pile is a CLUMP not a chipPile -> never in the save-time map -> window-spawned on drop). Possibly
+> the **4th mirror-identity instance** (object SPAWNS/changes position in-window, not save-dup) -> see
+> `docs/COOP_MIRROR_IDENTITY_WINDOW_RACE.md` MOVE-scenario headroom. NEEDS full RE BEFORE a fix. The older
+> "native-destroy fix not built" / take-31/32 framing below is HISTORICAL.
 
 > Single source of truth for the `actorChipPile_C` ("ambient trash pile") multiplayer
 > sync problem. Assembled 2026-06-20 (session 32) after the save-strip attempt FAILED

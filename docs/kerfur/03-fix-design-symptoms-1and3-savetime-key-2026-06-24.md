@@ -1,9 +1,29 @@
 # 03 — FIX DESIGN: forward off->active dup save-time-keyed RETIRE (scope A)
 
-**Status: BUILT v1 + DEPLOYED (2026-06-24, MD5 `D8A3D89E`, proto v88). HANDS-ON PENDING (runbook
-`research/handson_runbook_2026-06-24_kerfur_scopeA_retire.md`). Perf + correctness audits PASS (no CRITICAL/HIGH).
-NOT marked VERIFIED -- awaiting the hands-on.** Covers the forward off->active dup (doc 07: 15:43/16:37 dup +
-15:41 skew). Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+**Status: VERIFIED (hands-on 17:23, 2026-06-24) -- scope A v1.1, MD5 `39455EC6`, proto v88. The forward
+off->active kerfur dup is FIXED.** Covers the forward off->active dup (doc 07: 15:43/16:37 dup + 15:41 skew).
+Symptom 2 (camera) = a SEPARATE design (doc 04, later).
+
+> **VERIFIED (hands-on 17:23):** the off-from-save kerfur DISAPPEARED visually (user-confirmed) + client log
+> `kerfur_reconcile: sweep-retire -- 1 of 1 pending save-time kerfur retire(s) at post-quiescence ... destroyed`
+> (NOT the 17:06 ABORTED -- the valve-removal worked). The active form is correct + alive (eid 5278 BOUND), the
+> other 3 off-props stay BOUND (no over-retire). Three build iterations to get here:
+> - **v0 (`6c668b9d`, convert-driven):** FAILED 16:37 -- a join-window turn-on's `SendReliable(KerfurConvert)`
+>   FAILS (joiner not ready mid save-transfer), the convert is lost -> `OnKerfurConvert` never ran -> retire
+>   never fired. (doc 03 L17-19 warned: window conversions do NOT sync as KerfurConvert.)
+> - **v1 (`ce8942c4`, npc-channel):** PARTIAL 17:06 -- carry+arm+sweep+exact-key-match ALL worked (the active
+>   form rides the npc EntitySpawn, which DOES reach the joiner; the key is carried there), but the retire was
+>   vetoed by a `>50%` abort valve.
+> - **v1.1 (`7c67b00b`, valve removed):** PASS 17:23. The valve was mis-ported from pile_reconcile -- there the
+>   denominator is ALL live piles; here `cands` is ONLY non-mirror local off-props (adopted ones are mirrors,
+>   excluded), so the denominator IS the stale set and retiring the lone off-prop is always 100% -> false abort.
+>   Removed; the safety is the exact 1cm key + uniqueness + ambiguous-skip + non-mirror gate.
+>
+> **PROBE-TIMING NOTE (not a bug):** the 17:23 `[KERFUR CENSUS]` still printed `1 UNCLAIMED` because the
+> one-shot census (`kerfur_census::TickOnceAtQuiescence`) ran one tick BEFORE the retire sweep in the same
+> second (17:23:04). The retire fired immediately after (`sweep-retire 1 of 1 destroyed`) and the user saw the
+> off-prop vanish. To make the census post-retire-authoritative, order it AFTER `SweepReconcileSaveTimeKerfurs`
+> in the client tick (a probe ordering tweak; backlog).
 
 > **v1 PIVOT (2026-06-24, after the 16:37 hands-on FAILED the convert-driven v0):** the retire trigger moved
 > from the KerfurConvert to the **npc EntitySpawn channel**. WHY: v0 (commit `6c668b9d`, MD5 `E27D176C`, proto

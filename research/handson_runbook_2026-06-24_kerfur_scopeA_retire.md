@@ -1,4 +1,10 @@
-# Hands-on runbook — scope A v1: kerfur forward off->active dup RETIRE (NPC channel)
+# Hands-on runbook — scope A v1.1: kerfur forward off->active dup RETIRE (NPC channel)
+
+**RESULT: VERIFIED PASS (hands-on 17:23, 2026-06-24).** The off-from-save kerfur disappeared (user-confirmed) +
+client log `kerfur_reconcile: sweep-retire -- 1 of 1 ... destroyed` (NOT the 17:06 ABORTED). 6/6, active alive,
+3 off-props intact. The steps below are retained as the repro. (A SEPARATE pile-move-in-window dup surfaced in
+the same run -- NOT part of this kerfur test; see docs/piles/README NEW OPEN.)
+
 
 **Deployed:** MD5 `39455EC694E0CB1E90598B6524EB5E44` (short `39455EC6`) on HOST + CLIENT + CLIENT2 + DEV.
 Build clean. **Proto v88** (EntitySpawnPayload 96->108) -- BOTH peers MUST run this DLL. Audited: perf PASS +
