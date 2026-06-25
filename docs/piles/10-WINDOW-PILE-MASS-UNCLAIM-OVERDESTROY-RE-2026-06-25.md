@@ -71,12 +71,61 @@ modeled).** A dev forcing flag made the host SKIP expressing ALL chipPiles (`for
 ARMED`), so the joiner should have been left with ~870 unclaimed-in-universe natives -> a deterministic
 wipe. It did NOT happen: the client SEEDED 871 natives (`seeded ... 871 keyless chipPile element(s)`)
 but its claim sweep still showed `88 in-universe, 88 claimed, 0 destroyed` -- IDENTICAL to a clean run.
-So "host expresses 0 piles" does NOT by itself create the 870-unclaimed-in-universe state. **NEW PRIMARY
-OPEN QUESTION: why do ~871 SEEDED native chipPiles collapse to only 88 in the sweep's in-universe set
-(non-mirror local Prop Elements) by sweep time, even with zero host expression?** The 11:16 953-unclaimed
-was an ANOMALOUS state (the natives stayed in-universe AND unclaimed); the steady state is 88. Pinning
-this collapse (where do the other ~783 go -- claimed-as-mirror? doomed earlier? a re-bracket reset?) is
-the real root of both (a) reproducing the wipe to prove the Phase 0 floor and (b) the 11:16 bug itself.
+So "host expresses 0 piles" does NOT by itself create the 870-unclaimed-in-universe state.
+
+**UPDATE 2026-06-25 (read-only RE -- the 871->88 collapse + the TRUE 11:16 ROOT are now PINNED from the
+14:11 client log).** The collapse is a **world-reload mass-PURGE during the join**, and the sweep firing
+INSIDE the purge trough. Proven timeline (client `Game_0.9.0n_copy`, 14:11):
+```
+14:11:14  seed: 3316 live actors incl 871 chipPiles -> ALL MarkPropElement'd (Registry has them)
+14:11:16  BeginSnapshot (3087 obj) + claim tracking ARMED
+14:11:21  lift-reveal 412 mirrors; Complete (applied 2215/3087); census 871 received
+14:11:26  prop_element_tracker: reaped 256 dead Prop Elements (scanned 5011)  <- MASS PURGE
+14:11:26  net_pump: mass-purge detected (reaped 256>=64) -- world-change re-seed DEFERRED to drain-complete
+14:11:27  claim sweep -- 88 in-universe, 88 claimed, 0 destroyed   <- FIRED MID-PURGE (InPurgeEpisode==true)
+14:11:30..14:12:07  reaper grinds 5011 -> 2452 dead Prop Elements (256/call, ~10 ticks)
+14:12:11  re-seed (drain-complete): 3249 live, added 3001 NEW (870 chipPile)  <- natives re-registered, 44s LATE
+```
+So the 871 native chipPile Prop Elements registered at the boot seed (14:11:14) are DESTROYED by the
+save-load / world-reload purge that runs AFTER the seed. At sweep time (14:11:27) those 871 are DEAD Prop
+Elements (`IsLiveByIndex` false) -> skipped at `remote_prop_spawn.cpp:1069` (`continue` before `++inClass`)
+-> never enter `inClass` OR `doomed`. Only 88 cross-purge-surviving live props are in-universe. The reaper
+then drains the 5011 dead elements over the next ~40s, and the re-seed re-registers the reloaded natives at
+14:12:11 -- 44s AFTER the sweep already ran. **The ~783 "missing" went: DEAD (purged) -> reaped, then
+re-created by the async loadObjects pass + re-registered too late to matter to the sweep.**
+
+**TRUE 11:16 ROOT = the claim sweep's quiescence gate is BLIND to the purge episode, so the sweep fires at
+a RANDOM point relative to the native pile reload. It is a RACE, not a deterministic under-express.** The
+gate (`CountLoadTailUnsettled_`, `remote_prop_spawn.cpp:1308`) counts only (a) allowlisted NPCs and
+(b) keyless NON-pile props (it EXPLICITLY excludes chipPiles at :1329) and does NOT consult
+`InPurgeEpisode()` or the reaper backlog. So it declared "quiesced" at 14:11:27 while `InPurgeEpisode()`
+was true (set `net_pump.cpp:530`, cleared only at drain-complete `net_pump.cpp:538`). Depending on where the sweep lands in the
+purge->reload cycle:
+- sweep fires AFTER the natives are re-created + re-registered LIVE but BEFORE the host claims them ->
+  in-universe + unclaimed -> **mass-doomed = the 11:16 catastrophe (953 unclaimed, 870 piles 870->0).**
+- sweep fires DURING the purge trough (natives dead/reaping, not yet re-registered) -> only ~88 survivors
+  in-universe -> nothing doomed -> **14:11 / 13:21 "safe" -- but by luck, not by design.**
+
+11:16's 953-unclaimed and 14:11's 88 are the two sides of that race. This is the SAME "snapshot before
+state ready" recurring class ([[feedback-snapshot-before-state-ready]] / [[feedback-join-reconcile-sweep-safety]]):
+the sweep adjudicates against a half-reloaded Registry.
+
+**FLOOR RE-ASSESSMENT (the model revision):** the per-class floor is CORRECT and NECESSARY but it is a
+NET, not the root. It can only engage when the natives reach the sweep LIVE + unclaimed (the danger-window
+side of the race) -- there it keeps them (`claimed 0 < census 870`), directly preventing the wipe. In the
+trough case there is nothing doomed, so it stays dormant (correctly). The floor does NOT remove the RACE.
+The RULE-1 root fix is to make the sweep's quiescence gate wait for the purge to DRAIN + the current-world
+re-seed to run (treat `InPurgeEpisode()` / an un-re-seeded current world as "unsettled", and include the
+chipPile population in the load-tail count) -- the hard-deadline backstop stays. That removes the race:
+the sweep always adjudicates the fully-reloaded world. BOTH layers are needed and complementary:
+1. **Root/timing fix** -- the sweep never fires against a mid-purge Registry (kills the non-determinism).
+2. **Floor** -- the catastrophe net for when, even at TRUE quiescence, the host genuinely under-expressed a
+   whole class (the original kerfur-toggle-disrupts-pile-expression hypothesis). Irreplaceable for that.
+
+**This also makes the floor DETERMINISTICALLY PROVABLE:** with the root timing fix in place the sweep
+always fires with the natives live-registered, so `force_chippile_unclaim` (host-skip) then yields ~870
+live-unclaimed at sweep -> the floor MUST keep them. PATH B failed precisely because, without the timing
+fix, the sweep landed in the trough where host-skip is moot (no live natives to leave unclaimed).
 
 ## FIX DIRECTIONS (design only — NOT built; pick after the root is pinned)
 - **Safety net (defends regardless of root): a PER-CLASS floor on the claim sweep.** Never destroy ~100%
