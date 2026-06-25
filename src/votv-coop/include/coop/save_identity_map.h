@@ -21,6 +21,7 @@
 // Game-thread only (built at save-capture, save_transfer::OnRequest, the same frame as saveObjects).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -45,5 +46,28 @@ using IdMap = std::vector<IdEntry>;
 // unseeded, the same idempotent mint CollectTrackedPileTransforms uses). Logs a per-family summary. Returns
 // the entry count. NO wire (Phase 1B). Leak-free (frees the engine-allocated OutActors array via EngineFree).
 int BuildHostMap(IdMap& outMap);
+
+// ---- Phase 2 sidecar wire framing (transport) ----------------------------------------------------------
+// The map travels PREPENDED to the save-transfer blob stream (one stream, one CRC) so it can never desync
+// from the blob it indexes. Self-describing layout (little-endian; the whole protocol is same-endian raw on
+// x64 Windows): ['V','C','I','D'] magic | u32 version | u32 count | count x { u32 index, u32 eid, u8 family }.
+inline constexpr uint8_t  kSidecarMagic[4]    = {'V', 'C', 'I', 'D'};
+inline constexpr uint32_t kSidecarVersion     = 1u;
+inline constexpr size_t   kSidecarHeaderBytes = 12u;  // magic(4) + version(4) + count(4)
+inline constexpr size_t   kSidecarEntryBytes  = 9u;   // index(4) + eid(4) + family(1)
+
+// HOST: serialize `map` into `out` (cleared first) as the framed sidecar -- always writes the 12-byte header,
+// even for an empty map. `out.size()` == the value the host stamps into SaveTransferBeginPayload.sidecarBytes.
+void SerializeSidecar(const IdMap& map, std::vector<uint8_t>& out);
+
+// CLIENT: parse a framed sidecar from the first `len` bytes of `data`. On success fills `outMap`, sets
+// `consumed` to the total sidecar byte length (header + entries), returns true. Returns false (outMap cleared,
+// consumed=0) on a bad magic / unknown version / truncation -- the caller treats that as an unreadable map
+// (but still strips sidecarBytes from the stream; the .sav blob follows regardless).
+bool DeserializeSidecar(const uint8_t* data, size_t len, IdMap& outMap, size_t& consumed);
+
+// CLIENT (Phase 2a dev checkpoint): log a received map (summary + first/last 5 entries) in the SAME shape as
+// the host's BuildHostMap log, so the two can be eyeball-diffed line-for-line. NO bind (that is Phase 2b).
+void LogReceivedMap(const IdMap& map);
 
 }  // namespace coop::save_identity_map

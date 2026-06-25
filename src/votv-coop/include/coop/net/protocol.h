@@ -2398,9 +2398,9 @@ inline constexpr uint32_t kSaveChunkBytes = 56u * 1024u;
 // (fresh-hosted world whose slot never wrote, or a persistent read failure) ->
 // the client falls back to the fresh-world boot instead of waiting forever.
 struct SaveTransferBeginPayload {
-    uint32_t totalBytes;   // whole .sav size (0 = no save available)
+    uint32_t totalBytes;   // whole STREAMED blob size = sidecarBytes + .sav size (0 = no save available)
     uint32_t chunkCount;   // ceil(totalBytes / kSaveChunkBytes)
-    uint32_t crc32;        // CRC-32 of the whole blob (client verifies pre-write)
+    uint32_t crc32;        // CRC-32 of the whole streamed blob (sidecar + .sav; client verifies pre-write)
     uint8_t  gameMode;     // host's enum_gamemode ordinal (story=0) -- the zcoop_
                            // slot prefix can't prefix-match a mode, so the client
                            // threads this into LoadStorySave(forceGameMode)
@@ -2408,8 +2408,15 @@ struct SaveTransferBeginPayload {
                            // runs the divergence/ghost-sweep reconcile for EVERY join
                            // incl. live-capture, gated on NPC-aware load-tail quiescence
                            // + the >50% safety valve, so no per-join skip flag is needed)
+    uint32_t sidecarBytes; // Phase 2 (stable-id identity sidecar): the count of LEADING bytes of the
+                           // streamed blob that are the framed {objectsData-index -> host-eid} identity
+                           // map for the keyless save-loaded natives (prepended to the .sav so the map
+                           // travels ATOMICALLY inside this one CRC'd stream -- it cannot desync from the
+                           // blob it indexes). 0 = no sidecar (shipping default / stale-fallback join).
+                           // The client strips these bytes before writing the .sav, then (dev checkpoint)
+                           // parses + logs the map. coop/save_identity_map.h owns the framing.
 };
-static_assert(sizeof(SaveTransferBeginPayload) == 16, "SaveTransferBeginPayload must be 16 bytes");
+static_assert(sizeof(SaveTransferBeginPayload) == 20, "SaveTransferBeginPayload must be 20 bytes");
 static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,
               "PropDestroyPayload must fit in one reliable datagram");
 

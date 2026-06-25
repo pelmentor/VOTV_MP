@@ -137,9 +137,10 @@ void SendBeginNoSave_(int slot) {
 // TickHost chunk pump streams it from there. Shared by the LIVE-capture path
 // (OnRequest) and the canonical torn-read fallback (TryCaptureBlob_); `crc` is
 // precomputed by the caller (both already have it in hand).
-void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes, uint32_t crc) {
+void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes, uint32_t crc,
+                          uint32_t sidecarBytes = 0) {
     hs.active = true;
-    hs.blob = std::move(bytes);
+    hs.blob = std::move(bytes);  // already framed (identity sidecar prepended) by the caller
     hs.blobReady = true;
     hs.nextChunk = 0;
     hs.chunkCount = static_cast<uint32_t>(
@@ -151,6 +152,7 @@ void BeginStreamFromBlob_(int slot, HostStream& hs, std::vector<uint8_t>&& bytes
     b.crc32 = crc;
     b.gameMode = 0;  // story -- the coop target; a sandbox-host variant threads the
                      // live GameMode here when sandbox coop becomes a goal
+    b.sidecarBytes = sidecarBytes;  // Phase 2: leading bytes of the stream that are the framed identity map
     g_session->SendReliableToSlot(slot, coop::net::ReliableKind::SaveTransferBegin,
                                   &b, sizeof(b));
 }
@@ -220,6 +222,7 @@ uint32_t g_cliTotal = 0;
 uint32_t g_cliChunkCount = 0;
 uint32_t g_cliCrc = 0;
 uint8_t  g_cliGameMode = 0;
+uint32_t g_cliSidecarBytes = 0;  // Phase 2: leading bytes of g_cliBuf that are the framed identity map
 bool     g_cliHaveBegin = false;
 uint32_t g_cliChunksSeen = 0;
 std::vector<uint8_t> g_cliBuf;
@@ -241,20 +244,45 @@ void MaybeFinishLocked_() {
         g_cliState = ClientState::Failed;
         return;
     }
-    const uint32_t crc = Crc32(g_cliBuf.data(), g_cliBuf.size());
+    const uint32_t crc = Crc32(g_cliBuf.data(), g_cliBuf.size());  // over the WHOLE framed stream (sidecar+blob)
     if (crc != g_cliCrc) {
         UE_LOGE("save_transfer: blob CRC mismatch (got 0x%08X want 0x%08X) -- failing",
                 crc, g_cliCrc);
         g_cliState = ClientState::Failed;
         return;
     }
+    // Phase 2a: the host may have PREPENDED the framed {index->eid} identity sidecar (sidecarBytes>0). It is
+    // framing metadata, NOT part of the .sav -- strip it so the game's loadObjects sees a clean GVAS blob. The
+    // split length (sidecarBytes) comes from the CRC-verified Begin payload, so it's authoritative even if the
+    // map's inner framing is malformed; parse + log the map (NO bind -- that is step 2b) best-effort.
+    const uint8_t* blobStart = g_cliBuf.data();
+    size_t blobLen = g_cliBuf.size();
+    if (g_cliSidecarBytes > 0) {
+        if (g_cliSidecarBytes > g_cliBuf.size()) {
+            UE_LOGE("save_transfer: sidecarBytes=%u exceeds blob %zu -- failing",
+                    g_cliSidecarBytes, g_cliBuf.size());
+            g_cliState = ClientState::Failed;
+            return;
+        }
+        coop::save_identity_map::IdMap rxMap;
+        size_t consumed = 0;
+        if (coop::save_identity_map::DeserializeSidecar(g_cliBuf.data(), g_cliSidecarBytes, rxMap, consumed) &&
+            consumed == g_cliSidecarBytes) {
+            coop::save_identity_map::LogReceivedMap(rxMap);  // Phase 2a transport checkpoint -- log, NO bind
+        } else {
+            UE_LOGE("save_transfer: identity sidecar parse failed (sidecarBytes=%u consumed=%zu) -- map "
+                    "ignored (stripping the bytes anyway; the .sav blob follows)", g_cliSidecarBytes, consumed);
+        }
+        blobStart = g_cliBuf.data() + g_cliSidecarBytes;
+        blobLen = g_cliBuf.size() - g_cliSidecarBytes;
+    }
     const fs::path dir = coop::save_guard::SaveGamesDir();
     const fs::path tmp = dir / (CoopSlotFileNameNoExt_() + L".sav.part");
     const fs::path dst = dir / (CoopSlotFileNameNoExt_() + L".sav");
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f || !f.write(reinterpret_cast<const char*>(g_cliBuf.data()),
-                           static_cast<std::streamsize>(g_cliBuf.size()))) {
+        if (!f || !f.write(reinterpret_cast<const char*>(blobStart),
+                           static_cast<std::streamsize>(blobLen))) {
             UE_LOGE("save_transfer: slot write failed ('%ls')", tmp.c_str());
             g_cliState = ClientState::Failed;
             return;
@@ -270,8 +298,8 @@ void MaybeFinishLocked_() {
     g_cliBuf.clear();
     g_cliBuf.shrink_to_fit();
     g_cliState = ClientState::ReadySlotWritten;
-    UE_LOGI("save_transfer: host save written as '%ls' (%u bytes, crc ok) -- ready to load",
-            dst.c_str(), g_cliTotal);
+    UE_LOGI("save_transfer: host save written as '%ls' (%zu blob bytes [%u stream - %u sidecar], crc ok) "
+            "-- ready to load", dst.c_str(), blobLen, g_cliTotal, g_cliSidecarBytes);
 }
 
 // NET THREAD: registered as the session's bulk sink. Chunk payload = u32 idx +
@@ -364,11 +392,34 @@ void OnRequest(int peerSlot) {
         const bool got = ReadWholeFile(scratchFile, bytes) && !bytes.empty();
         DeleteFileLogged_(scratchFile);  // transient -- gone the instant it is read
         if (got) {
-            const uint32_t crc = Crc32(bytes.data(), bytes.size());
-            BeginStreamFromBlob_(peerSlot, hs, std::move(bytes), crc);
+            // Phase 2a (stable-id identity sidecar transport; gated dev checkpoint, NO bind yet): build the
+            // {objectsData-index -> host-eid} map for the keyless save-loaded natives and PREPEND it to the
+            // blob, so it travels ATOMICALLY inside the same CRC'd stream the client loads (one stream, one
+            // CRC -- the map cannot desync from the blob it indexes). The client strips + logs it (step 2a);
+            // the BindLocalNativeToHostEid consumer lands in step 2b. [dev] save_identity_map_log=1 only;
+            // absent (the shipping default + the user's normal play) -> sidecarBytes=0 -> byte-identical to
+            // the pre-sidecar stream. Built BEFORE BeginStreamFromBlob_ so the framing is part of the CRC.
+            std::vector<uint8_t> sidecar;  // empty unless the dev flag is on (then 12B header + 9B/entry)
+            if (coop::ini_config::IsIniKeyTrue("save_identity_map_log")) {
+                coop::save_identity_map::IdMap idMap;
+                coop::save_identity_map::BuildHostMap(idMap);              // logs its own per-family summary
+                coop::save_identity_map::SerializeSidecar(idMap, sidecar);
+                UE_LOGI("save_transfer: slot %d -- identity sidecar serialized: %zu entries -> %zu bytes "
+                        "(prepended to the blob stream)", peerSlot, idMap.size(), sidecar.size());
+            }
+            const uint32_t sidecarBytes = static_cast<uint32_t>(sidecar.size());
+            if (sidecarBytes) {
+                std::vector<uint8_t> framed;
+                framed.reserve(sidecar.size() + bytes.size());
+                framed.insert(framed.end(), sidecar.begin(), sidecar.end());
+                framed.insert(framed.end(), bytes.begin(), bytes.end());
+                bytes.swap(framed);  // bytes := [sidecar][.sav blob]
+            }
+            const uint32_t crc = Crc32(bytes.data(), bytes.size());  // CRC over the FRAMED stream
+            BeginStreamFromBlob_(peerSlot, hs, std::move(bytes), crc, sidecarBytes);
             UE_LOGI("save_transfer: slot %d streaming LIVE host world (%u bytes, %u chunks, "
-                    "crc=0x%08X)",
-                    peerSlot, static_cast<uint32_t>(hs.blob.size()), hs.chunkCount, crc);
+                    "crc=0x%08X, sidecar=%u B)",
+                    peerSlot, static_cast<uint32_t>(hs.blob.size()), hs.chunkCount, crc, sidecarBytes);
             // R2 baseline: record the keyed-prop set this blob contains (== the host's
             // live keyed props this instant -- the blob was just serialized from them).
             // SendBlobDivergenceDeletes diffs it at the connect edge. LIVE-capture path
@@ -392,15 +443,6 @@ void OnRequest(int peerSlot) {
                     "save-time xforms at blob instant (R2 + Path 1c + scope A baselines)",
                     peerSlot, g_blobKeys[peerSlot].size(), g_blobPileXforms[peerSlot].size(),
                     g_blobKerfurXforms[peerSlot].size());
-            // Phase 1B (gated checkpoint, NO wire): build the {objectsData-order -> eid} identity map for the
-            // keyless natives + LOG it, to verify it lands the right 874 entries (eids == S8.2 capture-eids)
-            // BEFORE the sidecar transport + client bind (step 2) are built. Same frame as saveObjects (just
-            // ran inside the capture). [dev] save_identity_map_log=1 only; absent = the shipping capture path
-            // is untouched (the wired, unconditional build comes with the transport in step 2).
-            if (coop::ini_config::IsIniKeyTrue("save_identity_map_log")) {
-                coop::save_identity_map::IdMap idMap;
-                coop::save_identity_map::BuildHostMap(idMap);  // logs its own summary; map discarded (no wire yet)
-            }
             return;
         }
         UE_LOGW("save_transfer: slot %d -- live scratch '%ls.sav' unreadable after capture; "
@@ -560,6 +602,7 @@ void ClientArm() {
     g_cliHaveBegin = false;
     g_cliChunksSeen = 0;
     g_cliTotal = g_cliChunkCount = g_cliCrc = 0;
+    g_cliSidecarBytes = 0;
     g_cliBuf.clear();
     UE_LOGI("save_transfer: client ARMED (menu-mode join -- will request the host save)");
 }
@@ -590,10 +633,11 @@ void OnBegin(const coop::net::SaveTransferBeginPayload& p) {
     g_cliChunkCount = p.chunkCount;
     g_cliCrc = p.crc32;
     g_cliGameMode = p.gameMode;
+    g_cliSidecarBytes = p.sidecarBytes;  // Phase 2: leading framed-identity-map bytes (0 = no sidecar)
     if (g_cliState == ClientState::WaitingBegin) g_cliState = ClientState::Receiving;
     g_cliBuf.reserve(p.totalBytes);
-    UE_LOGI("save_transfer: Begin -- %u bytes in %u chunks (crc=0x%08X mode=%u)",
-            p.totalBytes, p.chunkCount, p.crc32, p.gameMode);
+    UE_LOGI("save_transfer: Begin -- %u bytes in %u chunks (crc=0x%08X mode=%u sidecar=%u B)",
+            p.totalBytes, p.chunkCount, p.crc32, p.gameMode, p.sidecarBytes);
     MaybeFinishLocked_();
 }
 
@@ -637,6 +681,7 @@ void OnDisconnect() {
         g_cliRequested = false;
         g_cliHaveBegin = false;
         g_cliChunksSeen = 0;
+        g_cliSidecarBytes = 0;
         g_cliBuf.clear();
         g_cliBuf.shrink_to_fit();
     }
