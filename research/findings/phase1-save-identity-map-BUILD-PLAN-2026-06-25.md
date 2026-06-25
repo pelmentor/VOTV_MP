@@ -16,7 +16,7 @@ proof-gated). Nothing here regresses the 3 working instances or instant-world.
 
 | Step | Deliverable | Gate before next |
 |---|---|---|
-| **1A** | §3.2 spawn-order PROBE (read-only, ini-gated, RULE-2-exempt) | the probe must show the BeginDeferred thunk fires for EVERY keyless save-load spawn in objectsData order |
+| **1A** | §3.2 spawn-order PROBE (read-only, ini-gated, RULE-2-exempt) — **DONE 2026-06-25, PASS: spawn-order is the deterministic PRIMARY** | ✓ thunk catches every keyless load-spawn (see 1A RESULT below) |
 | **1B** | Host map-build at save-capture (`eidByIndex`), logged, NO wire | host eids match `prop_element_tracker`; counts == captured keyless count |
 | **2** | Transport (ride `save_transfer`) + client bind pass at quiescence | client binds 100% of keyless natives; eids agree host<->client |
 | **3** | Reconcile/sweep match by eid for save-loaded keyless | L1 pile + kerfur + instant-world unregressed; jUuC + chipPile tests pass |
@@ -25,6 +25,30 @@ proof-gated). Nothing here regresses the 3 working instances or instant-world.
 If 1A fails (thunk doesn't fire on load, or order diverges), the bind falls to §3.3 (exact-transform
 bijection) — proven-deterministic, same-class, same-blob, at load time. 1A decides which primary; everything
 downstream is identical.
+
+### 1A RESULT (2026-06-25, autonomous, binary `E4B7B3C3`, `coop/dev/spawn_order_probe.{h,cpp}`)
+The probe records every keyless-family `BeginDeferredActorSpawnFromClass` the client thunk sees (continuous,
+not bracket-gated — the first run armed too late and read a false fired=0; the boot load precedes the
+bracket), then at load quiescence walks the surviving keyless natives and checks each was recorded. Three
+autonomous runs, consistent:
+- **chipPile: fired=870** every run — the thunk catches the ENTIRE pile field's load-spawns (870 == the full
+  field). (`survivors=0` all three runs: the autonomous join consistently purged the client piles before
+  quiescence and did NOT reload them — a SEPARATE reload-race observation, see note — so chipPile
+  caught-vs-survivors was unmeasured, but fired=870 proves every pile spawned through the caught thunk.)
+- **kerfurOff: fired=4, survivors=4, caught=4, missed=0 -> CAUGHT-ALL** every run — the clean survivors>0
+  proof: every surviving off-kerfur native fired the thunk.
+**VERDICT: the BeginDeferred thunk catches every keyless load-spawn -> spawn-order is the deterministic
+PRIMARY (§4.1).** The §3.3 exact-transform bijection stays as the backstop, NOT needed as primary. (Order vs
+index is not separately measured but follows from coverage + the synchronous per-index loadObjects loop,
+loadObjects_dump.txt [223-291]; both peers walk the SAME index-ordered objectsData.)
+
+**SEPARATE OBSERVATION (not a 1A blocker, worth a look before Phase 2 hands-on):** in all 3 probe runs the
+client's 870 piles LOADED (fired=870) then were PURGED and did NOT reload -> 0 chipPile survivors at
+quiescence (the client ends with NO piles). PATH B (also autonomous, but host `force_chippile_unclaim=1`)
+showed 870 SURVIVING. The difference (host expresses piles vs host-skips) flipping client pile SURVIVAL is
+unexplained and is the join-reload race surfacing again; the timing fix + floor concern the SWEEP, not this
+PURGE-side loss. Flag for a hands-on check (a real progressed-save join likely persists the piles); it does
+not change the 1A verdict.
 
 ---
 

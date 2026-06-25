@@ -9,7 +9,8 @@
 
 #include "coop/trash_collect_sync.h"
 
-#include "coop/kerfur_entity.h"  // K-5: IsKerfurActor (the held-kerfur class-gate)
+#include "coop/dev/spawn_order_probe.h"  // Phase 1 step 1A: client load-spawn coverage probe (read-only)
+#include "coop/kerfur_entity.h"  // K-5: IsKerfurActor (the held-kerfur class-gate); IsKerfurPropClass (off-prop)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/prop_element_tracker.h"
@@ -75,6 +76,19 @@ bool g_repileThunkInstalled = false;          // process-lifetime Func-patch lat
 // RunCbSEH absorbs it -> no convert. Game thread (BeginDeferred is GT-only); host-only.
 void OnBeginDeferredSpawnObserve(void* srcObj, void* newActor) {
     auto* s = g_session.load(std::memory_order_acquire);
+    // Phase 1 step 1A PROBE (read-only, CLIENT-side, before the host gate): record every keyless-family
+    // load-spawn this thunk sees, so EmitVerdictAtQuiescence can test whether spawn-order catches every
+    // surviving native (build plan 1A; docs/COOP_STABLE_ID_SIDECAR.md S3.2). Observe-only, mutates nothing.
+    if (newActor && s && s->connected() && s->role() == coop::net::Role::Client &&
+        coop::dev::spawn_order_probe::IsEnabled()) {
+        if (ue_wrap::prop::IsChipPile(newActor)) {
+            coop::dev::spawn_order_probe::NoteKeylessSpawn(
+                newActor, coop::dev::spawn_order_probe::Family::ChipPile);
+        } else if (void* c = R::ClassOf(newActor); c && coop::kerfur_entity::IsKerfurPropClass(c)) {
+            coop::dev::spawn_order_probe::NoteKeylessSpawn(
+                newActor, coop::dev::spawn_order_probe::Family::KerfurOff);
+        }
+    }
     if (!s || !s->connected() || s->role() != coop::net::Role::Host) return;  // host authors converts
     if (!srcObj || !newActor) return;
     if (!ue_wrap::prop::IsGarbageClump(srcObj)) return;   // re-pile source must be a clump (grab case is a pile -> skip)

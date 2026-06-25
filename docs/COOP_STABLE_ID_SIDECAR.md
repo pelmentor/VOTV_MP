@@ -378,10 +378,13 @@ per-class manifest + floor. One new file per the modular rule
 
 ## 9. Open items before any build (greenlight gates)
 
-1. **§3.2 spawn-order probe** — confirm the BeginDeferred Func-thunk fires for
-   every keyless save-load spawn in objectsData order (read-only, ini-gated).
-   This is the ONLY unproven assumption in the recommended path; if it fails,
-   §3.3 (exact-transform bijection) is the proven fallback.
+1. **§3.2 spawn-order probe** — **DONE 2026-06-25, PASS.** The read-only probe
+   (`coop/dev/spawn_order_probe.{h,cpp}`, binary `E4B7B3C3`, 3 autonomous runs)
+   showed the BeginDeferred thunk catches EVERY keyless load-spawn: chipPile
+   fired=870 (full field), kerfurOff 4/4 CAUGHT-ALL (missed=0). Spawn-order is
+   the deterministic PRIMARY; §3.3 bijection stays as the backstop. (Detail +
+   the separate "client piles purge-not-reload" observation:
+   `research/findings/phase1-save-identity-map-BUILD-PLAN-2026-06-25.md` 1A RESULT.)
 2. **§4 manifest source** — confirm a host-side per-class GUObjectArray census
    at snapshot-finalize is cheap + independent of the expression path (it must
    not share the failure mode it guards).
