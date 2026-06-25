@@ -1,7 +1,14 @@
 # Autonomous PATH B — deterministic floor proof on the timing fix (2026-06-25)
 
-**STATUS: PREPARED, NOT RUN. Waits for the user's "отошёл / go" signal (user is in a live session;
-`mp.py kill` would kill his game + overwrite the host log). DO NOTHING on the peers until then.**
+**STATUS: DONE 2026-06-25 ~15:42 (A) / ~15:46 (B). RESULT = CONCLUSIVE PROOF.**
+- **RUN A (floor OFF):** `sweep FIRING (load tail quiesced; 2143ms after arm)` -> 3082 in-universe, 951
+  destroyed (`doomed 870 x actorChipPile_C`) -> all 870 piles WIPED (post re-seed `0 keyless chipPile`).
+- **RUN B (floor ON):** `sweep FIRING (load tail quiesced; 2176ms after arm)` -> `completeness FLOOR kept 870
+  unclaimed 'actorChipPile_C'` / `floor KEPT 870 of 975` -> 3106 in-universe, only 105 destroyed -> 870 piles
+  SURVIVE (post re-seed `870 keyless chipPile`).
+Both fired at FULL-world in-universe via quiescence (NOT a deadline/ceiling, NOT the old 88-trough) -> the
+timing fix removed the race; the floor flips WIPE-870 -> KEEP-870. Inis restored, no lingering procs.
+Deployed `BCDD46DA`. See docs/piles/10 "FIX PROVEN". (Procedure below retained for re-runs.)
 
 Built binary to deploy when go: **`votv-coop.dll` MD5 `BCDD46DA`** (HEAD `5e91519a`, timing fix + floor
 + dev forcing/toggle). Currently deployed on peers: `A47CA882` (stays until the run).

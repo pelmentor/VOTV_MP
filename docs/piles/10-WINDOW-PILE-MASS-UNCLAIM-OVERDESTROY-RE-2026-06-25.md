@@ -1,8 +1,48 @@
 # 10 — in-window pile MASS-UNCLAIM over-destroy (ALL piles vanish) — RE 2026-06-25
 
+**Status: ROOT PINNED (a RACE — sweep fires mid-purge) + BOTH-LAYER FIX BUILT + PROVEN by a deterministic
+controlled A/B (2026-06-25, binary `BCDD46DA`). Root fix = the purge-aware quiescence gate (commit
+`5e91519a`); the per-class floor (Phase 0) is the complementary NET. Proof below (§FIX PROVEN). Remaining:
+a hands-on VISUAL confirm (autonomous smoke is rendering-blind, but the floor's KEEP is engine-truth from the
+re-seed pile count).**
+
+## FIX PROVEN — deterministic A/B over the timing fix (2026-06-25, binary `BCDD46DA`, autonomous)
+
+One binary, one variable (the floor toggle), the host forcing-flag `force_chippile_unclaim=1` injecting the
+under-express on BOTH runs. The timing fix makes the sweep fire against the FULLY reloaded world (3082/3106
+in-universe, NOT the old 88-trough) in BOTH runs -- the race is GONE -- so the only thing that differs is the
+floor:
+
+| | sweep FIRING | in-universe | doomed (pre-floor) | actorChipPile_C | destroyed | piles after |
+|---|---|---|---|---|---|---|
+| **A — floor OFF** (`disable_completeness_floor=1`) | `load tail quiesced; 2143ms after arm` | 3082 | 951 | 870 doomed | **951** | **0 (WIPED)** |
+| **B — floor ON** | `load tail quiesced; 2176ms after arm` | 3106 | 975 | 870 **KEPT** | **105** | **870 (SURVIVE)** |
+
+Run B log (client `Game_0.9.0n_copy`, 15:46:57):
+`completeness FLOOR kept 870 unclaimed 'actorChipPile_C' -- host census 871, claimed only 0 this bracket` ->
+`completeness floor KEPT 870 of 975 doomed actor(s) ... the unclaimed locals SURVIVE` -> `claim sweep -- 3106
+in-universe, 2130 claimed, 105 unclaimed locals destroyed`. Post-sweep re-seed (15:46:59) still finds `870
+keyless chipPile` = the actors SURVIVED (engine-truth, not rendering). Run A (floor off) wiped all 870 and
+the post-sweep re-seed found `0 keyless chipPile`.
+
+PROVES: (1) the timing fix made the catastrophe DETERMINISTIC (both runs fired at full-world via
+`load tail quiesced`, never a deadline/ceiling, never the 88-trough); (2) the floor is the NET that flips
+WIPE-870 -> KEEP-870 with everything else identical. The PATH B that was INCONCLUSIVE on 14:11 (host-skip
+alone, sweep landed in the trough) is now CONCLUSIVE because the timing fix removed the race -- exactly as
+designed (`research/findings/sweep-quiescence-purge-gate-DESIGN-2026-06-25.md` S6).
+
+NOTE (separate, NOT a regression): Run B still destroyed 105 non-chipPile unclaimed locals (80 trashBitsPile
++ 1 mushroom7 + ~24 others) -- the floor's census covers chipPile (the mass catastrophe class) only. Whether
+to extend the census to trashBitsPile is a SEPARATE scope question (smaller blast radius, under the >50%
+valve); it is pre-existing sweep behavior, untouched by this fix.
+
+---
+
+## ORIGINAL RE (root pinning) -- retained below for the derivation
+
 **Status: ROOT MECHANISM RE'd from a REAL hands-on log (2026-06-25 11:16, build `b70f9aec`).
-NOT a regression (the docs/piles/09 fix was NOT deployed). FIX NOT built — one open root (why the host
-failed to express the piles this join). This is WORSE than the dup: a full-class WIPE, not a duplicate.**
+NOT a regression (the docs/piles/09 fix was NOT deployed). This is WORSE than the dup: a full-class WIPE,
+not a duplicate. (The "FIX NOT built" line is now SUPERSEDED -- see FIX PROVEN above.)**
 
 > **PLAN (2026-06-25, DESIGN on-review): the catastrophe guard is specified in
 > `docs/COOP_STABLE_ID_SIDECAR.md` §4 — a per-class COMPLETENESS FLOOR (a positive host->client
