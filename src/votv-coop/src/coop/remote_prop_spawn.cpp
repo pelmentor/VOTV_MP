@@ -218,20 +218,30 @@ bool g_sweepFired   = false;                          // sticky: set when the sw
 // and R3's membership + the >50% valve make any remaining re-fire bounded + safe. See
 // the note in ArmDivergenceSweep. RULE 2: no latch, no parallel band-aid.)
 std::chrono::steady_clock::time_point g_sweepArmedAt{};
+std::chrono::steady_clock::time_point g_sweepLastProgressAt{};  // reset on any progress (active purge OR moving
+                                                                // population) -> base of the NO-PROGRESS deadline
 std::chrono::steady_clock::time_point g_sweepLastScan{};  // {} (epoch 0) => not yet scanned this arm
 int  g_sweepLastUnsettledCount = -1;
 int  g_sweepStableScans        = 0;
 constexpr int kSweepScanIntervalMs = 200;    // 5 Hz quiescence probe while pending (matches npc_adoption)
-constexpr int kSweepQuiesceScans   = 10;     // load-tail population (keyless props AND allowlisted NPCs) stable
-                                             // across 10 scans (~2 s) = the async loadObjects pass has drained.
-                                             // Longer than the old 600 ms: the kerfur NPCs load with multi-
-                                             // hundred-ms gaps after the props, so a short window false-signals
-                                             // mid-load -> the adoption fresh-spawns a duplicate of a twin still
-                                             // to come (the 2026-06-15 kerfur-dupe).
-constexpr int kSweepDeadlineMs     = 45000;  // hard cap: sweep regardless. Generous -- a ~19 MB live-save blob
-                                             // loads async over ~12-15 s, so the deadline must NOT pre-empt
-                                             // quiescence (which fires when the load actually settles). This is
-                                             // the pathological backstop, not the normal path.
+constexpr int kSweepQuiesceScans   = 10;     // load-tail population (keyless props, chipPiles, AND allowlisted
+                                             // NPCs) stable across 10 scans (~2 s) = the async loadObjects pass
+                                             // has drained. Longer than the old 600 ms: the kerfur NPCs load with
+                                             // multi-hundred-ms gaps after the props, so a short window false-
+                                             // signals mid-load -> the adoption fresh-spawns a duplicate of a twin
+                                             // still to come (the 2026-06-15 kerfur-dupe).
+// Two-tier deadline (2026-06-25, the docs/piles/10 purge-aware gate). The sweep must adjudicate the FULLY
+// reloaded world, but a join-time world-reload mass-purge drains async over ~50 s (14:11 hands-on: arm ->
+// re-seed-done ~50 s) -- a fixed SINCE-ARM deadline would fire INSIDE the purge trough before the re-seed,
+// never exercising the floor (the exact self-sabotage this gate avoids). So:
+//   - kSweepDeadlineMs: a NO-PROGRESS timer (base = g_sweepLastProgressAt, reset whenever a purge is draining
+//     OR the load-tail population is still moving). It fires only after this long with NOTHING happening --
+//     a genuine stall, never a legitimate long drain. Same 45 s value, new semantics.
+//   - kSweepHardCapMs: an ABSOLUTE ceiling from arm. Bounds a pathological stuck-purge-flag (no-progress
+//     keeps resetting) so the reconcile can never defer forever. Curtain is already down at Complete, so this
+//     only delays the INVISIBLE reconcile, not player control -> a generous 120 s is safe.
+constexpr int kSweepDeadlineMs     = 45000;   // NO-PROGRESS deadline (since last progress, not since arm)
+constexpr int kSweepHardCapMs      = 120000;  // absolute ceiling since arm (stuck-purge backstop)
 
 // Record that the host snapshot bound `actor` (exact-key, fuzzy, or fresh
 // spawn) -- the actor is accounted-for by the host's world and must survive
@@ -1325,8 +1335,17 @@ static int CountLoadTailUnsettled_() {
         if (!ue_wrap::prop::IsClassKeyedInteractable(cls)) continue;
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;  // CDO (alloc-free)
+        // (b') chipPile field (docs/piles/10 purge-aware gate, 2026-06-25). COUNT live chipPiles into the
+        // population (was a `continue` skip): a join-time world-reload purge DROPS the field (871 -> ...) and
+        // the async reload CLIMBS it back (... -> 870), so counting it makes the gate refuse to quiesce
+        // through EITHER half of the reload -- including the <=4 s window where the purge has physically
+        // started but InPurgeEpisode is not yet flagged (the reaper is on a 4 s throttle). This is the
+        // PHYSICAL-population half of the fix; it does not depend on the flag's detection latency. Counted
+        // EVEN IF claimed (a claimed-then-purged pile still perturbs the field), so it sits ABOVE the
+        // g_claimedActors skip below. Shared with NPC adoption (HasLoadTailQuiesced): making adoption also
+        // wait for pile stability is conservative + correct (piles + kerfur NPCs load in the same async pass).
+        if (ue_wrap::prop::IsChipPile(obj)) { ++unsettled; continue; }
         if (g_claimedActors.count(obj)) continue;                       // claimed: never a sweep candidate
-        if (ue_wrap::prop::IsChipPile(obj)) continue;                   // chipPile is expressible keyless (not skipped)
         if (coop::prop_lifecycle::IsPerPlayerPropClass(R::ClassNameOf(obj))) continue;
         const std::wstring key = ue_wrap::prop::GetInteractableKeyString(obj);
         if (key.empty() || key == L"None") ++unsettled;
@@ -1356,6 +1375,9 @@ void ArmDivergenceSweep() {
     g_sweepPending = true;
     g_sweepFired = false;
     g_sweepArmedAt = std::chrono::steady_clock::now();
+    g_sweepLastProgressAt = g_sweepArmedAt;  // no-progress deadline base; no generation capture -- a clean
+                                             // no-purge join (boot seed holds, population already stable) must
+                                             // be allowed to quiesce immediately.
     g_sweepLastScan = {};            // force a quiescence scan on the next tick
     g_sweepLastUnsettledCount = -1;
     g_sweepStableScans = 0;
@@ -1377,13 +1399,30 @@ void TickClientReconcile() {
         msSince(g_sweepLastScan) < kSweepScanIntervalMs) return;
     g_sweepLastScan = now;
 
-    const bool deadlineHit = msSince(g_sweepArmedAt) >= kSweepDeadlineMs;
+    // Two-tier deadline (docs/piles/10 purge-aware gate): the NO-PROGRESS timer (since the last progress edge)
+    // OR the ABSOLUTE ceiling (since arm). The absolute ceiling fires even through a stuck purge so the
+    // reconcile can never defer forever; the no-progress timer never pre-empts a legitimately-draining purge
+    // (which keeps resetting g_sweepLastProgressAt below).
+    const bool deadlineHit = msSince(g_sweepArmedAt) >= kSweepHardCapMs ||
+                             msSince(g_sweepLastProgressAt) >= kSweepDeadlineMs;
     if (!deadlineHit) {
+        // REGISTRY MID-PURGE (or never seeded) -> the loaded world is INCOMPLETE; never adjudicate against it.
+        // A draining purge IS progress (reset the no-progress base) so a ~50 s legitimate reload does not trip
+        // the deadline; the population-stability run restarts once the world re-seeds (!InPurgeEpisode is the
+        // clean "registry re-seeded" edge -- the episode-end re-seed is synchronous, net_pump.cpp:538-539).
+        if (!coop::prop_element_tracker::HasSeededOnce() ||
+            coop::prop_element_tracker::InPurgeEpisode()) {
+            g_sweepLastProgressAt = now;
+            g_sweepLastUnsettledCount = -1;
+            g_sweepStableScans = 0;
+            return;  // keep waiting (the absolute ceiling above still bounds a permanently-stuck purge)
+        }
         const int unsettled = CountLoadTailUnsettled_();
         if (unsettled != g_sweepLastUnsettledCount) {
             g_sweepLastUnsettledCount = unsettled;
+            g_sweepLastProgressAt = now;  // population still moving = progress -> hold off the no-progress deadline
             g_sweepStableScans = 0;
-            return;  // population still changing -> load tail (props or NPCs) not drained, keep waiting
+            return;  // population still changing -> load tail (props, piles, or NPCs) not drained, keep waiting
         }
         if (++g_sweepStableScans < kSweepQuiesceScans) return;  // stable, but not for long enough yet
     }
@@ -1393,8 +1432,13 @@ void TickClientReconcile() {
     // sweep needs it to release the grav-hand if a doomed actor is being held --
     // exactly the kerfur-ghost-grab case). Cold path, one FindObjectByClass.
     void* localPlayer = R::FindObjectByClass(P::name::MainPlayerClass);
-    UE_LOGI("remote_prop_spawn: divergence sweep FIRING (%s; %lldms after arm)",
-            deadlineHit ? "hard deadline" : "load tail quiesced", static_cast<long long>(msSince(g_sweepArmedAt)));
+    const char* fireReason =
+        !deadlineHit                                       ? "load tail quiesced"
+        : (msSince(g_sweepArmedAt) >= kSweepHardCapMs)     ? "ABSOLUTE ceiling (stuck purge backstop)"
+                                                           : "no-progress deadline";
+    UE_LOGI("remote_prop_spawn: divergence sweep FIRING (%s; %lldms after arm, %lldms since last progress)",
+            fireReason, static_cast<long long>(msSince(g_sweepArmedAt)),
+            static_cast<long long>(msSince(g_sweepLastProgressAt)));
     g_sweepPending = false;
     g_sweepFired = true;  // load tail drained -> npc_adoption may now fresh-spawn no-twin save NPCs
     RunDivergenceSweep_(localPlayer);
