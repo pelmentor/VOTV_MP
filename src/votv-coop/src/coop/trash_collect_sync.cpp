@@ -397,9 +397,35 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
                 return;
             }
         }
-        // Aim ray from the live view camera. Forward from the camera rotation (deg->rad): the unit vector the
-        // cone tests each pile proxy against. maxRange 400 cm (a generous reach), minDot 0.94 (~20 deg cone --
-        // forgiving so a slightly-off aim still grabs).
+        // (X) native-authoritative GRAB recognition (items 5+6). A save-loaded pile the client BOUND as the
+        // host-range mirror (save_identity_bind) is a REAL actorChipPile_C native -> it IS the game's own
+        // lookAtActor (the int_player_C interaction trace), occlusion-correct + collision-blocked, unlike a
+        // bare proxy. PREFER it: read lookAtActor; if it's a bound native pile, SUPPRESS the native's LOCAL
+        // playerGrabbed by NULLING lookAtActor on THIS InpActEvt_use PRE edge -- the ubergraph reads
+        // lookAtActor FRESH at the icast(lookAtActor)->playerGrabbed cast that runs AFTER this PRE observer,
+        // so NoObject -> the cast fails -> playerGrabbed is skipped -> no client-authored clump/destroy/dup --
+        // and route the grab via GrabIntent (host-auth, the sole author of the shared mutation; the host runs
+        // playerGrabbed on the requester's puppet). lookAtActor is a plain ObjectProperty re-derived by the
+        // interaction trace next tick, so the clear SELF-HEALS (prompt/aim return) and collision is untouched.
+        // The camera-cone below stays only for UNBOUND proxy piles (runtime/host-only piles + carried clumps,
+        // no native to bind) which can never be lookAtActor. RULE 2: the cone is retired for bound piles.
+        {
+            void* aimedNative = ue_wrap::engine::ReadMainPlayerLookAtActor(self);
+            if (aimedNative && ue_wrap::prop::IsChipPile(aimedNative) && PT::IsBoundMirrorNative(aimedNative)) {
+                const coop::element::ElementId beid = coop::remote_prop::ResolveMirrorEidByActor(aimedNative);
+                if (beid != coop::element::kInvalidId) {
+                    ue_wrap::engine::WriteMainPlayerLookAtActor(self, nullptr);  // suppress the native's local grab dispatch
+                    UE_LOGI("[GRAB-INTENT] CLIENT E-PRESS on BOUND native pile eid=%u (lookAtActor, occlusion-correct) "
+                            "-> suppressed local grab (cleared lookAtActor) + requesting grab from host",
+                            static_cast<unsigned>(beid));
+                    coop::trash_channel::SendGrabIntent(*s, static_cast<uint32_t>(beid));
+                    return;
+                }
+            }
+        }
+        // Aim ray from the live view camera (FALLBACK -- unbound proxy piles only). Forward from the camera
+        // rotation (deg->rad): the unit vector the cone tests each pile proxy against. maxRange 400 cm (a
+        // generous reach), minDot 0.94 (~20 deg cone -- forgiving so a slightly-off aim still grabs).
         const ue_wrap::FVector  camLoc = ue_wrap::engine::GetCameraLocation();
         const ue_wrap::FRotator camRot = ue_wrap::engine::GetCameraRotation();
         const float d2r = 3.14159265f / 180.f;

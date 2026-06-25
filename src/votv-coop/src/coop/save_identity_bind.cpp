@@ -7,6 +7,7 @@
 #include "coop/ini_config.h"               // IsIniKeyTrue
 #include "coop/prop_element_tracker.h"     // UnmarkKnownKeyedProp, GetPropElementIdForActor, MarkBoundMirrorNative
 #include "coop/remote_prop.h"              // RegisterPropMirror, ConsumeLocalActor
+#include "coop/trash_proxy.h"              // (X) item 4: IsProxy / RetireProxy (proxy-before-bind race)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"                  // GetInteractableKeyString
 #include "ue_wrap/reflection.h"            // ClassNameOf, IsLive
@@ -70,12 +71,24 @@ void BindLocalNativeToHostEid_(void* native, coop::element::ElementId E, MAP::Fa
     // LOCAL element on it (MarkPropElement's idempotency only knows g_actorToPropElementId, which mirrors are
     // not in -> without this it would double-element). The root fix for binding-as-mirror at load time.
     PT::MarkBoundMirrorNative(native);
+    // (ii) proxy-before-bind race (X item 4): if a host PropSpawn beat the bind and spawned a trash PROXY at
+    // E (a chipPile mirror), retire it PROPERLY *before* re-binding. RetireProxy does Destroy -> RemoveFromRoot
+    // -> Take(E)/unbind, so it MUST precede RegisterPropMirror (otherwise Take(E) would destroy the element we
+    // just bound to the native), and it REPLACES ConsumeLocalActor (which only destroys the actor -> would leak
+    // the rooted proxy + its g_proxies entry). After RetireProxy, E is free in both the proxy map and the
+    // Registry, so the RegisterPropMirror below fresh-binds the native cleanly.
+    bool retiredProxy = false;
+    if (caseII && family == MAP::Family::ChipPile && coop::trash_proxy::IsProxy(E)) {
+        coop::trash_proxy::RetireProxy(E);
+        retiredProxy = true;
+    }
     // Step 3.2: install the host-range MIRROR at E onto the native. rebindInPlace=true handles the (ii) race
     // (re-points an already-bound E onto the native instead of HEAD-rejecting). senderSlot=0 (host owns it).
     coop::remote_prop::RegisterPropMirror(E, native, key, cls, /*senderSlot*/ 0, /*rebindInPlace*/ true);
-    // (ii): a host PropSpawn already spawned a SEPARATE fresh actor at E -> after the rebind that actor is
-    // orphaned (element-less); echo-destroy it so no dup survives (mini-design S4(ii)).
-    if (caseII) coop::remote_prop::ConsumeLocalActor(oldActor);
+    // (ii) non-proxy race (kerfur, or any non-proxy actor at E): a host PropSpawn already spawned a SEPARATE
+    // fresh actor at E -> after the rebind that actor is orphaned (element-less); echo-destroy it so no dup
+    // survives (mini-design S4(ii)). Skipped when the proxy path above already tore the proxy down.
+    if (caseII && !retiredProxy) coop::remote_prop::ConsumeLocalActor(oldActor);
 
     if (family == MAP::Family::ChipPile) ++g_boundChip; else ++g_boundKerfur;
     if (caseII) ++g_caseII; else ++g_caseI;

@@ -1046,16 +1046,36 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer,
     // SpawnProxy's convergence branch, which (by design) does NOT re-skin, so the form stays correct.
     // Non-trash converts (Aprop_C / kerfur) fall through to the legacy spawn+rebind path below.
     if (coop::trash_proxy::IsTrashProxyClass(remote_prop_spawn::ClassNameToWString(payload.pileClass))) {
+        // (X) morph hand-off: if E currently resolves to a BOUND save-loaded NATIVE pile (kept alive by the
+        // native-authoritative guards) and this is a ToClump (grab), the pile is leaving the save-loaded
+        // resting state to become a host-RUNTIME carried clump -- which has no native. The native can't morph
+        // to a clump (different class) and IsProxy(E) is false (it was never a proxy), so the plain SpawnProxy
+        // + RegisterPropMirror below would REJECT against the still-live native (rebindInPlace=false -> the
+        // duplicate-eid guard) and the pile would never convert. Hand the eid to the runtime proxy: re-skin the
+        // Element onto the fresh clump proxy (rebindInPlace) + retire the orphaned native (clear its bound-
+        // mirror mark via UnmarkKnownKeyedProp, then destroy). The design's gap-(b) hand-off: a carried clump
+        // is host-runtime, not a save-loaded native. Gated on wantClump so a spurious non-grab convert on a
+        // bound native falls to the safe reject path (never silently swaps a live native pile for a proxy).
+        void* boundNative = ResolveLiveActorByEid(E);
+        const bool morphBoundNative =
+            wantClump && boundNative && coop::prop_element_tracker::IsBoundMirrorNative(boundNative);
         ue_wrap::FVector  loc{payload.locX, payload.locY, payload.locZ};
         ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};
         void* proxy = coop::trash_proxy::SpawnProxy(E, payload.chipType, /*isClump=*/wantClump,
                                                     senderSlot, loc, rot,
                                                     ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ});
         if (proxy) {
-            RegisterPropMirror(E, proxy, L"", R::ClassNameOf(proxy), senderSlot);
-            UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> proxy SPAWNED %s (convert beat its spawn) "
-                    "[SYNC-MIRROR OK -- no dup]", edge, E, static_cast<unsigned>(payload.ctx),
-                    wantClump ? "CLUMP" : "PILE");
+            RegisterPropMirror(E, proxy, L"", R::ClassNameOf(proxy), senderSlot, /*rebindInPlace=*/morphBoundNative);
+            if (morphBoundNative) {
+                coop::prop_element_tracker::UnmarkKnownKeyedProp(boundNative);  // drop the bound-mirror mark
+                E::DestroyActor(boundNative);                                   // retire the orphaned save-loaded native pile
+                UE_LOGI("[PILE] CLIENT convert %s eid=%u -> bound save-loaded NATIVE pile GRABBED -> handed to "
+                        "runtime clump proxy=%p (native retired; native-authoritative hand-off)", edge, E, proxy);
+            } else {
+                UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> proxy SPAWNED %s (convert beat its spawn) "
+                        "[SYNC-MIRROR OK -- no dup]", edge, E, static_cast<unsigned>(payload.ctx),
+                        wantClump ? "CLUMP" : "PILE");
+            }
         } else {
             UE_LOGW("[PILE] CLIENT recv convert %s eid=%u -- proxy spawn-on-convert FAILED (DESYNC)", edge, E);
         }

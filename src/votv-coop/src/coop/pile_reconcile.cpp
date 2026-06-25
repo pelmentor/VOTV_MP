@@ -93,6 +93,11 @@ void EnsureIndex(const std::unordered_set<void*>& claimed) {
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;  // CDO
         if (claimed.count(obj)) continue;  // already bound earlier this bracket
+        // (X) native-authoritative guard (b): a save_identity_bind BOUND native IS the authoritative
+        // host-range mirror -- it must NEVER be a reconcile-destroy candidate. Excluding it from the index
+        // here covers BOTH the world-ready TryDestroyTwin AND the adopt path (FindAndConsumeAdoptCandidate),
+        // so a co-located UNBOUND pile's proxy can never 1cm-destroy a bound native (the end-to-end killer).
+        if (coop::prop_element_tracker::IsBoundMirrorNative(obj)) continue;
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
         // chipType read once at build time: save-loaded piles carry it from the
         // save (both peers loaded the SAME save, so host==client). If a pile
@@ -141,6 +146,10 @@ void TryDestroyTwin(const coop::net::PropSpawnPayload& payload,
         void* native = g_pileBindIndex[matchIdx].actor;
         g_pileBindIndex[matchIdx] = g_pileBindIndex.back();   // O(1) remove (consume the twin)
         g_pileBindIndex.pop_back();
+        // (X) MED-2: the EnsureIndex bound-mirror skip runs at index-BUILD time; a native that binds AFTER
+        // the (latched) build is still in the index. Re-check at the consume site so a bound native can never
+        // be destroyed even if it bound late (cheap -- one map lookup on the single matched candidate).
+        if (coop::prop_element_tracker::IsBoundMirrorNative(native)) return;
         // Drop its client-minted eid from the tracker FIRST so the K2_DestroyActor PRE observer
         // stays silent (keyless + no eid) -- no stray PropDestroy on the superseded client eid
         // (the same fresh-mirror invariant the adopt-bind path enforces, audit 2026-06-10).
@@ -314,6 +323,7 @@ int SweepReconcileSaveTimeTwins() {
         if (!o || !R::IsLive(o)) continue;
         if (!ue_wrap::prop::IsChipPile(o)) continue;                   // real actorChipPile_C only (NOT our proxy)
         if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;   // CDO
+        if (coop::prop_element_tracker::IsBoundMirrorNative(o)) continue;  // (X) bound native is the mirror -- never a save-time twin
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(o);
         natives.push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z, ue_wrap::prop::GetChipType(o)});
     }

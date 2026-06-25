@@ -321,6 +321,25 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // Trash is eid-only (the EID is the identity, Key=None). skipBind respected: OnConvert's
     // convert-before-spawn fallthrough passes skipBind=true and binds E itself.
     if (coop::trash_proxy::IsTrashProxyClass(classW)) {
+        // (X) native-authoritative guard (a): if this eid already resolves to a LIVE bound-mirror NATIVE
+        // (the client loaded the same host save + save_identity_bind bound its native actorChipPile_C as the
+        // host-range mirror at this eid), the NATIVE *is* the mirror -- do NOT spawn a redundant bare-
+        // AStaticMeshActor proxy over it. The proxy has no int_player_C/collision (through-wall grab, walk-
+        // through); suppressing it for the bound eid restores the native interaction surface for free. The
+        // native is already RegisterPropMirror'd by the bind, so the pose drive resolves it via
+        // ResolveLiveActorByEid -- nothing to (re-)register here. Only save-loaded piles hit this; runtime/
+        // host-only piles + carried clumps have no bound native -> IsBoundMirrorNative is false -> they spawn
+        // the proxy as before (the proxy is irreducible for them). Blast radius nil (per-eid gate).
+        if (auto* be = coop::element::Registry::Get().Get(payload.elementId)) {
+            void* bn = be->GetActor();
+            // IsLiveByIndex (NOT IsLive): the cached mirror actor is engine-GC-owned; read only the
+            // GUObjectArray slot, never deref a possibly-freed pointer ([[feedback-islive-unsafe-on-freed-cached-pointer]]).
+            if (bn && R::IsLiveByIndex(bn, be->GetInternalIdx()) &&
+                coop::prop_element_tracker::IsBoundMirrorNative(bn)) {
+                if (outSpawned) *outSpawned = bn;
+                return;
+            }
+        }
         const bool isClump = coop::trash_proxy::IsClumpClass(classW);
         ue_wrap::FVector  loc{payload.locX, payload.locY, payload.locZ};
         ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};
