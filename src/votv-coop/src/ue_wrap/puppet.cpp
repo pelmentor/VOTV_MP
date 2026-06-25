@@ -744,6 +744,14 @@ bool ReadPuppetHeadLookProbe(void* puppetActor, PuppetHeadLookProbe& out) {
         out.headClampDeg = ReadAt<float>(anim, P::anim::kKerfurLookAt_1 + P::anim::LookAt_Clamp);
         out.neckClampDeg = ReadAt<float>(anim, P::anim::kKerfurLookAt   + P::anim::LookAt_Clamp);
         out.haveClamp = true;
+        // Gate diagnostics: the LookAt node alphas (does the look get blended OUT when the
+        // head freezes?) + lookingAtPlayer (the dot-product state gate) + customLookAt (is
+        // our drive still pinned, or did BUA reclaim lookAt?).
+        out.headAlpha = ReadAt<float>(anim, P::anim::kKerfurLookAt_1 + P::anim::SkelCtl_Alpha);
+        out.neckAlpha = ReadAt<float>(anim, P::anim::kKerfurLookAt   + P::anim::SkelCtl_Alpha);
+        out.lookingAtPlayer = ReadAt<bool>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_lookingAtPlayer());
+        out.customLookAt    = ReadAt<bool>(anim, ue_wrap::reflected_offset::AnimBP_kerfur_customLookAt());
+        out.haveGates = true;
     }
     // Resolved WORLD rotation of the 'head' + 'neck' bones (the actual rendered twist).
     ue_wrap::FRotator hr{}, nr{};

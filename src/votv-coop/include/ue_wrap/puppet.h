@@ -92,9 +92,15 @@ struct PuppetHeadLookProbe {
     float headWorldYaw = 0.f;    // 'head' bone world yaw (deg)
     float headWorldPitch = 0.f;  // 'head' bone world pitch (deg)
     float neckWorldYaw = 0.f;    // 'neck' bone world yaw (deg)
+    // Gate diagnostics (2026-06-25, clamp REFUTED -> hunt why the head-look turns OFF):
+    float headAlpha = -1.f;      // head LookAt node SkelCtl_Alpha (1.0 = active; 0 = look bypassed)
+    float neckAlpha = -1.f;      // neck LookAt node SkelCtl_Alpha (0.5 native)
+    bool  lookingAtPlayer = false;  // AnimBP lookingAtPlayer (dot-product gate: observer in front?)
+    bool  customLookAt = false;     // our drive still pinned? (true = our lookAt wins; false = BUA reclaimed)
     bool  haveClamp = false;
     bool  haveHead  = false;
     bool  haveNeck  = false;
+    bool  haveGates = false;     // alpha + lookingAtPlayer + customLookAt read off the AnimInstance
 };
 bool ReadPuppetHeadLookProbe(void* puppetActor, PuppetHeadLookProbe& out);
 

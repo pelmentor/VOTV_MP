@@ -76,18 +76,22 @@ void Tick(void* puppetActor, float bodyYawDeg, float desiredLookYawDeg, float de
     const float clampReach = p.headClampDeg + 0.5f * p.neckClampDeg;
     const bool exceedsClamp = std::fabs(desiredOffset) > (clampReach + 3.f);
     const bool headShort = st.haveBaseline && (std::fabs(headTwist) + 8.f < std::fabs(desiredOffset));
+    // Head "frozen" = the look isn't applying (twist ~0 despite a real desired) WELL
+    // INSIDE the clamp -> NOT clamp saturation. Classify the GATE: alpha dropped? or the
+    // look state turned off (lookingAtPlayer false / customLookAt lost)?
+    const bool frozen = st.haveBaseline && std::fabs(desiredOffset) > 12.f && std::fabs(headTwist) < 6.f;
     const char* verdict =
         !st.haveBaseline            ? "no baseline yet (look straight ahead once to calibrate)"
-        : (exceedsClamp && headShort) ? "PINNED -- twist short of desired beyond clamp => CLAMP CONFIRMED"
-        : exceedsClamp              ? "desired > clamp but twist not yet short (sweep further)"
+        : frozen                    ? "FROZEN inside clamp -> look gated OFF (NOT the clamp; see alpha/lookingAtPlayer)"
+        : (exceedsClamp && headShort) ? "twist short of desired BEYOND clamp (clamp saturation)"
+        : exceedsClamp              ? "desired > clamp but twist not yet short"
                                     : "within clamp (head tracking the input)";
 
-    UE_LOGW("[HEAD-PROBE] actor=%p bodyYaw=%.1f lookYaw=%.1f | DESIRED off=%.1f deg | "
-            "TWIST head=%.1f neck=%.1f (raw head=%.1f base=%.1f) | clamp head=%.1f neck=%.1f reach~%.1f | "
-            "pitch=%.1f | %s",
-            puppetActor, bodyYawDeg, desiredLookYawDeg, desiredOffset,
-            headTwist, neckTwist, rawHead, st.baselineHead,
-            p.headClampDeg, p.neckClampDeg, clampReach, desiredPitchDeg, verdict);
+    UE_LOGW("[HEAD-PROBE] actor=%p bodyYaw=%.1f | DESIRED off=%.1f | TWIST head=%.1f neck=%.1f | "
+            "GATES alpha h=%.2f n=%.2f lookingAtPlayer=%d customLookAt=%d | clamp h=%.0f n=%.0f reach~%.1f | %s",
+            puppetActor, bodyYawDeg, desiredOffset, headTwist, neckTwist,
+            p.headAlpha, p.neckAlpha, (int)p.lookingAtPlayer, (int)p.customLookAt,
+            p.headClampDeg, p.neckClampDeg, clampReach, verdict);
 }
 
 }  // namespace coop::puppet_head_probe
