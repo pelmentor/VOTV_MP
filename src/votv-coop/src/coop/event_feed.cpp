@@ -27,6 +27,7 @@
 #include "coop/players_registry.h"
 #include "coop/remote_player.h"
 #include "coop/remote_prop_spawn.h"
+#include "coop/snapshot_census.h"  // Phase 0: parse the completeness census tail on SnapshotComplete
 #include "coop/save_transfer.h"
 #include "coop/dev/restore_vitals.h"
 #include "coop/dev/teleport_client.h"
@@ -408,6 +409,14 @@ void Update(net::Session& session, void* localPlayer) {
                 break;
             }
             if (session.role() == net::Role::Host) break;
+            // Phase 0 (docs/COOP_STABLE_ID_SIDECAR.md S4): parse the optional per-class completeness
+            // census appended after SnapshotEndPayload. The deferred claim sweep (armed below) reads
+            // it to KEEP any class the host did not express completely (the docs/piles/10 guard).
+            if (msg.payloadLen > sizeof(net::SnapshotEndPayload)) {
+                coop::snapshot_census::SetFromWire(
+                    reinterpret_cast<const uint8_t*>(msg.payload) + sizeof(net::SnapshotEndPayload),
+                    static_cast<size_t>(msg.payloadLen) - sizeof(net::SnapshotEndPayload));
+            }
             coop::join_progress::Complete();
             // instant-world curtain LIFT (SEAM 1+3): the primary world is assembled -- every host
             // PropSpawn/EntitySpawn in this snapshot has been applied above. Fade the curtain out and reveal

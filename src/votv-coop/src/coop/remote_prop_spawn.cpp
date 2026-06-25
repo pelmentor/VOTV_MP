@@ -24,6 +24,7 @@
 #include "coop/net/protocol.h"
 #include "coop/npc_sync.h"  // IsAllowlistedClass -- the NPC half of the load-tail quiescence probe
 #include "coop/pile_reconcile.h"  // extracted 2026-06-23: keyless-pile join twin-destroy / adopt / census
+#include "coop/snapshot_census.h"  // Phase 0: per-class completeness floor for the claim sweep
 #include "coop/prop_echo_suppress.h"
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_lifecycle.h"
@@ -991,6 +992,9 @@ void BeginClaimTracking() {
     // A fresh bracket re-enumerates pile-bind candidates (a re-bracket runs
     // against the post-sweep world; stale entries would be dead pointers).
     coop::pile_reconcile::Reset();
+    // Phase 0: drop any completeness census from a prior bracket; SnapshotComplete delivers this
+    // bracket's. Until then HostCountForClass returns -1 (the floor is a no-op -> >50% valve only).
+    coop::snapshot_census::Reset();
     UE_LOGI("remote_prop_spawn: claim tracking ARMED (snapshot bracket open) -- "
             "unclaimed in-universe locals will be destroyed at SnapshotComplete");
 }
@@ -1053,16 +1057,21 @@ static void RunDivergenceSweep_(void* localPlayer) {
     int claimedCount = 0;
     std::vector<void*> doomed;
     doomed.reserve(propPairs.size());
+    std::vector<std::wstring> doomedClass;  // Phase 0: class per doomed actor, parallel to `doomed`
+    doomedClass.reserve(propPairs.size());
     std::unordered_map<std::wstring, int> doomedByClass;
+    std::unordered_map<std::wstring, int> claimedByClass;  // Phase 0: claimed count per class (floor numerator)
     std::unordered_map<std::wstring, int> keylessSkippedByClass;
     for (const auto& pr : propPairs) {
         if (pr.mirror) continue;                                    // host-driven mirror -> not a save divergence (automatic kerfur exemption)
         if (!pr.actor) continue;
         if (!R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;  // dead (no deref) -- the reaper owns it
         ++inClass;
-        if (g_claimedActors.count(pr.actor)) { ++claimedCount; continue; }  // host-expressed / self-claimed -> converged, keep
         void* a = pr.actor;
+        // ClassNameOf moved AHEAD of the claimed check (Phase 0): the completeness floor needs the
+        // claimed count PER CLASS, so the claimed branch must tag its class too.
         const std::wstring acls = R::ClassNameOf(a);
+        if (g_claimedActors.count(a)) { ++claimedCount; ++claimedByClass[acls]; continue; }  // host-expressed / self-claimed -> converged, keep
         // PER-PLAYER state actors (inventory container etc.) are this player's own
         // per-save state -- never host-expressed AND never swept. The 2026-06-10 smoke
         // swept the client's inventory container and fataled at the next GC purge. STAYS:
@@ -1070,6 +1079,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
         if (coop::prop_lifecycle::IsPerPlayerPropClass(acls)) continue;
         if (ue_wrap::prop::IsChipPile(a)) {            // expressible keyed OR keyless (eid lane)
             doomed.push_back(a);
+            doomedClass.push_back(acls);
             ++doomedByClass[acls];
             continue;
         }
@@ -1087,6 +1097,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
             coop::trash_pile_sync::NotifyWireDestroy(key);
         }
         doomed.push_back(a);
+        doomedClass.push_back(acls);
         ++doomedByClass[acls];
     }
     if (!keylessSkippedByClass.empty()) {
@@ -1102,6 +1113,60 @@ static void RunDivergenceSweep_(void* localPlayer) {
                 "mean the quiescence gate fired too early (regression tripwire)",
                 skippedTotal, keylessSkippedByClass.size(), topCnt, topCls.c_str());
     }
+    // PHASE 0 PER-CLASS COMPLETENESS FLOOR (2026-06-25, docs/COOP_STABLE_ID_SIDECAR.md S4 -- the
+    // docs/piles/10 over-destroy guard). The >50% valve below is GLOBAL, so a whole-class wipe slips
+    // under it whenever that class is a minority of the world (11:16: 100% of 870 piles = 31% of all
+    // props -> no abort -> ALL piles vanished). This floor is PER-CLASS and uses a POSITIVE signal:
+    // the host's INDEPENDENT GUObjectArray census (snapshot_census, NOT the registry the expression
+    // path used). For each doomed actor, if the host reported a live count for its class AND we
+    // claimed FEWER than that, the snapshot for the class is INCOMPLETE -> KEEP (the missing
+    // expressions are in flight or failed; dooming wipes genuine objects). EXACT, not a percentage:
+    // it keeps "host expressed 0 of 870" yet still dooms a legitimate clear (host genuinely has 0 ->
+    // no census entry / count 0 -> claimed >= count -> doomed as a real deletion). A class with no
+    // census entry is unaffected (the >50% valve still guards it). Applied BEFORE the valve so the
+    // valve sees the genuine-divergence remainder.
+    if (coop::snapshot_census::HasCensus() && !doomed.empty()) {
+        std::vector<void*> keptDoomed;
+        std::vector<std::wstring> keptDoomedClass;
+        keptDoomed.reserve(doomed.size());
+        keptDoomedClass.reserve(doomed.size());
+        std::unordered_map<std::wstring, int> floorKeptByClass;
+        for (size_t i = 0; i < doomed.size(); ++i) {
+            const std::wstring& c = doomedClass[i];
+            const int hostHas = coop::snapshot_census::HostCountForClass(c);
+            const auto cit = claimedByClass.find(c);
+            const int claimedOfC = (cit == claimedByClass.end()) ? 0 : cit->second;
+            if (hostHas > 0 && claimedOfC < hostHas) {
+                ++floorKeptByClass[c];   // incomplete snapshot for class c -> KEEP, do not doom
+                continue;
+            }
+            keptDoomed.push_back(doomed[i]);
+            keptDoomedClass.push_back(c);
+        }
+        if (keptDoomed.size() != doomed.size()) {
+            doomedByClass.clear();   // rebuild the histogram from the surviving doomed set
+            for (const auto& c : keptDoomedClass) ++doomedByClass[c];
+            size_t keptTotal = 0;
+            std::wstring topCls;
+            int topCnt = 0;
+            for (const auto& [c, v] : floorKeptByClass) {
+                keptTotal += static_cast<size_t>(v);
+                if (v > topCnt) { topCnt = v; topCls = c; }
+                const int hostHas = coop::snapshot_census::HostCountForClass(c);
+                const auto cit = claimedByClass.find(c);
+                const int claimedOfC = (cit == claimedByClass.end()) ? 0 : cit->second;
+                UE_LOGW("remote_prop_spawn: completeness FLOOR kept %d unclaimed '%ls' -- host census %d, "
+                        "claimed only %d this bracket (INCOMPLETE snapshot, NOT a divergence; docs/piles/10 guard)",
+                        v, c.c_str(), hostHas, claimedOfC);
+            }
+            UE_LOGW("remote_prop_spawn: completeness floor KEPT %zu of %zu doomed actor(s) across %zu class(es) "
+                    "(top: %d x '%ls') -- the host under-expressed these classes; the unclaimed locals SURVIVE",
+                    keptTotal, doomed.size(), floorKeptByClass.size(), topCnt, topCls.c_str());
+            doomed.swap(keptDoomed);
+            doomedClass.swap(keptDoomedClass);
+        }
+    }
+
     // SAFETY VALVE (2026-06-15, post-live-save regression). A legitimate divergence
     // is a SMALL delta: the client loaded the host's save, so the host cannot have
     // changed more than a fraction of the world between that save and this join. A

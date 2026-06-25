@@ -19,6 +19,7 @@
 #include "coop/prop_lifecycle.h"
 #include "coop/remote_prop.h"
 #include "coop/save_transfer.h"  // v86 Path 1c: TryGetSaveTimePileXform -- stamp the join snapshot's pile match key
+#include "coop/snapshot_census.h"  // Phase 0: per-class completeness census appended to SnapshotComplete
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -29,6 +30,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -215,8 +217,19 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
     if (s && g_currentTargetSlot >= 1) {
         coop::net::SnapshotEndPayload e{};
         e.propSent = g_snapshotSentTotal;
+        // Phase 0 (docs/COOP_STABLE_ID_SIDECAR.md S4 -- the docs/piles/10 over-destroy guard):
+        // append a per-class completeness census (an INDEPENDENT GUObjectArray count of live
+        // chipPiles, NOT the registry-driven snapshot enumeration) as a tail. The joiner's claim
+        // sweep KEEPs a class whose claimed count is below the host's count = an incomplete snapshot.
+        // No new ReliableKind (the receiver reads SnapshotEndPayload then the optional tail).
+        std::vector<uint8_t> buf(sizeof(e));
+        std::memcpy(buf.data(), &e, sizeof(e));
+        std::vector<uint8_t> tail;
+        const int budget = coop::net::kMaxReliablePayload - static_cast<int>(sizeof(e));
+        coop::snapshot_census::BuildHostTail(tail, budget);
+        buf.insert(buf.end(), tail.begin(), tail.end());
         s->SendReliableToSlot(g_currentTargetSlot, coop::net::ReliableKind::SnapshotComplete,
-                              &e, sizeof(e));
+                              buf.data(), static_cast<int>(buf.size()));
     }
     UE_LOGI("snapshot: drain complete for slot %d (%zu candidates, %u sent)",
             g_currentTargetSlot, g_snapshotCandidates.size(), g_snapshotSentTotal);
