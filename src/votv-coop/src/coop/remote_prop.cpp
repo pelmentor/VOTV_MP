@@ -1079,6 +1079,28 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer,
         } else {
             UE_LOGW("[PILE] CLIENT recv convert %s eid=%u -- proxy spawn-on-convert FAILED (DESYNC)", edge, E);
         }
+        // b2 (2026-06-26, docs/piles/09 positional): the convert-beat-spawn LAND case (#2 pile-move-in-window:
+        // host grabbed+moved a save-loaded pile mid-join, the ToPile convert reached us before any OnSpawn, so
+        // we SpawnProxy HERE). SpawnProxy is given loc=the MOVED rest position, so per the code the proxy is
+        // already there -- but unlike the re-skin path (~:1018) this branch never read the transform back, so a
+        // SpawnActor-transform that silently no-op'd (a static-mobility quirk) was INVISIBLE in the log and the
+        // pile could render at the OLD spot until interaction reconverged it. Mirror the re-skin snap: force the
+        // moved transform explicitly (belt-and-suspenders) AND read it back + log drift. drift~0 -> the proxy was
+        // already at moved (any user-seen divergence is physics-settle/perception -> needs b2.1 host-streams-
+        // settled-pos, not this); drift>0 -> the spawn transform had NOT taken and this snap fixed it. ToPile
+        // only (a LAND has a final rest pose); ToClump (carry) is pose-stream-driven, never snapped.
+        if (proxy && !wantClump) {
+            E::SetActorLocation(proxy, ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
+            E::SetActorRotation(proxy, ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
+            const ue_wrap::FVector  got  = E::GetActorLocation(proxy);
+            const ue_wrap::FRotator gotR = E::GetActorRotation(proxy);
+            const float dx = got.X - payload.locX, dy = got.Y - payload.locY, dz = got.Z - payload.locZ;
+            UE_LOGI("[PILE] CLIENT ToPile SNAP(spawn-on-convert) eid=%u applied=(%.1f,%.1f,%.1f) "
+                    "host=(%.1f,%.1f,%.1f) drift=%.2fcm | rot applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f)",
+                    E, got.X, got.Y, got.Z, payload.locX, payload.locY, payload.locZ,
+                    std::sqrt(dx * dx + dy * dy + dz * dz),
+                    gotR.Pitch, gotR.Yaw, gotR.Roll, payload.rotPitch, payload.rotYaw, payload.rotRoll);
+        }
         // #3 release-path fix (2026-06-26): the IsProxy branch confirms the client carry-state toggle on a
         // ToClump matching our pending grab (line ~1039); THIS branch (a client grab of a bound save-loaded
         // NATIVE pile -> morph hand-off, OR a convert that beat its spawn) must honor the SAME contract, else
