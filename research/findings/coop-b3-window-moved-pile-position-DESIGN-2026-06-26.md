@@ -1,8 +1,20 @@
 # b3 — window-moved save-authoritative pile position: root + design (2026-06-26)
 
-**Status: DESIGN (on review, NOT built).** RULE-1 root fix for the eid-3144 stuck-pile tail from the 16:42
-hands-on. Backed by 4 parallel read-only RE traces (host replay/gate, client bind/apply, kerfur #1 sweep, MTA
-precedent) + the 16:42 logs. Continues `coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` (the b2 verdict).
+**Status: AS-BUILT (commit `10284a8a`, proto v90, deployed `BA9459985119`) — hands-on PENDING.** RULE-1 root
+fix for the eid-3144 stuck-pile tail from the 16:42 hands-on. Backed by 4 parallel read-only RE traces (host
+replay/gate, client bind/apply, kerfur #1 sweep, MTA precedent) + the 16:42 logs. Continues
+`coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` (the b2 verdict). Audit SHIP (3-place wire-in complete,
+host-only validation, thread-safe, no clean-join/b2/#1/carry regression, value-map no UAF).
+
+**AS-BUILT wire-in (10 files, +211):** `protocol.h` (kProtocolVersion 89->90; `ReliableKind::PropSnapPos=81`;
+`PropSnapPosPayload` 28B) · `session_lanes.h` (PropSnapPos->Lane::Bulk; NOT pre-world-sendable, NOT relayable) ·
+`event_feed.cpp` (master-router -> HandleEntityEvent) · `event_dispatch_entity.cpp` (PropSnapPos case: host-only
++ finite/bounds/eid-range validation -> ArmPendingPosCorrection; if HasLoadTailQuiesced -> ApplyPendingPosCorrections)
+· `save_transfer.{h,cpp}` (`FlushDivergedPilePositionsForSlot`: iterate g_blobPileXforms[slot], resolve host
+actor via element Registry, position-compare >4cm, SendReliableToSlot) · `subsystems.cpp` (call in
+ConnectReplayForSlot after TriggerForSlot) · `pile_reconcile.{h,cpp}` (`g_pendingPosCorrection`,
+Arm/ApplyPendingPosCorrection, cleared in Reset()) · `remote_prop_spawn.cpp` (Apply at RunDivergenceSweep_ after
+SweepReconcileSaveTimeTwins). Mid-carry pile at ready -> old eid resolves null -> skipped (carry stream owns it).
 
 ## 1. The root, sharpened by RE (deeper than "dropped convert")
 
