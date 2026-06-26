@@ -9,20 +9,21 @@
 > `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`.
 >
 > **2026-06-25 — TWO pile bugs now tracked, BOTH from the in-window manipulation:**
-> **(09) move-dup — FIX BUILT (compile-clean `f837fbad`, proto v89), NOT deployed, HELD.** The 4th
-> mirror-identity instance (host grabs/moves an UNTRACKED pile in-window -> eid-0-at-grab -> dup). The fix
-> (self-seed the eid at the grab edge + carry the pre-grab pos on the kToPile convert -> client arms a
-> pending twin -> the quiescence sweep retires native@old) is built across 6 files (proto bump). HELD
-> because (10) below is worse and orthogonal. See
-> [09-WINDOW-GRABBED-PILE-DUP-RE-2026-06-24.md](09-WINDOW-GRABBED-PILE-DUP-RE-2026-06-24.md).
-> **(10) MASS-UNCLAIM over-destroy — NEW, ROOT RE'd from a REAL log, FIX NOT built.** 2026-06-25 11:16
-> hands-on (build `b70f9aec`, NOT the 09 fix): the user threw piles near kerfurs + toggled those kerfurs
-> in-window -> **ALL 870 client piles VANISHED** (870->0 at quiescence). Root: the host failed to
-> express/claim the keyless piles -> the claim sweep dooms every unclaimed chipPile UNCONDITIONALLY
-> (`remote_prop_spawn.cpp:1071`) and its `>50%` abort valve is GLOBAL not per-class (31% total < 50% ->
-> no abort, even at 100% of piles). WORSE than a dup (full-class wipe). NOT a regression (09 fix not
-> deployed). OPEN root = WHY the host didn't express the piles (kerfur-disrupted vs flaky). See
-> [10-WINDOW-PILE-MASS-UNCLAIM-OVERDESTROY-RE-2026-06-25.md](10-WINDOW-PILE-MASS-UNCLAIM-OVERDESTROY-RE-2026-06-25.md).
+> **2026-06-26 UPDATE — both subsumed by the stable-ID native-authoritative model + #2 proxy-wins:**
+> **(09) window move-dup — FIXED + HANDS-ON VERIFIED (commit `acc416eb` #2).** The original f837fbad self-seed
+> approach is superseded: the `matchPos`/`ArmPendingSaveTimeTwin` machinery DID land (`08e35d77`, in the pushed
+> stack), but the dup CURE is now #2 — when a convert touched the eid in-window (`CtxForEid>0`), the bind keeps
+> the host proxy + retires the redundant save-loaded native. **15:42 hands-on: `PROXY-WINS ... case(ii)-
+> converted`, chipPile overflow=0, no dup.** Residual = positional only (b2, DESIGN). See `research/findings/
+> coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`.
+> **(10) MASS-UNCLAIM over-destroy — LIKELY SUBSUMED by (X) native-authoritative; no recurrence 15:42.** The
+> over-destroy was "the claim sweep dooms every UNCLAIMED chipPile". (X) keeps the save-loaded natives as
+> host-range MIRRORs, EXEMPT from the divergence/doom set (`remote_prop_spawn.cpp:1080`), so there are no
+> unclaimed piles to wipe. The 15:42 hands-on did the trigger (kerfur turn-on + pile moves in-window) with **no
+> mass-vanish** (#1/#2 verified, 870 intact). Treat as resolved-by-(X) pending a dedicated stress hands-on
+> (throw many piles near kerfurs in-window). The OPEN-root framing in
+> [10-WINDOW-PILE-MASS-UNCLAIM-OVERDESTROY-RE-2026-06-25.md](10-WINDOW-PILE-MASS-UNCLAIM-OVERDESTROY-RE-2026-06-25.md)
+> predates (X) + the per-class floor.
 >
 > --- prior (09) framing, now superseded by the BUILT status above ---
 > **ROOT RE'd (2026-06-24, hands-on 17:23) — pile GRABBED-AND-DROPPED/MOVED in the connect window

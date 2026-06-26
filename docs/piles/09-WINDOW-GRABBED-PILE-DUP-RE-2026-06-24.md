@@ -1,8 +1,17 @@
 # 09 -- window-GRABBED/moved pile dup (eid 5283, 17:23) -- ROOT RE
 
-**Status: ROOT RE'd (static, log+code proven). FIX BUILT 2026-06-25 (compile-clean MD5 `f837fbad`, proto
-v89), NOT DEPLOYED, HELD.** The 4TH mirror-identity window-race instance. Diagnosed 2026-06-24 from the
-17:23 mixed hands-on run. Different from L1 (the VERIFIED+PUSHED save-time-key dup); same CLASS.
+**Status (2026-06-26): the window-moved-pile dup is FIXED + HANDS-ON VERIFIED, but by a DIFFERENT mechanism
+than this doc's original f837fbad approach.** The `matchPos`/`ArmPendingSaveTimeTwin` machinery this doc
+designed DID land (commit `08e35d77`, in the pushed stack — the host still stamps `+saveTimeKey docs/piles/09`
+on the in-window kToPile LAND). But the actual DUP cure is now the **(X) native-authoritative** model +
+**#2 proxy-wins** (`save_identity_bind.cpp`, commit `acc416eb`): when a convert touched the eid in-window
+(`CtxForEid>0`), the bind keeps the host-authored proxy and retires the redundant save-loaded native, instead
+of binding native@old. **VERIFIED hands-on 2026-06-26 15:42** (`PROXY-WINS ... case(ii)-converted`, chipPile
+overflow=0, no dup). The remaining edge is positional only (the moved pile may render at the old spot until
+interaction) — tracked as **b2** (DESIGN, not built) in
+`research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`. The `f837fbad` MD5 below is a dead
+ancestor (its content re-landed via `08e35d77`); read the RE below for the original diagnosis, but the cure is
+#2. The 4TH mirror-identity window-race instance; same CLASS as L1.
 
 > **FIX AS-BUILT 2026-06-25 (uncommitted->committed this session; NOT deployed; HELD pending the 11:16
 > over-destroy root — see `docs/piles/10`).** Six changes implement the design in §Fix direction:

@@ -1,6 +1,14 @@
 # COOP_STABLE_ID — save-loaded identity via a stable ID, not position
 
-**Status: VERIFIED end-to-end (autonomous engine-truth), 2026-06-26. push HELD for user review + hands-on.**
+**Status: PUSHED + HANDS-ON VERIFIED, 2026-06-26 (origin/main `eb85ddfb`).** The save-loaded identity bind
++ the whole grab/throw chain are hands-on verified and on origin. Grab/throw: **#3 grab-release E-drop**
+(commit `2db3df27`, hands-on 12:36 -- the morph hand-off arms the client carry-latch) + **LMB hard-throw**
+(commit `eb85ddfb`, hands-on 13:53 -- native camera-driven velocity, separate `InpActEvt_fire` input). Then
+the **join-window bind-vs-live-mutation class** (#1 kerfur turn-on dup + #2 pile-move dup) was RE'd + fixed +
+hands-on VERIFIED 15:42 (commits `39a381b0` #1 + `acc416eb` #2, **2 ahead of origin, push HELD** pending the
+small b2 positional polish -- DESIGNED, not built). Full session detail: the new finding
+`research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` +
+`[[project-grab-throw-joinwindow-2026-06-26]]`.
 Phase 0 PROVEN+PUSHED. Phase 2a sidecar transport VERIFIED (874 arrive intact). Phase 2b client bind +
 **Path A** (parse the live `saveSlot.objectsData`+`primitivesData` arrays) VERIFIED. **(X) NATIVE-AUTHORITATIVE
 BUILT+VERIFIED** (`f299229f`): keep the bound native AS the host-range mirror, per-eid SUPPRESS the proxy ->
