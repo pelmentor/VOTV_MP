@@ -8,6 +8,7 @@
 #include "coop/prop_element_tracker.h"     // UnmarkKnownKeyedProp, GetPropElementIdForActor, MarkBoundMirrorNative
 #include "coop/remote_prop.h"              // RegisterPropMirror, ConsumeLocalActor
 #include "coop/trash_proxy.h"              // (X) item 4: IsProxy / RetireProxy (proxy-before-bind race)
+#include "coop/trash_channel.h"            // b1 (#2): CtxForEid -- was E converted in-window? (proxy-wins discriminator)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"                  // GetInteractableKeyString
 #include "ue_wrap/reflection.h"            // ClassNameOf, IsLive
@@ -78,6 +79,28 @@ void BindLocalNativeToHostEid_(void* native, coop::element::ElementId E, MAP::Fa
     void* oldActor = preE ? preE->GetActor() : nullptr;
     const bool sameActor = (oldActor == native);
     const bool caseII = (preE && oldActor && !sameActor && R::IsLive(oldActor));  // host PropSpawn beat the bind
+
+    // b1 (#2, 2026-06-26): PROXY-WINS when a convert already touched E. If a trash proxy beat the bind AND a
+    // PropConvert was adopted for E (CtxForEid>0), the host grabbed+MOVED this pile IN the join window: the
+    // proxy absorbed the ToClump/ToPile and IS the authoritative current rendering (at the moved position/
+    // form), while the save-loaded native loaded at the now-STALE save position -> it is the redundant dup.
+    // Keep E bound to the proxy; retire the native (drain its local element + echo-suppressed destroy). This
+    // is the morph-hand-off shape (#3) inverted for the converted save-loaded case. Distinct from the X item-4
+    // race BELOW (a FRESH host-PropSpawn proxy, no convert -> CtxForEid==0 -> the native at its untouched save
+    // position wins, RetireProxy + bind native). Isolation: clean-join save-loaded piles get no in-window
+    // convert -> CtxForEid==0 -> unchanged; only a pile converted in-window before its bind reaches here.
+    if (caseII && family == MAP::Family::ChipPile && coop::trash_proxy::IsProxy(E) &&
+        coop::trash_channel::CtxForEid(E) > 0) {
+        const unsigned ctx = coop::trash_channel::CtxForEid(E);
+        PT::UnmarkKnownKeyedProp(native);                  // drain the native's peer-range LOCAL element (if any)
+        coop::remote_prop::ConsumeLocalActor(native);      // echo-suppressed destroy of the redundant stale-pos native
+        ++g_boundChip;                                     // E IS satisfied (bound to the proxy) -> count for the 874/874 summary
+        ++g_caseII;
+        UE_LOGI("save_identity_bind: PROXY-WINS k=%zu chipPile native=%p -> host eid=%u [case(ii)-converted: "
+                "pile grabbed/moved in-window (ctx=%u) -> proxy authoritative, redundant save-loaded native retired]",
+                k, native, static_cast<unsigned>(E), ctx);
+        return;
+    }
 
     // Step 3.1: free the native's peer-range LOCAL element (no-op if the post-load seed hasn't minted one yet).
     // UnmarkKnownKeyedProp drains the local Prop Element + erases g_actorToPropElementId + the key index,
