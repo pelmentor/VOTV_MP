@@ -3324,17 +3324,26 @@ struct GrabIntentPayload {
 static_assert(sizeof(GrabIntentPayload) == 8, "GrabIntentPayload must be 8 bytes");
 static_assert(sizeof(GrabIntentPayload) <= 256 - 20 - 8, "GrabIntentPayload must fit one datagram");
 
-// ThrowIntentPayload (ThrowIntent=79, v85 -- the client-initiated throw of a puppet-held clump).
-// CLIENT->HOST, eid-only: the client has NO local clump (the clump is host-side; the client renders a
-// proxy), so it cannot measure a release velocity. The HOST derives the throw direction from the
-// requester puppet's CURRENT synced aim (which mirrors where the client is looking) -- authoritative
-// and matching the carry direction (RULE 2: no speculative client-velocity field). The host releases
-// the puppet grab + applies physics velocity; the clump self-re-piles via its own ground-hit ubergraph.
+// ThrowIntentPayload (ThrowIntent=79, v85; +mode/camFwd 2026-06-26) -- the client-initiated release/throw
+// of a puppet-held clump. CLIENT->HOST. TWO native mechanics, distinguished by `mode`:
+//   mode=kRelease (E)    -- the native E "drop": the host derives the launch from the puppet's smoothed
+//                          hand motion (HandVelocityForEid, capped) -- a still hold drops soft, a flick
+//                          flies. dir is UNUSED (zero). This is the original v85 behavior (#3 grab/release).
+//   mode=kHardThrow (LMB)-- the native throwHoldingProp: a deliberate camera-DIRECTED launch at the native
+//                          mass-scaled speed (RE: cameraFwd * 15000/max(mass,10) + playerVel, NO cap). The
+//                          throw flies exactly where the client looks AT THE PRESS, so the client sends its
+//                          instantaneous camera-forward unit vector (`dir`); the host applies the native
+//                          formula with the REAL clump mass (it holds the clump) + the puppet velocity.
+// The host releases the puppet grab + applies physics velocity; the clump self-re-piles via its own
+// ground-hit ubergraph either way.
+namespace throw_mode { constexpr uint8_t kRelease = 0; constexpr uint8_t kHardThrow = 1; }
 struct ThrowIntentPayload {
     uint32_t eid;        // the trash entity eid the client requests to throw (must be the one it holds)
-    uint8_t  _pad[4];    // 8-byte alignment; bytes-beyond-eid zero
+    uint8_t  mode;       // throw_mode::kRelease (E) | kHardThrow (LMB)
+    uint8_t  _pad[3];    // align dir to 4; bytes zero
+    float    dirX, dirY, dirZ;  // kHardThrow ONLY: client camera-forward unit vector at the press (zero for kRelease)
 };
-static_assert(sizeof(ThrowIntentPayload) == 8, "ThrowIntentPayload must be 8 bytes");
+static_assert(sizeof(ThrowIntentPayload) == 20, "ThrowIntentPayload must be 20 bytes (eid+mode+pad+dir)");
 static_assert(sizeof(ThrowIntentPayload) <= 256 - 20 - 8, "ThrowIntentPayload must fit one datagram");
 
 // PileResyncRequestPayload (PileResyncRequest=80, v84 STAGED -- ID reserved, no handler yet) --

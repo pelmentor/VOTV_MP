@@ -828,6 +828,11 @@ bool SetActorRootNotifyRigidBodyCollision(void* actor, bool notify);
 bool GetActorRootPhysicsVelocity(void* actor, FVector& outLin, FVector& outAng);
 bool SetActorRootPhysicsVelocity(void* actor, const FVector& lin, const FVector& ang);
 
+// `actor`'s root primitive mass in kg (UPrimitiveComponent::GetMass on the root). 0 on failure /
+// non-simulating body. Used by the native LMB throw formula (speed scales as 15000/max(mass,10)).
+// Generic (root component, not the Aprop_C mesh offset). Game thread only.
+float GetActorRootMass(void* actor);
+
 // The UPhysicalMaterial governing `actor`'s root surface: root primitive component
 // -> GetMaterial(0) -> UMaterialInterface::GetPhysicalMaterial() (all reflected
 // UFunctions; virtuals resolve through the native thunks). Feeds lib_C::physSound

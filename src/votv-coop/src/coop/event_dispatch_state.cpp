@@ -30,6 +30,7 @@
 #include "coop/window_sync.h"
 
 #include "ue_wrap/log.h"
+#include "ue_wrap/types.h"  // ue_wrap::FVector (ThrowIntent camFwd)
 
 #include <cmath>
 #include <cstring>
@@ -739,8 +740,10 @@ void HandleStateEvent(net::Session& session,
             UE_LOGW("event_feed: ThrowIntent eid==0 -- dropping");
             break;
         }
-        UE_LOGI("[THROW-INTENT] RECEIVED eid=%u slot=%d", p.eid, msg.senderPeerSlot);
-        coop::trash_channel::OnThrowIntent(session, p.eid, static_cast<uint8_t>(msg.senderPeerSlot));
+        UE_LOGI("[THROW-INTENT] RECEIVED eid=%u slot=%d mode=%u", p.eid, msg.senderPeerSlot, p.mode);
+        coop::trash_channel::OnThrowIntent(session, p.eid, p.mode,
+                                           ue_wrap::FVector{p.dirX, p.dirY, p.dirZ},
+                                           static_cast<uint8_t>(msg.senderPeerSlot));
         break;
     }
     case net::ReliableKind::PileResyncRequest:  // v84 STAGED (Increment 2 phase 3) -- ID reserved, no handler yet

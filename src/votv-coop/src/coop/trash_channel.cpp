@@ -269,17 +269,20 @@ void SendGrabIntent(coop::net::Session& s, uint32_t eid) {
     UE_LOGI("[GRAB-INTENT] CLIENT SENT eid=%u -> host (pending grab)", eid);
 }
 
-void SendThrowIntent(coop::net::Session& s, uint32_t eid) {
+void SendThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t mode, const ue_wrap::FVector& dir) {
     if (eid == 0u || eid == coop::element::kInvalidId) return;
     if (s.role() != coop::net::Role::Client) {
         UE_LOGW("[THROW-INTENT] SendThrowIntent called on a non-client -- ignoring");
         return;
     }
     coop::net::ThrowIntentPayload p{};
-    p.eid = eid;
+    p.eid  = eid;
+    p.mode = mode;
+    if (mode == coop::net::throw_mode::kHardThrow) { p.dirX = dir.X; p.dirY = dir.Y; p.dirZ = dir.Z; }
     s.SendReliable(coop::net::ReliableKind::ThrowIntent, &p, sizeof(p));
     if (g_clientCarry == eid) g_clientCarry = 0;   // optimistic: the ToPile land will also clear it
-    UE_LOGI("[THROW-INTENT] CLIENT SENT eid=%u -> host (carry released)", eid);
+    UE_LOGI("[THROW-INTENT] CLIENT SENT eid=%u mode=%s -> host (carry released)",
+            eid, mode == coop::net::throw_mode::kHardThrow ? "hardThrow(LMB)" : "release(E)");
 }
 
 void NoteClientConvertObserved(uint32_t eid, bool toClump) {
@@ -395,7 +398,8 @@ void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
             eid, clump, senderSlot);
 }
 
-void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
+void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t mode,
+                   const ue_wrap::FVector& camFwd, uint8_t senderSlot) {
     if (eid == 0u || eid == coop::element::kInvalidId) return;
     // GATE: the sender must currently HOLD this eid (HELD_BY). Else it's a stale/forged throw -> deny.
     auto held = g_heldBy.find(eid);
@@ -434,17 +438,36 @@ void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
     // max (a raw teleport delta on a fast flick can spike far past any real throw; the native PHC spring is
     // damped, so we cap the bound). Direction comes from the actual hand motion, not the aim, so a soft drop
     // falls straight down under gravity while a forward flick flies forward -- exactly the native feel.
-    ue_wrap::FVector lin = coop::puppet_carry_drive::HandVelocityForEid(static_cast<coop::element::ElementId>(eid));
-    constexpr float kMaxThrowCmS = 650.f;   // ~6.5 m/s -- above this is a teleport-delta artifact, not a human throw
-    const float sp2 = lin.X * lin.X + lin.Y * lin.Y + lin.Z * lin.Z;
-    if (sp2 > kMaxThrowCmS * kMaxThrowCmS) {
-        const float sc = kMaxThrowCmS / std::sqrt(sp2);
-        lin.X *= sc; lin.Y *= sc; lin.Z *= sc;
+    ue_wrap::FVector lin;
+    if (mode == coop::net::throw_mode::kHardThrow) {
+        // LMB native throw (RE 2026-06-26, throwHoldingProp->traceThrow->throwShit): the launch is the
+        // engine projectile-toss suggestion, which round-trips to the seed guess
+        //   v = cameraForward * (1000 / d) + playerVelocity,  d = max(objMass, 10) / 15
+        //     = cameraForward * (15000 / max(mass,10)) + playerVelocity      [NO cap -- a deliberate throw]
+        // The host holds the real clump, so read its TRUE mass (the native uses grabbing_component.GetMass);
+        // camFwd is the client's instantaneous camera-forward (Variant B -- flies exactly where it looked at
+        // the press); playerVel = the requester puppet's velocity (the native adds the thrower's locomotion).
+        const float mass  = ue_wrap::engine::GetActorRootMass(clump);
+        const float denom = (mass > 10.f) ? mass : 10.f;   // FMax(objMass, 10) -- a 0/unresolved mass floors to 10
+        const float speed = 15000.f / denom;
+        const ue_wrap::FVector pv = ue_wrap::engine::GetActorVelocity(puppet);
+        lin = ue_wrap::FVector{ camFwd.X * speed + pv.X, camFwd.Y * speed + pv.Y, camFwd.Z * speed + pv.Z };
+    } else {
+        // E-release (#3): the launch is the puppet's smoothed hand motion (a still hold drops soft, a flick
+        // flies), capped to a brisk-human max so a teleport-delta spike isn't a wild throw.
+        lin = coop::puppet_carry_drive::HandVelocityForEid(static_cast<coop::element::ElementId>(eid));
+        constexpr float kMaxThrowCmS = 650.f;   // ~6.5 m/s -- above this is a teleport-delta artifact, not a human throw
+        const float sp2 = lin.X * lin.X + lin.Y * lin.Y + lin.Z * lin.Z;
+        if (sp2 > kMaxThrowCmS * kMaxThrowCmS) {
+            const float sc = kMaxThrowCmS / std::sqrt(sp2);
+            lin.X *= sc; lin.Y *= sc; lin.Z *= sc;
+        }
     }
     ue_wrap::engine::SetActorRootPhysicsVelocity(clump, lin, ue_wrap::FVector{0.f, 0.f, 0.f});  // apply AFTER SimulatePhysics(true)
     coop::puppet_carry_drive::NoteThrown(static_cast<coop::element::ElementId>(eid));  // stop hand-drive; stream the flight
-    UE_LOGI("[THROW-INTENT] SUCCESS eid=%u slot=%u clump=%p -- puppet released + physics thrown vel=(%.0f,%.0f,%.0f); "
-            "clump flies + self-re-piles (thunk -> ToPile)", eid, senderSlot, clump, lin.X, lin.Y, lin.Z);
+    UE_LOGI("[THROW-INTENT] SUCCESS eid=%u slot=%u mode=%s clump=%p -- puppet released + physics thrown vel=(%.0f,%.0f,%.0f); "
+            "clump flies + self-re-piles (thunk -> ToPile)", eid, senderSlot,
+            mode == coop::net::throw_mode::kHardThrow ? "hardThrow(LMB)" : "release(E)", clump, lin.X, lin.Y, lin.Z);
 }
 
 void OnGrabHolderLeft(uint8_t senderSlot) {

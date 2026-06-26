@@ -391,9 +391,10 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
                         "through to grab", static_cast<unsigned>(carry));
                 coop::trash_channel::ClearClientCarry(static_cast<uint32_t>(carry));
             } else {
-                UE_LOGI("[THROW-INTENT] CLIENT E-PRESS while carrying eid=%u -> requesting throw from host",
+                UE_LOGI("[THROW-INTENT] CLIENT E-PRESS while carrying eid=%u -> requesting release(E-drop) from host",
                         static_cast<unsigned>(carry));
-                coop::trash_channel::SendThrowIntent(*s, static_cast<uint32_t>(carry));
+                coop::trash_channel::SendThrowIntent(*s, static_cast<uint32_t>(carry),
+                                                     coop::net::throw_mode::kRelease, ue_wrap::FVector{});
                 return;
             }
         }
@@ -487,6 +488,40 @@ static void OnPileGrabPre(void* self, void* /*function*/, void* /*params*/) {
     }
 }
 
+// (X) LMB hard-throw bridge (2026-06-26). The NATIVE throw input is InpActEvt_fire (LMB) -> throwHoldingProp
+// -> throwShit(velocity_fromCamera) -- a SEPARATE input from use/E (which is grab + the E-drop release). The
+// client holds NO native clump (host-authoritative; it renders a proxy), so the native fire's throwHoldingProp
+// finds no grabbing_component and no-ops -- and we never routed it, hence LMB did nothing (the 12:35 symptom).
+// Here: while carrying a clump proxy, an LMB press requests a hardThrow with the client's INSTANTANEOUS camera-
+// forward (Variant B -- the throw flies exactly where the client looks at the press, native-faithful); the host
+// applies the native velocity formula (cameraFwd * 15000/max(mass,10) + puppetVel, NO cap) with the real clump
+// mass. The native fire is left to run (it no-ops with no held native prop; nothing to suppress -- there is no
+// single lookAtActor-style field, and the client holds no equipment while carrying a clump). Client-only: the
+// host throws natively via its own InpActEvt_fire. E-drop (the #3 path) is untouched.
+static void OnFirePre(void* self, void* /*function*/, void* /*params*/) {
+    if (!self) return;
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || !s->connected()) return;
+    if (s->role() == coop::net::Role::Host) return;          // the host throws natively; this is the client bridge
+    const coop::element::ElementId carry = coop::trash_channel::ClientCarryEid();
+    if (carry == coop::element::kInvalidId) return;          // not carrying a clump -> let native fire do its thing
+    if (!coop::trash_proxy::ProxyActorForEid(carry)) {       // stale toggle (proxy gone) -> clear + let native run
+        coop::trash_channel::ClearClientCarry(static_cast<uint32_t>(carry));
+        return;
+    }
+    // The client's instantaneous camera-forward unit vector (same derivation as the grab cone). The native
+    // throw is camera-DIRECTED, so this is the authoritative aim; the host applies the mass-scaled speed.
+    const ue_wrap::FRotator camRot = ue_wrap::engine::GetCameraRotation();
+    const float d2r = 3.14159265f / 180.f;
+    const float yaw = camRot.Yaw * d2r, pitch = camRot.Pitch * d2r;
+    const float cp = std::cos(pitch);
+    const ue_wrap::FVector camFwd{ cp * std::cos(yaw), cp * std::sin(yaw), std::sin(pitch) };
+    UE_LOGI("[THROW-INTENT] CLIENT LMB(fire) while carrying eid=%u -> requesting NATIVE hard-throw from host "
+            "(camFwd=%.2f,%.2f,%.2f)", static_cast<unsigned>(carry), camFwd.X, camFwd.Y, camFwd.Z);
+    coop::trash_channel::SendThrowIntent(*s, static_cast<uint32_t>(carry),
+                                         coop::net::throw_mode::kHardThrow, camFwd);
+}
+
 void Install(coop::net::Session* session) {
     g_session.store(session, std::memory_order_release);  // re-cache every call (reconnect)
 
@@ -543,6 +578,17 @@ void Install(coop::net::Session* session) {
     g_grabObserverInstalled = true;
     UE_LOGI("trash_collect: pile grab observer installed on InpActEvt_use (records the aimed pile's eid "
             "as a pending grab -> the held-edge adopts the spawned clump; docs/piles/08)");
+
+    // LMB hard-throw bridge: PRE-observe BOTH fire handlers (_58/_59 = press/release). The OnFirePre gate on
+    // ClientCarryEid + SendThrowIntent's optimistic carry-clear mean only the press edge that finds a live
+    // carry acts; the other no-ops. Best-effort (a missing handler just means no LMB-throw on that edge).
+    int fireObs = 0;
+    for (const wchar_t* fireFn : { P::name::MainPlayerFireInputEventFn58, P::name::MainPlayerFireInputEventFn59 }) {
+        void* ff = R::FindFunction(cls, fireFn);
+        if (ff && GT::RegisterPreObserver(ff, &OnFirePre)) ++fireObs;
+    }
+    UE_LOGI("trash_collect: LMB hard-throw observer installed on %d/2 InpActEvt_fire handler(s) "
+            "(client routes LMB-while-carrying -> native camera-driven ThrowIntent)", fireObs);
 }
 
 void OnDisconnect() {
@@ -565,7 +611,7 @@ bool DebugSendThrowIntent(uint32_t eid) {
         UE_LOGW("trash_collect: DebugSendThrowIntent eid=%u -- no running client session", eid);
         return false;
     }
-    coop::trash_channel::SendThrowIntent(*s, eid);
+    coop::trash_channel::SendThrowIntent(*s, eid, coop::net::throw_mode::kRelease, ue_wrap::FVector{});
     return true;
 }
 

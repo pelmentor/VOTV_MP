@@ -39,6 +39,7 @@ void* g_setNotifyHitFn = nullptr;  // PrimitiveComponent::SetNotifyRigidBodyColl
 void* g_isAwakeFn = nullptr;  // PrimitiveComponent::IsAnyRigidBodyAwake
 void* g_putSleepFn = nullptr;  // PrimitiveComponent::PutRigidBodyToSleep
 void* g_getMatFn  = nullptr;  // PrimitiveComponent::GetMaterial
+void* g_getMassFn = nullptr;  // PrimitiveComponent::GetMass
 void* g_getPhysMatFn = nullptr;  // MaterialInterface::GetPhysicalMaterial
 void* g_primCompClass = nullptr;  // the PrimitiveComponent UClass (root-type gate)
 void* g_attachCompFn = nullptr;  // Actor::K2_AttachToComponent
@@ -182,6 +183,16 @@ bool SetActorRootPhysicsVelocity(void* actor, const FVector& lin, const FVector&
       f.Set<bool>(L"bAddToCurrent", false);
       Call(root, f); }
     return true;
+}
+
+float GetActorRootMass(void* actor) {
+    void* root = RootComponentOf(actor);
+    if (!root) return 0.f;
+    void* getMass = PrimFn(&g_getMassFn, L"GetMass");
+    if (!getMass) return 0.f;
+    ParamFrame f(getMass);
+    if (!Call(root, f)) return 0.f;
+    return f.Get<float>(L"ReturnValue");
 }
 
 void* GetActorRootPhysicalMaterial(void* actor) {

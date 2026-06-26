@@ -83,17 +83,19 @@ void SendGrabIntent(coop::net::Session& s, uint32_t eid);
 // No-op (logged DENIED) on any gate fail or a dead puppet/pile. Host-only. Game thread.
 void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot);
 
-// CLIENT: send a ThrowIntent{eid} to the host (the client-grab THROW, the E-press toggle while carrying).
+// CLIENT: send a ThrowIntent{eid,mode,dir} to the host. mode=throw_mode::kRelease (E-press toggle drop,
+// dir ignored) | kHardThrow (LMB native throw, dir = the client's camera-forward unit vector at the press).
 // No-op if `s` is not a running client. Game thread.
-void SendThrowIntent(coop::net::Session& s, uint32_t eid);
+void SendThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t mode, const ue_wrap::FVector& dir);
 
 // HOST: a client at peer `senderSlot` requested to throw the puppet-held trash entity `eid`. Gate: the
 // sender must currently hold `eid` (HELD_BY). On pass: release the puppet's grab (clear grabbing_actor +
 // PHC release -- REQUIRED so the clump's re-pile gate reads "not held"), enable physics + apply the throw
-// velocity along the puppet's synced aim (the re-pile is the clump's OWN ground-hit ubergraph -> the
-// existing BeginDeferred thunk converts ToPile), and NoteThrown so the host streams the flight not the
+// velocity (mode=kRelease: puppet hand motion, capped; mode=kHardThrow: native cameraFwd*15000/max(mass,10)
+// +puppetVel, NO cap, dir = client camera-forward), and NoteThrown so the host streams the flight not the
 // hand. No-op (logged DENIED) on a gate fail / dead puppet / dead clump. Host-only. Game thread.
-void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot);
+void OnThrowIntent(coop::net::Session& s, uint32_t eid, uint8_t mode,
+                   const ue_wrap::FVector& camFwd, uint8_t senderSlot);
 
 // ---- CLIENT carry-state (the E-press grab/throw toggle, Increment 2 phase 2) -------------------------
 // The client tracks the single trash eid its own puppet is carrying (a player holds one thing), so a

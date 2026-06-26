@@ -1126,6 +1126,11 @@ inline constexpr const wchar_t* AddImpulseFn                           = L"AddIm
 inline constexpr const wchar_t* MainPlayerGrabUpdateFn       = L"grab__UpdateFunc";
 inline constexpr const wchar_t* MainPlayerGrabFinishedFn     = L"grab__FinishedFunc";
 inline constexpr const wchar_t* MainPlayerUseInputEventFn    = L"InpActEvt_use_K2Node_InputActionEvent_41";
+// LMB (fire) input action -- the NATIVE throw-when-holding seam (InpActEvt_fire -> throwHoldingProp; SEPARATE
+// from use/E). Two handlers (_58/_59, press/release); the client registers BOTH + gates on ClientCarryEid so
+// only the press edge that finds a live carry acts (SendThrowIntent clears the carry -> the other no-ops).
+inline constexpr const wchar_t* MainPlayerFireInputEventFn58 = L"InpActEvt_fire_K2Node_InputActionEvent_58";
+inline constexpr const wchar_t* MainPlayerFireInputEventFn59 = L"InpActEvt_fire_K2Node_InputActionEvent_59";
 
 // Phase 5F flashlight (item activation sync). Two UFunctions in the chain;
 // hands-on testing 2026-05-25 NIGHT-3 showed `updateFlashlight` is BP-INLINED
