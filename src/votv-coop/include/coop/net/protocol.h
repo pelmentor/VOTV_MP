@@ -694,7 +694,20 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 89;  // v89: pile GRAB-edge self-seed (docs/piles/09, 4th
+inline constexpr uint16_t kProtocolVersion = 90;  // v90 (b3): PropSnapPos=81 + PropSnapPosPayload (28B) --
+                                                  // a join-window position correction for save-authoritative
+                                                  // chipPiles. A pile moved in the join window broadcasts its
+                                                  // PropConvert, which the joiner's not-yet-ready reliable
+                                                  // channel DROPS; chipPiles are otherwise save-authoritative
+                                                  // (no wire position) so NOTHING else carries the moved pos ->
+                                                  // the native sticks at the stale save pos. At the joiner's
+                                                  // world-ready the host position-compares each save-time pile
+                                                  // vs its current actor + sends PropSnapPos for the diverged;
+                                                  // the client snaps the bound native at quiescence. Closes the
+                                                  // connect-snapshot's save-authoritative hole (the keyed-prop
+                                                  // snapshot + NPC EntitySpawn already carry current pos). See
+                                                  // research/findings/coop-b3-window-moved-pile-position-DESIGN.
+                                                  // v89: pile GRAB-edge self-seed (docs/piles/09, 4th
                                                   // mirror-identity instance). PropConvertPayload 112->124
                                                   // (+hasMatchPos +matchX/Y/Z): a kToPile LAND carries the
                                                   // pre-grab save-time pos when the host grabbed an UNTRACKED
@@ -1766,6 +1779,17 @@ enum class ReliableKind : uint8_t {
     PileResyncRequest = 80, // 2026-06-22 (v84, STAGED -- ID reserved, no handler yet): CLIENT->HOST drain-
                        //     survive (MTA EntityAdd-on-rescope). On a shadow-drain the client asks the host
                        //     to re-stream PropSpawn per live pile (host eid preserved). No body.
+    PropSnapPos = 81,  // 2026-06-26 (v90, b3): HOST->ONE-JOINER position correction for a save-authoritative
+                       //     chipPile the host MOVED during that joiner's connect window. The move's PropConvert
+                       //     was dropped (the joiner's pre-world reliable gate), and chipPiles carry no position
+                       //     in the connect-snapshot (both peers load them from the identical save; the bind maps
+                       //     by ordinal), so the native stuck at the stale save pos. At the joiner's world-ready
+                       //     the host position-compares each of that joiner's save-time pile positions vs the
+                       //     pile's CURRENT actor pos + sends this for the diverged ones; the client arms it and
+                       //     SetActorLocation's the bound native at the quiescence sweep (identity preserved,
+                       //     position-only, idempotent). HOST->CLIENT only; NOT relayable; NOT pre-world-sendable
+                       //     (sent AFTER the gate opens at ClientWorldReady). Payload: PropSnapPosPayload.
+                       //     event_dispatch_entity dispatches it -> pile_reconcile::ArmPendingPosCorrection.
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -3354,6 +3378,21 @@ struct PileResyncRequestPayload {
     uint8_t _pad[8];     // no payload body; kept 8 bytes for a uniform minimum datagram
 };
 static_assert(sizeof(PileResyncRequestPayload) == 8, "PileResyncRequestPayload must be 8 bytes");
+
+// PropSnapPosPayload (PropSnapPos=81, v90, b3) -- HOST->ONE-JOINER position correction for a
+// save-authoritative chipPile the host moved during that joiner's connect window (its PropConvert was
+// dropped by the joiner's pre-world reliable gate, and chipPiles carry no position in the connect-snapshot).
+// The host sends the eid + its CURRENT authoritative transform; the client snaps the bound native to it at
+// the quiescence sweep. Identity is preserved (the native stays a native -- this is a position delta on the
+// existing save-authoritative identity, NOT a re-spawn). Idempotent (safe for an eid already corrected by a
+// delivered convert -> drift 0). research/findings/coop-b3-window-moved-pile-position-DESIGN-2026-06-26.md.
+struct PropSnapPosPayload {
+    uint32_t eid;                       // the save-authoritative pile eid to reposition
+    float    locX, locY, locZ;          // host's CURRENT authoritative world position (cm)
+    float    rotPitch, rotYaw, rotRoll; // host's CURRENT authoritative rotation (deg)
+};
+static_assert(sizeof(PropSnapPosPayload) == 28, "PropSnapPosPayload must be 28 bytes (eid + loc + rot)");
+static_assert(sizeof(PropSnapPosPayload) <= 256 - 20 - 8, "PropSnapPosPayload must fit one datagram");
 
 // TimeSyncPayload -- the host-authoritative WORLD CLOCK (TimeSync=29, v36). The cycle's
 // totalTime/Day/TimeScale (AdaynightCycle_C) are not otherwise replicated, so a fresh joiner

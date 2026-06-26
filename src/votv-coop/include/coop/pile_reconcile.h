@@ -96,4 +96,20 @@ void* FindAndConsumeAdoptCandidate(const coop::net::PropSpawnPayload& payload,
 // this bracket. See the in-line note this replaced.
 void LogCensus();
 
+// b3 (v90, PropSnapPos): a join-window position correction for a save-authoritative chipPile the host MOVED
+// while the joiner's reliable channel wasn't ready (the move's PropConvert was dropped, and chipPiles carry
+// no position in the connect-snapshot -- both peers load them from the identical save, so the bind cements
+// the native at the STALE save pos). The client ARMS the correction on receipt (event_dispatch_entity) and
+// APPLIES it at the quiescence sweep: resolve the bound native by eid (the bind has registered it + the load
+// tail is settled) -> SetActorLocation/Rotation to the host's authoritative pos -> log drift. Identity is
+// preserved (the native stays a native; this is a position delta on the existing save-authoritative identity,
+// NOT a re-spawn), and idempotent (an eid already corrected by a delivered convert snaps to the same pos ->
+// drift 0). research/findings/coop-b3-window-moved-pile-position-DESIGN-2026-06-26.md.
+void ArmPendingPosCorrection(coop::element::ElementId eid,
+                             const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot);
+
+// Drain the armed b3 corrections (applied ones erased). Called from RunDivergenceSweep_ (quiescence) and,
+// for a late arrival after the sweep already fired, immediately from the receive handler. Game-thread only.
+void ApplyPendingPosCorrections();
+
 }  // namespace coop::pile_reconcile

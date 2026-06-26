@@ -46,6 +46,9 @@ inline Lane LaneForKind(ReliableKind k) {
     // lane a convert could overtake the ball spawn under backpressure -> the ball mirror spawns
     // after the convert already ran -> a lingering, never-destroyed ball.
     case ReliableKind::PropConvert:    return Lane::Bulk;
+    // b3 (v90): PropSnapPos rides Bulk so it delivers AFTER the connect-snapshot PropSpawns for the same join
+    // (it corrects a save-authoritative native's position; ordering after the snapshot keeps it consistent).
+    case ReliableKind::PropSnapPos:    return Lane::Bulk;
     case ReliableKind::EntitySpawn:    return Lane::Bulk;
     case ReliableKind::EntityDestroy:  return Lane::Bulk;
     // v80 (B3b): WorldActorSpawn + WorldActorDestroy share the Spawn/Destroy lane for the same reason --

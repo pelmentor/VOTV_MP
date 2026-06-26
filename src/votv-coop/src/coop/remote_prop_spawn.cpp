@@ -1302,6 +1302,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // natives are present (the census below SEES them). Keyed by save-time position (not blind proximity),
     // with its own >50% abort-valve. Runs BEFORE the census so the census reflects the removals.
     coop::pile_reconcile::SweepReconcileSaveTimeTwins();
+    coop::pile_reconcile::ApplyPendingPosCorrections();  // b3 (v90): snap any save-authoritative pile the host moved in-window (dropped convert) now that the bind+load-tail settled
     coop::pile_reconcile::LogCensus();  // extracted 2026-06-23 (FRESH GC-robust walk; no-op if no index built)
     // NOTE: the kerfur off->active retire sweep (scope A) is NOT driven here -- it runs from the kerfur
     // client poll (kerfur_convert::PollKerfurConversions, also quiescence-gated) so it fires even when no

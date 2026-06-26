@@ -7,6 +7,8 @@
 
 #include "coop/pile_reconcile.h"
 
+#include "coop/element/element.h"   // b3: Element::GetActor() (resolve the bound native by eid)
+#include "coop/element/registry.h"  // b3: Registry::Get().Get(eid) (the eid->actor lookup)
 #include "coop/ini_config.h"  // IsIniKeyTrue -- the [PILE-DELTA] probe flag (votv-coop.ini [dev], not bats/env)
 #include "coop/prop_element_tracker.h"  // UnmarkKnownKeyedProp / GetPropElementIdForActor
 #include "coop/save_time_retire_util.h"  // FindExactMatch + UnmarkAndDestroy + kExactMatchR2Cm (shared kernel)
@@ -62,6 +64,13 @@ struct PendingTwin {
     uint8_t chipType;
 };
 std::unordered_map<uint32_t, PendingTwin> g_pendingSaveTimeTwin;
+
+// b3 (v90, PropSnapPos) -- a join-window position correction for a save-authoritative chipPile the host moved
+// while our reliable channel wasn't ready (the move's PropConvert was dropped; chipPiles carry no position in
+// the connect-snapshot). Armed on receipt (event_dispatch_entity), applied at the quiescence sweep (the bind
+// has registered the native + the load tail is settled). Keyed by host eid; the latest correction wins.
+struct PendingPosCorrection { float x, y, z, pitch, yaw, roll; };
+std::unordered_map<uint32_t, PendingPosCorrection> g_pendingPosCorrection;
 int  g_pileIndexBuiltCount = 0;  // size of g_pileBindIndex at build (the L1 orphan-census valve denominator:
                                  // leftovers / built = the host-drift fraction; a huge fraction = wire loss,
                                  // not divergence -> the census/removal must refuse it, like the >50%% sweep valve)
@@ -121,6 +130,7 @@ void Reset() {
     g_pileBindCount = 0;
     g_pileIndexBuiltCount = 0;
     g_pendingSaveTimeTwin.clear();
+    g_pendingPosCorrection.clear();  // b3: drop any undrained corrections at bracket teardown / world-ready reset
 }
 
 void TryDestroyTwin(const coop::net::PropSpawnPayload& payload,
@@ -365,6 +375,46 @@ int SweepReconcileSaveTimeTwins() {
             toRemove.size(), pendingN);
     g_pendingSaveTimeTwin.clear();
     return static_cast<int>(toRemove.size());
+}
+
+// b3 (v90): arm a join-window position correction for save-authoritative pile `eid`. The latest wins (a pile
+// the host moved twice in-window resolves to its final pos). Applied at the quiescence sweep (or immediately
+// by the caller if already quiesced). Game-thread only (the event_feed drain).
+void ArmPendingPosCorrection(coop::element::ElementId eid,
+                             const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot) {
+    g_pendingPosCorrection[static_cast<uint32_t>(eid)] =
+        PendingPosCorrection{loc.X, loc.Y, loc.Z, rot.Pitch, rot.Yaw, rot.Roll};
+    UE_LOGI("[PILE-B3] CLIENT armed pos-correction eid=%u host=(%.1f,%.1f,%.1f) -- a save-authoritative pile "
+            "the host moved in-window (convert dropped); snap the bound native at quiescence",
+            static_cast<unsigned>(eid), loc.X, loc.Y, loc.Z);
+}
+
+// b3 (v90): drain the armed corrections. For each, resolve the bound actor by eid (the save_identity_bind
+// registered the native in the element Registry; for an eid that DID receive its convert this is the proxy --
+// either way Registry::Get(eid) is the authoritative local rendering of E) and SNAP it to the host's pos,
+// then read the transform back and log drift (drift~0 => the snap took; drift>0 with a Static-mobility native
+// would expose a no-op -- the lesson). Identity untouched (position-only). Applied entries are erased; an eid
+// whose actor isn't resolvable (never bound) is left for the next drain and cleared by Reset() at sweep end.
+void ApplyPendingPosCorrections() {
+    if (g_pendingPosCorrection.empty()) return;  // game-thread only (the event_feed drain / the sweep), by contract
+    for (auto it = g_pendingPosCorrection.begin(); it != g_pendingPosCorrection.end(); ) {
+        const uint32_t eid = it->first;
+        const PendingPosCorrection& c = it->second;
+        coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+        void* actor = el ? el->GetActor() : nullptr;
+        if (!actor || !R::IsLive(actor)) { ++it; continue; }  // native not bound/loaded yet -- retry next drain
+        const ue_wrap::FVector  loc{c.x, c.y, c.z};
+        const ue_wrap::FRotator rot{c.pitch, c.yaw, c.roll};
+        ue_wrap::engine::SetActorLocation(actor, loc);
+        ue_wrap::engine::SetActorRotation(actor, rot);
+        const ue_wrap::FVector got = ue_wrap::engine::GetActorLocation(actor);
+        const float dx = got.X - c.x, dy = got.Y - c.y, dz = got.Z - c.z;
+        UE_LOGI("[PILE-B3] CLIENT pos-correction APPLIED eid=%u applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f) "
+                "drift=%.2fcm -- join-window moved pile snapped to host pos (no interaction needed)",
+                static_cast<unsigned>(eid), got.X, got.Y, got.Z, c.x, c.y, c.z,
+                std::sqrt(dx * dx + dy * dy + dz * dz));
+        it = g_pendingPosCorrection.erase(it);
+    }
 }
 
 }  // namespace coop::pile_reconcile

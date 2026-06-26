@@ -11,6 +11,7 @@
 #include "coop/item_activate.h"
 #include "coop/join_progress.h"
 #include "coop/npc_mirror.h"
+#include "coop/pile_reconcile.h"  // b3: ArmPendingPosCorrection / ApplyPendingPosCorrections (PropSnapPos)
 #include "coop/players_registry.h"
 #include "coop/world_actor_sync.h"  // v80 (B3b): non-Character event-actor mirror receivers
 #include "coop/prop_stick_sync.h"
@@ -364,6 +365,48 @@ void HandleEntityEvent(net::Session& session,
             UE_LOGW("event_feed: PropConvert newEid=%u pile spawn FAILED -- a re-grab of this "
                     "pile won't propagate its destroy", p.newEid);
         }
+        break;
+    }
+    case net::ReliableKind::PropSnapPos: {
+        // b3 (v90): a join-window position correction for a save-authoritative chipPile the host moved
+        // while OUR reliable channel wasn't ready (the move's PropConvert was dropped). Host-authoritative:
+        // a client never legitimately sends it (and it is not relayed). Validate at the trust boundary
+        // (finite + in-bounds + in-range eid), then ARM a pending correction; the bound native is snapped
+        // at the quiescence sweep (where the bind has registered it + the load tail is settled). If we
+        // already quiesced (a late arrival after the sweep fired), apply immediately.
+        if (msg.senderPeerSlot != 0) {
+            UE_LOGW("event_feed: PropSnapPos from non-host senderPeerSlot=%d -- dropping (host-only)",
+                    msg.senderPeerSlot);
+            break;
+        }
+        if (msg.payloadLen < sizeof(net::PropSnapPosPayload)) {
+            UE_LOGW("event_feed: PropSnapPos payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::PropSnapPosPayload));
+            break;
+        }
+        net::PropSnapPosPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        const float svals[6] = { p.locX, p.locY, p.locZ, p.rotPitch, p.rotYaw, p.rotRoll };
+        bool sfinite = true;
+        for (float v : svals) { if (!std::isfinite(v)) { sfinite = false; break; } }
+        if (!sfinite) { UE_LOGW("event_feed: PropSnapPos floats non-finite -- dropping"); break; }
+        constexpr float kMaxSnapCoord = 1.0e6f;
+        if (std::fabs(p.locX) > kMaxSnapCoord || std::fabs(p.locY) > kMaxSnapCoord ||
+            std::fabs(p.locZ) > kMaxSnapCoord) {
+            UE_LOGW("event_feed: PropSnapPos location out of bounds (%.1f,%.1f,%.1f) -- dropping",
+                    p.locX, p.locY, p.locZ);
+            break;
+        }
+        if (p.eid == 0u || p.eid == coop::element::kInvalidId ||
+            !coop::element::Registry::IsAllowedHostAllocatedEid(p.eid)) {
+            UE_LOGW("event_feed: PropSnapPos eid=0x%08x not a valid host-allocated id -- dropping", p.eid);
+            break;
+        }
+        coop::pile_reconcile::ArmPendingPosCorrection(
+            p.eid, ue_wrap::FVector{p.locX, p.locY, p.locZ},
+            ue_wrap::FRotator{p.rotPitch, p.rotYaw, p.rotRoll});
+        if (coop::remote_prop_spawn::HasLoadTailQuiesced())
+            coop::pile_reconcile::ApplyPendingPosCorrections();
         break;
     }
     case net::ReliableKind::EntitySpawn: {

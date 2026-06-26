@@ -167,6 +167,7 @@ void Update(net::Session& session, void* localPlayer) {
         case net::ReliableKind::PropSpawn:
         case net::ReliableKind::PropDestroy:
         case net::ReliableKind::PropConvert:
+        case net::ReliableKind::PropSnapPos:        // b3 (v90): join-window save-authoritative pile position correction
         case net::ReliableKind::PropStickState:
         case net::ReliableKind::EntitySpawn:
         case net::ReliableKind::EntityDestroy:

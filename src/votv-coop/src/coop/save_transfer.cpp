@@ -3,6 +3,8 @@
 #include "coop/save_transfer.h"
 
 #include "coop/chat_feed.h"  // v86 Path 1c hands-on: in-game JOIN-WINDOW OPEN cue (gated on pile_delta_probe)
+#include "coop/element/element.h"   // b3: Element::GetActor() (resolve the host pile actor by eid)
+#include "coop/element/registry.h"  // b3: Registry::Get().Get(eid) (the host eid->actor lookup)
 #include "coop/ini_config.h"  // IsIniKeyTrue -- the hands-on test-cue gate
 #include "coop/net/session.h"
 #include "coop/prop_element_tracker.h"  // R2: CollectTrackedKeyedPropKeys (blob-vs-live diff)
@@ -10,13 +12,16 @@
 #include "coop/save_identity_map.h"  // Phase 1B: host-side keyless index->eid map build + log (gated, no wire)
 #include "coop/save_guard.h"
 #include "coop/save_indicator_suppress.h"  // detect/suppress the SAVED HUD on join-save
+#include "ue_wrap/engine.h"      // b3: GetActorLocation/GetActorRotation (host current pile pos)
 #include "ue_wrap/log.h"
+#include "ue_wrap/reflection.h"  // b3: IsLive (skip a dead/mid-carry host actor)
 #include "ue_wrap/save_capture.h"
 
 #include <windows.h>
 
 #include <atomic>
 #include <chrono>
+#include <cmath>     // b3: std::sqrt (diverged-pile drift log)
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -553,6 +558,44 @@ bool TryGetSaveTimePileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVect
         if (it != m.end()) { out = it->second; return true; }
     }
     return false;
+}
+
+// b3 (v90): the connect-snapshot carries current positions for keyed props + NPCs, but NOT for keyless
+// save-authoritative chipPiles (both peers load them from the identical save; the bind maps by ordinal, no
+// wire position). So a pile the host MOVED in this joiner's window -- whose move-convert was dropped by the
+// joiner's pre-world gate -- has NO surviving position channel and sticks at the stale save pos on the client.
+// This closes that hole: per the joiner's save-time pile map, resolve the host's CURRENT actor pos and, where
+// it diverged, send a PropSnapPos correction the client snaps onto the bound native at quiescence. Pure
+// position-compare (robust regardless of whether a convert was delivered). Cold path: once per join, a few
+// dozen entries x an O(1) registry lookup. The gate is already open (called after MarkSlotWorldReady).
+void FlushDivergedPilePositionsForSlot(int peerSlot) {
+    if (!g_session || peerSlot < 1 || peerSlot >= coop::net::kMaxPeers) return;
+    const auto& m = g_blobPileXforms[peerSlot];
+    if (m.empty()) return;  // stale-fallback join (no save-time pile map captured)
+    constexpr float kDivergeCm2 = 4.0f * 4.0f;  // >4cm moved (above settle jitter) = a real in-window move
+    int sent = 0, checked = 0;
+    for (const auto& [eid, savePos] : m) {
+        ++checked;
+        coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+        void* actor = el ? el->GetActor() : nullptr;
+        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead / mid-carry clump -> skip (post-world stream owns it)
+        const ue_wrap::FVector cur = ue_wrap::engine::GetActorLocation(actor);
+        const float dx = cur.X - savePos.X, dy = cur.Y - savePos.Y, dz = cur.Z - savePos.Z;
+        if (dx * dx + dy * dy + dz * dz <= kDivergeCm2) continue;  // unmoved (save IS current) -> no correction
+        const ue_wrap::FRotator rot = ue_wrap::engine::GetActorRotation(actor);
+        coop::net::PropSnapPosPayload p{};
+        p.eid = static_cast<uint32_t>(eid);
+        p.locX = cur.X; p.locY = cur.Y; p.locZ = cur.Z;
+        p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
+        g_session->SendReliableToSlot(peerSlot, coop::net::ReliableKind::PropSnapPos, &p, sizeof(p));
+        ++sent;
+        UE_LOGI("[PILE-B3] HOST slot %d pos-correction eid=%u save=(%.1f,%.1f,%.1f) -> current=(%.1f,%.1f,%.1f) "
+                "drift=%.1fcm (pile moved in-window; convert dropped -> deliver the position)",
+                peerSlot, static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z,
+                cur.X, cur.Y, cur.Z, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    UE_LOGI("[PILE-B3] HOST slot %d diverged-pile flush -- %d correction(s) sent of %d save-time pile(s) "
+            "(connect-snapshot save-authoritative hole closed)", peerSlot, sent, checked);
 }
 
 bool TryGetSaveTimeKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out) {

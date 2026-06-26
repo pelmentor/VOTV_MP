@@ -96,6 +96,14 @@ void RecordGrabTimePileXform(coop::element::ElementId eid, const ue_wrap::FVecto
 // is a single fan-out, not per-joiner; a pile eid is unique). Game thread.
 bool TryGetSaveTimePileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out);
 
+// b3 (v90): at `peerSlot`'s world-ready, send a PropSnapPos position correction for every save-authoritative
+// chipPile whose CURRENT host actor position diverges from THIS joiner's save-time position -- i.e. a pile the
+// host MOVED during the join window whose PropConvert was dropped (chipPiles carry no position in the connect-
+// snapshot). Closes the connect-snapshot's save-authoritative hole. Iterates g_blobPileXforms[peerSlot] (the
+// per-joiner save-time pile map), resolves each eid's live host actor (element Registry), position-compares,
+// and SendReliableToSlot's the diverged. Called from ConnectReplayForSlot AFTER the gate opened. Game thread.
+void FlushDivergedPilePositionsForSlot(int peerSlot);
+
 // scope A (kerfur off->active dup retire, 2026-06-24): the SAVE-TIME position of OFF-form kerfur `eid`,
 // captured at the blob instant (OnRequest), searched across ALL active peer slots' blob maps (the host
 // turn-on broadcast that carries this is a single fan-out, not per-joiner, and a kerfur off-prop's host

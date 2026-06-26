@@ -177,6 +177,12 @@ void ConnectReplayForSlot(int slot) {
     // joiner (no blob baseline -> the sweep, bounded by R3, still owns that).
     coop::save_transfer::SendBlobDivergenceDeletes(slot);
     coop::prop_snapshot::TriggerForSlot(slot);
+    // b3 (v90): deliver the CURRENT position of any save-authoritative chipPile this joiner's host MOVED in its
+    // connect window (the move's PropConvert was dropped pre-world, and chipPiles carry no position in the
+    // snapshot above). Closes the connect-snapshot's save-authoritative hole; the client snaps the bound native
+    // at quiescence. AFTER TriggerForSlot so it rides Bulk behind the snapshot. (#1 kerfur is unaffected -- the
+    // active kerfur is already delivered via EntitySpawn / npc_sync below.)
+    coop::save_transfer::FlushDivergedPilePositionsForSlot(slot);
     coop::item_activate::QueueConnectBroadcastForSlot(slot);
     coop::weather_sync::QueueConnectBroadcastForSlot(slot);
     coop::interactable_sync::QueueConnectBroadcastForSlot(slot);  // door/light/container states
