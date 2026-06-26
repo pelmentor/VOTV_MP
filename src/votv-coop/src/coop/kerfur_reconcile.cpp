@@ -3,8 +3,10 @@
 #include "coop/kerfur_reconcile.h"
 
 #include "coop/element/mirror_manager.h"
+#include "coop/element/element_deleter.h"  // ElementDeleter (mirror-aware teardown of a bound off-prop)
 #include "coop/element/prop.h"
 #include "coop/kerfur_entity.h"        // IsKerfurPropClass
+#include "coop/remote_prop.h"          // ResolveMirrorEidByActor (bound-mirror eid for the teardown)
 #include "coop/net/session.h"
 #include "coop/npc_sync.h"             // GetSession (the shared client gate)
 #include "coop/save_time_retire_util.h" // FindExactMatch + UnmarkAndDestroy (the shared kernel; pulls in
@@ -60,7 +62,15 @@ void CollectLocalOffPropKerfurs(std::vector<LocalOffProp>& out) {
         if (!cls || !coop::kerfur_entity::IsKerfurPropClass(cls)) continue;  // off-form kerfurs only
         if (!R::IsLive(obj)) continue;
         if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;       // CDO
-        if (mirrors.count(obj)) continue;                                    // host-driven mirror -> keep
+        // b (#1, 2026-06-26): a LIVE-broadcast off-prop mirror (a kerfur the host turned OFF in-window) is
+        // legit current host state -> keep (exclude). But a SAVE-IDENTITY BOUND mirror (IsBoundMirrorNative)
+        // can be STALE: the join-window save-identity bind binds the save-loaded off-prop as a host-range
+        // mirror at its OLD off eid, and if the host then turned that kerfur ON in the window the off-prop is
+        // dead (its NPC form is the truth) -- but the failed mid-join KerfurConvert never destroyed it. Such a
+        // stale bound mirror MUST be a retire candidate (the pending-retire's save-time key, armed only on a
+        // host turn-ON, is the discriminator: a still-off bound kerfur has no pending retire at its position).
+        // So exclude only NON-bound mirrors; include bound mirrors so FindExactMatch can pair the stale one.
+        if (mirrors.count(obj) && !coop::prop_element_tracker::IsBoundMirrorNative(obj)) continue;
         // RESIDUAL (audit M2, safe in scope): a save-off-prop mid-adoption (bound by kerfur_prop_adoption
         // but not yet a Mirror Element) is NOT excluded here. It cannot be wrongly retired in THIS path: a
         // retire only fires for a kerfur the host turned ON -- so the host is NOT expressing it as an
@@ -69,6 +79,29 @@ void CollectLocalOffPropKerfurs(std::vector<LocalOffProp>& out) {
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
         out.push_back(LocalOffProp{obj, R::InternalIndexOf(obj), loc.X, loc.Y, loc.Z});
     }
+}
+
+// b (#1): retire a matched stale off-prop. A save-identity BOUND mirror needs a MIRROR-aware teardown:
+// UnmarkAndDestroy alone would leave the Prop mirror Element dangling (UnmarkKnownKeyedProp resolves the
+// LOCAL reverse-map only -> early-returns for a mirror -> never Takes the mirror Element, so the host-range
+// eid would point at a destroyed actor). Mirror the trash_proxy::RetireProxy teardown: resolve the host eid,
+// clear the bound-mirror mark + local maps, destroy the actor, unbind the Prop mirror Element via the deferred
+// deleter. A non-mirror LOCAL off-prop keeps the plain UnmarkAndDestroy.
+void RetireMatchedOffProp_(void* actor) {
+    if (!actor) return;
+    if (!coop::prop_element_tracker::IsBoundMirrorNative(actor)) {
+        coop::save_time_retire_util::UnmarkAndDestroy(actor);
+        return;
+    }
+    const coop::element::ElementId eid = coop::remote_prop::ResolveMirrorEidByActor(actor);
+    coop::prop_element_tracker::UnmarkKnownKeyedProp(actor);   // clear the bound-mirror mark + any local maps
+    if (R::IsLive(actor)) ue_wrap::engine::DestroyActor(actor);
+    if (eid != coop::element::kInvalidId)
+        coop::element::ElementDeleter::Get().Enqueue(
+            coop::element::MirrorManager<coop::element::Prop>::Instance().Take(eid));
+    UE_LOGI("kerfur_reconcile: retired bound-mirror stale off-prop actor=%p eid=%u (mirror-aware teardown -- "
+            "host turned this kerfur ON in-window; the failed mid-join KerfurConvert left the off-prop alive)",
+            actor, static_cast<unsigned>(eid));
 }
 
 }  // namespace
@@ -121,7 +154,7 @@ int SweepReconcileSaveTimeKerfurs() {
     // deliberate host turn-on) matched by the EXACT 1cm save-time key under position uniqueness +
     // ambiguous(>1)->skip + the non-mirror IsKerfurPropClass gate -- so the retire set is intrinsically
     // bounded + precise, and no ratio guard fits or is needed.
-    for (void* actor : toRetire) coop::save_time_retire_util::UnmarkAndDestroy(actor);
+    for (void* actor : toRetire) RetireMatchedOffProp_(actor);
     UE_LOGI("kerfur_reconcile: sweep-retire -- %zu of %zu pending save-time kerfur retire(s) at "
             "post-quiescence (the late-loaded stale local off-prop destroyed; the active NPC is the sole "
             "form -- join-window off->active dup fixed)",
