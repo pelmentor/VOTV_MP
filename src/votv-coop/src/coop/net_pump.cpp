@@ -459,6 +459,25 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             const size_t reaped = inGameplayWorld
                 ? coop::prop_element_tracker::ReapDeadLocalPropElements(kReapEvictCap, &reapedEids)
                 : 0;
+            // Reaper escalation (2026-06-27, purge-timing race fix lever (a)). A mass-purge
+            // backlog otherwise drains at kReapEvictCap (256) per 4 s throttle -- ~9 scans x 4 s
+            // = ~37 s for a ~2300 backlog. That slow drain is the 09:54 ghost root: the
+            // episode-end re-seed (below) fires only after the drain catches up, so a 37 s drain
+            // lands the re-seed ~37 s into the join -- AFTER the save-identity bind/reconcile has
+            // already armed on the pre-purge world, orphaning the save-authoritative natives
+            // (tracked-but-unbound = ghosts). The 16:42 run worked only because a fast 4096-cap
+            // self-heal drain happened to land the re-seed BEFORE the bind armed. So when THIS
+            // scan hit the eviction cap (backlog remains) or a purge episode is still mid-drain,
+            // cancel the 4 s throttle: the next tick reaps again immediately and the backlog
+            // drains at frame cadence (~256/frame, ~0.15 s total) under the join cover instead of
+            // 256/4 s. Per-call cost stays bounded at 256 (no single-frame hitch). Self-
+            // terminating: the first scan that reaps < cap with the episode ended restores the
+            // throttle. This races the re-seed back AHEAD of the bind (restores 16:42 timing);
+            // lever (b) re-binds deterministically if a late GC purge still lands after the arm.
+            if (inGameplayWorld &&
+                (reaped >= kReapEvictCap || coop::prop_element_tracker::InPurgeEpisode())) {
+                sNextReap = reapNow;  // drain again next tick -- no 4 s wait while a backlog remains
+            }
             // PART 1 (2026-06-18) HOST-AUTHORITATIVE prop/pile death-watch. A host prop/pile
             // destroyed via a BP-internal EX_CallMath path (garbage-truck collect, ambient cull,
             // removeWOrespawn/LifeSpan despawn, grab-morph) NEVER fires K2_DestroyActor, so the
