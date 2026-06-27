@@ -257,19 +257,29 @@ void ConvergeAfterConversion(void* oldActor, int32_t oldIdx, coop::element::Elem
     }
 }
 
+void* TakeParkedGhostByEid(uint32_t srcEid, bool wantNpc);  // fwd (defined with g_parkedGhosts below)
+
 // ---- client-side apply (kerfur redesign K-4b) --------------------------------
 // Materialize (or adopt this peer's claimed local ghost into) a kerfur mirror of `form` at host-range
-// `eid`. NPC: adopt the parked turn-on ghost if present (the initiator) else fresh-spawn. PROP:
-// synthesize a PropSpawn so the existing OnSpawn Gap-I-1 fuzzy match adopts the frozen turn-off ghost
-// (the initiator) else fresh-spawns. The kerfur is eid-identified now, so the prop mirror carries a
-// deterministic SYNTHETIC key derived from eid (not the BP's random per-peer key). Game thread.
-void MaterializeKerfurMirror(bool toNpc, coop::element::ElementId eid, const std::wstring& classW,
+// `eid`. `adoptEid` (D2 relay) = the converting mirror's eid (the host's KerfurConvert oldEid); the parked
+// ghost tagged with it is adopted DETERMINISTICALLY (no fuzzy position miss = no flash). kInvalidId = no
+// eid-keyed adopt (the rejected-restore path). NPC: adopt the parked turn-on ghost (by eid, then position)
+// else fresh-spawn. PROP: adopt the frozen turn-off ghost (by eid directly, else the synthetic-PropSpawn
+// Gap-I-1 fuzzy match) else fresh-spawn. The prop mirror carries a deterministic SYNTHETIC key from eid.
+void MaterializeKerfurMirror(bool toNpc, coop::element::ElementId eid, coop::element::ElementId adoptEid,
+                             const std::wstring& classW,
                              float lx, float ly, float lz, float rp, float ry, float rr,
                              void* localPlayer) {
     if (toNpc) {
-        if (void* ghost = FindParkedGhostNpcNear(lx, ly, lz)) {
+        // D2 relay: prefer the eid-tagged ghost (deterministic) over the fuzzy position match.
+        void* ghost = (adoptEid != coop::element::kInvalidId)
+                          ? TakeParkedGhostByEid(static_cast<uint32_t>(adoptEid), /*wantNpc=*/true)
+                          : nullptr;
+        if (!ghost) ghost = FindParkedGhostNpcNear(lx, ly, lz);
+        if (ghost) {
             if (coop::npc_mirror::AdoptExistingNpcAsMirror(ghost, static_cast<uint32_t>(eid), classW)) {
-                UE_LOGI("kerfur_convert[client]: adopted parked turn-on ghost as NPC mirror eid=%u", eid);
+                UE_LOGI("kerfur_convert[client]: adopted parked turn-on ghost as NPC mirror eid=%u (by %s)",
+                        eid, adoptEid != coop::element::kInvalidId ? "eid" : "position");
                 return;
             }
             // adopt failed (dup-eid race) -> fall through to fresh-spawn beside it (cleanup reaps ghost)
@@ -283,14 +293,28 @@ void MaterializeKerfurMirror(bool toNpc, coop::element::ElementId eid, const std
         coop::npc_mirror::SpawnFreshNpcMirror(classW, actorClass, static_cast<uint32_t>(eid),
                                               lx, ly, lz, rp, ry, rr);
     } else {
-        // Drive the existing PropSpawn receiver (exact-key/fuzzy-adopt/fresh-spawn + mirror register).
-        // Synthetic deterministic key from eid -- the kerfur is eid-identified; OnSpawn's Gap-I-1
-        // fuzzy match binds the frozen ghost by position+class (the initiator) and rekeys it to this.
+        const std::string key8 = "coopkerfur#" + std::to_string(static_cast<unsigned>(eid));
+        // D2 relay: if our own turn-off parked a prop ghost tagged with the converting eid, adopt THAT exact
+        // actor as the host-eid mirror DIRECTLY (no fuzzy position match -> no miss -> no orphan-destroy flash).
+        // The ghost is already frozen (claim) and at the conversion site; snap it to the authoritative pose.
+        if (adoptEid != coop::element::kInvalidId) {
+            if (void* ghost = TakeParkedGhostByEid(static_cast<uint32_t>(adoptEid), /*wantNpc=*/false)) {
+                std::wstring key8w(key8.begin(), key8.end());
+                coop::remote_prop::RegisterPropMirror(eid, ghost, key8w, classW, /*senderSlot=*/0,
+                                                      /*rebindInPlace=*/false);
+                ue_wrap::engine::SetActorLocation(ghost, ue_wrap::FVector{lx, ly, lz});
+                ue_wrap::engine::SetActorRotation(ghost, ue_wrap::FRotator{rp, ry, rr});
+                UE_LOGI("kerfur_convert[client]: adopted parked turn-off ghost as PROP mirror eid=%u (by eid -- "
+                        "deterministic, no fuzzy miss)", eid);
+                return;
+            }
+        }
+        // No eid-tagged ghost (a non-initiator peer, or the rejected-restore path): drive the PropSpawn
+        // receiver (exact-key/fuzzy-adopt/fresh-spawn + mirror register). Synthetic deterministic key from eid.
         coop::net::PropSpawnPayload sp{};
         sp.className.len = 0;
         for (size_t i = 0; i < classW.size() && i < 63; ++i)
             sp.className.data[sp.className.len++] = static_cast<char>(classW[i]);
-        const std::string key8 = "coopkerfur#" + std::to_string(static_cast<unsigned>(eid));
         sp.key.len = 0;
         for (size_t i = 0; i < key8.size() && i < 31; ++i) sp.key.data[sp.key.len++] = key8[i];
         sp.propName.len = 0;
@@ -425,12 +449,30 @@ void SendConvertRequestDirect(uint32_t eid, uint8_t toProp) {
 // A ghost the host never confirms (sentient-kerfur reject / dropped request) is
 // destroyed by CleanupParkedGhosts after a timeout, so it can never be grabbed.
 struct ParkedGhost {
-    void*   actor;
-    int32_t idx;
-    uint8_t toProp;  // 1 = prop ghost (turn-off result), 0 = NPC ghost (turn-on result)
+    void*    actor;
+    int32_t  idx;
+    uint8_t  toProp;  // 1 = prop ghost (turn-off result), 0 = NPC ghost (turn-on result)
+    uint32_t srcEid;  // (D2 relay, 2026-06-27) the eid of the mirror that converted -- the host's KerfurConvert
+                      // carries this as oldEid, so the ghost is adopted by STABLE EID, not fuzzy position
+                      // (the position-match miss = the 15:01 "appears-freezes-disappears" flash root).
     std::chrono::steady_clock::time_point armed;
 };
 std::vector<ParkedGhost> g_parkedGhosts;  // GT-only (poll + OnEntitySpawn are both game thread)
+
+// (D2 relay) Take (find + remove) the parked ghost tagged with `srcEid` of the requested form, returning its
+// actor or nullptr. Deterministic eid correlation replaces the fuzzy position adopt -> the local ghost is
+// ALWAYS adopted by the host's authoritative KerfurConvert(oldEid), never orphaned -> destroyed (no flash).
+void* TakeParkedGhostByEid(uint32_t srcEid, bool wantNpc) {
+    const uint8_t wantProp = wantNpc ? uint8_t(0) : uint8_t(1);
+    for (auto it = g_parkedGhosts.begin(); it != g_parkedGhosts.end(); ++it) {
+        if (it->srcEid != srcEid || it->toProp != wantProp) continue;
+        void* actor = it->actor;
+        const int32_t idx = it->idx;
+        g_parkedGhosts.erase(it);
+        return (actor && R::IsLiveByIndex(actor, idx)) ? actor : nullptr;
+    }
+    return nullptr;
+}
 
 // Collect the actors bound to WIRE MIRROR Elements (IsMirror()==true) of the requested type(s).
 // THIS is the authoritative "the host owns this actor" signal -- NOT the per-actor
@@ -459,7 +501,7 @@ void CollectMirrorActors(bool wantProp, bool wantNpc, std::unordered_set<void*>&
 // kerfur(s) of the new form near `pos`. NPC turn-on spawns one kerfurOmega; prop
 // turn-off can drop the prop AND its carried floppy -> claim all near. One cold-path
 // GUObjectArray walk, only on a detected client toggle.
-void ClaimConversionGhosts(bool wantNpc, float x, float y, float z) {
+void ClaimConversionGhosts(uint32_t srcEid, bool wantNpc, float x, float y, float z) {
     void* bases[2];
     size_t nBases = 0;
     if (wantNpc) {
@@ -514,7 +556,7 @@ void ClaimConversionGhosts(bool wantNpc, float x, float y, float z) {
             ue_wrap::engine::SetActorSimulatePhysics(obj, false);  // freeze -> stays inside Gap-I-1's 30 cm
         }
         g_parkedGhosts.push_back(ParkedGhost{obj, R::InternalIndexOf(obj),
-                                             wantNpc ? uint8_t(0) : uint8_t(1), now});
+                                             wantNpc ? uint8_t(0) : uint8_t(1), srcEid, now});
         ++claimed;
     }
     if (claimed)
@@ -624,7 +666,7 @@ void PollKerfurConversions() {
             // path. FREEZE it (do not destroy) so the host's authoritative prop ADOPTS it through
             // the Gap-I-1 fuzzy match -- freezing keeps it inside the 30 cm window (it used to
             // FALL out before the host's PropSpawn arrived, which broke the match -> dupe + pop).
-            ClaimConversionGhosts(/*wantNpc=*/false, lx, ly, lz);
+            ClaimConversionGhosts(eid, /*wantNpc=*/false, lx, ly, lz);
         } else if (isHost)
             ConvergeAfterConversion(actor, el->GetInternalIdx(),
                                     static_cast<coop::element::ElementId>(eid), /*toProp=*/1,
@@ -661,7 +703,7 @@ void PollKerfurConversions() {
             // object"). CLAIM it (park) instead of destroying it: npc_mirror::OnEntitySpawn adopts
             // THAT exact actor as the host mirror (FindParkedGhostNpcNear), so no destroy/respawn
             // pop and no untracked ghost that a grab could cascade into a dupe.
-            ClaimConversionGhosts(/*wantNpc=*/true, lx, ly, lz);
+            ClaimConversionGhosts(eid, /*wantNpc=*/true, lx, ly, lz);
         } else if (isHost) {
             ConvergeAfterConversion(actor, el->GetInternalIdx(),
                                     static_cast<coop::element::ElementId>(eid), /*toProp=*/0,
@@ -851,7 +893,9 @@ void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& p, void* lo
         }
         UE_LOGI("kerfur_convert[client]: KerfurConvert rejected K=%u oldEid=%u -- restoring local mirror (converted optimistically)",
                 p.kerfurId, p.oldEid);
-        MaterializeKerfurMirror(toNpc, oldEid, classW, p.locX, p.locY, p.locZ,
+        // Restore the OLD form fresh (kInvalidId = no eid-keyed adopt: the parked ghost is the rejected NEW
+        // form, wrong form to adopt; the cleanup timeout reaps it).
+        MaterializeKerfurMirror(toNpc, oldEid, coop::element::kInvalidId, classW, p.locX, p.locY, p.locZ,
                                 p.rotPitch, p.rotYaw, p.rotRoll, localPlayer);
         return;
     }
@@ -874,7 +918,8 @@ void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& p, void* lo
         dp.elementId = static_cast<uint32_t>(oldEid);
         coop::remote_prop::OnDestroy(dp, localPlayer);
     }
-    MaterializeKerfurMirror(toNpc, newEid, classW, p.locX, p.locY, p.locZ,
+    // D2 relay: adopt the initiator's parked ghost by the converting eid (oldEid) -- deterministic, no flash.
+    MaterializeKerfurMirror(toNpc, newEid, /*adoptEid=*/oldEid, classW, p.locX, p.locY, p.locZ,
                             p.rotPitch, p.rotYaw, p.rotRoll, localPlayer);
     // NOTE (scope A v1): the off->active dup RETIRE is NOT triggered here. A join-window turn-on's
     // KerfurConvert SendReliable FAILS (the joiner isn't ready for reliable gameplay mid save-transfer --
