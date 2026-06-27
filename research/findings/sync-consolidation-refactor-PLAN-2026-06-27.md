@@ -49,6 +49,30 @@ We adopt that shape, skipping the parts RULE 3/1 exclude (Lua, anti-cheat, asset
 New subtree: **`src/votv-coop/{src,include}/coop/sync/`** (principle-7 gameplay/network side; engine
 access stays behind `ue_wrap/`). One conceptual sync engine, physically one module, behind a clean API.
 
+### FOUNDATION DISCOVERY (2026-06-27, on reading the actual code) — the registry already exists
+`SyncRegistry`'s role is **already played** by `element::Registry` (the MTA `CElementIDs` analog: the sole
+eid->Element* array, host/peer range partition, `RegisterMirror`/`Get`/`FreeId`, "intentionally NO bulk
+Reset" — `registry.h`) + `MirrorManager<Prop>` (the MTA per-type `CClient*Manager` analog: Install /
+AllocAndInstall / Take / Snapshot / Drain — `mirror_manager.h`) + `Element` (the `CClientEntity` analog:
+id/type/name/typeName/actor/internalIdx/beingDeleted/mirror/ownerSlot — `element.h`). These are good and
+MTA-shaped. **So step 1 is NOT "build a new class" — it is "absorb the 3 satellite indices that leaked
+OUT of the registry into `prop_element_tracker` back into the Element/Registry layer, with one bind
+owner."** The 3 satellites (`prop_element_tracker.cpp`):
+1. `g_actorToPropElementId` (`:119`) — actor->eid reverse, **LOCALS ONLY** (a mirror is deliberately absent).
+2. `g_boundMirrorNatives` (`:129`) — the is-save-native SET (actor->internalIdx). **A separate set keyed on
+   actor, set by save_identity_bind, that can read stale relative to the binding = D1's exact root.** It
+   exists ONLY because `MarkPropElement`/`OnConvert` must answer "is this actor a bound save-native" holding
+   only the actor, and mirrors are not in satellite #1.
+3. `g_keyToActor`/`g_actorToKey` (`:176-177`) — the key->actor index (the FindByKeyString balloon fix).
+
+**The consolidation:** maintain ONE actor->eid reverse index INSIDE the registry/manager, covering BOTH
+locals AND mirrors, written atomically at every Install/AllocAndInstall/RegisterMirror and cleared at every
+Take/Unregister/Free. Then make **is-save-native an `Element` field** (`m_saveNative`, set by
+save_identity_bind at bind). "Is actor A a bound save-native" becomes `Resolve(EidOf(A))->IsSaveNative()` —
+one path through the registry, atomic with the binding, **structurally unable to desync** (satellite #2
+disappears). Satellite #3 (key index) moves onto the manager as a secondary index maintained by the same
+bind owner. This is smaller, lower-risk, and more faithful to the existing MTA-shaped core than a new class.
+
 | MTA piece (evidence) | Our consolidated piece | Subsumes today |
 |---|---|---|
 | `CElementIDs` sole ID owner (`CElementArray.cpp:23-46`); bind in ctor/dtor/`SetID` only (`CClientEntity.cpp:40,74,259`) | **`SyncRegistry`** — the SOLE owner of eid<->actor (+ reverse + per-entry flags: kind, is-save-native, owner-slot, ctx, local-vs-host). One `Bind`, one `Unbind`, one `Resolve`. | `remote_prop` RegisterPropMirror/ResolveLiveActorByEid/ResolveMirrorEidByActor + `MirrorManager<Prop>`; `prop_element_tracker` g_actorToPropElementId / RebindLocalElementActor / g_boundMirrorNatives / key index; `save_identity_bind` bind kernel |
@@ -139,8 +163,8 @@ flips a marker (D1 dup gone) and is verified on its own.
 | # | Step (commit kind) | What | Behavior check |
 |---|---|---|---|
 | 0 | move | Create `coop/sync/` skeleton + facade header; no code moved yet, just the namespace + a forwarding shim so callers compile. | builds; smoke identical |
-| 1 | **move** | **Extract `SyncRegistry`** — pull the eid<->actor binding (the 5 binders + MirrorManager + g_actorToPropElementId + g_boundMirrorNatives + key index) behind one owner. The 5 call-sites now call `SyncRegistry::{Bind,Unbind,Resolve}` with identical semantics. Biggest/riskiest — do it FIRST (everything rests on it). | smoke identical; same bind log sequence |
-| 1b | **fix** | **D1 enabler**: make `IsSaveNative` a registry-entry flag PRESERVED across the steady re-seed cycle (the mark that went stale). Separate commit; this alone may already cut D1's orphan even before the reconcile unify. | D1 grab: native NOT orphaned (marker flips) |
+| 1 | **move** | **Absorb the 3 satellites into the existing `element::Registry`/`MirrorManager`/`Element`** (NOT a new class — see Foundation Discovery). 1a: add ONE unified actor->eid reverse index on `MirrorManager<Prop>` (or Registry), written at every Install/AllocAndInstall/RegisterMirror, cleared at Take/Unregister/Free — covering BOTH locals and mirrors; repoint `g_actorToPropElementId` readers + `ResolveMirrorEidByActor` at it. 1a': move the key->actor index onto the same owner. Semantics identical (same set/clear points). Biggest/riskiest — FIRST (all rests on it). | smoke identical; SAME bind + grab/throw/#1/#2/b2/b3 marker stream |
+| 1b | **fix** | **D1 enabler**: add `Element::m_saveNative` (set by `save_identity_bind` at bind); answer "is actor a bound save-native" via `Resolve(EidOf(actor))->IsSaveNative()` instead of the `g_boundMirrorNatives` set; DELETE the satellite set. The flag is now atomic with the binding -> cannot read stale relative to it (the 15:01:49 `morphBoundNative=false` cause). Separate commit; may already cut D1's orphan before the reconcile unify. | D1 grab: morphBoundNative TRUE, native NOT orphaned (marker flips) |
 | 2 | move | **Consolidate the convert pipeline** — OnConvert decision tree + OnHostConvert authoring + the re-pile thunk trigger → one `convert` applier path calling `CreateOrAdopt`/`ApplyUpdate`. Carry/hold state (today in 4 places) collapses into the registry entry + authority. | smoke identical; same convert markers |
 | 3 | move | **Unify the router** — one `SyncRouter::OnReliable` switch; delete the 3-place ReliableKind wiring. | smoke identical |
 | 4 | move | **Move the reconcile mechanisms onto `SyncReconcile`** — twin-retire, variant-1, b3, kerfur-retire, ordinal-bind — still gated to current (join-window) timing. Pure relocation. | smoke identical; sweep markers identical |
