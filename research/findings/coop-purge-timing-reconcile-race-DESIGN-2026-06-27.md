@@ -257,6 +257,67 @@ re-create matches its OWN save position -> its OWN eid, regardless of order/coun
   position (only 4, co-location unlikely), and whether the b3 PendingPosCorrection apply still works (it resolves
   by eid via the registry -- unaffected, since the re-create now binds to the correct eid).
 
+## 2.7 RE before variant-1 design (2 parallel traces) -- TRUE mechanism + the no-wire enabler REFUTED
+
+Per "don't build on an unverified invariant" (we were burned twice), two read-only RE traces ran before designing
+variant 1. Both confirmed by the 12:29 logs.
+
+### TRUE mechanism (the "purge re-creates all 870" model is FALSE)
+- The 870 save chipPile natives are **NOT mass-destroyed**. The keyless-chipPile element count holds **flat**
+  (870->869->868 across the episode, client:24658/24770/25423); the 868 survivors keep their first-load addresses
+  + correct binds. The mass-purge reaped **dead tracker elements + dying/menu-shadow objects** (the "reaped 256 x9
+  + 3219 dying"), not the live save piles.
+- Only a **SPARSE handful** (here exactly 2: eid 4434 + 4435) are **client-local engine-GC'd and re-instantiated
+  at their save position** by UE's incremental GC under the join load. They re-spawn via
+  `BeginDeferredActorSpawnFromClass` -> fire the bind seam fresh (`case(i) E free`, the prior mirror GC'd). Gated
+  to a subset purely because the seam fires only on a REAL re-spawn.
+- **Move-UNCORRELATED + client-only:** the host had NO purge (host:11628). The b3 host-moved piles (4436/5271) are
+  handled by `trash_proxy` SPAWN (AStaticMeshActor proxies) + the convert channel, and **never native-re-create**;
+  the sparse native churn (4434/4435) is a separate, GC-timed, client-local phenomenon. So the re-creates are
+  NOT the moved piles.
+- Why (b) cursor-reset mis-bound (mechanism-level): the ~2 re-spawns consume the reset cursor in **GC order**,
+  whose rank != saveSlot array index -> the lone re-create took `g_chipEntries[0]`=eid 4435 = a foreign identity
+  (the black pile). Confirmed.
+
+### The no-wire enabler is REFUTED (critical -- kills my proposed shortcut)
+The variant-1 "capture `eid->save-pos` client-side at first-load bind" idea (doc 2.6) is **FALSE at that point**:
+`BindLocalNativeToHostEid_` runs INSIDE the BeginDeferred POST-hook (trash_collect_sync.cpp:79->100->
+save_identity_bind.cpp:252), which is **PRE-FinishSpawningActor -- the transform is not set**, so
+`GetActorLocation(native)` there is **(0,0,0)** (code-pinned trash_collect_sync.cpp:112-121, the take-31 finding
+b3 already relies on). Capturing at bind captures garbage.
+- Earliest reliable client-side position is **quiescence** (pile_reconcile already reads native positions there:
+  EnsureIndex:110, SweepReconcileSaveTimeTwins:337) -- but the **churned eids have no survivor at quiescence** to
+  capture from, and a pre-churn periodic capture is GC-timing-fragile (the churn at 12:30:09 precedes the first
+  quiescence at 12:30:25). So a robust client-only eid->save-pos source does NOT exist.
+- The client has **no** blob-position store (g_blobPileXforms is host-only, save_transfer.cpp:116, host
+  OnRequest:445). pile_reconcile's twin machinery (ArmPendingSaveTimeTwin/SweepReconcileSaveTimeTwins) does
+  position-twin **DESTROY** (1cm exact + ambiguous-skip + >50% valve), NOT a position->eid BIND -- so it can't be
+  reused as-is.
+
+### Variant-1 design (REVISED to robust HOST-WIRE; on review, NOT built)
+**Revert (b)** (cursor-reset + flag-clear + reseed gate + sweep re-arm). **Keep lever (a).** Then:
+- **Host sends `eid -> save-position`** alongside the identity map (extend the sidecar `IdEntry` with an FVector,
+  or a parallel array; ~+12B x 870 ~= 10 KB, trivial). The host has the authoritative positions
+  (`g_blobPileXforms`). This is the originally-scoped variant 1 -- ROBUST: order-, count-, AND timing-independent
+  (no GC-timing dependency, no transform-unset problem), authoritative from the save.
+- **Client, at quiescence:** for each UNBOUND chipPile native (a sparse re-create), match its (now valid) position
+  against the received `eid->save-pos` (1cm exact, the proven bit-exact save round-trip) -> bind it to that host
+  eid. Co-located (>1 within 1cm) -> ambiguous-skip (the rare residual stays a ghost; chipPile doom-exemption
+  prevents wrong-destroy). The bulk survivors are untouched (already bound). b3 PendingPosCorrection still resolves
+  by eid post-bind. A moved-in-window pile that churned would re-create at its SAVE pos on the client -> matches
+  save-pos -> correct eid; b3 delivers the moved pos separately.
+- Why host-wire over the no-wire capture: the no-wire capture is REFUTED at bind (transform unset) and
+  timing-fragile elsewhere (churn precedes quiescence); after being burned twice on timing/order assumptions, the
+  authoritative host-wire removes the entire class of fragility. The wire cost is trivial.
+- Open points (settle on build): exact sidecar layout (FVector in IdEntry vs parallel array + version bump); the
+  quiescence match step (new code, or graft onto SweepReconcileSaveTimeTwins's read+match but BIND instead of
+  destroy); kerfur family (only 4 -- position or leave to its own retire path); the 1cm tolerance + co-located
+  policy (reuse pile_reconcile's kExactMatchR2Cm + ambiguous-skip).
+
+(The "bind at BeginDeferred = (0,0,0)" fact is already load-bearing in the codebase (b3 design); a 1-line
+read-only `GetActorLocation` probe at the top of BindLocalNativeToHostEid_ would make it probe-certain if desired,
+but it is well-established -- not a new unverified invariant.)
+
 ## 3. b3 stays (unblocked by the fix)
 b3's host-detect + client-arm are log-verified correct; only its apply is unverified (blocked by the purge). With
 (b) the bind survives the re-seed → the sweep adjudicates a stable world → b3 corrections + kerfur retire + mirror
