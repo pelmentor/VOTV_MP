@@ -26,6 +26,7 @@
 #include "coop/pile_reconcile.h"  // extracted 2026-06-23: keyless-pile join twin-destroy / adopt / census
 #include "coop/dev/spawn_order_probe.h"  // Phase 1 step 1A: keyless load-spawn coverage probe (read-only)
 #include "coop/save_identity_bind.h"     // Phase 1 step 2b: eid-range bind summary at quiescence
+#include "coop/sync/sync_reconcile.h"    // sync-refactor: identity reconcile engine (join + steady triggers)
 #include "coop/snapshot_census.h"  // Phase 0: per-class completeness floor for the claim sweep
 #include "coop/dev/force_overdestroy_test.h"  // dev-only: floor-disable toggle for the controlled proof
 #include "coop/prop_echo_suppress.h"
@@ -1301,14 +1302,12 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // by TickClientReconcile on kSweepQuiesceScans stable scans) + past the >50%% valve above, so the late
     // natives are present (the census below SEES them). Keyed by save-time position (not blind proximity),
     // with its own >50% abort-valve. Runs BEFORE the census so the census reflects the removals.
-    coop::pile_reconcile::SweepReconcileSaveTimeTwins();
-    // Variant 1 (purge-race, 2026-06-27): re-bind the sparse engine-GC-churned save natives that re-created
-    // UNBOUND (the cursor was consumed by the first load) by an authoritative host-wire position match -- AFTER
-    // the twin sweep (so a dup-twin is destroyed, not re-bound) and BEFORE b3's apply (so the re-bound eid
-    // resolves for the position correction). Fixes the 09:54/11:32 ghost without the (b) cursor-reset mis-bind.
-    coop::save_identity_bind::BindUnboundReCreatesByPosition();
-    coop::pile_reconcile::ApplyPendingPosCorrections();  // b3 (v90): snap any save-authoritative pile the host moved in-window (dropped convert) now that the bind+load-tail settled
-    coop::pile_reconcile::LogCensus();  // extracted 2026-06-23 (FRESH GC-robust walk; no-op if no index built)
+    // The identity reconcile (twin-retire -> variant-1 re-bind -> b3 pos-correction -> census) now lives in
+    // coop::sync::RunIdentityReconcile, driven HERE at the join-window quiescence sweep AND by the steady-state
+    // coop::sync::OnReconcileTick (the D1 structural fix: the mechanisms were join-window-one-shot, so a save-pile
+    // grabbed/moved AFTER this sweep armed a twin nothing consumed = the 15:01:49 ghost). joinSweep=true logs the
+    // one-shot orphan census. See coop/sync/sync_reconcile.h.
+    coop::sync::RunIdentityReconcile(/*joinSweep=*/true);
     // NOTE: the kerfur off->active retire sweep (scope A) is NOT driven here -- it runs from the kerfur
     // client poll (kerfur_convert::PollKerfurConversions, also quiescence-gated) so it fires even when no
     // pile bracket armed (the SnapshotBegin-lost flake leaves g_sweepPending false). Single driver, RULE 2.
@@ -1416,6 +1415,11 @@ void ArmDivergenceSweep() {
 }
 
 void TickClientReconcile() {
+    // Steady-state identity reconcile (D1 structural fix, sync-refactor 2026-06-27): runs EVERY tick, even
+    // when the join one-shot is disarmed -- it self-gates cheaply (a quiescence bool + a pending-work bool +
+    // a 250 ms debounce) and only walks the array when a save-pile grabbed/moved after the join sweep armed a
+    // twin. Below this line is the join-window one-shot trigger (disarmed = zero cost). See coop/sync.
+    coop::sync::OnReconcileTick();
     if (!g_sweepPending) return;  // zero cost when disarmed (the steady state)
     UE_ASSERT_GAME_THREAD("remote_prop_spawn::TickClientReconcile");  // no-mutex: all sweep state is GT-only
     const auto now = std::chrono::steady_clock::now();

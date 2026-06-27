@@ -112,4 +112,11 @@ void ArmPendingPosCorrection(coop::element::ElementId eid,
 // for a late arrival after the sweep already fired, immediately from the receive handler. Game-thread only.
 void ApplyPendingPosCorrections();
 
+// True iff there is armed-but-unconsumed reconcile work (a pending save-time twin OR a pending b3 position
+// correction). The steady-state reconcile trigger (coop::sync::OnReconcileTick) polls this so it only does a
+// GUObjectArray walk when there is actually something to reconcile -- NOT every tick (the perf rule). The D1
+// structural fix: a save-pile grabbed/moved AFTER the join one-shot arms a twin that this predicate then
+// surfaces to the steady reconcile. Game-thread only.
+bool HasPendingWork();
+
 }  // namespace coop::pile_reconcile

@@ -417,4 +417,8 @@ void ApplyPendingPosCorrections() {
     }
 }
 
+bool HasPendingWork() {
+    return !g_pendingSaveTimeTwin.empty() || !g_pendingPosCorrection.empty();
+}
+
 }  // namespace coop::pile_reconcile
