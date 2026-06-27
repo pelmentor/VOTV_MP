@@ -101,10 +101,55 @@ bound, only the new re-seeded natives need binding) — the hard part is purely 
 3. **Capture the ordinal at first bind** — store, per host eid at the initial bind, a STABLE re-find key (the
    save position is the only cross-peer-stable one for a keyless pile), then on re-seed re-bind by that key.
    (Converges with option 1.)
-**Leaning option 1 (position-keyed re-bind), bounded by ambiguous-skip + the existing sweep**, because it needs
-no load-order plumbing and reuses the deterministic-position fact — but this is exactly the call to make on build,
-and it foreshadows the sync-module refactor (the bind/re-bind/position-key/ordinal all want to live behind one
-coherent identity API). **Lever (a) is unaffected and ready** (a 1-2 line throttle-skip, fully understood).
+### (b) RE update 2026-06-27 (3 parallel RE traces) — a THIRD option, and option 1's hidden cost
+Three read-only RE traces refined the fork. Summary:
+
+- **Option 2 (ordinal re-derivation via the re-seed walk) is DEAD.** `ReSeedKnownKeyedProps` ->
+  `SeedWalk_` (prop_element_tracker.cpp:606-619) enumerates in **GUObjectArray object-index order**, NOT saveSlot
+  array order; for purge-recycled slots the two are unrelated. The ordinal was never stored — it was a transient
+  consumed by the per-family cursor during the BP load loop. A walk cannot recover it. Proven, not reachable.
+
+- **Option 1 (position-keyed re-bind) is moved-pile-SAFE but NOT free — it needs a WIRE EXTENSION.** The
+  save<->save match IS the right identity shape and the user's moved-pile worry does NOT apply: the re-bind only
+  assigns eid identity; the host's moved/current position is delivered SEPARATELY by eid via b3
+  `ApplyPendingPosCorrections` AFTER the bind (pile_reconcile.cpp:398-409). BUT the **client has no per-eid
+  save-time position to match against**: the sidecar `IdEntry` carries `{index, eid, family}` only
+  (save_identity_map.h:37-41); `g_blobPileXforms` is **host-side, keyed by host eid, never transmitted**
+  (save_transfer.cpp:116-117). So option 1 requires **adding an FVector to `IdEntry` + bumping the sidecar
+  version**, host-populated from the byLoc data `BuildHostMap` already computes. Co-located piles (>1 within 1cm)
+  -> ambiguous -> **skip** (safe: chipPile is doom-exempt from the divergence sweep, remote_prop_spawn.cpp:1491,
+  and the >50% valve protects), leaving that one pile a ghost — the bounded residual.
+
+- **Option 3 (cursor-reset — re-fire the PROVEN per-spawn bind) is NEW and, if a probe confirms it, STRICTLY
+  BEST (zero wire change, reuses Build 3 ordinal, no position ambiguity).** The crux RE: the natives are
+  re-created during the episode by the **game's own `loadObjects`/Load-Primitives BP loop deferred-spawning each
+  pile** (docs/piles/README.md:81; the same-world "Load Primitives re-run" destroys+respawns the natives) — the
+  **exact same deferred-spawn path the original bind catches** at `OnBeginDeferredSpawnObserve`
+  (trash_collect_sync.cpp:79-105, a `BeginDeferredActorSpawnFromClass` Func-patch; save_identity_bind.h:7-9
+  "1A-proved to catch every keyless load-spawn"). That seam has **no `InPurgeEpisode` gate** — so it fires for
+  each re-created native. The 09:54 ghost is then precisely explained: in a LATE purge the per-family cursors are
+  already at `fam.size()` (consumed by the first load's bind), so the seam's `OnKeylessLoadSpawn` re-fires but
+  hits the overflow guard (`cursor >= size` -> "NOT binding") -> the re-spawns don't bind -> ghosts. **Fix:
+  RESET the per-family cursors (g_chipCursor/g_kerfurCursor = 0, map NOT cleared) at purge-episode START so the
+  existing seam re-consumes the re-spawned natives in array order** — the identical Build-3 ordinal bind, no
+  wire change, no position match. `IsBoundMirrorNative` (save_identity_bind.cpp:182) keeps purge-surviving
+  bound natives from double-binding.
+
+  **The ONE unproven assumption (the probe target, per [[feedback-probe-dont-guess-rule]]):** does the
+  cursor-reset land BEFORE the first re-spawn fires the seam? The reaper detects the episode on a TICK *after*
+  the purge began; if Load Primitives destroys+respawns within the same BP burst, some re-spawns could fire the
+  seam before our reset. **Read-only probe:** a `[BIND-PROBE]` log in `OnBeginDeferredSpawnObserve`
+  (trash_collect_sync.cpp ~:94) gated on `InPurgeEpisode()`, logging fam + the live cursor value per fire. Run
+  the 09:54 repro. **If `[BIND-PROBE]` lines appear during the episode with cursors that a reset would re-consume
+  -> option 3 confirmed (cursor-reset, zero wire change). If zero fires (or re-spawns precede any possible reset)
+  -> fall back to option 1 (position wire-extension).** The probe is read-only diagnosis (RULE-2-exempt) and
+  decides the whole fork; bundle it with lever (a)'s deploy so the next hands-on settles it.
+
+**Recommendation: PROBE option 3 before committing to a design** — it is the most-native, lowest-cost fix IF the
+ordering holds, and only a runtime measurement can confirm the ordering (the head-freeze clamp was REFUTED by
+exactly this kind of probe; do not guess). Option 1 is the proven fallback if the probe refutes option 3.
+**Lever (a) is unaffected, built + committed (`bfe9182a`), and independently useful** — its fast drain also
+shrinks the window in which a re-spawn could precede the reset, helping option 3.
 
 ### Why both
 (b) is the root: the reconcile must bind the FINAL (post-re-seed) world, regardless of purge timing — this fixes
