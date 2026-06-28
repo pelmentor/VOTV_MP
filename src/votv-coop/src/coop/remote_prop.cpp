@@ -15,6 +15,7 @@
 #include "coop/prop_element_tracker.h"
 #include "coop/prop_stick_sync.h"  // v68: stuck wall-attachable gates (unstick + release)
 #include "coop/remote_prop_spawn.h"
+#include "coop/sync/sync_create.h"  // CreateOrAdoptPropMirror (the prop-mirror bind keystone; RegisterPropMirror forwards)
 #include "coop/trash_channel.h"  // docs/piles/08: per-eid sync-time-context (stale carry/convert drop)
 #include "coop/trash_clump_pose_stream.h"  // v85: stop the per-eid carry drive at the ToPile land
 #include "coop/trash_proxy.h"    // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
@@ -711,14 +712,7 @@ inline coop::element::MirrorManager<coop::element::Prop>& PropMirrors() {
     return coop::element::MirrorManager<coop::element::Prop>::Instance();
 }
 
-// Lossy-narrow a wstring to ASCII for Element name/typeName storage. The
-// VOTV Key strings + class names are ASCII in practice (BP-minted NewGuid
-// + class identifiers like "Aprop_chipPile_C").
-std::string NarrowAscii(const std::wstring& w) {
-    std::string s; s.reserve(w.size());
-    for (wchar_t c : w) s.push_back(static_cast<char>(c & 0xFF));
-    return s;
-}
+// (NarrowAscii moved to sync_create.cpp with the prop-mirror bind body it served.)
 
 // Register a Prop mirror Element at `eid` bound to `actor`. Idempotent:
 // if `eid` already has a mirror in our map, no-op (a re-spawn convergence
@@ -741,70 +735,18 @@ std::string NarrowAscii(const std::wstring& w) {
 // Public accessor (M-1 2026-05-29 split): used by coop::remote_prop_spawn::
 // OnSpawn to bind a wire-received Prop Element after every successful
 // spawn/converge path.
+// PR-FOUNDATION-3 Inc3 -> sync-consolidation 2026-06-28: the prop-mirror bind body
+// MOVED to coop::sync::CreateOrAdoptPropMirror (the one collision-reconcile create
+// path, sync_create.cpp). This stays as the named public entry callers already use
+// (OnSpawn / OnConvert / kerfur materialize); it forwards verbatim. `rebindInPlace`
+// is the morph flag.
 void RegisterPropMirror(coop::element::ElementId eid,
                         void* actor,
                         const std::wstring& key,
                         const std::wstring& cls,
                         int senderSlot,
                         bool rebindInPlace) {
-    if (!actor) return;
-    // Fork B 2b (2026-06-10): quiet idempotency. Under the relaxed snapshot
-    // gate the OWNER client re-ingests its own entities at every re-bracket
-    // -- the bind paths resolve its OWN element's actor and re-register the
-    // same (eid, actor) pair. Short-circuit before Install so the manager's
-    // duplicate path doesn't warn once per entity per re-bracket.
-    if (auto* existing = coop::element::Registry::Get().Get(eid)) {
-        if (existing->GetActor() == actor) return;
-        // v81 MORPH V2: the SINGLE rebind entry point. Re-skin eid E onto the new rendering (pile-A ->
-        // clump -> pile-B). HEAD keeps the existing live actor (a different live actor for the same eid
-        // is a conflict to reject); the morph LEGITIMATELY swaps the actor (the old one is destroyed
-        // right after). Route on the Element's AUTHORITATIVE m_mirror flag -- NOT a caller's runtime
-        // guess (findings 3/6/7/15): a MIRROR rebinds via SetActor here; a LOCAL element (a host
-        // applying a client's convert against its OWN pile) MUST go through RebindLocalElementActor so
-        // the forward map g_actorToPropElementId stays consistent. Only the morph callers pass true.
-        if (rebindInPlace) {
-            if (existing->IsMirror()) {
-                existing->SetActor(actor, R::InternalIndexOf(actor));
-                // Keep the K-5 client kerfur held-pose map consistent if this is a kerfur mirror (it
-                // won't be for a chipPile/clump morph -- self-filters on class).
-                coop::kerfur_entity::NotifyKerfurPropMirrorBound(actor, eid);
-                UE_LOGI("remote_prop::RegisterPropMirror: eid=%u REBOUND mirror in place -> actor=%p "
-                        "cls='%ls' (morph re-skin)", eid, actor, cls.c_str());
-            } else {
-                coop::prop_element_tracker::RebindLocalElementActor(eid, actor);
-            }
-            return;
-        }
-        // else: fall through to Install, which rejects the duplicate eid (HEAD live-conflict guard).
-    }
-    // Tag with the originating peer slot for per-slot disconnect eviction
-    // (D1-7). Out-of-range/unknown -> -1 (untagged; only drained on full
-    // teardown). kMaxPeers bounds it to the 4-peer slot space.
-    const int ownerSlot =
-        (senderSlot >= 0 && senderSlot < static_cast<int>(coop::players::kMaxPeers))
-            ? senderSlot : -1;
-    // Build the Prop mirror with name/typeName/actor populated, then
-    // hand off to MirrorManager::Install. The template encapsulates
-    // the 5-step pattern (alloc-under-lock + RegisterMirror +
-    // rollback-on-fail with dtor outside lock), so the wire-receiver
-    // side just builds and ships.
-    auto mirror = std::make_unique<coop::element::Prop>();
-    if (!key.empty()) mirror->SetName(NarrowAscii(key));
-    if (!cls.empty()) mirror->SetTypeName(NarrowAscii(cls));
-    mirror->SetActor(actor, R::InternalIndexOf(actor));
-    if (PropMirrors().Install(eid, std::move(mirror), ownerSlot)) {
-        UE_LOGI("remote_prop::RegisterPropMirror: eid=%u bound to actor=%p "
-                "key='%ls' cls='%ls' ownerSlot=%d",
-                eid, actor, key.c_str(), cls.c_str(), ownerSlot);
-        // K-5: if this is a CLIENT kerfur prop mirror, record actor->host-range-eid so local_streams
-        // can stream the eid while it's carried (its random BP key won't resolve cross-peer; the host's
-        // remote_prop receiver resolves the authoritative kerfur prop by this eid). Self-filters to
-        // client + kerfur class (no-op for every ordinary prop / on the host). The single choke-point
-        // every kerfur prop mirror bind funnels through (convert materialize, join-snapshot, fuzzy-adopt).
-        coop::kerfur_entity::NotifyKerfurPropMirrorBound(actor, eid);
-    }
-    // On false: Install already logged the failure case (rejected
-    // sentinel id, duplicate, or RegisterMirror failure).
+    coop::sync::CreateOrAdoptPropMirror(eid, actor, key, cls, senderSlot, rebindInPlace);
 }
 
 // Reverse lookup: the eid bound to `actor` among the Prop Elements (mirrors + locals all live in this
