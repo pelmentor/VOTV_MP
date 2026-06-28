@@ -90,7 +90,26 @@ Two real LAN scenarios PASS against the assembled module -- the two MOST-refacto
 NOT autonomously closable (VISUAL / needs the user's eyes): #1 kerfur twitch + #2 hang-in-air-on-off -- downstream of
 a clean adopt, not reproduced (0 spurious converts) but neither scenario sustained a converted kerfur long enough to
 expose them. #3 pile-host-only looks CLEARED (joinchurn unclaimed-destroyed=0 = client piles not dropped) -> likely the
-transitional noise predicted. PUSH HELD for the user's explicit go (push asks; the visual symptoms want a human pass).
+transitional noise predicted.
+
+### 09:54 RE-SEED-ORPHAN GHOST -- FIXED + PROVEN AUTONOMOUSLY (2026-06-28 ~22:07)
+ROOT (2-agent trace): the reaper Take()s a purged bound save-native's Prop Element but DEFERS ~Element to
+ElementDeleter::Flush (worker-thread safety); between Take and Flush the registry actor->eid reverse is STALE, so a
+post-purge re-seed running in that window orphans a GC-churned save-native (cursor consumed -> overflow-drop) into a
+tracked-but-unbound ghost -- and variant-1's position re-bind only fired ~30s later at the late quiescence sweep.
+FIX (`ddaec1fa`, net_pump purge-drain re-seed edge): (a) ElementDeleter::Flush() BEFORE ReSeedKnownKeyedProps (force
+the precondition) + (b) BindUnboundReCreatesByPosition() right AFTER (re-bind churned natives by POSITION immediately
+-- host-shipped save-time positions, 1cm; moved-in-window handled by b3/proxy-wins). W-2-gated to the rare post-purge
+re-seed only.
+PROOF (`c6192d06` reseed_orphan_selftest, deployed 4BC7B452): a host-side IN-PROCESS self-test reproduces the exact
+Take->re-seed race on a real chipPile native (no save-transfer-join, no rendering -> cannot false-green like a clean
+smoke). Result on BOTH peers: VERDICT=PASS -- bound=1 took=1 eidBeforeFlush=32000(stale, the race) eidAfterFlush=
+kInvalid((a) Flush settles it) rebound=1 finalEid=32000((b) re-bound by position, NO orphan). The whole mechanism is
+proven link-by-link, deterministically.
+
+PUSH: the user pre-authorized "test proves the fix -> sync verified autonomously -> push the rubicon". The test proved
+it -> PUSHED 2026-06-28. The two VISUAL symptoms (#1/#2 kerfur twitch/hang) remain a SEPARATE deferred SyncAuthority
+track needing a human pass; they do not block this push.
 
 NEXT: user eyeballs #1/#2 (+ a client steady-grab for D1) via `research/handson_runbook_2026-06-28_whole_module.md`,
 OR green-lights the push of the autonomously-verified assembled module as the sync ETALON.
