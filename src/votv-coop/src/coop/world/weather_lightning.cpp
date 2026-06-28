@@ -1,6 +1,6 @@
 // coop/weather_lightning.cpp -- see coop/weather_lightning.h.
 
-#include "coop/weather_lightning.h"
+#include "coop/world/weather_lightning.h"
 
 #include "coop/element/element.h"
 #include "coop/net/protocol.h"

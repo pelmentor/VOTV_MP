@@ -1,6 +1,6 @@
 // coop/weather_redsky.cpp -- see coop/weather_redsky.h.
 
-#include "coop/weather_redsky.h"
+#include "coop/world/weather_redsky.h"
 
 #include "coop/element/element.h"
 #include "coop/net/protocol.h"

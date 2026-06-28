@@ -7,7 +7,7 @@
 // via a reflected SpawnEmitterAtLocation. No suppression; the host relays a client's spawn
 // to the other clients (IsClientRelayableReliableKind).
 
-#include "coop/firefly_sync.h"
+#include "coop/world/firefly_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

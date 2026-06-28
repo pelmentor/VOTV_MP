@@ -33,7 +33,7 @@
 #include "coop/players_registry.h"
 #include "coop/prop_element_tracker.h"
 #include "coop/remote_player.h"
-#include "coop/weather_sync.h"
+#include "coop/world/weather_sync.h"
 #include "coop/dev/flashlight_setup.h"
 #include "harness/screenshot.h"
 #include "ue_wrap/call.h"

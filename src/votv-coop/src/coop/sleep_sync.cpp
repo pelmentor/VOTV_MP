@@ -4,7 +4,7 @@
 
 #include "coop/chat_feed.h"
 #include "coop/net/session.h"
-#include "coop/time_sync.h"
+#include "coop/world/time_sync.h"
 
 #include "ue_wrap/log.h"
 #include "ue_wrap/sleep.h"

@@ -40,7 +40,7 @@
 #include "coop/remote_prop.h"
 #include "coop/save_guard.h"
 #include "coop/shutdown.h"
-#include "coop/weather_sync.h"
+#include "coop/world/weather_sync.h"
 #include "ui/dev_menu.h"
 #include "ui/imgui_overlay.h"
 #include "ui/console.h"

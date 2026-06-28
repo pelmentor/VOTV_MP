@@ -1,15 +1,15 @@
 // coop/weather_sync.cpp -- Phase 5W weather sync. See coop/weather_sync.h.
 
-#include "coop/weather_sync.h"
+#include "coop/world/weather_sync.h"
 
 #include "coop/element/element.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/players_registry.h"
 #include "coop/ini_config.h"
-#include "coop/weather_fog.h"
-#include "coop/weather_lightning.h"
-#include "coop/weather_redsky.h"
+#include "coop/world/weather_fog.h"
+#include "coop/world/weather_lightning.h"
+#include "coop/world/weather_redsky.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/directionalwind.h"
 #include "ue_wrap/game_thread.h"

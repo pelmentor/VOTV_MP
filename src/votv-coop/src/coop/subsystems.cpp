@@ -5,7 +5,7 @@
 
 #include "coop/subsystems.h"
 
-#include "coop/balance_sync.h"
+#include "coop/world/balance_sync.h"
 #include "coop/comp_sync.h"
 #include "coop/console_state_sync.h"
 #include "coop/device_occupancy.h"
@@ -39,15 +39,15 @@
 #include "coop/atv_sync.h"
 #include "coop/drone_sync.h"
 #include "coop/order_sync.h"
-#include "coop/event_cue_sync.h"
-#include "coop/firefly_sync.h"
+#include "coop/world/event_cue_sync.h"
+#include "coop/world/firefly_sync.h"
 #include "coop/inventory_pickup_sync.h"
 #include "coop/chat_sync.h"
 #include "coop/turbine_sync.h"
 #include "coop/keypad_sync.h"
 #include "coop/power_sync.h"
-#include "coop/sky_sync.h"
-#include "coop/time_sync.h"
+#include "coop/world/sky_sync.h"
+#include "coop/world/time_sync.h"
 #include "coop/window_sync.h"
 #include "coop/join_progress.h"
 #include "coop/garbage_sync.h"
@@ -74,7 +74,7 @@
 #include "coop/prop_snapshot.h"
 #include "coop/remote_prop.h"
 #include "coop/remote_prop_spawn.h"
-#include "coop/weather_sync.h"
+#include "coop/world/weather_sync.h"
 
 #include "ue_wrap/log.h"
 

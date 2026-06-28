@@ -204,7 +204,7 @@ add_library(votv-coop SHARED
     src/coop/remote_player.cpp
     src/coop/remote_prop.cpp
     src/coop/save_guard.cpp
-    src/coop/balance_sync.cpp
+    src/coop/world/balance_sync.cpp
     src/coop/save_block.cpp
     src/coop/save_button_disable.cpp
     src/coop/multiplayer_menu.cpp
@@ -224,14 +224,14 @@ add_library(votv-coop SHARED
     src/coop/kerfur_prop_adoption.cpp
     src/coop/kerfur_reconcile.cpp
     src/coop/keypad_sync.cpp
-    src/coop/time_sync.cpp
-    src/coop/sky_sync.cpp
+    src/coop/world/time_sync.cpp
+    src/coop/world/sky_sync.cpp
     src/coop/power_sync.cpp
     src/coop/atv_sync.cpp
     src/coop/drone_sync.cpp
     src/coop/order_sync.cpp
-    src/coop/firefly_sync.cpp
-    src/coop/event_cue_sync.cpp
+    src/coop/world/firefly_sync.cpp
+    src/coop/world/event_cue_sync.cpp
     src/coop/window_sync.cpp
     src/coop/grime_sync.cpp
     src/coop/player_handshake.cpp
@@ -273,10 +273,10 @@ add_library(votv-coop SHARED
     src/coop/trash_proxy.cpp
     src/coop/puppet_carry_drive.cpp
     src/coop/trash_clump_pose_stream.cpp
-    src/coop/weather_sync.cpp
-    src/coop/weather_fog.cpp
-    src/coop/weather_lightning.cpp
-    src/coop/weather_redsky.cpp
+    src/coop/world/weather_sync.cpp
+    src/coop/world/weather_fog.cpp
+    src/coop/world/weather_lightning.cpp
+    src/coop/world/weather_redsky.cpp
     src/coop/ini_config.cpp
     src/coop/element/element.cpp
     src/coop/element/element_deleter.cpp

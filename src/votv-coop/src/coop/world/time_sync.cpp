@@ -1,6 +1,6 @@
 // coop/time_sync.cpp -- see coop/time_sync.h. Host-authoritative world-clock sync.
 
-#include "coop/time_sync.h"
+#include "coop/world/time_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

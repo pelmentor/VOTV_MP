@@ -1,6 +1,6 @@
 // coop/balance_sync.cpp -- see coop/balance_sync.h.
 
-#include "coop/balance_sync.h"
+#include "coop/world/balance_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

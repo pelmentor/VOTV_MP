@@ -10,7 +10,7 @@
 
 #include "event_dispatch.h"  // co-located private header (src tree, not include/)
 
-#include "coop/balance_sync.h"
+#include "coop/world/balance_sync.h"
 #include "coop/chat_feed.h"
 #include "coop/ini_config.h"  // IsIniKeyTrue -- v86 Path 1c JOIN-WINDOW CLOSED hands-on cue gate
 #include "coop/interactable_sync.h"

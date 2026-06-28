@@ -6,7 +6,7 @@
 // EX_CallMath SpawnEmitterAtLocation is invisible to our ProcessEvent detour, the firefly trap).
 // Clients replay the emitter via a reflected SpawnEmitterAtLocation (the firefly_sync spawn path).
 
-#include "coop/event_cue_sync.h"
+#include "coop/world/event_cue_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

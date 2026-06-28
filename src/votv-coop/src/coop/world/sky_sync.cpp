@@ -1,7 +1,7 @@
 // coop/sky_sync.cpp -- see coop/sky_sync.h. Host-authoritative night-sky sync (star-dome
 // world rotation + moon phase). A near-verbatim clone of coop/time_sync.cpp.
 
-#include "coop/sky_sync.h"
+#include "coop/world/sky_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

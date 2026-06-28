@@ -2,7 +2,7 @@
 
 #include "coop/dev/add_points.h"
 
-#include "coop/balance_sync.h"
+#include "coop/world/balance_sync.h"
 #include "coop/dev/dev_gate.h"
 #include "ue_wrap/log.h"
 

@@ -1,6 +1,6 @@
 // coop/weather_fog.cpp -- Phase 5W host-authoritative FOG sync. See weather_fog.h.
 
-#include "coop/weather_fog.h"
+#include "coop/world/weather_fog.h"
 
 #include "coop/net/protocol.h"
 #include "ue_wrap/call.h"

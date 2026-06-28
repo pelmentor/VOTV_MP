@@ -1,7 +1,7 @@
 #include "coop/dev/force_weather.h"
 
 #include "coop/net/session.h"
-#include "coop/weather_sync.h"
+#include "coop/world/weather_sync.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 

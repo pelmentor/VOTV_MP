@@ -9,12 +9,12 @@
 #include "coop/element/registry.h"
 
 #include "coop/chat_sync.h"
-#include "coop/event_cue_sync.h"
-#include "coop/firefly_sync.h"
+#include "coop/world/event_cue_sync.h"
+#include "coop/world/firefly_sync.h"
 #include "coop/inventory_pickup_sync.h"
-#include "coop/sky_sync.h"
-#include "coop/time_sync.h"
-#include "coop/weather_sync.h"
+#include "coop/world/sky_sync.h"
+#include "coop/world/time_sync.h"
+#include "coop/world/weather_sync.h"
 
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
