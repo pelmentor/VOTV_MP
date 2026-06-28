@@ -1,8 +1,17 @@
 # Hands-on runbook — variant-1 force-churn verify (2026-06-27)
 
-GOAL: verify **variant-1** (`BindUnboundReCreatesByPosition`) actually re-binds GC-churned save-natives by
-the host-wire save-position — N>0, right native -> right eid. The 14:59 run had N=0 (no real GC churn), so
-variant-1 was never exercised. This forces the churn deterministically via a dev probe.
+> **SUPERSEDED 2026-06-27 (15:24/15:44 runs).** The synthetic `force_save_churn` probe is MOOT: the GATE
+> diagnostic proved the REAL engine mass-purge (15:25:42 / 15:44:41, ~2215 reaped) ALREADY unbinds the chips
+> BEFORE the synthetic probe runs (boundLive=0) -- the real purge IS the churn. New approach: `force_save_churn=0`,
+> let the real save-transfer-join purge churn the natives, and verify the reconcile (now non-one-shot + valve-abort-
+> safe + post-purge-triggered) re-binds them. **The probe + GATE diag stay in the tree (gated, RULE-2-exempt).**
+> The variant-1 verify is now folded into the refactor arc -- see the AS-BUILT ledger in
+> `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md` (step 4b+/7) and
+> [[project-sync-module-refactor-2026-06-27]]. 15:44 result: fix #1 (reconcile-on-valve-abort) VERIFIED in the
+> log; world ended CLEAN (870 piles, 0 orphans); variant-1 N=0 = no churn left anything unbound = a pass.
+
+GOAL (original, for reference): verify **variant-1** (`BindUnboundReCreatesByPosition`) re-binds GC-churned
+save-natives by the host-wire save-position. The synthetic probe below cannot fire (the real purge pre-empts it).
 
 Deployed DLL: build `425633d7` (the sync-refactor arc; D1+D2 closed, force-churn probe). Run
 `tools/deploy-all.ps1` first; hash-verify host+client DLLs == `build\votv-coop\Release\votv-coop.dll`.

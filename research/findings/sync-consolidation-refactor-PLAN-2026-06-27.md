@@ -1,9 +1,28 @@
-# Sync-consolidation refactor — PLAN (on review, 2026-06-27)
+# Sync-consolidation refactor — PLAN + AS-BUILT LEDGER (2026-06-27)
 
-STATUS: **DESIGN / ON REVIEW — do NOT start rewriting until the user reviews this plan.**
-Author: Claude. Supersedes nothing yet; this is the structure design the user asked for
-([[project-sync-module-refactor-2026-06-27]]). Grounded in a 4-agent structural map of the current
-sync layer + the MTA:SA client architecture (`reference/mtasa-blue/`, per RULE 2026-05-28).
+STATUS: **APPROVED + EXECUTION IN PROGRESS (mode: embryonic/fast -- marker-protection lifted, move/fix
+split kept only for bisect).** The FOUNDATION + the D1/D2 fixes are SHIPPED (commits below); the full
+module assembly (SyncRouter / CreateOrAdopt / SyncDestroyQueue / SyncAuthority, props inside) is NOT yet
+started. HEAD `8b85cb2e`, deployed `2D0230013D35481A`, push HELD. Author: Claude. Grounded in a 4-agent
+structural map + the MTA:SA client architecture (`reference/mtasa-blue/`, per RULE 2026-05-28).
+Topic: [[project-sync-module-refactor-2026-06-27]].
+
+### SHIPPED THIS ARC (2026-06-27, 11 commits) -- the AS-BUILT ledger
+| Plan step | Commit | State | Evidence |
+|---|---|---|---|
+| 1 [move] unified actor->eid reverse absorbed into element::Registry (`EidForActor`/`NoteActorRebind`) + `Element::m_saveNative` | `ce132e0d` | **AS-BUILT** (builds; 15:44 binds used it) | registry.cpp/element.cpp/element.h |
+| 1b [fix] D1 enabler: `g_boundMirrorNatives` SET DELETED; `IsBoundMirrorNative` via `Element::IsSaveNative`+liveness | `066d0a49` | **AS-BUILT** (not hands-on-verified for the grab scenario) | prop_element_tracker.cpp:326, save_identity_bind.cpp |
+| 4b [fix] D1 close: reconcile NON-one-shot (`coop/sync/sync_reconcile`, join + steady triggers) | `47384057` | **AS-BUILT** | sync_reconcile.{h,cpp}; remote_prop_spawn.cpp:1304,1477 |
+| 4b+ [fix] reconcile runs on the valve-ABORT path; post-purge steady trigger | `432183ce`,`8b85cb2e` | **fix #1 VERIFIED (15:44 log: variant-1 ran on the abort path)**; fix #2 (post-purge window) AS-BUILT, gate-order bug fixed, NOT yet seen firing | remote_prop_spawn.cpp:1226, sync_reconcile.cpp |
+| 6b [fix] D2: kerfur ghost adopted by STABLE EID not fuzzy position | `df589591` | **AS-BUILT** (not hands-on-verified; the toggle scenario untested) | kerfur_convert.cpp `TakeParkedGhostByEid` |
+| 7 [probe] variant-1 force-churn dev probe + runbook + GATE diag | `425633d7`,`4d6f2afb`,`2033cdb6` | **PARTIAL** -- probe moot (real purge pre-empts the synthetic churn); 15:44 world ended CLEAN (variant-1 N=0=no-churn-needed); fix #1 confirmed | save_identity_bind.cpp `ForceSaveChurnForTest` |
+
+**NOT started** (still future): plan steps 0/2/3/5/8 + the module assembly proper (one `SyncRouter`,
+`CreateOrAdopt` collision-reconcile, `SyncDestroyQueue` deferred funnel, `SyncAuthority` relay, props
+moved inside). The reconcile engine (`coop/sync/sync_reconcile`) is the ONLY module piece born so far.
+
+The plan/design below is RETAINED as the roadmap for the remaining steps; the step table in §4 is the
+source of truth for what shipped.
 
 ---
 

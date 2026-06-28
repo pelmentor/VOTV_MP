@@ -7,9 +7,16 @@
   (`86bca8cb`).** The re-create is a SPARSE engine-GC subset (~2 of 870), NOT a full array-order batch, so
   resetting the cursor bound the lone re-create to entry[0] = a foreign eid (the black pile). DEAD; §2.5/2.6 are
   the post-mortem (kept for the lesson, NOT the plan).
-- **VARIANT 1 host-wire — BUILT (`54ee4b06`), audit SHIP, deployed `D54AB5B8` (sidecar v2), HANDS-ON PENDING.**
-  The host ships each eid's save-position; the client re-binds the sparse GC-churned natives by an authoritative
-  1cm position match at quiescence (§2.8 = AS-BUILT). Runbook: `research/handson_runbook_2026-06-27_purge_v1_combined.md`.
+- **VARIANT 1 host-wire — BUILT (`54ee4b06`), then ABSORBED INTO THE SYNC-CONSOLIDATION REFACTOR (2026-06-27).**
+  Host ships each eid's save-pos; client re-binds the sparse GC-churned natives by a 1cm position match. ORIGINALLY
+  it ran ONLY in the join-window one-shot sweep, which (a) the >50% valve ABORT skipped on an incomplete snapshot
+  and (b) fired DURING the purge (before re-creates land) -> N=0, never exercised. The refactor FIXED both: the
+  identity reconcile now runs on the valve-abort path too AND has a post-purge steady trigger
+  (`coop/sync/sync_reconcile`, commits `47384057`/`432183ce`/`8b85cb2e`). 15:44 hands-on: reconcile-on-valve-abort
+  VERIFIED (variant-1 ran, log `position re-bind pass`); world ended CLEAN (870 piles, 0 orphans); variant-1 N=0 =
+  no native left unbound = a pass. **CURRENT HOME: `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md`
+  (step 4b+/7) + [[project-sync-module-refactor-2026-06-27]].** The `force_save_churn` synthetic probe is MOOT (the
+  real purge pre-empts it) -- see the superseded runbook banner.
 - **b3 is INNOCENT** (proven below); never rolled back.
 
 This is a pre-existing fragility ([[feedback-snapshot-before-state-ready]] / [[feedback-recurring-bug-is-architectural]] /

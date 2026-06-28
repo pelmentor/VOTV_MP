@@ -121,6 +121,17 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 **Durable facts (survive the redesign):**
 - **chipPile is KEYLESS** — `setKey` is a no-op; the only identity is the host-minted eid. **[V/RD]**
   Caught by the seed-walk keyless-pile lane (`IsChipPile`) → connect snapshot / R1 re-seed. **[V]**
+- **IDENTITY MECHANISM UPDATE (2026-06-27, sync-consolidation refactor) [RD]:** (1) "is this actor a
+  bound save-loaded native" (`IsBoundMirrorNative`) now resolves `actor → eid` via the unified
+  `element::Registry::EidForActor` reverse → `Element::IsSaveNative()` + liveness. The old
+  `g_boundMirrorNatives` actor-keyed SET is DELETED — the flag now lives WITH the identity (the Element),
+  so it can never read stale relative to the binding (was the 15:01:49 D1 root). (2) The join reconcile
+  (twin-retire / variant-1 position re-bind / b3) is NO LONGER a join-window one-shot: it lives in
+  `coop/sync/sync_reconcile::RunIdentityReconcile`, driven by the join sweep AND a steady trigger
+  (`OnReconcileTick`: pending-twin/b3 work OR a 6s post-purge window) AND the >50% valve-ABORT path. So a
+  save-pile grabbed/moved in steady state, and the GC-churned natives a mass-purge re-creates, both have a
+  consumer. Commits `ce132e0d`/`066d0a49`/`47384057`/`432183ce`/`8b85cb2e`. AS-BUILT (fix #1 valve-abort
+  path VERIFIED 15:44; the rest not yet hands-on-verified). See [[project-sync-module-refactor-2026-06-27]].
 - **VERIFIED mechanic (bytecode):** `actorChipPile_C` = CARRY-AND-THROW (E → `playerGrabbed` spawns a
   clump in hand + destroys the pile; the clump re-piles on its **2nd ground contact** at the clump's
   **sphere-traced RESTING point** — NOT `lastPos`, NOT the source pile pos → why proximity was doomed).
