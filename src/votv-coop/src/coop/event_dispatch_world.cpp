@@ -64,7 +64,7 @@ bool VerifySenderEidRange(int senderPeerSlot,
     return true;
 }
 
-void HandleWorldEvent(net::Session& session,
+bool HandleWorldEvent(net::Session& session,
                       const net::Session::ReliableMessage& msg) {
     switch (msg.kind) {
     case net::ReliableKind::FireflySpawn: {
@@ -342,8 +342,9 @@ void HandleWorldEvent(net::Session& session,
         break;
     }
     default:
-        break;  // not a world-family kind (caller routes only family members)
+        return false;  // not a world-family kind -> event_feed tries the next family
     }
+    return true;  // a world-family kind was matched (processed or validation-dropped)
 }
 
 }  // namespace coop::event_feed

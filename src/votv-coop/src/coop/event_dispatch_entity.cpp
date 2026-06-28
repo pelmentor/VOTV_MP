@@ -30,7 +30,7 @@
 
 namespace coop::event_feed {
 
-void HandleEntityEvent(net::Session& session,
+bool HandleEntityEvent(net::Session& session,
                        const net::Session::ReliableMessage& msg,
                        void* localPlayer) {
     (void)session;
@@ -656,8 +656,9 @@ void HandleEntityEvent(net::Session& session,
         break;
     }
     default:
-        break;  // not an entity-family kind (caller routes only family members)
+        return false;  // not an entity-family kind -> event_feed tries the next family
     }
+    return true;  // an entity-family kind was matched (processed or validation-dropped)
 }
 
 }  // namespace coop::event_feed

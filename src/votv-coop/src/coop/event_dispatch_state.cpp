@@ -37,7 +37,7 @@
 
 namespace coop::event_feed {
 
-void HandleStateEvent(net::Session& session,
+bool HandleStateEvent(net::Session& session,
                       const net::Session::ReliableMessage& msg,
                       void* localPlayer) {
     switch (msg.kind) {
@@ -774,8 +774,9 @@ void HandleStateEvent(net::Session& session,
         break;
     }
     default:
-        break;  // not a state-family kind (caller routes only family members)
+        return false;  // not a state-family kind -> event_feed tries the next family
     }
+    return true;  // a state-family kind was matched (processed or validation-dropped)
 }
 
 }  // namespace coop::event_feed

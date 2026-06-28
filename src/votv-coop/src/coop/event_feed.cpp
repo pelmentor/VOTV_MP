@@ -109,9 +109,11 @@ void Update(net::Session& session, void* localPlayer) {
         g_lastConnectedBySlot[slot] = slotConnected;
     }
 
-    // Drain delivered reliable messages. The switch is the ONE kind->handler
-    // table; the three Handle*Event families re-switch internally on msg.kind
-    // (see event_dispatch.h for the family membership).
+    // Drain delivered reliable messages. The switch handles the inline special
+    // cases (handshake / dev-key / snapshot / balance) explicitly; everything
+    // else falls to the default, which chains the three Handle*Event family
+    // routers (each returns true iff it owns msg.kind -- the family's own switch
+    // is the single membership declaration; see event_dispatch.h).
     net::Session::ReliableMessage msg;
     while (session.TryGetReliable(msg)) {
         switch (msg.kind) {
@@ -159,22 +161,6 @@ void Update(net::Session& session, void* localPlayer) {
                 // joiner setting g_worldReadyAnnounced + posting its own "Joined <host>'s game".
                 coop::player_handshake::OnClientWorldReady(msg.senderPeerSlot);
             }
-            break;
-        }
-
-        // ---- entity lifecycle + held items (event_dispatch_entity.cpp) ----
-        case net::ReliableKind::PropRelease:
-        case net::ReliableKind::PropSpawn:
-        case net::ReliableKind::PropDestroy:
-        case net::ReliableKind::PropConvert:
-        case net::ReliableKind::PropSnapPos:        // b3 (v90): join-window save-authoritative pile position correction
-        case net::ReliableKind::PropStickState:
-        case net::ReliableKind::EntitySpawn:
-        case net::ReliableKind::EntityDestroy:
-        case net::ReliableKind::WorldActorSpawn:    // v80 (B3b): non-Character event-actor lifecycle
-        case net::ReliableKind::WorldActorDestroy:
-        case net::ReliableKind::ItemActivate: {
-            HandleEntityEvent(session, msg, localPlayer);
             break;
         }
 
@@ -449,65 +435,6 @@ void Update(net::Session& session, void* localPlayer) {
             break;
         }
 
-        // ---- keyed device state (event_dispatch_state.cpp) ----
-        case net::ReliableKind::DoorState:
-        case net::ReliableKind::LightState:
-        case net::ReliableKind::ContainerState:
-        case net::ReliableKind::GarageDoorState:
-        case net::ReliableKind::ApplianceState:
-        case net::ReliableKind::LockerDoorState:
-        case net::ReliableKind::KeypadState:
-        case net::ReliableKind::PowerControlState:
-        case net::ReliableKind::AtvState:
-        case net::ReliableKind::AtvRelease:
-        case net::ReliableKind::AtvSpawn:
-        case net::ReliableKind::AtvDestroy:
-        case net::ReliableKind::DroneState:
-        case net::ReliableKind::OrderRequest:
-        case net::ReliableKind::WindowCleanState:
-        case net::ReliableKind::GrimeState:
-        case net::ReliableKind::TrashPileState:
-        case net::ReliableKind::TurbineState:
-        case net::ReliableKind::DeviceClaim:
-        case net::ReliableKind::SkySignalState:
-        case net::ReliableKind::SkySignalCatch:
-        case net::ReliableKind::DeskState:
-        case net::ReliableKind::DishAimState:
-        case net::ReliableKind::EmailAppend:
-        case net::ReliableKind::EmailDelete:
-        case net::ReliableKind::SavedSignalAppend:
-        case net::ReliableKind::SavedSignalDelete:
-        case net::ReliableKind::CompState:
-        case net::ReliableKind::CompData:
-        case net::ReliableKind::VoiceState:
-        case net::ReliableKind::DoorOpenRequest:
-        case net::ReliableKind::KerfurConvertRequest:
-        case net::ReliableKind::KerfurConvert:  // v78 host->all kerfur form-transition broadcast (client apply)
-        case net::ReliableKind::KerfurCommand:  // v74 host-authoritative kerfur menu command relay
-        case net::ReliableKind::DeskLogLine:   // v70 (route fix 2026-06-13: missed at ship -- the idle smokes never exercised the wire)
-        case net::ReliableKind::SleepState:    // v71
-        case net::ReliableKind::PlayerInventoryBlob:  // v73 per-player inventory stream
-        case net::ReliableKind::GrabIntent:    // v84 CLIENT->HOST chipPile grab request (Increment 2)
-        case net::ReliableKind::ThrowIntent:   // v84 STAGED CLIENT->HOST clump throw
-        case net::ReliableKind::PileResyncRequest: {  // v84 STAGED CLIENT->HOST drain-resync
-            HandleStateEvent(session, msg, localPlayer);
-            break;
-        }
-
-        // ---- ambient / world events (event_dispatch_world.cpp) ----
-        case net::ReliableKind::FireflySpawn:
-        case net::ReliableKind::EventCue:        // v79 host-auth cosmetic emitter cue (starfall etc.)
-        case net::ReliableKind::InventoryPickup:
-        case net::ReliableKind::ChatMessage:
-        case net::ReliableKind::TimeSync:
-        case net::ReliableKind::SkyState:
-        case net::ReliableKind::RedSky:
-        case net::ReliableKind::LightningStrike:
-        case net::ReliableKind::WeatherState: {
-            HandleWorldEvent(session, msg);
-            break;
-        }
-
         case net::ReliableKind::AssignPeerSlot: {
             coop::player_handshake::HandleAssignPeerSlot(session, msg);
             break;
@@ -518,6 +445,19 @@ void Update(net::Session& session, void* localPlayer) {
             break;
         }
         default: {
+            // ---- the family routers (event_dispatch_{entity,state,world}.cpp) ----
+            // SyncRouter consolidation (2026-06-28): the explicit family case-label
+            // lists that used to sit in THIS switch were one of three places a new
+            // ReliableKind had to be wired (enum + here + the family's own switch),
+            // the documented 3-place hazard ([[feedback-reliablekind-router-checklist]]).
+            // Each Handle*Event now returns true iff msg.kind is in its family
+            // (processed or validation-dropped), so the family switch IS the single
+            // membership declaration; we just chain them. The inline special cases
+            // above (Join/Balance/Teleport/Wisp/Snapshot/handshake) are disjoint from
+            // every family and take priority via their own case labels.
+            if (HandleEntityEvent(session, msg, localPlayer)) break;
+            if (HandleStateEvent(session, msg, localPlayer)) break;
+            if (HandleWorldEvent(session, msg)) break;
             // Audit-fix 2026-05-25 LATE +5h: log-and-drop unknown ReliableKind
             // values instead of silently discarding. A peer running a newer
             // protocol could send a kind we don't yet handle; this surfaces

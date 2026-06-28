@@ -10,9 +10,13 @@
 //
 // Each Handle* function re-switches on msg.kind and contains the FULL original
 // case body: payload-length check, trust-boundary validation (sender slot/role
-// gates, finite/bounds checks, eid range), and the module dispatch. Kinds outside
-// the family fall through their internal switch as no-ops (callers route only
-// family members).
+// gates, finite/bounds checks, eid range), and the module dispatch. Each RETURNS
+// true if msg.kind is in its family (whether processed or validation-dropped),
+// false otherwise -- so event_feed's drain chains them (entity -> state -> world)
+// and a kind no family claims falls to the unknown-kind log. This makes each
+// family's own switch the SINGLE membership declaration: the old parallel
+// case-label lists in event_feed.cpp were the 3-place ReliableKind wiring hazard
+// (a new kind needed enum + here + the family switch). Now: enum + family switch.
 
 #pragma once
 
@@ -32,7 +36,7 @@ bool VerifySenderEidRange(int senderPeerSlot, uint32_t senderElementId,
 // Entity lifecycle + held-item family: PropRelease, PropSpawn, PropDestroy,
 // PropConvert, EntitySpawn, EntityDestroy, ItemActivate.
 // `localPlayer` threads into remote_prop for held-grab release / destroy safety.
-void HandleEntityEvent(net::Session& session,
+bool HandleEntityEvent(net::Session& session,
                        const net::Session::ReliableMessage& msg,
                        void* localPlayer);
 
@@ -41,13 +45,13 @@ void HandleEntityEvent(net::Session& session,
 // PowerControlState, AtvState, DroneState, OrderRequest, WindowCleanState,
 // GrimeState, TrashPileState, DoorOpenRequest, KerfurConvert (v78 client apply).
 // `localPlayer` threads into the KerfurConvert client apply (prop teardown/materialize).
-void HandleStateEvent(net::Session& session,
+bool HandleStateEvent(net::Session& session,
                       const net::Session::ReliableMessage& msg,
                       void* localPlayer);
 
 // Ambient / world-event family: FireflySpawn, InventoryPickup, TimeSync,
 // SkyState, RedSky, LightningStrike, WeatherState.
-void HandleWorldEvent(net::Session& session,
+bool HandleWorldEvent(net::Session& session,
                       const net::Session::ReliableMessage& msg);
 
 }  // namespace coop::event_feed
