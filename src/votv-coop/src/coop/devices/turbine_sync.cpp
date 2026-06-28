@@ -1,6 +1,6 @@
 // coop/turbine_sync.cpp -- see coop/turbine_sync.h.
 
-#include "coop/turbine_sync.h"
+#include "coop/devices/turbine_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

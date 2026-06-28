@@ -1,6 +1,6 @@
 // coop/device_occupancy.cpp -- see coop/device_occupancy.h.
 
-#include "coop/device_occupancy.h"
+#include "coop/devices/device_occupancy.h"
 
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"

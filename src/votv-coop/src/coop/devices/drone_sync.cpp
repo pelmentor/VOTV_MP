@@ -6,7 +6,7 @@
 // Singleton (no key) -> the sky_sync host-auth push shape (host streams; client applies; host
 // early-returns) + the atv_sync LerpWindow interp. No index (one drone).
 
-#include "coop/drone_sync.h"
+#include "coop/devices/drone_sync.h"
 
 #include "coop/lerp_window.h"
 #include "coop/net/protocol.h"

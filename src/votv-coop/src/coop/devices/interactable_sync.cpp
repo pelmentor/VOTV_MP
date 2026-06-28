@@ -11,7 +11,7 @@
 // kind->Channel router, the client E-press observer, and the Install/Tick/... facade
 // the net-pump + event_feed call. Adding a feature is an adapter + a few lines here.
 
-#include "coop/interactable_sync.h"
+#include "coop/devices/interactable_sync.h"
 #include "coop/interactable_channel.h"  // the generic engine: Adapter + Channel (+ ProbeLog, R alias, WireKey usings)
 
 #include "ue_wrap/appliance.h"     // the 6-class save-actor toggle family (faucet/sink/shower/kitchen/serverBox/wallunit_tapes)

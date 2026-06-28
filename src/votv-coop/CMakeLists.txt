@@ -215,25 +215,25 @@ add_library(votv-coop SHARED
     src/coop/event_dispatch_state.cpp
     src/coop/event_dispatch_world.cpp
     src/coop/social/chat_sync.cpp
-    src/coop/turbine_sync.cpp
-    src/coop/interactable_sync.cpp
+    src/coop/devices/turbine_sync.cpp
+    src/coop/devices/interactable_sync.cpp
     src/coop/kerfur_convert.cpp
     src/coop/kerfur_command.cpp
     src/coop/kerfur_menu_input.cpp
     src/coop/kerfur_entity.cpp
     src/coop/kerfur_prop_adoption.cpp
     src/coop/kerfur_reconcile.cpp
-    src/coop/keypad_sync.cpp
+    src/coop/devices/keypad_sync.cpp
     src/coop/world/time_sync.cpp
     src/coop/world/sky_sync.cpp
-    src/coop/power_sync.cpp
-    src/coop/atv_sync.cpp
-    src/coop/drone_sync.cpp
-    src/coop/order_sync.cpp
+    src/coop/devices/power_sync.cpp
+    src/coop/devices/atv_sync.cpp
+    src/coop/devices/drone_sync.cpp
+    src/coop/devices/order_sync.cpp
     src/coop/world/firefly_sync.cpp
     src/coop/world/event_cue_sync.cpp
-    src/coop/window_sync.cpp
-    src/coop/grime_sync.cpp
+    src/coop/devices/window_sync.cpp
+    src/coop/devices/grime_sync.cpp
     src/coop/player_handshake.cpp
     src/coop/grab_observer.cpp
     src/coop/social/item_activate.cpp
@@ -303,10 +303,10 @@ add_library(votv-coop SHARED
     src/coop/net_pump.cpp
     src/coop/subsystems.cpp
     src/coop/local_streams.cpp
-    src/coop/device_occupancy.cpp
-    src/coop/console_state_sync.cpp
-    src/coop/signal_catch_sync.cpp
-    src/coop/sleep_sync.cpp
+    src/coop/devices/device_occupancy.cpp
+    src/coop/devices/console_state_sync.cpp
+    src/coop/devices/signal_catch_sync.cpp
+    src/coop/devices/sleep_sync.cpp
     src/coop/social/wisp_attack_sync.cpp
     src/coop/social/wisp_tear_mirror.cpp
     src/coop/social/player_inventory_sync.cpp
@@ -314,9 +314,9 @@ add_library(votv-coop SHARED
     src/ue_wrap/inventory.cpp
     src/coop/social/email_sync.cpp
     src/coop/blob_chunks.cpp
-    src/coop/signal_wire.cpp
-    src/coop/signal_sync.cpp
-    src/coop/comp_sync.cpp
+    src/coop/devices/signal_wire.cpp
+    src/coop/devices/signal_sync.cpp
+    src/coop/devices/comp_sync.cpp
     src/coop/voice/voice_chat.cpp
     src/coop/voice/voice_capture.cpp
     src/coop/voice/voice_playback.cpp

@@ -1,10 +1,10 @@
 // coop/comp_sync.cpp -- see coop/comp_sync.h.
 
-#include "coop/comp_sync.h"
+#include "coop/devices/comp_sync.h"
 
 #include "coop/blob_chunks.h"
 #include "coop/net/session.h"
-#include "coop/signal_wire.h"
+#include "coop/devices/signal_wire.h"
 
 #include "ue_wrap/console_desk.h"
 #include "ue_wrap/log.h"

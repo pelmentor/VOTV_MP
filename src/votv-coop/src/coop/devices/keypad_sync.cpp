@@ -61,7 +61,7 @@
 // it is a separate module rather than another toggle Adapter (RULE 2: forcing it into the
 // toggle Channel is what produced the v31 fail-cycle).
 
-#include "coop/keypad_sync.h"
+#include "coop/devices/keypad_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

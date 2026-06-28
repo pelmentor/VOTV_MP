@@ -1,6 +1,6 @@
 // coop/sleep_sync.cpp -- see coop/sleep_sync.h.
 
-#include "coop/sleep_sync.h"
+#include "coop/devices/sleep_sync.h"
 
 #include "coop/social/chat_feed.h"
 #include "coop/net/session.h"

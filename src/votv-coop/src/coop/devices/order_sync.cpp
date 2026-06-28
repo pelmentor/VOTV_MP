@@ -8,7 +8,7 @@
 // HOST: assembles the chunks per (senderSlot, orderId), then commits a completed order via the native
 // makeAnOrder (ue_wrap::order_economy) -- which queues + flies + natively drains. All GT-only.
 
-#include "coop/order_sync.h"
+#include "coop/devices/order_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

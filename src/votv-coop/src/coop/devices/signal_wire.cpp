@@ -1,6 +1,6 @@
 // coop/signal_wire.cpp -- see header.
 
-#include "coop/signal_wire.h"
+#include "coop/devices/signal_wire.h"
 
 #include "coop/blob_chunks.h"
 

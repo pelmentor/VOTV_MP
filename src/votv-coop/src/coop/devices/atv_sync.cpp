@@ -8,7 +8,7 @@
 // blueprint). The index/poll/connect-snapshot shape follows the keyed-interactable modules
 // (power_sync/keypad_sync); the per-ATV LerpWindow interp follows element::Npc's pose drive.
 
-#include "coop/atv_sync.h"
+#include "coop/devices/atv_sync.h"
 
 #include "coop/lerp_window.h"
 #include "coop/net/protocol.h"

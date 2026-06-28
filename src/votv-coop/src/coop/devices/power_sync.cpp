@@ -8,7 +8,7 @@
 // is why it is a separate module rather than another toggle Adapter (the generic Channel is one
 // bool per key; 5 bools per actor don't fit -- RULE 2, same call the keypad made).
 
-#include "coop/power_sync.h"
+#include "coop/devices/power_sync.h"
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"

@@ -15,7 +15,7 @@
 // (window_sync + grime_sync are now two near-identical keyed-float channels; if a third appears,
 // generalize into a shared Adapter+Channel the way interactable_sync did for its 3 bool features.)
 
-#include "coop/grime_sync.h"
+#include "coop/devices/grime_sync.h"
 
 #include "coop/ini_config.h"
 #include "coop/net/protocol.h"

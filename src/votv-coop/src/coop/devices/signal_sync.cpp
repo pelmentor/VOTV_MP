@@ -1,10 +1,10 @@
 // coop/signal_sync.cpp -- see coop/signal_sync.h.
 
-#include "coop/signal_sync.h"
+#include "coop/devices/signal_sync.h"
 
 #include "coop/blob_chunks.h"
 #include "coop/net/session.h"
-#include "coop/signal_wire.h"
+#include "coop/devices/signal_wire.h"
 
 #include "ue_wrap/log.h"
 #include "ue_wrap/saved_signals.h"

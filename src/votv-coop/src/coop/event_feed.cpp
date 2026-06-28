@@ -13,7 +13,7 @@
 #include "coop/world/balance_sync.h"
 #include "coop/social/chat_feed.h"
 #include "coop/ini_config.h"  // IsIniKeyTrue -- v86 Path 1c JOIN-WINDOW CLOSED hands-on cue gate
-#include "coop/interactable_sync.h"
+#include "coop/devices/interactable_sync.h"
 #include "coop/join_curtain.h"  // instant-world SEAM 1: the short curtain (Show at SnapshotBegin / dismiss at Complete)
 #include "coop/join_progress.h"
 #include "coop/mirror_defer.h"  // instant-world SEAM 2+3: arm deferred-hide / reveal-confirmed at the lift

@@ -11,7 +11,7 @@
 // locally), so a SYMMETRIC min-wins poll converges with no oscillation -- the simplest
 // correct model (Agent A's design verdict).
 
-#include "coop/window_sync.h"
+#include "coop/devices/window_sync.h"
 
 #include "coop/ini_config.h"
 #include "coop/net/protocol.h"

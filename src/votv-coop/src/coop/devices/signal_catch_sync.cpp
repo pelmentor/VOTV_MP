@@ -1,9 +1,9 @@
 // coop/signal_catch_sync.cpp -- see coop/signal_catch_sync.h.
 
-#include "coop/signal_catch_sync.h"
+#include "coop/devices/signal_catch_sync.h"
 
-#include "coop/console_state_sync.h"
-#include "coop/device_occupancy.h"
+#include "coop/devices/console_state_sync.h"
+#include "coop/devices/device_occupancy.h"
 #include "coop/net/session.h"
 
 #include "ue_wrap/console_desk.h"
