@@ -328,6 +328,10 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     void* const localNow = coop::players::Registry::Get().Local();
     const bool worldUp = (localNow != nullptr);
 
+    // [dev] reseed_orphan_selftest: deterministic in-process proof of the 09:54 re-seed-orphan fix above.
+    // Self-gated (one-shot, latches only once a live chipPile native exists) -> cheap no-op otherwise.
+    if (worldUp) coop::save_identity_bind::RunReseedOrphanSelfTest();
+
     // Pose-apply diagnostic (lag hunt 2026-06-06): the wire is proven clean (net-diag), so
     // measure the APPLY side. Per remote puppet, accumulate the FRESH-pose count (isNew/sec)
     // and the latest stream target below, then log once/sec the target vs the puppet's rendered

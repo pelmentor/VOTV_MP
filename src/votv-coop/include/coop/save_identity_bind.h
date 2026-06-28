@@ -72,6 +72,16 @@ int BindUnboundReCreatesByPosition();
 // native to the right eid. One-shot (latched). No-op unless the flag is set. Game thread (the sweep tick).
 void ForceSaveChurnForTest();
 
+// DEV SELF-TEST (gated [dev] reseed_orphan_selftest=1, one-shot, runs wherever live chipPile natives exist --
+// the host's s_1234 load). Deterministically reproduces the 09:54 re-seed-orphan race IN-PROCESS on a real
+// save-native actor -- no save-transfer-join, no rendering, so it CANNOT false-green the way a clean smoke does.
+// Self-arms a 1-entry map at a live native's position, binds it to a free host eid, Takes the Element + enqueues
+// it deferred (the reaper's Take-but-not-Flushed window), then runs the fix sequence (ElementDeleter::Flush ->
+// ReSeedKnownKeyedProps -> BindUnboundReCreatesByPosition) and asserts the churned native is RE-BOUND to its host
+// eid (not orphaned). Logs `VERDICT=PASS/FAIL`; restores the subject native after. Returns true on PASS. Requires
+// save_identity_bind=1. Game thread. [[feedback-rule2-exempts-probes-diagnostics-tools]]
+bool RunReseedOrphanSelfTest();
+
 // CLIENT session end (save_transfer::OnDisconnect): drop the map + both per-family lists/cursors + the
 // bound-native guard set.
 void OnDisconnect();

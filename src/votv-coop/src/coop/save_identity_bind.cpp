@@ -3,6 +3,7 @@
 #include "coop/save_identity_bind.h"
 
 #include "coop/element/element.h"          // Element, ElementId, kInvalidId
+#include "coop/element/element_deleter.h"  // reseed_orphan_selftest: Enqueue/Flush (reproduce the Take-but-not-Flushed race)
 #include "coop/element/mirror_manager.h"   // MirrorManager<Prop>::Take (force_save_churn probe unbind)
 #include "coop/element/prop.h"             // coop::element::Prop (MirrorManager<Prop>)
 #include "coop/element/registry.h"         // Registry::Get().Get(eid)
@@ -339,6 +340,96 @@ void ForceSaveChurnForTest() {
     if (churned)
         UE_LOGW("save_identity_bind: [force_save_churn] unbound %d save-native(s) before the sweep -- expect "
                 "%d 'RE-BIND by position' line(s) next", churned, churned);
+}
+
+bool RunReseedOrphanSelfTest() {
+    static const bool s_on = coop::ini_config::IsIniKeyTrue("reseed_orphan_selftest");
+    static bool s_done = false;
+    if (!s_on || s_done) return false;
+    if (!IsEnabled()) {
+        UE_LOGW("save_identity_bind: [reseed_orphan_selftest] requires save_identity_bind=1 (variant-1 gates on it) -- skipping");
+        s_done = true;
+        return false;
+    }
+    namespace EL = coop::element;
+
+    // 1. Find a real live UNBOUND chipPile native (a host's own local pile) as the subject. Retry next tick if
+    //    the world's piles haven't loaded yet (do NOT latch s_done until we actually have a subject).
+    void* native = nullptr; int32_t nativeIdx = -1; ue_wrap::FVector pos{};
+    const int32_t n = R::NumObjects();
+    for (int32_t i = 0; i < n; ++i) {
+        void* o = R::ObjectAt(i);
+        if (!o || !R::IsLive(o)) continue;
+        if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;
+        if (!ue_wrap::prop::IsChipPile(o)) continue;
+        if (PT::IsBoundMirrorNative(o)) continue;  // never disturb an already-bound native
+        native = o; nativeIdx = R::InternalIndexOf(o);
+        pos = ue_wrap::engine::GetActorLocation(o);
+        break;
+    }
+    if (!native) return false;  // piles not loaded yet -> retry next tick
+    s_done = true;              // we have a subject; this is the one real run
+
+    // 2. Pick a free host-range eid for the synthetic bind.
+    EL::ElementId hostEid = EL::kInvalidId;
+    for (EL::ElementId cand = 32000; cand > 1; --cand) {
+        if (EL::Registry::Get().Get(cand) == nullptr) { hostEid = cand; break; }
+    }
+    if (hostEid == EL::kInvalidId) {
+        UE_LOGW("save_identity_bind: [reseed_orphan_selftest] no free host-range eid -- skipping");
+        return false;
+    }
+
+    // 3. Self-arm a 1-entry map (the native's CURRENT position -> hostEid) + BIND the native (host-range mirror).
+    {
+        std::lock_guard<std::mutex> lk(g_mu);  // BindLocalNativeToHostEid_ contract: caller holds g_mu
+        g_chipEntries.clear(); g_kerfurEntries.clear();
+        MAP::IdEntry e{};
+        e.eid      = static_cast<uint32_t>(hostEid);
+        e.family   = static_cast<uint8_t>(MAP::Family::ChipPile);
+        e.index    = 0;
+        e.savePosX = pos.X; e.savePosY = pos.Y; e.savePosZ = pos.Z;
+        g_chipEntries.push_back(e);
+        g_armed = true; g_chipCursor = 0;
+        BindLocalNativeToHostEid_(native, hostEid, MAP::Family::ChipPile, 0);
+    }
+    const bool boundOK = (EL::Registry::Get().Get(hostEid) != nullptr) && PT::IsBoundMirrorNative(native);
+
+    // 4. CHURN: Take the mirror Element + enqueue it DEFERRED -- exactly the reaper's Take-but-not-Flushed window
+    //    (the Element is gone from the manager, but ~Element/reverse-clear is pending until Flush).
+    auto taken = EL::MirrorManager<EL::Prop>::Instance().Take(hostEid);
+    const bool tookIt = (taken != nullptr);
+    if (tookIt) EL::ElementDeleter::Get().Enqueue(std::move(taken));
+    const EL::ElementId eidBeforeFlush = EL::Registry::Get().EidForActor(native);  // STALE: still maps -> the race
+
+    // 5. THE FIX SEQUENCE (mirrors net_pump's purge-drain re-seed edge): (a) Flush settles the reverse, then the
+    //    re-seed, then (b) variant-1 re-binds the now-unbound native by its save-time position.
+    EL::ElementDeleter::Get().Flush();
+    const EL::ElementId eidAfterFlush = EL::Registry::Get().EidForActor(native);   // expect kInvalid (settled)
+    PT::ReSeedKnownKeyedProps();                  // re-seeds the unbound native as a fresh local (the GC-recreate analog)
+    const int rebound = BindUnboundReCreatesByPosition();  // (b): re-bind by position
+
+    // 6. VERDICT: the churned native must be RE-BOUND to hostEid as a host-range mirror = no orphan.
+    const EL::ElementId finalEid = EL::Registry::Get().EidForActor(native);
+    const bool reboundOK = (finalEid == hostEid) && PT::IsBoundMirrorNative(native);
+    UE_LOGW("save_identity_bind: [reseed_orphan_selftest] native=%p idx=%d @pos=(%.1f,%.1f,%.1f) hostEid=%u | "
+            "bound=%d took=%d eidBeforeFlush=%u(stale) eidAfterFlush=%u(settled) rebound=%d finalEid=%u | VERDICT=%s",
+            native, nativeIdx, pos.X, pos.Y, pos.Z, static_cast<unsigned>(hostEid),
+            boundOK ? 1 : 0, tookIt ? 1 : 0, static_cast<unsigned>(eidBeforeFlush),
+            static_cast<unsigned>(eidAfterFlush), rebound, static_cast<unsigned>(finalEid),
+            reboundOK ? "PASS (churned save-native re-bound by position AT the re-seed -- 09:54 orphan closed)"
+                      : "FAIL (native orphaned -- re-seed-orphan NOT closed)");
+
+    // 7. RESTORE: drop the synthetic test binding so the host world returns to normal (native re-seeds as a local).
+    {
+        auto cleanup = EL::MirrorManager<EL::Prop>::Instance().Take(hostEid);
+        if (cleanup) EL::ElementDeleter::Get().Enqueue(std::move(cleanup));
+        EL::ElementDeleter::Get().Flush();
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_chipEntries.clear(); g_kerfurEntries.clear(); g_armed = false; g_chipCursor = 0;
+    }
+    PT::ReSeedKnownKeyedProps();  // re-mark the subject native as a normal host local
+    return reboundOK;
 }
 
 void OnDisconnect() {
