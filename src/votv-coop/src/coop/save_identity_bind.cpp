@@ -301,11 +301,23 @@ int BindUnboundReCreatesByPosition() {
 
 void ForceSaveChurnForTest() {
     static const bool s_on = coop::ini_config::IsIniKeyTrue("force_save_churn");
-    if (!s_on) return;
     static bool s_done = false;
     if (s_done) return;  // one-shot: churn once, just before the quiescence sweep
+    s_done = true;
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_armed) return;
+    // DIAGNOSTIC (unconditional): the 15:12 run produced ZERO churn -- log every gate so the next run pins
+    // which one failed (flag read / armed / how many chip eids are bound+live at this instant).
+    int boundLive = 0;
+    for (const MAP::IdEntry& e : g_chipEntries) {
+        if (e.eid == 0u || e.eid == coop::element::kInvalidId) continue;
+        coop::element::Element* el =
+            coop::element::Registry::Get().Get(static_cast<coop::element::ElementId>(e.eid));
+        void* actor = el ? el->GetActor() : nullptr;
+        if (actor && R::IsLive(actor)) ++boundLive;
+    }
+    UE_LOGW("save_identity_bind: [force_save_churn] GATE -- flag=%d armed=%d chipEntries=%zu boundLive=%d",
+            s_on ? 1 : 0, g_armed ? 1 : 0, g_chipEntries.size(), boundLive);
+    if (!s_on || !g_armed) return;
     constexpr int kChurnN = 3;
     int churned = 0;
     for (const MAP::IdEntry& e : g_chipEntries) {
@@ -324,7 +336,6 @@ void ForceSaveChurnForTest() {
                 "-- synthetic GC churn; variant-1 must re-bind it by position",
                 static_cast<unsigned>(e.eid), actor, e.savePosX, e.savePosY, e.savePosZ);
     }
-    s_done = true;
     if (churned)
         UE_LOGW("save_identity_bind: [force_save_churn] unbound %d save-native(s) before the sweep -- expect "
                 "%d 'RE-BIND by position' line(s) next", churned, churned);
