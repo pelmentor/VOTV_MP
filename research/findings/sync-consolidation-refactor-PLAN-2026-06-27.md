@@ -21,6 +21,28 @@ Topic: [[project-sync-module-refactor-2026-06-27]].
 `CreateOrAdopt` collision-reconcile, `SyncDestroyQueue` deferred funnel, `SyncAuthority` relay, props
 moved inside). The reconcile engine (`coop/sync/sync_reconcile`) is the ONLY module piece born so far.
 
+### OPEN SYMPTOMS seen 2026-06-28 (DO NOT FIX NOW -- verify-after-assembly)
+Decided 2026-06-28: the hands-on D1/D2 check was PREMATURE -- the module is half-moved (reconcile/bind
+partly in `coop/sync/`, authority/spawn paths still scattered), so testing the transitional state catches
+under-assembled noise, not real bugs. These three symptoms are RECORDED, not fixed; re-check them AFTER
+the module is fully assembled (gone = transitional noise; remain = real bugs fixed on the whole path):
+1. **Kerfurs TWITCH** -- "want to face both host and client at once" = two authority sources tugging the
+   actor (host pose vs a still-live local predict). The 16:24 client log shows adopt-by-eid WORKED
+   (every toggle `adopted parked ... ghost as PROP/NPC mirror eid=N (by eid)`, zero fuzzy-miss, zero
+   timeout-destroy) -- so this is DOWNSTREAM of adoption, not an adopt failure.
+2. **All kerfurs HANG IN AIR on turn-off** -- the off-form (`prop_kerfurOmega_C`) stays at the NPC death
+   pos (z~6207, standing height) instead of falling/resting. Suspicion: the adopted off-prop is the
+   CLIENT's local ghost (adopted in place at the local predicted pos) bound onto the "held-pose stream"
+   (`kerfur_entity[client]: ... held-pose stream can now carry it`) though nothing holds it -> no pose
+   correction -> frozen where the client spawned it. Worse than the OLD flash (old = timeout-destroy =
+   vanished; new = adopted-but-mispositioned = hangs). Likely the adopt left local physics/authority
+   half-set -- exactly the kind of half-path the assembly (CreateOrAdopt + SyncAuthority, one owner)
+   resolves.
+3. **Piles present on HOST, ABSENT on CLIENT** (disappear). Not yet greps-classified (cancelled mid-grep
+   when the assembly decision was made). Re-grep after assembly.
+HONEST: at JOIN the 16:24 census was CLEAN (6/6 kerfurs, 0 orphans, 242 RE-BIND by position on the abort
+path = fix #1 still good); the symptoms are STEADY-STATE interaction artifacts in the half-assembled state.
+
 The plan/design below is RETAINED as the roadmap for the remaining steps; the step table in §4 is the
 source of truth for what shipped.
 
