@@ -15,7 +15,7 @@
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
-#include "coop/sync/sync_create.h"   // the single NPC mirror create funnel (Inc A)
+#include "coop/element/identity_create.h"   // the single NPC mirror create funnel (Inc A)
 #include "coop/creatures/kerfur_convert.h"  // FindParkedGhostNpcNear -- adopt the client's own turn-on result
 #include "coop/session/mirror_defer.h"  // instant-world: hide a freshly-spawned NPC mirror until lift/quiescence reveal
 #include "coop/net/protocol.h"
@@ -219,7 +219,7 @@ bool AdoptExistingNpcAsMirror(void* actor, uint32_t elementId, const std::wstrin
     // actor (no BeginDeferred/FinishSpawning). The actor is the client's own real game-spawned
     // kerfur -> camera-safe, fully initialized.
     const coop::element::ElementId eid = static_cast<coop::element::ElementId>(elementId);
-    if (!coop::sync::CreateOrAdoptNpcMirror(eid, actor, classW, /*senderSlot=*/-1)) {
+    if (!coop::element::CreateOrAdoptNpcMirror(eid, actor, classW, /*senderSlot=*/-1)) {
         UE_LOGW("npc-mirror[adopt]: CreateOrAdoptNpcMirror(eid=%u) failed for existing actor %p -- leaving it for "
                 "kerfur_convert ghost cleanup", elementId, actor);
         return false;
@@ -344,7 +344,7 @@ bool SpawnFreshNpcMirror(const std::wstring& classW, void* actorClass, uint32_t 
     const coop::element::ElementId eid =
         static_cast<coop::element::ElementId>(elementId);
 
-    if (!coop::sync::CreateOrAdoptNpcMirror(eid, spawned, classW, /*senderSlot=*/-1)) {
+    if (!coop::element::CreateOrAdoptNpcMirror(eid, spawned, classW, /*senderSlot=*/-1)) {
         UE_LOGW("npc-sync[client OnSpawn]: CreateOrAdoptNpcMirror(eid=%u) failed "
                 "(duplicate eid race / Registry collision) -- destroying orphan actor %p",
                 eid, spawned);

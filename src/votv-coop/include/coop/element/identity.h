@@ -1,4 +1,4 @@
-// coop/sync/sync.h -- the consolidated world-sync module facade.
+// coop/element/identity.h -- the entity-identity authority facade (coop::element).
 //
 // THE single conceptual sync engine (sync-consolidation refactor 2026-06-27,
 // research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md). One module,
@@ -40,7 +40,7 @@
 //                           (npc_sync x3, world_actor_sync x2, kerfur_reconcile)
 //                           route through it.
 //   - SEALED Install ...... [Inc C] MirrorManager<T>::Install is now PRIVATE,
-//                           friended to exactly coop::sync::MirrorInstallAccess. A
+//                           friended to exactly coop::element::MirrorInstallAccess. A
 //                           wire mirror can ONLY be bound through sync -- a feature
 //                           file reaching into a manager to Install is a COMPILE
 //                           error ("someone to watch them", enforced not conventional).
@@ -87,7 +87,7 @@
 //
 // RESIDUE -- folding REJECTED on inspection (2026-06-28). The plan floated folding
 // the two world-ptr caches (g_seedWorld in prop_element_tracker vs g_reapWorld in
-// net_pump) + the purge-episode flag into a coop::sync::Tick. Inspection refutes it:
+// net_pump) + the purge-episode flag into a coop::element::Tick. Inspection refutes it:
 // the two caches are CONSCIOUSLY separate -- the seeder's piggybacks the seed walk's
 // existing GUObjectArray iteration (perf audit W-2 forbids a per-walk FindObjectsBy-
 // Class; the 120->60fps lesson), the reaper's is a throttled FindObjectByClass for
@@ -98,6 +98,6 @@
 
 #pragma once
 
-#include "coop/sync/sync_reconcile.h"   // RunIdentityReconcile / OnReconcileTick (the non-one-shot reconcile)
-#include "coop/sync/sync_create.h"      // CreateOrAdopt (the one collision-reconcile create/bind path)
-#include "coop/sync/sync_destroy.h"     // RetireMirror (the one type-dispatched mirror destroy funnel)
+#include "coop/element/identity_reconcile.h"   // RunIdentityReconcile / OnReconcileTick (the non-one-shot reconcile)
+#include "coop/element/identity_create.h"      // CreateOrAdopt (the one collision-reconcile create/bind path)
+#include "coop/element/identity_destroy.h"     // RetireMirror (the one type-dispatched mirror destroy funnel)

@@ -16,7 +16,7 @@
 #include "coop/props/prop_element_tracker.h"
 #include "coop/props/prop_stick_sync.h"  // v68: stuck wall-attachable gates (unstick + release)
 #include "coop/props/remote_prop_spawn.h"
-#include "coop/sync/sync_create.h"  // CreateOrAdoptPropMirror (the prop-mirror bind keystone; RegisterPropMirror forwards)
+#include "coop/element/identity_create.h"  // CreateOrAdoptPropMirror (the prop-mirror bind keystone; RegisterPropMirror forwards)
 #include "coop/props/trash_channel.h"  // docs/piles/08: per-eid sync-time-context (stale carry/convert drop)
 #include "coop/props/trash_clump_pose_stream.h"  // v85: stop the per-eid carry drive at the ToPile land
 #include "coop/props/trash_proxy.h"    // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
@@ -735,7 +735,7 @@ using coop::element::PropMirrors;   // canonical accessor (coop/element/mirror_m
 // OnSpawn to bind a wire-received Prop Element after every successful
 // spawn/converge path.
 // PR-FOUNDATION-3 Inc3 -> sync-consolidation 2026-06-28: the prop-mirror bind body
-// MOVED to coop::sync::CreateOrAdoptPropMirror (the one collision-reconcile create
+// MOVED to coop::element::CreateOrAdoptPropMirror (the one collision-reconcile create
 // path, sync_create.cpp). This stays as the named public entry callers already use
 // (OnSpawn / OnConvert / kerfur materialize); it forwards verbatim. `rebindInPlace`
 // is the morph flag.
@@ -745,7 +745,7 @@ void RegisterPropMirror(coop::element::ElementId eid,
                         const std::wstring& cls,
                         int senderSlot,
                         bool rebindInPlace) {
-    coop::sync::CreateOrAdoptPropMirror(eid, actor, key, cls, senderSlot, rebindInPlace);
+    coop::element::CreateOrAdoptPropMirror(eid, actor, key, cls, senderSlot, rebindInPlace);
 }
 
 // Reverse lookup: the eid bound to `actor` among the Prop Elements (mirrors + locals all live in this

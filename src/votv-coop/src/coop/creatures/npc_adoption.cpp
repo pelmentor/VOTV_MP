@@ -6,7 +6,7 @@
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
-#include "coop/sync/sync_create.h"   // the single NPC mirror create funnel (Inc A)
+#include "coop/element/identity_create.h"   // the single NPC mirror create funnel (Inc A)
 #include "coop/net/session.h"
 #include "coop/creatures/npc_mirror.h"
 #include "coop/creatures/npc_sync.h"
@@ -67,7 +67,7 @@ inline long long MsSince(std::chrono::steady_clock::time_point t) {
 // child exactly as the host's does (the v74 floating-camera fix, now structural). Parks it
 // host-driven. Returns true on success (false leaves the entry pending for the next scan).
 bool BindAsMirror(uint32_t eid, void* obj, const std::wstring& classW) {
-    if (!coop::sync::CreateOrAdoptNpcMirror(static_cast<coop::element::ElementId>(eid), obj, classW,
+    if (!coop::element::CreateOrAdoptNpcMirror(static_cast<coop::element::ElementId>(eid), obj, classW,
                                             /*senderSlot=*/-1)) {
         UE_LOGW("npc-adopt: CreateOrAdoptNpcMirror(eid=%u) failed for local actor %p -- retry/fallback",
                 eid, obj);

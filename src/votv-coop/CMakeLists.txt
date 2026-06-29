@@ -282,9 +282,9 @@ add_library(votv-coop SHARED
     src/coop/element/element_deleter.cpp
     src/coop/element/registry.cpp
     src/coop/element/world_actor.cpp
-    src/coop/sync/sync_reconcile.cpp
-    src/coop/sync/sync_create.cpp
-    src/coop/sync/sync_destroy.cpp
+    src/coop/element/identity_reconcile.cpp
+    src/coop/element/identity_create.cpp
+    src/coop/element/identity_destroy.cpp
     src/coop/net/session.cpp
     src/coop/net/session_npc.cpp
     src/coop/net/session_worldactor.cpp

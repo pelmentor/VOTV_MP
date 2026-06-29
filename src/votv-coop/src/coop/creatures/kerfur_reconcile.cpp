@@ -4,7 +4,7 @@
 
 #include "coop/element/mirror_manager.h"
 #include "coop/element/element_deleter.h"  // ElementDeleter (mirror-aware teardown of a bound off-prop)
-#include "coop/sync/sync_destroy.h"         // RetireMirror (the single destroy funnel, Inc B)
+#include "coop/element/identity_destroy.h"         // RetireMirror (the single destroy funnel, Inc B)
 #include "coop/element/prop.h"
 #include "coop/element/npc.h"          // MirrorManager<Npc> (ROOT-2 probe: is the replacement NPC live?)
 #include "coop/creatures/kerfur_entity.h"        // IsKerfurPropClass
@@ -99,7 +99,7 @@ void RetireMatchedOffProp_(void* actor) {
     coop::prop_element_tracker::UnmarkKnownKeyedProp(actor);   // clear the bound-mirror mark + any local maps
     if (R::IsLive(actor)) ue_wrap::engine::DestroyActor(actor);
     if (eid != coop::element::kInvalidId)
-        coop::sync::RetireMirror(eid);   // the single destroy funnel (Inc B): type-dispatched Take+Enqueue
+        coop::element::RetireMirror(eid);   // the single destroy funnel (Inc B): type-dispatched Take+Enqueue
     UE_LOGI("kerfur_reconcile: retired bound-mirror stale off-prop actor=%p eid=%u (mirror-aware teardown -- "
             "host turned this kerfur ON in-window; the failed mid-join KerfurConvert left the off-prop alive)",
             actor, static_cast<unsigned>(eid));

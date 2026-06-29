@@ -1,4 +1,4 @@
-// coop/sync/sync_destroy.h -- RetireMirror, the ONE type-dispatched mirror destroy funnel.
+// coop/element/identity_destroy.h -- RetireMirror, the ONE type-dispatched mirror destroy funnel.
 //
 // The symmetric counterpart to sync_create's CreateOrAdopt: where create owns the
 // "which manager Install"s a wire mirror, RetireMirror owns the "which manager
@@ -19,7 +19,7 @@
 
 #include "coop/element/element.h"  // ElementId
 
-namespace coop::sync {
+namespace coop::element {
 
 // Retire the wire mirror Element bound at `eid`: resolve its ElementType, Take it
 // from the matching MirrorManager, and Enqueue it on the deferred ElementDeleter
@@ -27,4 +27,4 @@ namespace coop::sync {
 // type is not a streamed mirror kind (Player/Kerfur/Unknown are not retired here).
 void RetireMirror(coop::element::ElementId eid);
 
-}  // namespace coop::sync
+}  // namespace coop::element

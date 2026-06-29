@@ -1,4 +1,4 @@
-// coop/sync/sync_create.h -- CreateOrAdopt, the ONE collision-reconcile create/bind path.
+// coop/element/identity_create.h -- CreateOrAdopt, the ONE collision-reconcile create/bind path.
 //
 // THE keystone of the consolidated sync module (plan section 1, the MTA
 // `Packet_EntityAdd` analog: resolve ID -> if occupied, retire-stale ->
@@ -17,7 +17,7 @@
 
 #include "coop/element/element.h"  // ElementId
 
-namespace coop::sync {
+namespace coop::element {
 
 // CreateOrAdopt for a wire-received PROP MIRROR. Resolves `eid` against the
 // registry and CLAIMs / ADOPTs / REJECTs:
@@ -56,4 +56,4 @@ bool CreateOrAdoptNpcMirror(coop::element::ElementId eid, void* actor,
 bool CreateOrAdoptWorldActorMirror(coop::element::ElementId eid, void* actor,
                                    const std::wstring& cls, int senderSlot);
 
-}  // namespace coop::sync
+}  // namespace coop::element

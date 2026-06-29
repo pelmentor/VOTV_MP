@@ -1,6 +1,6 @@
-// coop/sync/sync_reconcile.cpp -- see coop/sync/sync_reconcile.h.
+// coop/element/identity_reconcile.cpp -- see coop/element/identity_reconcile.h.
 
-#include "coop/sync/sync_reconcile.h"
+#include "coop/element/identity_reconcile.h"
 
 #include "coop/props/pile_reconcile.h"
 #include "coop/props/prop_element_tracker.h"  // InPurgeEpisode (post-purge re-bind trigger)
@@ -10,7 +10,7 @@
 
 #include <chrono>
 
-namespace coop::sync {
+namespace coop::element {
 
 namespace {
 // Debounce for the steady-state reconcile: when work is pending we want to retire
@@ -68,4 +68,4 @@ void OnReconcileTick() {
     RunIdentityReconcile(/*joinSweep=*/false);
 }
 
-}  // namespace coop::sync
+}  // namespace coop::element

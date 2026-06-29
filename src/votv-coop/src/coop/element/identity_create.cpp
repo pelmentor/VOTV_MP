@@ -1,11 +1,11 @@
-// coop/sync/sync_create.cpp -- CreateOrAdopt implementation (the prop-mirror bind keystone).
+// coop/element/identity_create.cpp -- CreateOrAdopt implementation (the prop-mirror bind keystone).
 //
 // Moved 2026-06-28 from remote_prop::RegisterPropMirror (sync-consolidation
 // refactor, plan section 1). Behavior IDENTICAL to the prior RegisterPropMirror:
 // idempotent-adopt / morph-reskin / Install-new with the HEAD live-conflict
 // reject. remote_prop::RegisterPropMirror is now a thin forwarder.
 
-#include "coop/sync/sync_create.h"
+#include "coop/element/identity_create.h"
 
 #include <memory>
 #include <string>
@@ -22,9 +22,9 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
-namespace coop::sync {
+namespace coop::element {
 // The friended gateway to the sealed MirrorManager::Install (Inc C, 2026-06-29).
-// Defined here in coop::sync so a wire-mirror bind can ONLY originate from this
+// Defined here in coop::element so a wire-mirror bind can ONLY originate from this
 // module; the CreateOrAdopt* funnels are its only users. mirror_manager.h friends
 // exactly this struct -- Install is private to everyone else (the compile wall).
 struct MirrorInstallAccess {
@@ -34,7 +34,7 @@ struct MirrorInstallAccess {
         return m.Install(eid, std::move(el), ownerSlot);
     }
 };
-}  // namespace coop::sync
+}  // namespace coop::element
 
 namespace {
 namespace R = ue_wrap::reflection;
@@ -69,11 +69,11 @@ bool CreateOrAdoptSimpleMirror(coop::element::MirrorManager<T>& mgr,
     auto mirror = std::make_unique<T>();
     if (!cls.empty()) mirror->SetTypeName(NarrowAscii(cls));
     mirror->SetActor(actor, R::InternalIndexOf(actor));
-    return coop::sync::MirrorInstallAccess::Install(mgr, eid, std::move(mirror), ownerSlot);
+    return coop::element::MirrorInstallAccess::Install(mgr, eid, std::move(mirror), ownerSlot);
 }
 }  // namespace
 
-namespace coop::sync {
+namespace coop::element {
 
 void CreateOrAdoptPropMirror(coop::element::ElementId eid, void* actor,
                              const std::wstring& key, const std::wstring& cls,
@@ -154,4 +154,4 @@ bool CreateOrAdoptWorldActorMirror(coop::element::ElementId eid, void* actor,
     return ok;
 }
 
-}  // namespace coop::sync
+}  // namespace coop::element

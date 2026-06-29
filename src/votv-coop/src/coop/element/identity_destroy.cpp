@@ -1,6 +1,6 @@
-// coop/sync/sync_destroy.cpp -- RetireMirror, the type-dispatched mirror destroy funnel.
+// coop/element/identity_destroy.cpp -- RetireMirror, the type-dispatched mirror destroy funnel.
 
-#include "coop/sync/sync_destroy.h"
+#include "coop/element/identity_destroy.h"
 
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
@@ -9,7 +9,7 @@
 #include "coop/element/registry.h"
 #include "coop/element/world_actor.h"
 
-namespace coop::sync {
+namespace coop::element {
 
 void RetireMirror(coop::element::ElementId eid) {
     using namespace coop::element;
@@ -34,4 +34,4 @@ void RetireMirror(coop::element::ElementId eid) {
     }
 }
 
-}  // namespace coop::sync
+}  // namespace coop::element

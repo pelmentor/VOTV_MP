@@ -1,6 +1,6 @@
-// coop/sync/sync_reconcile.h -- the world-sync identity reconcile engine.
+// coop/element/identity_reconcile.h -- the world-sync identity reconcile engine.
 //
-// The first piece of the consolidated coop::sync module (sync-consolidation
+// The first piece of the consolidated coop::element module (sync-consolidation
 // refactor 2026-06-27, research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md).
 //
 // THE D1 STRUCTURAL FIX (plan step 4b): the identity reconcile mechanisms
@@ -25,7 +25,7 @@
 
 #pragma once
 
-namespace coop::sync {
+namespace coop::element {
 
 // The identity reconcile sequence: retire save-time twins -> re-bind GC-churned
 // unbound natives by save-position (variant-1) -> apply b3 position corrections.
@@ -40,4 +40,4 @@ void RunIdentityReconcile(bool joinSweep);
 // unless there is actually work (the perf rule). Game-thread only.
 void OnReconcileTick();
 
-}  // namespace coop::sync
+}  // namespace coop::element

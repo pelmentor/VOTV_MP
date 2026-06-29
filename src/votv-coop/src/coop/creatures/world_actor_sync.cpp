@@ -22,8 +22,8 @@
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/registry.h"
 #include "coop/element/world_actor.h"
-#include "coop/sync/sync_create.h"   // the single WorldActor mirror create funnel (Inc A)
-#include "coop/sync/sync_destroy.h"  // RetireMirror (the single destroy funnel, Inc B)
+#include "coop/element/identity_create.h"   // the single WorldActor mirror create funnel (Inc A)
+#include "coop/element/identity_destroy.h"  // RetireMirror (the single destroy funnel, Inc B)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 
@@ -150,7 +150,7 @@ void WorldActorSpawn_POST(void* /*self*/, void* /*function*/, void* params) {
     void* spawnedActor = *reinterpret_cast<void**>(
         reinterpret_cast<uint8_t*>(params) + g_spawnReturnParamOff);
     if (!spawnedActor) {
-        coop::sync::RetireMirror(eid);
+        coop::element::RetireMirror(eid);
         UE_LOGW("world-actor[host POST]: BeginDeferredSpawn returned null for eid=%u -- released", eid);
         return;
     }
@@ -185,7 +185,7 @@ void WorldActorDestroy_PRE(void* self, void* /*function*/, void* /*params*/) {
         eid = it->second;
         g_actorToWaId.erase(it);
     }
-    coop::sync::RetireMirror(eid);
+    coop::element::RetireMirror(eid);
     UE_LOGI("world-actor[host destroy PRE]: actor=%p WorldActor eid=%u released (deferred)", self, eid);
     auto* s = LoadSession();
     if (!s || !s->connected() || s->role() != coop::net::Role::Host) return;
@@ -577,7 +577,7 @@ void OnWorldActorSpawn(const coop::net::EntitySpawnPayload& payload) {
     }
 
     const coop::element::ElementId eid = static_cast<coop::element::ElementId>(payload.elementId);
-    if (!coop::sync::CreateOrAdoptWorldActorMirror(eid, spawned, classW, /*senderSlot=*/-1)) {
+    if (!coop::element::CreateOrAdoptWorldActorMirror(eid, spawned, classW, /*senderSlot=*/-1)) {
         UE_LOGW("world-actor[client OnSpawn]: CreateOrAdoptWorldActorMirror(eid=%u) failed -- destroying orphan actor %p",
                 payload.elementId, spawned);
         if (g_k2DestroyFn && R::IsLive(spawned)) R::CallFunction(spawned, g_k2DestroyFn, nullptr);
