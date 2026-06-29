@@ -335,7 +335,16 @@ void MaterializeKerfurMirror(bool toNpc, coop::element::ElementId eid, coop::ele
         // deferKerfur=false: this is the CONVERSION materialize -- the client's parked ghost is ready
         // NOW (claim/adopt), so OnSpawn must run the inline fuzzy-adopt, NOT defer to the join-time
         // kerfur_prop_adoption poll (which is for un-converted save-loaded twins). K-6.
-        coop::remote_prop_spawn::OnSpawn(sp, /*senderSlot=*/0, localPlayer, /*deferKerfur=*/false);
+        // ROOT-1 FIX (2026-06-29, 10:30 hands-on -- the turn-off DOUBLE): the prior call
+        // `OnSpawn(sp, 0, localPlayer, /*deferKerfur=*/false)` bound `false` to param #4 (fromConvert),
+        // leaving deferKerfur at its DEFAULT true -> this synthetic kerfur PropSpawn ARMED the join-window
+        // fuzzy adopter (remote_prop_spawn.cpp:763 -> kerfur_prop_adoption::Arm) instead of adopting inline.
+        // That adopter can't match the local conversion ghost (fresh per-load key fails its anti-collision
+        // gate) -> it fresh-spawned a SECOND prop beside the orphaned ghost -> the visible double. This is the
+        // IDENTICAL arg-slot bug already fixed at kerfur_prop_adoption.cpp:171-179 (the "OBS-2 ROOT FIX"),
+        // never fixed at this 2nd call site. Pass fromConvert=false EXPLICITLY so deferKerfur=false lands right.
+        coop::remote_prop_spawn::OnSpawn(sp, /*senderSlot=*/0, localPlayer,
+                                         /*fromConvert=*/false, /*deferKerfur=*/false);
     }
 }
 

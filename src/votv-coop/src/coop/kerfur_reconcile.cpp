@@ -5,6 +5,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/element_deleter.h"  // ElementDeleter (mirror-aware teardown of a bound off-prop)
 #include "coop/element/prop.h"
+#include "coop/element/npc.h"          // MirrorManager<Npc> (ROOT-2 probe: is the replacement NPC live?)
 #include "coop/kerfur_entity.h"        // IsKerfurPropClass
 #include "coop/remote_prop.h"          // ResolveMirrorEidByActor (bound-mirror eid for the teardown)
 #include "coop/net/session.h"
@@ -132,15 +133,14 @@ int SweepReconcileSaveTimeKerfurs() {
     std::vector<LocalOffProp> cands;
     CollectLocalOffPropKerfurs(cands);
     std::vector<bool> consumed(cands.size(), false);
-    std::vector<void*> toRetire;
+    std::vector<std::pair<void*, uint32_t>> toRetire;  // (off-prop actor, the NPC hostEid that replaces it)
     toRetire.reserve(pendingN);
     for (const auto& [hostEid, key] : g_pendingRetire) {
-        (void)hostEid;
         // No secondary tie-break for kerfur (position alone is the key; correctly-adopted off-props are
         // host mirrors, already excluded from `cands`). Ambiguous(>1)/absent(0) -> -1 -> retire nothing.
         const int matchIdx = coop::save_time_retire_util::FindExactMatch(
             cands, consumed, key, [](const LocalOffProp&) { return true; });
-        if (matchIdx >= 0) { consumed[matchIdx] = true; toRetire.push_back(cands[matchIdx].actor); }
+        if (matchIdx >= 0) { consumed[matchIdx] = true; toRetire.push_back({cands[matchIdx].actor, hostEid}); }
     }
 
     // NO >50% ratio-valve here (REMOVED 2026-06-24, hands-on 17:06 root). A ratio valve was mis-ported
@@ -154,7 +154,23 @@ int SweepReconcileSaveTimeKerfurs() {
     // deliberate host turn-on) matched by the EXACT 1cm save-time key under position uniqueness +
     // ambiguous(>1)->skip + the non-mirror IsKerfurPropClass gate -- so the retire set is intrinsically
     // bounded + precise, and no ratio guard fits or is needed.
-    for (void* actor : toRetire) RetireMatchedOffProp_(actor);
+    for (const auto& [actor, hostEid] : toRetire) {
+        // ROOT-2 PROBE (2026-06-29, the "5-of-6 on join"): the off->active retire is DETERMINISTIC (armed
+        // by the NPC EntitySpawn), but the replacement NPC materialize is a FUZZY npc_adoption class+pose
+        // match that CAN fail. If we retire the off-prop while the replacement NPC (hostEid) is NOT a live
+        // bound mirror, this kerfur VANISHES (off-prop gone, NPC never appeared) = the missing-kerfur hole.
+        // The 10:30 log did NOT trip this (the fuzzy adopt succeeded there), so this WARN pins whether a
+        // real 5-of-6 is a retire-without-replacement. Diagnostic only (RULE-2-exempt); no behaviour change.
+        auto* npc = coop::element::MirrorManager<coop::element::Npc>::Instance().Get(
+            static_cast<coop::element::ElementId>(hostEid));
+        const bool npcLive = npc && npc->GetActor() && R::IsLive(npc->GetActor());
+        if (!npcLive)
+            UE_LOGW("[KERFUR-R2] retire-WITHOUT-replacement: off-prop actor=%p retired but its replacement "
+                    "NPC eid=%u is NOT a live bound mirror -> this kerfur will be MISSING (the 5-of-6 hole). "
+                    "npc_adoption fuzzy match has not bound it; a re-toggle is the only recovery.",
+                    actor, static_cast<unsigned>(hostEid));
+        RetireMatchedOffProp_(actor);
+    }
     UE_LOGI("kerfur_reconcile: sweep-retire -- %zu of %zu pending save-time kerfur retire(s) at "
             "post-quiescence (the late-loaded stale local off-prop destroyed; the active NPC is the sole "
             "form -- join-window off->active dup fixed)",
