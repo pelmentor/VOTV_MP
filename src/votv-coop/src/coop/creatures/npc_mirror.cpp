@@ -167,22 +167,17 @@ void OnEntitySpawn(const coop::net::EntitySpawnPayload& payload) {
                 classW.c_str(), payload.elementId);
         return;
     }
-    // scope A v1 (kerfur off->active dup retire): a kerfur that was OFF in the transferred save and the
-    // host turned ON in the join window carries its blob-instant SAVE-TIME pos here. THIS npc channel
-    // reaches the joiner (the KerfurConvert that would have linked it FAILS to send mid-join -- hands-on
-    // 16:37 root). Arm a retire of the client's stale local off-prop at that exact key; the quiescence-
-    // driven sweep (kerfur_convert::PollKerfurConversions -> kerfur_reconcile::SweepReconcileSaveTimeKerfurs)
-    // destroys it once the local off-prop has async-loaded. Independent of how the NPC mirror itself
-    // materializes below (adopt-local / fresh-spawn). Keyed by the host eid (unique, idempotent).
-    if (payload.hasMatchPos &&
-        std::isfinite(payload.matchX) && std::isfinite(payload.matchY) && std::isfinite(payload.matchZ) &&
-        std::fabs(payload.matchX) <= coop::net::kMaxCoord &&
-        std::fabs(payload.matchY) <= coop::net::kMaxCoord &&
-        std::fabs(payload.matchZ) <= coop::net::kMaxCoord) {
-        ue_wrap::FVector key;
-        key.X = payload.matchX; key.Y = payload.matchY; key.Z = payload.matchZ;
-        coop::kerfur_reconcile::ArmPendingRetire(payload.elementId, key);
-    }
+    // scope A (kerfur off->active dup retire, v91 DETERMINISTIC): a kerfur that was OFF in the transferred
+    // save and the host turned ON in the join window carries the off-prop's HOST EID here (retireOffEid).
+    // THIS npc channel reaches the joiner (the KerfurConvert that would have linked it is pre-world-gated
+    // mid-join -- v56 B2; hands-on 16:37 + 13:21 root). Arm a retire of the client's stale local off-prop
+    // MIRROR bound at that EXACT eid (save_identity_bind already bound it there); the quiescence-driven sweep
+    // (kerfur_convert::PollKerfurConversions -> kerfur_reconcile::SweepReconcileSaveTimeKerfurs) destroys it
+    // once it has bound. Independent of how the NPC mirror itself materializes below (adopt-local /
+    // fresh-spawn). No fuzzy 1cm position match (the recurring 5-of-6 / dup collision class is gone).
+    if (payload.retireOffEid != 0)
+        coop::kerfur_reconcile::ArmPendingRetireByEid(
+            static_cast<coop::element::ElementId>(payload.retireOffEid));
     // v75: route by whether the joining client has a LOCAL TWIN of this NPC (savePersisted).
     // savePersisted=1 -> a save object (the kerfur) the client ALSO loaded from the transferred
     // save; its local twin spawned via un-hookable EX_CallMath at an unpredictable time. ADOPT it

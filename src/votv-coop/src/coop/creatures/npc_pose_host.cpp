@@ -17,7 +17,7 @@
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
-#include "coop/creatures/kerfur_entity.h"  // scope A v1: GetSaveTimePosForEid -- carry the off->active retire key
+#include "coop/creatures/kerfur_entity.h"  // scope A: GetOriginOffEidForEid -- carry the off->active retire eid
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "ue_wrap/engine.h"
@@ -77,14 +77,14 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
         // for key-equality adoption -- abandoned: the kerfur's key is minted RANDOM per load, so it
         // differs across peers; only the PRESENCE of a key is portable.)
         p.savePersisted = ue_wrap::kerfur::HasSaveKey(actor) ? 1 : 0;
-        // scope A v1: carry the off->active dup RETIRE key for a kerfur that was OFF at the blob instant
-        // and the host turned ON in the join window (GetSaveTimePosForEid returns its blob-instant
-        // save-time pos). The joiner retires its stale local off-prop at that key (kerfur_reconcile). This
-        // rides the npc EntitySpawn -- the channel that DOES reach the joiner -- not the KerfurConvert
-        // reliable (whose SendReliable fails mid-join: hands-on 16:37 root).
-        p.hasMatchPos = 0;
-        if (coop::kerfur_entity::GetSaveTimePosForEid(el->GetId(), p.matchX, p.matchY, p.matchZ))
-            p.hasMatchPos = 1;
+        // scope A (v91 deterministic): carry the off->active dup RETIRE key for a kerfur that was OFF at the
+        // blob instant and the host turned ON in the join window. GetOriginOffEidForEid returns the host EID
+        // of the off-prop it replaced (kInvalidId for an always-active kerfur). The joiner retires its stale
+        // local off-prop MIRROR bound at that EXACT eid (kerfur_reconcile). This rides the npc EntitySpawn --
+        // the channel that DOES reach the joiner -- not the KerfurConvert reliable (pre-world-gated mid-join:
+        // v56 B2; hands-on 16:37 + 13:21 root).
+        const coop::element::ElementId offEid = coop::kerfur_entity::GetOriginOffEidForEid(el->GetId());
+        p.retireOffEid = (offEid == coop::element::kInvalidId) ? 0u : static_cast<uint32_t>(offEid);
         if (s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::EntitySpawn, &p, sizeof(p)))
             ++sent;
     }

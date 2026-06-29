@@ -694,7 +694,17 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 90;  // v90 (b3): PropSnapPos=81 + PropSnapPosPayload (28B) --
+inline constexpr uint16_t kProtocolVersion = 91;  // v91: kerfur off->active dup retire goes DETERMINISTIC --
+                                                  // EntitySpawnPayload 108->100: hasMatchPos + matchX/Y/Z
+                                                  // (the join-window-turned-ON kerfur's SAVE-TIME position,
+                                                  // matched fuzzily within 1cm) REPLACED by retireOffEid (the
+                                                  // host eid of the off-prop it replaced). The joiner retires
+                                                  // its off-prop MIRROR by that exact eid (it already binds the
+                                                  // save-loaded off-prop to the host eid via save_identity_bind),
+                                                  // killing the position-fuzzy collision class (the recurring
+                                                  // 5-of-6 / dup). See the runbook RESULT 13:21 + topic memory.
+                                                  // Prior:
+                                                  // v90 (b3): PropSnapPos=81 + PropSnapPosPayload (28B) --
                                                   // a join-window position correction for save-authoritative
                                                   // chipPiles. A pile moved in the join window broadcasts its
                                                   // PropConvert, which the joiner's not-yet-ready reliable
@@ -2920,19 +2930,25 @@ struct EntitySpawnPayload {
                                    //      PRESENCE of a key (= is-a-save-object) is portable, not its value.
                                    //      See research/findings/votv-kerfurOmega-coop-double-and-camera-
                                    //      RE-2026-06-14.md sec "CORRECTION" + sec 11.
-    uint8_t       hasMatchPos;     // 1 -- scope A v1 (kerfur off->active dup retire): 1 => matchX/Y/Z carry
-                                   //      this NPC's SAVE-TIME position. Set ONLY for a kerfur that was OFF
-                                   //      in the transferred save and the host turned ON in the join window
-                                   //      (KerfurRecord.saveTimePos). The joining client arms a retire of its
-                                   //      stale local off-prop at that key (kerfur_reconcile) -- the active
-                                   //      form rides THIS npc channel (which reaches the client), unlike the
-                                   //      KerfurConvert reliable that fails mid-join (hands-on 16:37 root).
-    uint8_t       _pad2[2];        // 2 -- align loc to 4 (was 3 with WireKey tail; hasMatchPos took one byte)
+    uint8_t       _pad[3];         // 3 -- align loc to 4
     float         locX, locY, locZ;            // 12 -- world cm at spawn time
     float         rotPitch, rotYaw, rotRoll;   // 12 -- FRotator
-    float         matchX, matchY, matchZ;      // 12 -- save-time position (world cm); valid iff hasMatchPos
+    uint32_t      retireOffEid;    // 4 -- v91 (kerfur off->active dup retire, DETERMINISTIC): non-zero => this
+                                   //      NPC is a kerfur the host turned ON in the join window, and
+                                   //      retireOffEid is the HOST EID of the off-prop it replaced
+                                   //      (KerfurRecord.originOffEid, captured at the first conversion). The
+                                   //      joining client retires the off-prop MIRROR bound at that exact eid
+                                   //      (kerfur_reconcile, eid-keyed). REPLACES the v88 position-fuzzy
+                                   //      hasMatchPos+matchX/Y/Z: the active form rides THIS npc channel (which
+                                   //      reaches the joiner), unlike the KerfurConvert reliable that is
+                                   //      pre-world-gated mid-join (v56 B2; hands-on 16:37 + 13:21 root). The
+                                   //      client already binds its save-loaded off-prop to the host eid via
+                                   //      save_identity_bind, so the retire is deterministic -- no 1cm
+                                   //      position match, no fuzzy collision (the recurring 5-of-6 / dup class).
+                                   //      0 = not a window turn-on (always-active NPC, or a transient enemy;
+                                   //      WorldActorSpawn reuse leaves it 0).
 };
-static_assert(sizeof(EntitySpawnPayload) == 108, "EntitySpawnPayload must be 108 bytes (scope A v1: +hasMatchPos +matchX/Y/Z kerfur save-time retire key)");
+static_assert(sizeof(EntitySpawnPayload) == 100, "EntitySpawnPayload must be 100 bytes (v91: position-fuzzy matchX/Y/Z replaced by deterministic retireOffEid)");
 static_assert(sizeof(EntitySpawnPayload) <= 256 - 20 - 8,
               "EntitySpawnPayload must fit in one reliable datagram");
 

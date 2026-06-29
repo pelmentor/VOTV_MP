@@ -42,12 +42,13 @@ struct KerfurRecord {
     int32_t                  idx         = -1;
     std::string              npcClassName;
     std::string              propClassName;
-    // scope A (kerfur off->active dup retire): the kerfur's blob-instant SAVE-TIME position. Bootstrapped
-    // at the FIRST conversion from g_blobKerfurXforms[oldEid] (an off-prop turned ON in the join window),
-    // then carried across every subsequent flip on the same K. The KerfurConvert broadcast stamps it as
-    // matchX/Y/Z so the joining client retires its stale local off-prop at the exact key.
-    float                    saveTimePosX = 0.f, saveTimePosY = 0.f, saveTimePosZ = 0.f;
-    bool                     hasSaveTimePos = false;
+    // scope A (kerfur off->active dup retire, DETERMINISTIC v91): the HOST EID of the off-prop this kerfur
+    // was at when the host first turned it ON in the join window. Captured at the FIRST conversion (oldEid,
+    // gated on it being a tracked save off-prop via the blob map), then carried across every subsequent flip
+    // on the same K. The npc EntitySpawn builders stamp it as retireOffEid so the joining client retires its
+    // stale local off-prop MIRROR bound at that EXACT eid (no fuzzy 1cm position match). kInvalidId =
+    // always-active (never an in-window turn-on) -> nothing to retire on the joiner.
+    coop::element::ElementId originOffEid = coop::element::kInvalidId;
 };
 
 std::mutex g_mutex;  // guards every table below (game thread in practice; locked for the worker-thread predicates)
@@ -166,19 +167,18 @@ bool IsKerfurEid(coop::element::ElementId currentEid) {
     return g_eidToKerfurId.count(currentEid) != 0;
 }
 
-bool GetSaveTimePosForEid(coop::element::ElementId currentEid, float& outX, float& outY, float& outZ) {
-    // scope A v1: the blob-instant SAVE-TIME position of the kerfur currently at `currentEid`, IFF it was
-    // bootstrapped at a join-window turn-on (BindFormActor stamped rec.saveTimePos from g_blobKerfurXforms).
-    // A kerfur that was already ACTIVE at blob (never converted) has no anchor -> returns false -> the npc
-    // EntitySpawn builder leaves hasMatchPos=0 (nothing to retire). Host-side; HOST only in practice.
-    if (currentEid == coop::element::kInvalidId) return false;
+coop::element::ElementId GetOriginOffEidForEid(coop::element::ElementId currentEid) {
+    // scope A (v91 deterministic): the host EID of the off-prop the kerfur currently at `currentEid` replaced,
+    // IFF it was captured at a join-window turn-on (BindFormActor stored rec.originOffEid = the off-prop's
+    // save eid). A kerfur already ACTIVE at blob (never converted) has no anchor -> kInvalidId -> the npc
+    // EntitySpawn builder leaves retireOffEid=0 (nothing to retire). Host-side; HOST only in practice.
+    if (currentEid == coop::element::kInvalidId) return coop::element::kInvalidId;
     std::lock_guard<std::mutex> lk(g_mutex);
     auto eit = g_eidToKerfurId.find(currentEid);
-    if (eit == g_eidToKerfurId.end()) return false;
+    if (eit == g_eidToKerfurId.end()) return coop::element::kInvalidId;
     auto rit = g_byKerfurId.find(eit->second);
-    if (rit == g_byKerfurId.end() || !rit->second.hasSaveTimePos) return false;
-    outX = rit->second.saveTimePosX; outY = rit->second.saveTimePosY; outZ = rit->second.saveTimePosZ;
-    return true;
+    if (rit == g_byKerfurId.end()) return coop::element::kInvalidId;
+    return rit->second.originOffEid;
 }
 
 // ---- K-5 CLIENT held-pose map -----------------------------------------------------------------------
@@ -289,17 +289,18 @@ coop::element::ElementId BindFormActor(coop::element::ElementId oldEid, void* ne
         if (newForm == Form::Npc) rec.npcClassName = cn; else rec.propClassName = cn;
         g_actorToKerfurId[newActor] = k;
         g_eidToKerfurId[newEid]     = k;
-        // scope A v1: bootstrap the save-time anchor from the blob map at the FIRST conversion (oldEid is
-        // the off-prop eid captured in g_blobKerfurXforms when a join-window turn-on fires); carry it
-        // forward across every subsequent flip on this K. The connect-snapshot npc EntitySpawn builder
-        // reads it via GetSaveTimePosForEid and carries it to the joiner (NOT the KerfurConvert, whose
-        // SendReliable fails mid-join -- hands-on 16:37).
-        if (!rec.hasSaveTimePos) {
+        // scope A (v91 deterministic): capture the off-prop's host eid at the FIRST conversion. oldEid IS
+        // that eid; the blob-map membership check (TryGetSaveTimeKerfurXformAnySlot) is the GATE that this is
+        // a genuine join-window turn-ON of a tracked SAVE off-prop (a turn-OFF's oldEid is an NPC eid, absent
+        // from the map -> not captured -> no spurious retire). Carried forward across every subsequent flip on
+        // this K. The connect-snapshot npc EntitySpawn builder reads it via GetOriginOffEidForEid and carries
+        // it to the joiner as retireOffEid (NOT the KerfurConvert, whose SendReliable is pre-world-gated
+        // mid-join -- v56 B2; hands-on 16:37 + 13:21). The joiner already binds its save-loaded off-prop to
+        // this host eid (save_identity_bind), so the retire is by EXACT eid -- no fuzzy 1cm position match.
+        if (rec.originOffEid == coop::element::kInvalidId) {
             ue_wrap::FVector sv;
-            if (coop::save_transfer::TryGetSaveTimeKerfurXformAnySlot(oldEid, sv)) {
-                rec.saveTimePosX = sv.X; rec.saveTimePosY = sv.Y; rec.saveTimePosZ = sv.Z;
-                rec.hasSaveTimePos = true;
-            }
+            if (coop::save_transfer::TryGetSaveTimeKerfurXformAnySlot(oldEid, sv))
+                rec.originOffEid = oldEid;
         }
     }
 
