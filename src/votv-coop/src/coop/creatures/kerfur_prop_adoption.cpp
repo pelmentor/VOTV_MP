@@ -5,6 +5,7 @@
 
 #include "coop/element/element.h"      // ElementId + kInvalidId
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/prop.h"
 #include "coop/creatures/kerfur_entity.h"        // IsKerfurPropClass + NotifyKerfurPropMirrorBound
 #include "coop/net/session.h"
@@ -47,9 +48,7 @@ constexpr int kAdoptTimeoutMs = 60000;   // last-resort backstop (HasLoadTailQui
 // so we keep waiting / fresh-spawn rather than bind the wrong one. Matches ClaimConversionGhosts' radius.
 constexpr float kMaxBindDist2 = 500.f * 500.f;
 
-inline coop::element::MirrorManager<coop::element::Prop>& PropMirrors() {
-    return coop::element::MirrorManager<coop::element::Prop>::Instance();
-}
+using coop::element::PropMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 inline long long MsSince(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now() - t).count();

@@ -12,6 +12,7 @@
 
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
@@ -33,9 +34,7 @@ namespace R = ue_wrap::reflection;
 
 // The single host/mirror Npc set (the same template singleton npc_sync.cpp +
 // npc_mirror.cpp + npc_pose_host.cpp wrap; MirrorManager<Npc>::Instance() owns it).
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 }  // namespace
 

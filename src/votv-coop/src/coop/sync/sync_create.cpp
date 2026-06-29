@@ -11,6 +11,7 @@
 #include <string>
 
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/prop.h"
 #include "coop/element/npc.h"          // CreateOrAdoptNpcMirror
 #include "coop/element/world_actor.h"  // CreateOrAdoptWorldActorMirror
@@ -40,9 +41,7 @@ namespace R = ue_wrap::reflection;
 
 // The canonical owner of ALL Prop Elements (wire mirrors AND prop_element_tracker
 // locals AllocAndInstall into this same Instance()).
-inline coop::element::MirrorManager<coop::element::Prop>& PropMirrors() {
-    return coop::element::MirrorManager<coop::element::Prop>::Instance();
-}
+using coop::element::PropMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // Lossy-narrow a wstring to ASCII for Element name/typeName storage. The VOTV Key
 // strings + class names are ASCII in practice (BP-minted NewGuid + class ids).

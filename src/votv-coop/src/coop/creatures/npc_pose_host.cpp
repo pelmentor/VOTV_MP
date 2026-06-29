@@ -15,6 +15,7 @@
 #include "coop/creatures/npc_sync.h"
 
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/creatures/kerfur_entity.h"  // scope A v1: GetSaveTimePosForEid -- carry the off->active retire key
 #include "coop/net/protocol.h"
@@ -38,9 +39,7 @@ namespace R = ue_wrap::reflection;
 
 // The single host/mirror Npc set (same template singleton npc_sync.cpp +
 // npc_mirror.cpp wrap; MirrorManager<Npc>::Instance() owns the storage).
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 }  // namespace
 

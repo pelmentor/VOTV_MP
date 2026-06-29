@@ -19,6 +19,7 @@
 
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/registry.h"
 #include "coop/element/world_actor.h"
 #include "coop/sync/sync_create.h"   // the single WorldActor mirror create funnel (Inc A)
@@ -79,9 +80,7 @@ std::atomic<bool> g_destroyObserverInstalled{false};
 
 // The canonical owner of every WorldActor element (host AllocAndInstall'd m_mirror=false XOR client
 // Install'd m_mirror=true -- a process is host XOR client for WorldActors, like Npc).
-inline coop::element::MirrorManager<coop::element::WorldActor>& WaMirrors() {
-    return coop::element::MirrorManager<coop::element::WorldActor>::Instance();
-}
+using coop::element::WaMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // Host-side reverse lookup: live AActor* -> ElementId (the K2_DestroyActor PRE gate). Guarded (POST +
 // destroy PRE run on parallel-anim workers). LEAF lock -- never nested under the Registry/type mutex

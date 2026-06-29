@@ -3,6 +3,7 @@
 #include "coop/creatures/npc_adoption.h"
 
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
 #include "coop/sync/sync_create.h"   // the single NPC mirror create funnel (Inc A)
@@ -54,9 +55,7 @@ constexpr int kPollIntervalMs = 200;    // 5 Hz scan WHILE pending; zero cost ot
 // the pathological case where quiescence never signals at all.
 constexpr int kAdoptTimeoutMs = 60000;
 
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 inline long long MsSince(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(

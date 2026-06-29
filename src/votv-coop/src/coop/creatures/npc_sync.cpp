@@ -16,6 +16,7 @@
 
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/sync/sync_destroy.h"   // RetireMirror (the single destroy funnel, Inc B)
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
@@ -119,9 +120,7 @@ std::atomic<void*> g_incomingNpcSpawnClass{nullptr};
 // elements (m_mirror=false -> dtor FreeId) OR client-Install'd mirrors
 // (m_mirror=true -> dtor UnregisterMirror), never both. That IsMirror() flag is
 // the discriminator a unified drain uses (npc_mirror::DrainClientMirrors).
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // Reverse lookup: live AActor* -> ElementId. Populated by the POST-spawn
 // observer when it captures the BeginDeferredSpawn ReturnValue; the

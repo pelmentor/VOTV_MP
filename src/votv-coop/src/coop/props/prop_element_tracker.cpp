@@ -10,6 +10,7 @@
 #include "coop/dev/eid_lifetime_trace.h"  // Phase 1 S8.2: record the capture-eid (read-only host trace)
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/prop.h"
 #include "coop/element/registry.h"
 #include "coop/creatures/kerfur_entity.h"  // K-5: IsKerfurActor (the client-mint gate)
@@ -112,9 +113,7 @@ std::atomic<bool> g_knownKeyedPropsOverflowLogged{false};
 // the Prop Element is created at Init POST time (engine already has the
 // actor) and the actor pointer is bound directly inside MarkPropElement.
 // No params-correlation gymnastics needed.
-inline coop::element::MirrorManager<coop::element::Prop>& PropMirrors() {
-    return coop::element::MirrorManager<coop::element::Prop>::Instance();
-}
+using coop::element::PropMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // (sync-refactor 2026-06-27) The is-save-native question is now an Element field
 // (Element::IsSaveNative), set by save_identity_bind at bind. The old

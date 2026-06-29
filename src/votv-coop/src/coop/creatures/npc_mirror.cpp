@@ -12,6 +12,7 @@
 #include "coop/creatures/npc_mirror.h"
 
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
 #include "coop/sync/sync_create.h"   // the single NPC mirror create funnel (Inc A)
@@ -56,9 +57,7 @@ void*   g_gsCdo               = nullptr;
 int32_t g_spawnReturnParamOff = -1;
 void*   g_k2DestroyFn         = nullptr;
 
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // v75 (supersedes v74's key-adoption -- the kerfur int_save key is RANDOM per peer, bytecode-
 // proven, so key-equality could never match): a save-persisted NPC the joining client loaded

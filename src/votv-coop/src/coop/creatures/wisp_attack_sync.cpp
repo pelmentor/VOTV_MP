@@ -4,6 +4,7 @@
 
 #include "coop/element/element.h"
 #include "coop/element/mirror_manager.h"
+#include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/element/player.h"
 #include "coop/element/registry.h"
@@ -94,9 +95,7 @@ bool AddPlayerDamage_PreCancel(void* /*self*/, void* /*params*/) {
     return g_cancelHostDamage.load(std::memory_order_acquire);
 }
 
-inline coop::element::MirrorManager<coop::element::Npc>& NpcMirrors() {
-    return coop::element::MirrorManager<coop::element::Npc>::Instance();
-}
+using coop::element::NpcMirrors;   // canonical accessor (coop/element/mirror_managers.h)
 
 // Relay one client-victim grab: WispGrab -> the victim slot, WispTear -> all, run the tear
 // on the host's own wisp, and schedule the host wisp's despawn after the tear. releasePlayer
