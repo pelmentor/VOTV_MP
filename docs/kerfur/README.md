@@ -2,9 +2,18 @@
 
 > **PUSH STATUS (2026-06-28): every commit at/below origin/main `63aa4c01` is now PUSHED.** Any "push HELD" /
 > "N ahead of origin" status below referencing a 2026-06-23..28 commit is STALE (the whole sync arc shipped to
-> origin on 2026-06-28). LATEST kerfur bug (hands-on 10:15): the **turn-off off-prop HANGS IN AIR** (frozen
-> kinematic, physics never re-enabled after adopt) -> FIX BUILT `150da133` (SetActorSimulatePhysics(ghost,true)
-> after the adopt-snap; AS-BUILT, re-test pending). #1 turn-on twitch = CLEARED. See [[project-sync-module-refactor-2026-06-27]].
+> origin on 2026-06-28).
+>
+> **LATEST (hands-on 10:30, 2026-06-29): the hang fix `150da133` did NOT resolve kerfurs.** The physics
+> re-enable was a correct sub-fix, but the 10:30 test (deployed `E3E6BEAB`) exposed TWO deeper roots:
+> **(ROOT 1) turn-off creates a DOUBLE** — `kerfur_convert.cpp:338` passes `deferKerfur=false` into the
+> `fromConvert` arg slot (default `deferKerfur=true` survives) → arms the join-window fuzzy adopter →
+> fresh-spawns a 2nd prop (the IDENTICAL OBS-2 arg-slot bug already fixed at `kerfur_prop_adoption.cpp:178`,
+> never fixed here). **(ROOT 2) 5-of-6 on join** — a mid-join `SendReliable(KerfurConvert)` FAILED with no
+> retry → permanent divergence (kerfur form is not in the join snapshot). #1 turn-on twitch = STILL CLEARED.
+> Full design (kerfur live-fix + the `coop/sync`-as-authority refactor + the strict reorg taxonomy):
+> **`research/findings/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`**. Status: DESIGN,
+> no code written yet. See [[project-kerfur-identity-authority-refactor-2026-06-29]].
 >
 > Single source of truth for the **kerfur** multiplayer sync problem, mirroring `docs/piles/`.
 > Created 2026-06-24 when the user opened the **OFF-state non-replication** track. Living KB:

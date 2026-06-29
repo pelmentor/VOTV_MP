@@ -314,6 +314,15 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   (`KerfurConvertRequest`); host runs the real verb authoritatively + broadcasts `KerfurConvert`; the client
   **claims-and-adopts** its conversion ghost (parks/freezes, never destroy+respawn). The historical dupe came
   from the mid-join turn-on window + the invisible spawn leaving untracked ghosts. **[V/RD]**
+- **10:30 HANDS-ON (2026-06-29) — two roots still open [V (hands-on)]:** **(ROOT 1)** a steady-state turn-off
+  DOUBLES on the client — `kerfur_convert.cpp:338` passes `deferKerfur=false` into the `fromConvert` arg slot,
+  so the default `deferKerfur=true` survives → the convert's synthetic PropSpawn ARMS the join-window fuzzy
+  adopter (`remote_prop_spawn.cpp:763`) → fresh-spawns a 2nd prop beside the orphaned local ghost (identical
+  to the OBS-2 arg-slot bug already fixed at `kerfur_prop_adoption.cpp:178`). **(ROOT 2)** a mid-join
+  `SendReliable(KerfurConvert)` can FAIL with no retry → 5-of-6 (kerfur FORM is not in the join snapshot, so
+  nothing reconciles a dropped convert). Fix design (live-fix + the `coop/sync`-single-authority refactor that
+  ends this whole dupe class):
+  `research/findings/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`.
 
 ## Dupe matrix (every two-seam overlap + its dedup) — the high-value reference
 
