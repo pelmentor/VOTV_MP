@@ -20,13 +20,33 @@
 // per-kind manager) + `Element` (the entity). So this module does NOT rebuild a
 // registry -- it adds the missing seams on top.
 //
-// ASSEMBLY STATE (2026-06-28, ASSEMBLED). The identity module -- one eid<->actor
-// owner across create / adopt / morph / destroy -- is built:
+// ASSEMBLY STATE (2026-06-29, AUTHORITY EXTENDED -- A/B/C). The identity module --
+// one eid<->actor owner across create / adopt / morph / destroy -- is built, and
+// the 2026-06-29 authority pass extended it from prop-only to ALL streamed kinds +
+// added the compile wall:
 //   - CreateOrAdopt ....... sync_create.h: the ONE bind decision (idempotent-adopt
 //                           / morph-reskin / Install-new w/ HEAD live-conflict
-//                           reject). Every prop-mirror bind funnels here
+//                           reject). Every PROP mirror bind funnels here
 //                           (RegisterPropMirror forwards; OnSpawn + both convert
-//                           morph sites route through it).
+//                           morph sites route through it). [Inc A 2026-06-29] NOW
+//                           ALSO NPC + WorldActor: CreateOrAdoptNpcMirror /
+//                           CreateOrAdoptWorldActorMirror (one templated simple-
+//                           mirror helper); npc_mirror/npc_adoption/world_actor_sync
+//                           route their wire binds through sync, not raw Install.
+//   - RetireMirror ........ [Inc B] sync_destroy.h: the ONE type-dispatched destroy
+//                           funnel -- resolves the Element's ElementType, Takes from
+//                           the matching MirrorManager<T>, Enqueues to ElementDeleter.
+//                           The 6 per-producer Enqueue(Mgr.Take(eid)) sites
+//                           (npc_sync x3, world_actor_sync x2, kerfur_reconcile)
+//                           route through it.
+//   - SEALED Install ...... [Inc C] MirrorManager<T>::Install is now PRIVATE,
+//                           friended to exactly coop::sync::MirrorInstallAccess. A
+//                           wire mirror can ONLY be bound through sync -- a feature
+//                           file reaching into a manager to Install is a COMPILE
+//                           error ("someone to watch them", enforced not conventional).
+//                           AllocAndInstall (host mint) + Take/Drop/Drain (teardown)
+//                           stay public per-type-authority ops (sealing them = a
+//                           god-module crutch, RULE 1 -- deliberately not done).
 //   - SyncReconcile ....... sync_reconcile.h: the non-one-shot identity reconcile
 //                           (valve-abort re-bind + post-purge window). VERIFIED
 //                           16:06 (242 re-binds + 13 post-purge fires, world clean).
