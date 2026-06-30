@@ -7,11 +7,13 @@ on the in-window kToPile LAND). But the actual DUP cure is now the **(X) native-
 **#2 proxy-wins** (`save_identity_bind.cpp`, commit `acc416eb`): when a convert touched the eid in-window
 (`CtxForEid>0`), the bind keeps the host-authored proxy and retires the redundant save-loaded native, instead
 of binding native@old. **VERIFIED hands-on 2026-06-26 15:42** (`PROXY-WINS ... case(ii)-converted`, chipPile
-overflow=0, no dup). The remaining edge is positional only (the moved pile may render at the old spot until
-interaction) — tracked as **b2** (AS-BUILT commit `2829ce6d`, hands-on PENDING: an explicit
-`SetActorLocation`+`ToPile SNAP(spawn-on-convert) drift=` log in `remote_prop.cpp` OnConvert's convert-beat-spawn
-LAND branch — forces the moved pos + closes the observability hole; attempt+observability, not a guaranteed fix)
-in `research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`. The `f837fbad` MD5 below is a dead
+overflow=0, no dup). The remaining edge was positional only (the moved pile rendered at the old spot until
+interaction) — tracked as **b2/b3** (AS-BUILT commit `2829ce6d`) — **now ROOT-FIXED + HANDS-ON VERIFIED
+2026-06-30** (commit `a6242cfe`, deployed `C726D533`): the b3 quiescence pos-correction fired but its
+`SetActorLocation` silently NO-OP'd because a save-loaded `actorChipPile_C` native is **STATIC mobility** (the
+`SetActorRootMovable`-before-teleport fix — see the 2026-06-30 section at the bottom of this doc). The earlier
+b2 `2829ce6d` log-attempt was observability, not the cure; the mobility no-op was the actual root.
+Original b2 RE: `research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`. The `f837fbad` MD5 below is a dead
 ancestor (its content re-landed via `08e35d77`); read the RE below for the original diagnosis, but the cure is
 #2. The 4TH mirror-identity window-race instance; same CLASS as L1.
 
@@ -126,3 +128,18 @@ AdoptPendingGrabClump) · `net_pump.cpp:617-626` (re-seed minting 5283) · `prop
 TryDestroyTwin) · `pile_reconcile.cpp:120-197` (twin-destroy + the NONE probe) ·
 `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md` (L1 root + purge/re-seed gap) ·
 `memory/project_prop_appearance_delay_backlog_2026-06-23.md:18-22` (symptom-1 held-pile-in-window).
+
+## 2026-06-30 -- b3 pos-correction never snapped the native (STATIC-mobility no-op) -- ROOT-FIXED + VERIFIED
+The b3 PropSnapPos path (host flushes a save-authoritative position for a pile it moved in the join window;
+client arms `quiescence_drain::ArmPendingPosCorrection`, applies at the quiescence sweep) FIRED correctly but
+the snap **never took**: client log eid 4436 showed `[PILE-B3] APPLIED ... applied=(1699) host=(1556)
+drift=150cm` -- the native read back STILL at the save pos right after `SetActorLocation`. ROOT: a save-loaded
+`actorChipPile_C` native rests at **STATIC mobility**, and a Static component silently no-ops
+`SetActorLocation` (the K2 call still returns true). So a host-moved-in-window pile stayed at the old spot on
+the client unless the host RE-interacted (re-grab/drop -> a convert morphs a Movable clump). Kerfurs reconciled
+because an NPC is Movable -- the user's exact "moved piles don't snap like kerfurs" report. FIX (commit
+`a6242cfe`, deployed `C726D533`, **HANDS-ON VERIFIED 2026-06-30**): new `ue_wrap::engine::SetActorRootMovable`
+(RootComponentOf + SetComponentMobility Movable=2, the `trash_proxy.cpp:183` precedent) called in
+`ApplyPendingPosCorrections` BEFORE the teleport; the existing APPLIED drift log self-verifies (drift~0 = the
+snap took). Same Static-no-op trap as the proxy lesson, now confirmed for a NATIVE game pile.
+[[lesson-runtime-staticmeshactor-must-be-movable]]
