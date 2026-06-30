@@ -53,6 +53,18 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 
 ### chipPile + garbageClump (the dupe-critical family) — REDESIGN 2026-06-21, see [docs/piles/08](piles/08-HOST-AUTH-TRASH-CHANNEL.md)
 
+> **NATIVIZATION 2026-06-30 [V probe / AS-BUILT inc1] — the PILE-form CLIENT MIRROR is moving from the bare
+> `AStaticMeshActor` proxy (row "chipPile/garbageClump CLIENT MIRROR" below) to a ROOTED REAL `actorChipPile_C`
+> NATIVE** (`coop/props/native_pile_mirror`), bound+marked save-native so it rides the `IsBoundMirrorNative`
+> machinery. A real pile IS `int_player_C` → native hover GUI + collision + per-instance rotation + occlusion +
+> movement-block, FREE. Inertness PROVEN hands-on (inert probe 60s collision-ON GO; user saw the native GUI on
+> aim). The in-hand/flying **CLUMP stays the bare proxy** (LifeSpan + autonomous re-pile = too live). Increment 1
+> (steady-state spawn-seam) deployed `75CB1762`, UNCOMMITTED (no-regression gate); re-pile + full proxy retire =
+> increment 2+. The camera-cone grab recognition is retired for piles (a native IS `lookAtActor` — the grab route
+> at `trash_collect_sync.cpp:414` already reads it). Canonical: [docs/piles/11](piles/11-PROXY-TO-NATIVE-NATIVIZATION-2026-06-30.md)
+> · [[project-pile-nativization-2026-06-30]]. The proxy rows below stay TRUE for the clump + the not-yet-nativized
+> pile paths.
+
 > **IDENTITY UPDATE 2026-06-27 [RD] — save-loaded chip/kerfur natives gained a position RE-BIND safety-net.**
 > The primary identity is the save-identity ORDINAL bind (Build 3, by saveSlot array index). But UE's incremental
 > GC sporadically destroys + re-instantiates a SPARSE handful of save-placed natives mid-join; they re-create at

@@ -1,5 +1,15 @@
 # Piles — the complete knowledge base (ambient trash pile coop sync)
 
+> **CURRENT TRACK (2026-06-30): pile mirror proxy → NATIVE nativization.** The bare `AStaticMeshActor` PILE
+> proxy (no int_player_C → no native hover GUI, no collision, wrong rotation) is being REPLACED by a rooted
+> real `actorChipPile_C` native (in-hand CLUMP stays a proxy). Inertness PROVEN hands-on (probe 60s collision-ON
+> GO + native GUI confirmed live). Increment 1 (spawn-seam) deployed `75CB1762`, UNCOMMITTED — no-regression
+> test is the commit gate; increment 2 (re-pile → native) = the observable win, NEXT. Full design + as-built +
+> NEXT: **[11-PROXY-TO-NATIVE-NATIVIZATION-2026-06-30.md](11-PROXY-TO-NATIVE-NATIVIZATION-2026-06-30.md)** ·
+> [[project-pile-nativization-2026-06-30]]. (Much of the proxy-centric framing below is being superseded as
+> the pile form goes native; the proxy stays load-bearing for clumps + the in-bracket fallback + the not-yet-
+> nativized re-pile path.)
+
 > **L1 JOIN-WINDOW DUP (host MOVES a SAVE-LOADED pile in-window) = VERIFIED + PUSHED (origin/main `960e4650`).**
 > A save-loaded chipPile the host moves during the join-load window duped (native@old + proxy@new, >1cm → the
 > 1cm dedup blind). FIX: the host stamps each join-snapshot pile with its SAVE-TIME position
