@@ -109,6 +109,29 @@ flash the PRIMARY dups (the sweep kills them only at quiescence, +2s later). So 
   this jump stays visible. The backup still makes it correct. This is the honest cost of a SHORT curtain
   (vs a quiescence-long curtain that would add the +2s the user rejected). Quantify in the first hands-on;
   if material, a per-actor brief re-hide on reposition is a follow-up (do not over-build now).
+- RESIDUAL (in-window host MUTATION -- the 2026-06-30 "issue 1", visible pop-in): a host mutation DURING a
+  join (e.g. a kerfur turn-off) registers an off-prop AFTER drain-complete, so it post-dates the snapshot.
+  It is delivered correctly by the late-registration DELIVERY OWNER (`prop_snapshot::DeliverLateRegisteredProps`,
+  fed by the net_pump re-seed -> `ExpressIncrementalKerfurOffProp` -> client `kerfur_prop_adoption::Arm`,
+  eid-idempotent) and materializes at quiescence -- but AFTER the short curtain already lifted, so the joiner
+  SEES the count reconcile (5->6). **This is NOT a delivery gap** -- delivery is owned + VERIFIED (`48bba605`,
+  hands-on 14:42: host TOTAL == client TOTAL, owner fired x1). It is the by-design cost of lifting at
+  SnapshotComplete instead of quiescence (the same SHORT-curtain cost as the bullet above). CLOSED as
+  arrival-order cosmetic. See [[feedback-deliver-missing-owner-delivery-axis]].
+  - **REJECTED machinery (2026-06-30) -- do NOT resurrect:** a client CURTAIN-HOLD (defer `BeginDismiss` to
+    quiescence) and/or a HOST pre-SnapshotComplete re-seed FLUSH were designed to hide this pop-in. BOTH
+    rejected: (1) the mutation post-dates drain-complete, so a host flush at `CompleteDrainForCurrentSlot`
+    runs BEFORE the off-prop exists -- cannot catch the reported repro; (2) the lift event (SnapshotComplete
+    arriving) temporally PRECEDES the mutation, so the client cannot react without holding to quiescence =
+    the +2s blank this whole design exists to avoid; (3) **delivery is ALREADY owned** by
+    `DeliverLateRegisteredProps` -- adding a host-flush / curtain-hold to "ensure arrival before the lift"
+    re-solves an owned axis = a RULE-2 parallel delivery channel. A future N+1 that sees the pop-in must
+    classify it as the arrival-order cosmetic above, NOT a delivery defect.
+  - **Only polish that would NOT re-solve delivery** (if ever wanted, separate track, not-worth-it-now): a
+    pure CLIENT-side soft fade-in of the late mirror at its quiescence materialization (post-spawn visual
+    only -- bracket-FREE, does not touch the host delivery arm, does not re-arm any sweep). Deferred because
+    it is asset-dependent (needs an opacity/dither material param on the mesh), not because it risks the
+    incremental arm.
 
 ## Acceptance (design review gate)
 1. Curtain is SHORT -- lifts on "primary world assembled" (SnapshotComplete + drain), NOT `g_sweepFired`.
