@@ -23,7 +23,6 @@
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"  // K-6: deferred prop-form kerfur adoption (driven from the client tick)  // v75: deferred class-match adoption for save-persisted NPCs
 #include "coop/creatures/kerfur_reconcile.h"  // scope A v1: arm the off->active dup retire from the carried save-time key
-#include "coop/props/remote_prop_spawn.h"  // TickClientReconcile (deferred prop divergence sweep)
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/dev/kerfur_census.h"  // DIAGNOSTIC: one-shot kerfur census at quiescence (forward-dup root)
 #include "coop/creatures/npc_sync.h"

@@ -203,6 +203,10 @@ void DestroyEchoSuppressed(void* actor) {
     if (ResolveDestroyFn()) {
         coop::prop_echo_suppress::MarkIncomingDestroy(actor);
         R::CallFunction(actor, g_destroyActorFn, nullptr);
+    } else {
+        // Parity with DestroyResolvedLocalActor_ / ConsumeLocalActor (the old inline OnConvert echo shared
+        // this warning path before the extraction). Drop-with-WARN, not a silent no-op.
+        UE_LOGW("remote_prop::DestroyEchoSuppressed: K2_DestroyActor unresolved -- actor %p not destroyed", actor);
     }
 }
 

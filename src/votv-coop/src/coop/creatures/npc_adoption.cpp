@@ -145,7 +145,7 @@ void ResolvePending() {
             // No local twin -- and the save load tail has DRAINED (the divergence sweep fired,
             // HasLoadTailQuiesced), or the last-resort timeout elapsed. CRITICAL: quiescence now
             // waits for the async ALLOWLISTED-NPC population to settle, not just the keyed props
-            // (remote_prop_spawn::CountLoadTailUnsettled_). The kerfur twins respawn SECONDS after
+            // (join_membership_sweep::CountLoadTailUnsettled_). The kerfur twins respawn SECONDS after
             // the props' keys mint (2026-06-15 hands-on: prop-only quiescence fired while the kerfur
             // NPCs were still loading -> this branch fresh-spawned a mirror that then duplicated the
             // late-arriving twin). With the NPC-aware gate, every blob twin is present by quiescence

@@ -130,7 +130,7 @@ void BeginClaimTracking() {
     coop::snapshot_census::Reset();
     // Phase 1 step 1A probe: arm the read-only keyless load-spawn coverage recorder for this join.
     coop::dev::spawn_order_probe::ArmForJoin();
-    UE_LOGI("remote_prop_spawn: claim tracking ARMED (snapshot bracket open) -- "
+    UE_LOGI("join_membership_sweep: claim tracking ARMED (snapshot bracket open) -- "
             "unclaimed in-universe locals will be destroyed at SnapshotComplete");
 }
 
@@ -142,7 +142,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
         // A SnapshotComplete without its Begin (wire anomaly / disconnect race)
         // must NOT sweep with an empty claim set -- that would destroy every
         // in-universe actor including legitimately claimed ones.
-        UE_LOGW("remote_prop_spawn: claim sweep requested but tracking is not armed -- skipping");
+        UE_LOGW("join_membership_sweep: claim sweep requested but tracking is not armed -- skipping");
         return;
     }
     // Fork B 2e (2026-06-10): SWEEP(client) == EXPRESS(host) + CLIENT-
@@ -243,7 +243,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
         for (const auto& [k, v] : keylessSkippedByClass) {
             if (v > topCnt) { topCnt = v; topCls = k; }
         }
-        UE_LOGW("remote_prop_spawn: sweep SKIPPED %zu keyless unclaimed actor(s) across %zu class(es) "
+        UE_LOGW("join_membership_sweep: sweep SKIPPED %zu keyless unclaimed actor(s) across %zu class(es) "
                 "(top: %d x '%ls') -- expected ~0 post-quiescence; a non-zero keyed-later count would "
                 "mean the quiescence gate fired too early (regression tripwire)",
                 skippedTotal, keylessSkippedByClass.size(), topCnt, topCls.c_str());
@@ -291,11 +291,11 @@ static void RunDivergenceSweep_(void* localPlayer) {
                 const int hostHas = coop::snapshot_census::HostCountForClass(c);
                 const auto cit = claimedByClass.find(c);
                 const int claimedOfC = (cit == claimedByClass.end()) ? 0 : cit->second;
-                UE_LOGW("remote_prop_spawn: completeness FLOOR kept %d unclaimed '%ls' -- host census %d, "
+                UE_LOGW("join_membership_sweep: completeness FLOOR kept %d unclaimed '%ls' -- host census %d, "
                         "claimed only %d this bracket (INCOMPLETE snapshot, NOT a divergence; docs/piles/10 guard)",
                         v, c.c_str(), hostHas, claimedOfC);
             }
-            UE_LOGW("remote_prop_spawn: completeness floor KEPT %zu of %zu doomed actor(s) across %zu class(es) "
+            UE_LOGW("join_membership_sweep: completeness floor KEPT %zu of %zu doomed actor(s) across %zu class(es) "
                     "(top: %d x '%ls') -- the host under-expressed these classes; the unclaimed locals SURVIVE",
                     keptTotal, doomed.size(), floorKeptByClass.size(), topCnt, topCls.c_str());
             doomed.swap(keptDoomed);
@@ -316,7 +316,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // live-capture path skips the sweep entirely (event_feed); this guards every
     // OTHER path (stale fallback / fresh boot) against the same class of bug.
     if (inClass > 0 && static_cast<int>(doomed.size()) * 2 > inClass) {
-        UE_LOGW("remote_prop_spawn: claim sweep ABORTED -- would destroy %zu of %d in-universe "
+        UE_LOGW("join_membership_sweep: claim sweep ABORTED -- would destroy %zu of %d in-universe "
                 "actor(s) (>50%%); the host snapshot is INCOMPLETE (partial/racing bracket), not a "
                 "divergence. Keeping the loaded world (%d claimed stay converged).",
                 doomed.size(), inClass, claimedCount);
@@ -343,7 +343,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
         ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, a);
         coop::prop_lifecycle::DestroyLocalProp(a, /*deferred=*/false);
     }
-    UE_LOGI("remote_prop_spawn: claim sweep -- %d in-universe actors live, "
+    UE_LOGI("join_membership_sweep: claim sweep -- %d in-universe actors live, "
             "%d claimed (expressed on the wire this bracket), %d unclaimed locals destroyed "
             "(client adopts host world)",
             inClass, claimedCount, static_cast<int>(doomed.size()));
@@ -356,11 +356,11 @@ static void RunDivergenceSweep_(void* localPlayer) {
         int shown = 0;
         for (const auto& [hcls, cnt] : hist) {
             if (++shown > 10) {
-                UE_LOGI("remote_prop_spawn:   doomed ... +%zu more classes",
+                UE_LOGI("join_membership_sweep:   doomed ... +%zu more classes",
                         hist.size() - 10);
                 break;
             }
-            UE_LOGI("remote_prop_spawn:   doomed %d x '%ls'", cnt, hcls.c_str());
+            UE_LOGI("join_membership_sweep:   doomed %d x '%ls'", cnt, hcls.c_str());
         }
     }
     // R1 + R3 retired the reconcile-once latch that lived here (g_sweepReconciled):
@@ -433,7 +433,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // RSS plateau that grazed the 12 GB process commit cap. Runs under the
     // join cover; the purge hitch is invisible.
     if (!ue_wrap::engine::ForceGarbageCollection()) {
-        UE_LOGW("remote_prop_spawn: post-sweep CollectGarbage unresolved -- relying on the engine's periodic purge");
+        UE_LOGW("join_membership_sweep: post-sweep CollectGarbage unresolved -- relying on the engine's periodic purge");
     }
 }
 
@@ -496,7 +496,7 @@ void ArmDivergenceSweep() {
     if (!g_claimTrackingActive) {
         // SnapshotComplete without its Begin (wire anomaly / disconnect race) --
         // do not arm a sweep with no claim set behind it.
-        UE_LOGW("remote_prop_spawn: divergence sweep arm requested but tracking not armed -- skipping");
+        UE_LOGW("join_membership_sweep: divergence sweep arm requested but tracking not armed -- skipping");
         return;
     }
     // (The 2026-06-17 reconcile-once latch that gated here -- g_sweepReconciled -- is
@@ -520,7 +520,7 @@ void ArmDivergenceSweep() {
     g_sweepLastScan = {};            // force a quiescence scan on the next tick
     g_sweepLastUnsettledCount = -1;
     g_sweepStableScans = 0;
-    UE_LOGI("remote_prop_spawn: divergence sweep ARMED -- deferring to load-tail quiescence "
+    UE_LOGI("join_membership_sweep: divergence sweep ARMED -- deferring to load-tail quiescence "
             "(keyless-prop + allowlisted-NPC population stable x%d scans @%dms, or %dms hard deadline)",
             kSweepQuiesceScans, kSweepScanIntervalMs, kSweepDeadlineMs);
 }
@@ -580,7 +580,7 @@ void TickClientReconcile() {
         !deadlineHit                                       ? "load tail quiesced"
         : (msSince(g_sweepArmedAt) >= kSweepHardCapMs)     ? "ABSOLUTE ceiling (stuck purge backstop)"
                                                            : "no-progress deadline";
-    UE_LOGI("remote_prop_spawn: divergence sweep FIRING (%s; %lldms after arm, %lldms since last progress)",
+    UE_LOGI("join_membership_sweep: divergence sweep FIRING (%s; %lldms after arm, %lldms since last progress)",
             fireReason, static_cast<long long>(msSince(g_sweepArmedAt)),
             static_cast<long long>(msSince(g_sweepLastProgressAt)));
     g_sweepPending = false;
@@ -632,7 +632,7 @@ bool HasLoadTailQuiesced() { return g_sweepFired; }
 
 void OnClientWorldReadyResetSweep() {
     if (g_sweepPending)
-        UE_LOGI("remote_prop_spawn: client world-ready -- cancelling a pending divergence sweep "
+        UE_LOGI("join_membership_sweep: client world-ready -- cancelling a pending divergence sweep "
                 "from the prior world (the new snapshot bracket will re-arm it)");
     g_sweepPending = false;
     g_sweepFired = false;
@@ -642,7 +642,7 @@ void OnClientWorldReadyResetSweep() {
 
 void ResetClaimTracking() {
     if (g_claimTrackingActive) {
-        UE_LOGI("remote_prop_spawn: claim tracking reset mid-snapshot (disconnect) -- "
+        UE_LOGI("join_membership_sweep: claim tracking reset mid-snapshot (disconnect) -- "
                 "%zu claims dropped, no sweep", g_claimedActors.size());
     }
     g_claimedActors.clear();
