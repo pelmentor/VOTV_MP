@@ -146,6 +146,13 @@ void OnDisconnectForSlot(int peerSlot);
 // for the common case where the destroyed prop isn't grabbed.
 void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer);
 
+// Deferred re-apply of a PropDestroy that arrived BEFORE its target loaded (the destroy-before-load race).
+// Called ONLY by the drain-edge order owner (pile_reconcile::ApplyPendingDestroys) at the quiescence sweep,
+// after the bind, so an out-of-order destroy reconciles instead of leaking a dup. Resolves the local player
+// itself. Returns true iff the now-loaded actor was destroyed (erase from the pending queue); false = still
+// not loaded, keep queued. NEVER re-arms. Game thread. [[feedback-one-owner-order-axis]]
+bool TryApplyDestroy(const coop::net::PropDestroyPayload& payload);
+
 // Clear every slot's kinematic-drive cache entry for `actor` (so nothing
 // drives a destroyed actor next tick). Extracted from OnDestroy (Fork B 2e,
 // 2026-06-10): the adoption sweep destroys actors through the same teardown

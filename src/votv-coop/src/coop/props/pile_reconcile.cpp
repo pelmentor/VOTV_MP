@@ -11,6 +11,7 @@
 #include "coop/element/registry.h"  // b3: Registry::Get().Get(eid) (the eid->actor lookup)
 #include "coop/session/ini_config.h"  // IsIniKeyTrue -- the [PILE-DELTA] probe flag (votv-coop.ini [dev], not bats/env)
 #include "coop/props/prop_element_tracker.h"  // UnmarkKnownKeyedProp / GetPropElementIdForActor
+#include "coop/props/remote_prop.h"  // TryApplyDestroy + KeyToWString (deferred destroy-before-load re-apply)
 #include "coop/props/save_time_retire_util.h"  // FindExactMatch + UnmarkAndDestroy + kExactMatchR2Cm (shared kernel)
 #include "coop/props/trash_proxy.h"  // NearestPileProxy (the census)
 #include "ue_wrap/engine.h"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>   // getenv -- the read-only [PILE-DELTA] probe gate (L1 orphan histogram)
+#include <cstring>   // memcmp -- deferred-destroy dedup by key bytes
 #include <unordered_map>
 #include <vector>
 
@@ -71,6 +73,11 @@ std::unordered_map<uint32_t, PendingTwin> g_pendingSaveTimeTwin;
 // has registered the native + the load tail is settled). Keyed by host eid; the latest correction wins.
 struct PendingPosCorrection { float x, y, z, pitch, yaw, roll; };
 std::unordered_map<uint32_t, PendingPosCorrection> g_pendingPosCorrection;
+
+// DESTROY-BEFORE-LOAD (2026-06-30): PropDestroys that arrived before this peer loaded the doomed prop. Armed by
+// remote_prop::OnDestroy (the event handler CAPTURES), applied at the quiescence sweep AFTER the rebind (the
+// order owner SEQUENCES) -- never dropped. [[feedback-one-owner-order-axis]]
+std::vector<coop::net::PropDestroyPayload> g_pendingDestroy;
 int  g_pileIndexBuiltCount = 0;  // size of g_pileBindIndex at build (the L1 orphan-census valve denominator:
                                  // leftovers / built = the host-drift fraction; a huge fraction = wire loss,
                                  // not divergence -> the census/removal must refuse it, like the >50%% sweep valve)
@@ -138,6 +145,12 @@ void Reset() {
         UE_LOGW("[PILE-B3] Reset DROPPING %zu undrained pos-correction(s) -- moved-in-window pile(s) left at "
                 "STALE save pos (never bound/applied before this teardown)", g_pendingPosCorrection.size());
     g_pendingPosCorrection.clear();
+    // Deferred destroys: a tombstone unresolved by teardown = a destroy whose target never loaded on this peer
+    // (host removed it before the joiner's copy ever materialized) -> safe to drop (nothing to destroy here).
+    if (!g_pendingDestroy.empty())
+        UE_LOGI("[DESTROY-DEFER] Reset dropping %zu unresolved deferred destroy(s) -- target never loaded here "
+                "(host-removed before our copy materialized; benign)", g_pendingDestroy.size());
+    g_pendingDestroy.clear();
 }
 
 void TryDestroyTwin(const coop::net::PropSpawnPayload& payload,
@@ -424,8 +437,38 @@ void ApplyPendingPosCorrections() {
     }
 }
 
+// DESTROY-BEFORE-LOAD: capture a PropDestroy whose target hasn't loaded yet (remote_prop::OnDestroy hands it
+// here on "no local actor"). The event handler only CAPTURES; this queue + ApplyPendingDestroys is the order
+// owner. Dedup by (eid, key bytes) so a resent destroy doesn't pile up. Game-thread only.
+void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload) {
+    for (const coop::net::PropDestroyPayload& p : g_pendingDestroy)
+        if (p.elementId == payload.elementId &&
+            std::memcmp(&p.key, &payload.key, sizeof(payload.key)) == 0)
+            return;  // already queued
+    g_pendingDestroy.push_back(payload);
+    UE_LOGI("[DESTROY-DEFER] CLIENT armed deferred destroy key='%ls' eid=%u -- arrived before the target loaded; "
+            "the drain-edge applies it post-bind at quiescence (destroy-before-load order fix)",
+            coop::remote_prop::KeyToWString(payload.key).c_str(), payload.elementId);
+}
+
+// Drain the armed deferred destroys. For each, re-dispatch through remote_prop::TryApplyDestroy: if the target
+// has now loaded + bound it is destroyed (erase); if it still hasn't materialized it stays queued for the next
+// drain. Sequenced AFTER BindUnboundReCreates so a just-bound native is resolvable. Game-thread only.
+void ApplyPendingDestroys() {
+    if (g_pendingDestroy.empty()) return;
+    for (auto it = g_pendingDestroy.begin(); it != g_pendingDestroy.end(); ) {
+        if (coop::remote_prop::TryApplyDestroy(*it)) {
+            UE_LOGI("[DESTROY-DEFER] CLIENT applied deferred destroy eid=%u -- target finally loaded -> destroyed "
+                    "(out-of-order destroy reconciled; no dup)", it->elementId);
+            it = g_pendingDestroy.erase(it);
+        } else {
+            ++it;  // target still not loaded -- retry next drain
+        }
+    }
+}
+
 bool HasPendingWork() {
-    return !g_pendingSaveTimeTwin.empty() || !g_pendingPosCorrection.empty();
+    return !g_pendingSaveTimeTwin.empty() || !g_pendingPosCorrection.empty() || !g_pendingDestroy.empty();
 }
 
 }  // namespace coop::pile_reconcile

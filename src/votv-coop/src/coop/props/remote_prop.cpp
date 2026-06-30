@@ -834,7 +834,40 @@ void ClearAnyDriveFor(void* actor) {
     }
 }
 
-void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) {
+// The terminal local teardown of a RESOLVED doomed actor -- shared by the in-time OnDestroy and the deferred
+// re-apply (pile_reconcile::ApplyPendingDestroys -> TryApplyDestroy). Clears any drive, releases a local grab,
+// echo-suppresses, then K2_DestroyActor. Game thread.
+void DestroyResolvedLocalActor_(void* actor, const std::wstring& keyW,
+                                const coop::net::PropDestroyPayload& payload, void* localPlayer) {
+    if (!ResolveDestroyFn()) {
+        UE_LOGW("remote_prop::OnDestroy: K2_DestroyActor UFunction unresolved -- dropping");
+        return;
+    }
+    UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u -> destroying local actor %p",
+            keyW.c_str(), payload.elementId, actor);
+    if (ue_wrap::prop::IsChipPile(actor) || ue_wrap::prop::IsGarbageClump(actor)) {
+        UE_LOGI("[PILE] CLIENT destroy eid=%u -> mirror %p removed (the pile/clump vanished here too, "
+                "matching the host)", payload.elementId, actor);
+    }
+    // If any slot was kinematically driving this prop, clear that slot's cache so we don't try to drive a
+    // destroyed actor next tick.
+    ClearAnyDriveFor(actor);
+    // 2026-05-25 cross-peer destroy: if this peer's local mainPlayer is currently grabbing the doomed actor,
+    // tear down the PHC grab cleanly first (no-op when not grabbed). Routed through ue_wrap::engine (Principle 7).
+    ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, actor);
+    // Mark BEFORE the engine call so our K2_DestroyActor PRE observer sees it and skips the broadcast (echo).
+    coop::prop_echo_suppress::MarkIncomingDestroy(actor);
+    R::CallFunction(actor, g_destroyActorFn, nullptr);
+}
+
+// Core PropDestroy handler. `allowDefer`=true is the in-time event path: if the doomed save-loaded prop has NOT
+// materialized on this peer yet (it loads on its own timeline; the host's destroy raced ahead), the destroy is
+// QUEUED on the drain-edge order owner (pile_reconcile::ArmPendingDestroy) and re-applied AFTER the bind at the
+// quiescence sweep -- NEVER dropped (the 2026-06-30 destroy-before-load 5-vs-7 race: a host destroy arrived 9s
+// before the client loaded its Nrby off-prop -> "no local actor" -> the prop then loaded unopposed -> a dup).
+// `allowDefer`=false is the deferred re-apply (TryApplyDestroy): a still-missing actor just returns false to
+// stay queued. Returns true iff a local actor was destroyed (or a proxy retired). Game thread.
+bool OnDestroyImpl_(const coop::net::PropDestroyPayload& payload, void* localPlayer, bool allowDefer) {
     // Clears g_drives[*] if the destroyed actor was under drive (T-10, GT-only).
     // Dispatched from event_feed::Update on the game thread (PropDestroy case).
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnDestroy)");
@@ -847,7 +880,7 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
         // carry -- audit HIGH), else the next E-press throws a dead eid forever. RetireProxy clears the drive.
         coop::trash_channel::ClearClientCarry(payload.elementId);
         coop::trash_proxy::RetireProxy(payload.elementId);
-        return;
+        return true;
     }
     const std::wstring keyW = KeyToWString(payload.key);
     // Resolve the doomed actor BEFORE draining the mirror. KEYED props resolve by Key (a
@@ -873,38 +906,37 @@ void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) 
         if (keyW.empty() &&
             (payload.elementId == 0 || payload.elementId == coop::element::kInvalidId)) {
             UE_LOGW("remote_prop::OnDestroy: empty key AND no eid -- dropping");
+            return false;
+        }
+        if (allowDefer) {
+            // DESTROY-BEFORE-LOAD: the doomed save-loaded prop hasn't materialized on this peer yet. Hand the
+            // destroy to the drain-edge ORDER OWNER instead of dropping it -- it re-applies at the quiescence
+            // sweep, AFTER the bind, so delivery order can't leak a dup. [[feedback-one-owner-order-axis]]
+            UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u has no local actor YET -- DEFERRING to the "
+                    "quiescence drain-edge (destroy-before-load; the order owner applies it post-bind)",
+                    keyW.c_str(), payload.elementId);
+            coop::pile_reconcile::ArmPendingDestroy(payload);
         } else {
-            UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u has no local actor (already destroyed or never spawned here)",
+            UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u still has no local actor -- keep pending",
                     keyW.c_str(), payload.elementId);
         }
-        return;
+        return false;
     }
-    if (!ResolveDestroyFn()) {
-        UE_LOGW("remote_prop::OnDestroy: K2_DestroyActor UFunction unresolved -- dropping");
-        return;
-    }
-    UE_LOGI("remote_prop::OnDestroy: key '%ls' eid=%u -> destroying local actor %p",
-            keyW.c_str(), payload.elementId, actor);
-    if (ue_wrap::prop::IsChipPile(actor) || ue_wrap::prop::IsGarbageClump(actor)) {
-        UE_LOGI("[PILE] CLIENT destroy eid=%u -> mirror %p removed (the pile/clump vanished here too, "
-                "matching the host)", payload.elementId, actor);
-    }
-    // If any slot was kinematically driving this prop, clear that slot's
-    // cache so we don't try to drive a destroyed actor next tick.
-    ClearAnyDriveFor(actor);
-    // 2026-05-25 cross-peer destroy: if this peer's local mainPlayer is
-    // currently grabbing the doomed actor (typical case: HOST holds the
-    // food, CLIENT eats it, HOST receives PropDestroy from client and
-    // must release before destroy), tear down the PHC grab cleanly
-    // first. No-op for the common case where the actor isn't grabbed.
-    // Audit fix #3 (2026-05-25): routed through ue_wrap::engine to keep
-    // Principle 7 layering (coop/ does not touch engine struct offsets
-    // directly).
-    ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, actor);
-    // Mark BEFORE the engine call so our K2_DestroyActor PRE observer sees
-    // it and skips the broadcast (echo suppression).
-    coop::prop_echo_suppress::MarkIncomingDestroy(actor);
-    R::CallFunction(actor, g_destroyActorFn, nullptr);
+    DestroyResolvedLocalActor_(actor, keyW, payload, localPlayer);
+    return true;
+}
+
+void OnDestroy(const coop::net::PropDestroyPayload& payload, void* localPlayer) {
+    OnDestroyImpl_(payload, localPlayer, /*allowDefer=*/true);
+}
+
+// Deferred re-apply, called by the drain-edge order owner (pile_reconcile::ApplyPendingDestroys) at the
+// quiescence sweep. Resolves the local player itself (the sweep has no caller-passed pawn). Returns true iff
+// the doomed actor has now loaded + was destroyed (so the order owner erases it from the pending queue); false
+// keeps it queued for the next drain. NEVER re-arms (allowDefer=false) -- the order owner already owns it.
+bool TryApplyDestroy(const coop::net::PropDestroyPayload& payload) {
+    void* localPlayer = coop::players::Registry::Get().Local();
+    return OnDestroyImpl_(payload, localPlayer, /*allowDefer=*/false);
 }
 
 void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer, int senderSlot) {

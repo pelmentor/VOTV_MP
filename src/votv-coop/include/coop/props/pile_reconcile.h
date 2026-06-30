@@ -112,6 +112,20 @@ void ArmPendingPosCorrection(coop::element::ElementId eid,
 // for a late arrival after the sweep already fired, immediately from the receive handler. Game-thread only.
 void ApplyPendingPosCorrections();
 
+// DESTROY-BEFORE-LOAD (2026-06-30): a PropDestroy can arrive BEFORE this peer has loaded its copy of the doomed
+// save-loaded prop (the host removed it during the join window; the prop loads on the client's own timeline).
+// remote_prop::OnDestroy finds "no local actor" and, instead of dropping the destroy (-> the prop later loads
+// unopposed = a dup, the 5-vs-7 race), hands it here. The order owner re-applies it at the quiescence sweep,
+// AFTER the bind, via remote_prop::TryApplyDestroy -- so destroy delivery becomes order-independent (the
+// symmetric peer of the create/rebind-at-quiescence). The event handler only CAPTURES; the drain-edge applies.
+// [[feedback-one-owner-order-axis]] Game-thread only.
+void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload);
+
+// Drain the armed deferred destroys (applied ones erased; a still-unloaded target stays queued for the next
+// drain). Called from RunDivergenceSweep_ (quiescence), in order AFTER the rebind so the target has bound.
+// Game-thread only.
+void ApplyPendingDestroys();
+
 // True iff there is armed-but-unconsumed reconcile work (a pending save-time twin OR a pending b3 position
 // correction). The steady-state reconcile trigger (coop::element::OnReconcileTick) polls this so it only does a
 // GUObjectArray walk when there is actually something to reconcile -- NOT every tick (the perf rule). The D1
