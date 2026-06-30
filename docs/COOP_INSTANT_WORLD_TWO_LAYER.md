@@ -18,7 +18,7 @@ in END-STATE; this is a TIMING/VISUAL layer on top.
 > revealed at quiescence -> stuck-hidden impossible), not a MirrorManager walk.
 
 ## The frame -- two layers, the backup is UNTOUCHED
-- **LOWER layer = the current reconcile** (quiescence-gated sweeps: `pile_reconcile::SweepReconcileSaveTimeTwins`,
+- **LOWER layer = the current reconcile** (quiescence-gated sweeps: `quiescence_drain::SweepReconcileSaveTimeTwins`,
   `kerfur_reconcile::SweepReconcileSaveTimeKerfurs`, the npc ghost sweep, the divergence sweep + the
   `save_time_retire_util` kernel). **STAYS EXACTLY AS-IS = the SAFE-BACKUP.** It guarantees correctness at
   quiescence (`HasLoadTailQuiesced()`), exactly as today.
@@ -145,7 +145,7 @@ Every fresh mirror is confirmed-safe-at-lift OR in an existing pending set -- NO
 2. **Hide AFTER register:** place the deferred-hide after `RegisterPropMirror`/`Install` (OnSpawn:947 /
    npc_mirror Install) so an actor is never hidden-but-unenumerable.
 3. **Confirmed test checks the 2 save-time sets:** lift-reveal gates on new `IsPendingSaveTimeTwin(eid)`
-   (pile_reconcile) + `IsPendingKerfurRetire(eid)` (kerfur_reconcile) predicates -- their LOCAL twins are
+   (quiescence_drain) + `IsPendingKerfurRetire(eid)` (kerfur_reconcile) predicates -- their LOCAL twins are
    still visible at lift = the dup-flash to avoid.
 
 ### Post-deploy audit (2026-06-24, code-reviewer agent) -- 2 fixes applied, 2 modularity flags

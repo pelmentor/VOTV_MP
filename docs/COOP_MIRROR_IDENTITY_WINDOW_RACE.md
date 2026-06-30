@@ -1,5 +1,13 @@
 # Mirror-identity JOIN-WINDOW race — a PROBLEM CLASS (not one object's bug)
 
+> **MODULE RENAME 2026-06-30 (anti-smear refactor; dated blockquotes below keep their original names as historical
+> record):** `pile_reconcile` was SPLIT into `coop/props/pile_spawn_bind` (the spawn-time TryDestroyTwin/adopt index)
+> + `coop/element/quiescence_drain` (the deferred queues + the SweepReconcileSaveTimeTwins drain). `identity_reconcile`
+> (`RunIdentityReconcile`/`OnReconcileTick`) became `coop/element/quiescence_drain` (`RunReconcile`/`OnTick`) -- the ONE
+> join-window order owner that also drains the kerfur retire (folded out of `kerfur_convert::PollKerfurConversions`).
+> The shared kernel `coop/save_time_retire_util.h` is UNCHANGED; its callers are now pile_spawn_bind + quiescence_drain
+> + kerfur_reconcile. See [[project-anti-smear-refactor-2026-06-30]].
+
 **Recognized 2026-06-24 (user architectural instinct). Rule-of-three MET 2026-06-24 (3 working instances).
 EXTRACT BUILT 2026-06-24 (`b6fb2638`) -- a MINIMAL shared kernel, NOT a full unification; details below.**
 This is a cross-cutting class doc. Discipline: **make each instance WORK first, generalize AFTER N>=3** --
@@ -59,7 +67,7 @@ unique per instance -> kills the dup (1) AND the cluster collision (3).
 | symptom | save-time WINDOW DUP (host moves a pile in-window) | IDENTITY-COLLISION (a keyless kerfur steals a neighbor's actor) | WINDOW DUP (off-in-save kerfur the host turns ON in-window) |
 | cross-peer key | KEYLESS -> save-time position | own `Aprop_Key` (keyless-never-steals gate) | save-time position carried on the **npc EntitySpawn** |
 | channel the key rides | the prop snapshot (`matchX/Y/Z`) | n/a (anti-collision gate, no carry) | **npc EntitySpawn** (NOT KerfurConvert -- it fails mid-join) |
-| reconcile | `pile_reconcile::SweepReconcileSaveTimeTwins` + `TryDestroyTwin` | `kerfur_prop_adoption` / `remote_prop_spawn` Gap-I-1 key gate | `kerfur_reconcile::SweepReconcileSaveTimeKerfurs` |
+| reconcile | `quiescence_drain::SweepReconcileSaveTimeTwins` + `pile_spawn_bind::TryDestroyTwin` (was `pile_reconcile`, split 2026-06-30) | `kerfur_prop_adoption` / `remote_prop_spawn` Gap-I-1 key gate | `kerfur_reconcile::SweepReconcileSaveTimeKerfurs` |
 | safety | exact 1cm key + chipType + `>50%` valve (denominator = ALL live piles) | own-key != pending-key -> never steal | exact 1cm key + uniqueness + ambiguous-skip + non-mirror gate (**NO ratio valve** -- see lesson) |
 | status | **VERIFIED + PUSHED** (`960e4650`) | **VERIFIED** (`8c96d7aa`) | **VERIFIED hands-on 17:23** (`7c67b00b`) |
 
@@ -110,7 +118,8 @@ match kernel + destroy + constant, keep everything else per-class." Target file 
   twin-destroy. Per-class hook.
 
 ### CRITICAL LESSON — the `>50%` ratio valve is DENOMINATOR-DEPENDENT (do NOT port blindly)
-This is EXACTLY the bug we just fixed (scope A v1->v1.1, 17:06). In `pile_reconcile` the valve denominator is
+This is EXACTLY the bug we just fixed (scope A v1->v1.1, 17:06). In the pile sweep (`quiescence_drain::
+SweepReconcileSaveTimeTwins`, was `pile_reconcile`) the valve denominator is
 **ALL live native piles** (claimed + unclaimed) -> `>50%` genuinely flags a racing bracket. In
 `kerfur_reconcile` the denominator is **ONLY non-mirror local off-props** (correctly-adopted ones are mirrors,
 excluded) -> the denominator IS the stale set, so retiring the lone stale form is always 100% -> the valve

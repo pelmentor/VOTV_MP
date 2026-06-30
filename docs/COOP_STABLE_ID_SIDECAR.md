@@ -6,9 +6,14 @@
 (commit `eb85ddfb`, hands-on 13:53 -- native camera-driven velocity, separate `InpActEvt_fire` input). Then
 the **join-window bind-vs-live-mutation class** (#1 kerfur turn-on dup + #2 pile-move dup) was RE'd + fixed +
 hands-on VERIFIED 15:42 (commits `39a381b0` #1 + `acc416eb` #2 -- **now PUSHED on origin/main `63aa4c01`**, 2026-06-28,
-as part of the sync-consolidation arc). NOTE (2026-06-28 hands-on 10:15): the b2 moved-in-window pile is STILL
-misplaced on the client (correction dropped by pile_reconcile::Reset; probe added, fix pending the next hands-on --
-see `[[project-sync-module-refactor-2026-06-27]]`). Full session detail: the new finding
+as part of the sync-consolidation arc). NOTE (2026-06-28 hands-on 10:15): the b2 moved-in-window pile was STILL
+misplaced on the client -- ROOT was the b3 pos-correction being DROPPED at bracket-close `Reset` before it could
+drain. **CODE-FIXED 2026-06-30 (anti-smear refactor `19bea2b3`):** the deferred pos-correction queue (now in
+`coop/element/quiescence_drain`) SURVIVES bracket close + drains at the steady-state `OnTick`; it is cleared ONLY
+at session teardown (`quiescence_drain::Reset` via `join_membership_sweep::ResetClaimTracking`). The "Reset DROPPING
+undrained pos-correction" data loss is gone. **VERIFICATION PENDING** -- whether b2/b3 actually snaps the moved pile
+end-to-end is part of the combined hands-on (research/handson_runbook_2026-06-30_destroy_before_load.md,
+[[project-anti-smear-refactor-2026-06-30]]). Full session detail: the new finding
 `research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` +
 `[[project-grab-throw-joinwindow-2026-06-26]]`.
 

@@ -4,8 +4,10 @@
 > A save-loaded chipPile the host moves during the join-load window duped (native@old + proxy@new, >1cm → the
 > 1cm dedup blind). FIX: the host stamps each join-snapshot pile with its SAVE-TIME position
 > (`save_transfer::g_blobPileXforms`, host-eid-keyed, self-seeded); the client twin-destroy matches the native
-> by that frozen key, retried at the POST-QUIESCENCE sweep (`pile_reconcile::SweepReconcileSaveTimeTwins`,
-> >50% valve). Module `coop/pile_reconcile.{h,cpp}`. Canonical RE:
+> by that frozen key, retried at the POST-QUIESCENCE sweep (`quiescence_drain::SweepReconcileSaveTimeTwins`,
+> >50% valve). Modules: `coop/props/pile_spawn_bind` (spawn-time TryDestroyTwin) + `coop/element/quiescence_drain`
+> (the deferred queues + the post-quiescence sweep) -- was `coop/pile_reconcile.{h,cpp}`, split in the 2026-06-30
+> anti-smear refactor [[project-anti-smear-refactor-2026-06-30]]. Canonical RE:
 > `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`.
 >
 > **2026-06-25 — TWO pile bugs now tracked, BOTH from the in-window manipulation:**
