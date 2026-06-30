@@ -654,7 +654,7 @@ void TickClientNpcs() {
     // DIAGNOSTIC (2026-06-24, doc kerfur/07): one-shot kerfur census at quiescence, AFTER both
     // sweeps, to catch the "silent" forward-dup half (an un-reconciled local kerfur form no
     // bind/spawn/sweep line names). Reads + logs only; fires once. Remove once the root is settled.
-    coop::kerfur_census::TickOnceAtQuiescence();
+    coop::kerfur_census::Tick();  // client census (default one-shot at quiescence; periodic when kerfur_census=1)
 }
 
 }  // namespace coop::npc_mirror

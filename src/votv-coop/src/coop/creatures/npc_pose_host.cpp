@@ -18,6 +18,7 @@
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
 #include "coop/element/npc.h"
 #include "coop/creatures/kerfur_entity.h"  // scope A: GetOriginOffEidForEid -- carry the off->active retire eid
+#include "coop/dev/kerfur_census.h"        // [dev] kerfur_census=1: periodic HOST census (5-vs-6 measurement)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "ue_wrap/engine.h"
@@ -100,6 +101,11 @@ void TickPoseStream() {
     // Game thread (the net-pump tick asserts GT) -> the scratch statics below are single-threaded.
     auto* s = GetSession();
     if (!s || s->role() != coop::net::Role::Host || !s->connected()) return;
+
+    // DIAGNOSTIC ([dev] kerfur_census=1): periodic HOST kerfur census so a hands-on can diff host vs client
+    // counts after the world settles (the 5-vs-6 measurement -- the host had no self-census before 2026-06-30).
+    // No-op unless the flag is set; throttled internally. Read-only.
+    coop::kerfur_census::Tick();
 
     // Reused scratch (no per-tick heap alloc): Snapshot() clears+fills elems; batch is cleared then
     // refilled in-place and handed to SetLocalNpcPoseBatch BY CONST-REF (it copies), so this static
