@@ -1,9 +1,14 @@
-# Hands-on runbook -- DESTROY-BEFORE-LOAD fix + census measurement (2026-06-30)
+# Hands-on runbook -- DESTROY-BEFORE-LOAD fix + ANTI-SMEAR refactor + census (2026-06-30)
 
-Deployed: **`21CDC33A`** (votv-coop.dll, hash-verified host = client = client2 = dev). **Proto 92** (unchanged
-wire; the fix is client-side reconcile + a read-only census). Build GREEN, audit CLEAN (no CRITICAL/WARN;
-one pre-existing file-size WARN on remote_prop.cpp). HEAD `211eec5e` on main. Launch via the named-window bats
+Deployed: **`043D756B`** (votv-coop.dll, hash-verified host = client = client2 = dev). **Proto 92** (unchanged
+wire). Build GREEN, audits CLEAN. HEAD **`db0c358f`** on main. Launch via the named-window bats
 (`mp_host_game.bat` + `mp_client_connect.bat`).
+
+**THIS ONE RUN GATES TWO THINGS** (the anti-smear refactor merged the destroy logic into the new order owner,
+so verifying the join also verifies the refactor): (1) the **destroy-before-load fix** (`211eec5e`, below);
+(2) the **ANTI-SMEAR refactor** (`quiescence_drain` order owner + `pile_spawn_bind` + `join_membership_sweep`
++ `remote_prop_destroy`; the kerfur retire folded into the one sequence). A clean join with matching census
+TOTALs + the kerfur/pile reconcile still working = both verified. See [[project-anti-smear-refactor-2026-06-30]].
 
 ## What changed (the 11:24 client=7 host=6 root)
 
