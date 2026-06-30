@@ -805,6 +805,14 @@ bool DetachActorFromParent(void* actor);
 // Game thread only.
 bool SetActorSimulatePhysics(void* actor, bool simulate);
 
+// Force `actor`'s ROOT component to Movable (EComponentMobility::Movable=2) so a subsequent
+// SetActorLocation/SetActorRotation actually relocates it. A Static-mobility root silently NO-OPs
+// SetActorLocation (the K2 call still returns true) -- so teleporting a Static native does nothing.
+// A save-loaded chipPile native rests at Static mobility; the b3 pos-correction must call this before
+// the teleport or the snap is a no-op (the "applied but drift unchanged" bug). Game thread only.
+// [[lesson-runtime-staticmeshactor-must-be-movable]]
+bool SetActorRootMovable(void* actor);
+
 // SetCollisionEnabled(collisionType) on `actor`'s root primitive component.
 // collisionType: 0=NoCollision 1=QueryOnly 2=PhysicsOnly 3=QueryAndPhysics. The
 // thrown clump MIRROR needs 3 so it collides + lands instead of sinking through the

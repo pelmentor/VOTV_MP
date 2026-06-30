@@ -205,12 +205,19 @@ void ApplyPendingPosCorrections() {
         if (!actor || !R::IsLive(actor)) { ++it; continue; }  // native not bound/loaded yet -- retry next drain
         const ue_wrap::FVector  loc{c.x, c.y, c.z};
         const ue_wrap::FRotator rot{c.pitch, c.yaw, c.roll};
+        // A save-loaded chipPile native rests at STATIC mobility -> SetActorLocation silently no-ops (the K2
+        // call returns true but the actor never moves), so the b3 snap "applied" with the full divergence
+        // still present (drift unchanged = the long-standing "moved pile stays wrong on the client unless the
+        // host re-interacts" bug; kerfurs reconcile because an NPC is Movable). Force the root Movable FIRST so
+        // the teleport takes. [[lesson-runtime-staticmeshactor-must-be-movable]]
+        ue_wrap::engine::SetActorRootMovable(actor);
         ue_wrap::engine::SetActorLocation(actor, loc);
         ue_wrap::engine::SetActorRotation(actor, rot);
         const ue_wrap::FVector got = ue_wrap::engine::GetActorLocation(actor);
         const float dx = got.X - c.x, dy = got.Y - c.y, dz = got.Z - c.z;
         UE_LOGI("[PILE-B3] CLIENT pos-correction APPLIED eid=%u applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f) "
-                "drift=%.2fcm -- join-window moved pile snapped to host pos (no interaction needed)",
+                "drift=%.2fcm -- join-window moved pile snapped to host pos (forced-Movable then teleport; "
+                "drift~0 confirms the snap took -- no interaction needed)",
                 static_cast<unsigned>(eid), got.X, got.Y, got.Z, c.x, c.y, c.z,
                 std::sqrt(dx * dx + dy * dy + dz * dz));
         it = g_pendingPosCorrection.erase(it);

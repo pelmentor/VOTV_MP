@@ -82,6 +82,17 @@ bool SetActorSimulatePhysics(void* actor, bool simulate) {
     return Call(root, f);
 }
 
+bool SetActorRootMovable(void* actor) {
+    // Force the root component Movable so a subsequent SetActorLocation/Rotation actually takes. A Static
+    // component silently no-ops the teleport (the K2 call still returns true) -- the b3 pos-correction bug:
+    // a save-loaded chipPile native rests at Static mobility, so the join-window snap to the host position
+    // did nothing (the "applied but drift unchanged" log). Movable also re-registers the render state.
+    // [[lesson-runtime-staticmeshactor-must-be-movable]] / SetComponentMobility's own note.
+    void* root = RootComponentOf(actor);
+    if (!root) return false;
+    return SetComponentMobility(root, /*EComponentMobility::Movable=*/2);
+}
+
 bool GetActorRootPhysicsVelocity(void* actor, FVector& outLin, FVector& outAng) {
     outLin = FVector{}; outAng = FVector{};
     void* root = RootComponentOf(actor);
