@@ -299,7 +299,15 @@ bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t int
     // eid_lifetime_trace=1 AND obj was captured). Proves capture-eid == wire-eid before the bind is built.
     coop::dev::eid_lifetime_trace::CheckWireEid(obj, static_cast<uint32_t>(eid));
     const auto loc = ue_wrap::engine::GetActorLocation(obj);
-    const auto rot = ue_wrap::engine::GetActorRotation(obj);
+    // chipPile/clump visual variety lives on the StaticMesh COMPONENT's relative rotation (random
+    // roll from UserConstructionScript), not the actor root (identity). For the trash family the
+    // mirror is a bare AStaticMeshActor proxy whose mesh sits on its own identity-relative root, so
+    // capture the visible mesh's WORLD rotation -- else GetActorRotation sends identity and every
+    // proxy pile renders identically oriented (the reported "rotation always the same"). A native
+    // (Aprop_C / keyed) prop keeps its actor rotation. [[lesson-chippile-saved-in-primitivesData-not-objectsData]]
+    const auto rot = ue_wrap::prop::IsChipPile(obj)
+                         ? ue_wrap::engine::GetVisibleMeshWorldRotation(obj)
+                         : ue_wrap::engine::GetActorRotation(obj);
     p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
     p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
     p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);

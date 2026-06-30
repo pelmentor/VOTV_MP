@@ -181,6 +181,16 @@ FRotator GetComponentWorldRotation(void* component);
 // Game thread only.
 bool SetComponentWorldRotation(void* component, const FRotator& rotation);
 
+// The WORLD rotation of `actor`'s visible StaticMesh component, or the actor
+// rotation if it owns none. A chipPile's per-instance visual variety lives on
+// its StaticMesh COMPONENT's relative rotation (a random roll applied in its
+// UserConstructionScript), NOT the actor root (which stays identity) -- so
+// GetActorRotation captures identity for every pile and every mirror proxy
+// would render identically oriented. Capture THIS on the host so the bare-
+// AStaticMeshActor proxy (whose mesh sits on its own identity-relative root)
+// reproduces the same orientation via a plain SetActorRotation. Game thread.
+FRotator GetVisibleMeshWorldRotation(void* actor);
+
 // AActor::SetActorTickEnabled. A remote pawn must NOT run the local-player
 // per-frame BP EventTick (which re-applies view/post-process/exposure to the
 // shared screen every frame -- the gamma stomp that survives a component

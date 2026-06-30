@@ -532,7 +532,10 @@ void TickCarry(coop::net::Session& s) {
             const bool reread = (ls.pileActor && R::IsLiveByIndex(ls.pileActor, ls.pileIdx));
             if (reread) {
                 cloc   = ue_wrap::engine::GetActorLocation(ls.pileActor);
-                crot   = ue_wrap::engine::GetActorRotation(ls.pileActor);
+                // The settled pile's visual orientation is on its StaticMesh component's relative
+                // rotation (random roll), not the actor root -- capture the mesh WORLD rotation so
+                // the re-skinned proxy reproduces it (else every re-piled proxy looks identical).
+                crot   = ue_wrap::engine::GetVisibleMeshWorldRotation(ls.pileActor);
                 cscale = ue_wrap::engine::GetActorScale3D(ls.pileActor);
             }
             BroadcastConvert(s, E, coop::net::propconvert_kind::kToPile, cloc, crot, cscale, ls.chipType,
