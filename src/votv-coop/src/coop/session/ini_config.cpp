@@ -26,9 +26,15 @@ std::wstring ModuleDir() {
     return sep == std::wstring::npos ? L"." : p.substr(0, sep);
 }
 
-// Strip whitespace + lowercase a line in place (case/space tolerant key matching).
+// Strip an inline `; comment`, then whitespace, then lowercase (case/space/comment
+// tolerant key matching). The ini uses inline comments pervasively
+// (`garbage_pickup_probe=1   ; v81 morph...`); WITHOUT this cut the trailing comment
+// made the normalized line `key=1;comment` != `key=1`, so the exact-equality match
+// below silently read EVERY inline-commented flag as ABSENT (=false). A `;` never
+// appears in a real value, so cutting at the first `;` is safe.
 std::string Normalize(const char* line) {
     std::string s(line);
+    if (const size_t c = s.find(';'); c != std::string::npos) s.erase(c);
     s.erase(std::remove_if(s.begin(), s.end(),
                            [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
             s.end());
