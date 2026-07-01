@@ -21,6 +21,7 @@
 #include "coop/props/trash_channel.h"  // docs/piles/08: per-eid sync-time-context (stale carry/convert drop)
 #include "coop/props/trash_clump_pose_stream.h"  // v85: stop the per-eid carry drive at the ToPile land
 #include "coop/props/trash_proxy.h"    // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
+#include "coop/props/native_pile_mirror.h"  // increment 2: nativize a landed clump proxy -> rooted real pile
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -845,41 +846,62 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* localPlayer,
     // the dup is structurally unreachable. Non-proxy converts (Aprop_C / kerfur, or a rare trash convert
     // that beat its OnSpawn) keep the legacy spawn+rebind path below.
     if (coop::trash_proxy::IsProxy(E)) {
-        void* proxy = coop::trash_proxy::ReskinProxy(E, payload.chipType, wantClump,
-                                                     ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ});
-        // ToPile (LAND) ONLY: stop the drive + snap to the authoritative LANDED rest position (the carry
-        // stream ended at the throw + the proxy froze mid-air, so without this the re-skinned pile would
-        // float where the throw began). For ToClump (GRAB) we must NOT teleport or reset the drive: the
-        // clump is being CARRIED -- the live carry pose stream drives its position with pose+lerp, exactly
-        // like every other prop. Clearing + snapping on every grab convert reset lerpSeeded so the next pose
-        // SNAPPED; with the host's re-pile churn that became the 2fps teleporting the user reported. The
-        // re-skin alone changes the form in place; the pose stream leads the position. (2026-06-22 carry fix:
-        // one convert in = re-skin only, pose+lerp the carry, one convert out = land snap.)
-        if (proxy && !wantClump) {
-            ClearAnyDriveFor(proxy);
-            coop::trash_clump_pose_stream::ClearDriveForEid(E);  // v85: stop the host-auth per-eid carry drive at the land
-            E::SetActorLocation(proxy, ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
-            E::SetActorRotation(proxy, ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
-            // Instrumentation (harness): read the proxy's ACTUAL world transform back and log the drift vs the
-            // host's authoritative payload. drift~0 proves the snap TOOK EFFECT (the proxy is Movable, no
-            // no-op, no mis-apply) AND that the CLIENT renders the host pose -- the automated "does the client
-            // show the pile in the right place / orientation" gate (the eyeball the screenshots gave, in a log).
-            const ue_wrap::FVector  got  = E::GetActorLocation(proxy);
-            const ue_wrap::FRotator gotR = E::GetActorRotation(proxy);
-            const float dx = got.X - payload.locX, dy = got.Y - payload.locY, dz = got.Z - payload.locZ;
-            UE_LOGI("[PILE] CLIENT ToPile SNAP eid=%u applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f) "
-                    "drift=%.2fcm | rot applied=(%.1f,%.1f,%.1f) host=(%.1f,%.1f,%.1f)",
-                    E, got.X, got.Y, got.Z, payload.locX, payload.locY, payload.locZ,
-                    std::sqrt(dx * dx + dy * dy + dz * dz),
-                    gotR.Pitch, gotR.Yaw, gotR.Roll, payload.rotPitch, payload.rotYaw, payload.rotRoll);
+        // INCREMENT 2 (2026-07-01) -- ToPile LAND on a proxy = the carried CLUMP proxy is settling into a
+        // resting PILE. NATIVIZE it: rebind E in place onto a rooted real actorChipPile_C native (which IS
+        // int_player_C -> native hover GUI + native random rotation + collision + occlusion, all free), then
+        // retire the proxy ACTOR (its Element stays, now owned by the native). This is the exact INVERSE of
+        // the ToClump morph hand-off (native -> clump proxy, ~:907): rebind-in-place FIRST, destroy the old
+        // ACTOR after, so E's Element never leaves the manager (the destroy-before-load hazard the kerfur arc
+        // was bitten by). payload.pileClass on a LAND = ClassNameOf(the re-piled actorChipPile_C) (trash_
+        // channel.cpp:169), so Materialize spawns the pile class.
+        if (!wantClump) {
+            coop::trash_clump_pose_stream::ClearDriveForEid(E);   // stop the carry pose stream at the land
+            const std::wstring pileCls = remote_prop_spawn::ClassNameToWString(payload.pileClass);
+            void* native = coop::native_pile_mirror::Materialize(
+                E, pileCls, payload.chipType,
+                ue_wrap::FVector{payload.locX, payload.locY, payload.locZ},
+                ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ},
+                senderSlot, /*skipBind=*/false, /*rebindInPlace=*/true);
+            if (native) {
+                coop::trash_proxy::RetireProxyActorOnly(E);       // destroy the proxy actor; Element KEPT (rebound to native)
+                // NO SetActorRotation -- the native applies its OWN per-instance random mesh roll (the fix for
+                // "every proxy pile looked identical"); its SpawnActor(loc) already positions it at the land.
+                // Read the native's world location back + log drift vs the host payload (the automated "client
+                // renders the host pose" gate, same eyeball-in-log the proxy snap gave).
+                const ue_wrap::FVector got = E::GetActorLocation(native);
+                const float dx = got.X - payload.locX, dy = got.Y - payload.locY, dz = got.Z - payload.locZ;
+                UE_LOGI("[PILE] CLIENT ToPile LAND eid=%u ctx=%u -> NATIVIZED native=%p at (%.1f,%.1f,%.1f) "
+                        "host=(%.1f,%.1f,%.1f) drift=%.2fcm [native hover GUI + rotation + collision -- proxy retired]",
+                        E, static_cast<unsigned>(payload.ctx), native, got.X, got.Y, got.Z,
+                        payload.locX, payload.locY, payload.locZ, std::sqrt(dx * dx + dy * dy + dz * dz));
+                coop::trash_channel::NoteClientConvertObserved(E, false);
+                return native;
+            }
+            // Materialize FAILED (pile class not loaded -- defensive) -> fall back to the proxy re-skin so the
+            // pile still lands (no-regression): re-skin in place + snap to the authoritative LANDED rest.
+            void* proxy = coop::trash_proxy::ReskinProxy(E, payload.chipType, /*isClump=*/false,
+                                                         ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ});
+            if (proxy) {
+                ClearAnyDriveFor(proxy);
+                E::SetActorLocation(proxy, ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
+                E::SetActorRotation(proxy, ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
+                UE_LOGW("[PILE] CLIENT ToPile LAND eid=%u -- native materialize FAILED, fell back to proxy re-skin "
+                        "(pile class '%ls' not loaded?)", E, pileCls.c_str());
+            }
+            coop::trash_channel::NoteClientConvertObserved(E, false);
+            return proxy;
         }
-        UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> PROXY re-skinned IN PLACE to %s chipType=%u "
+        // ToClump GRAB on a proxy (an un-nativized pile proxy from the join bracket / convert-beat-spawn being
+        // carried) -> re-skin to the carried clump IN PLACE. NO teleport / drive-reset: the live carry pose
+        // stream drives its position with pose+lerp (2026-06-22 carry fix -- snapping on every grab convert was
+        // the 2fps teleport). A native pile grabbed goes to the ~:907 morph hand-off instead (IsProxy=false).
+        void* proxy = coop::trash_proxy::ReskinProxy(E, payload.chipType, /*isClump=*/true,
+                                                     ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ});
+        UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u -> PROXY re-skinned IN PLACE to CLUMP chipType=%u "
                 "[SYNC-MIRROR OK -- no spawn-fresh, no dup]",
-                edge, E, static_cast<unsigned>(payload.ctx), wantClump ? "CLUMP" : "PILE",
-                static_cast<unsigned>(payload.chipType));
-        // v85: reconcile the CLIENT carry-state toggle -- a ToClump matching our pending grab confirms the
-        // carry; a ToPile for our carried eid ends it (so the next E-press grabs, not throws). No-op on host.
-        coop::trash_channel::NoteClientConvertObserved(E, wantClump);
+                edge, E, static_cast<unsigned>(payload.ctx), static_cast<unsigned>(payload.chipType));
+        // v85: reconcile the CLIENT carry-state toggle -- a ToClump matching our pending grab confirms the carry.
+        coop::trash_channel::NoteClientConvertObserved(E, true);
         return proxy;
     }
     // HIGH-1: a trash convert that BEAT its OnSpawn (no proxy for E yet). Spawn the proxy HERE in the

@@ -231,6 +231,26 @@ void RetireProxy(coop::element::ElementId eid) {
             eid, actor);
 }
 
+void RetireProxyActorOnly(coop::element::ElementId eid) {
+    UE_ASSERT_GAME_THREAD("trash_proxy::RetireProxyActorOnly");
+    auto it = g_proxies.find(eid);
+    if (it == g_proxies.end()) return;
+    void* actor = it->second.actor;
+    g_proxies.erase(it);
+    // Same drive-evict -> destroy -> un-root order as RetireProxy (GC can't interleave on the game thread),
+    // but WITHOUT the Element unbind: the caller (remote_prop::OnConvert nativize hand-off) has already
+    // rebound `eid` onto the native pile in place, so Take/Enqueue-ing the Element here would delete the
+    // Element the native now owns (the destroy-before-load hazard). This is the ACTOR-only half of teardown.
+    coop::remote_prop::ClearAnyDriveFor(actor);
+    coop::trash_clump_pose_stream::ClearDriveForEid(eid);
+    if (actor && R::IsLive(actor)) {
+        E::DestroyActor(actor);
+        R::RemoveFromRoot(actor);
+    }
+    UE_LOGI("[PILE] trash_proxy: RETIRE-ACTOR-ONLY eid=%u actor=%p (drive-evicted, destroyed, un-rooted; "
+            "Element KEPT -- rebound to the native pile by the caller)", eid, actor);
+}
+
 bool IsProxy(coop::element::ElementId eid) {
     return g_proxies.find(eid) != g_proxies.end();
 }

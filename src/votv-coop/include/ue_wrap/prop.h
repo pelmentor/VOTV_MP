@@ -188,6 +188,16 @@ uint8_t GetChipType(void* actor);
 // mirrored clump shows the SAME trash variant the owner grabbed.
 void SetChipType(void* actor, uint8_t chipType);
 
+// Set a chipPile's chipType and REBUILD its appearance the game's OWN way: writes chipType, then dispatches
+// the pile's init() -- which does getChipPileType(chipType) -> SetStaticMesh on BOTH the pile's StaticMesh
+// AND Collision components (RE: actorChipPile 'init' export 80). This is exactly what loadData /
+// loadPrimitiveData do after writing chipType. A fresh SpawnActor runs init via UserConstructionScript with
+// the DEFAULT chipType=0, so a RUNTIME pile mirror must call this to show the host's variant -- an external
+// single SetStaticMesh can't (the pile has two mesh components, and init also owns the collision mesh).
+// For a clump, SetChipType's setTex already repaints and there is no init() (the call no-ops). No-op on a
+// non-chip actor. Game-thread only (dispatches UFunctions).
+void SetChipTypeAndRebuild(void* actor, uint8_t chipType);
+
 // Resolve the chipType -> pile static-mesh the GAME uses, via
 // Ulib_getFunc_C::getChipPileType(chipType, worldContext) dispatched on the lib's
 // CDO. Returns a UStaticMesh* (the client computes the trash proxy's mesh exactly

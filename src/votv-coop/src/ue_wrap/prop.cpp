@@ -372,6 +372,17 @@ void* ResolveSetTexFn(void* cls) {
     return fn;
 }
 
+std::unordered_map<void*, void*> g_initFnByClass;  // UClass* -> pile init() UFunction (nullptr = none)
+void* ResolveInitFn(void* cls) {
+    if (!cls) return nullptr;
+    std::lock_guard<std::mutex> lk(g_chipTypeMutex);
+    auto it = g_initFnByClass.find(cls);
+    if (it != g_initFnByClass.end()) return it->second;
+    void* fn = R::FindFunction(cls, L"init");  // actorChipPile 'init' skins the mesh from chipType
+    g_initFnByClass[cls] = fn;                 // cache even nullptr (a clump has no init())
+    return fn;
+}
+
 }  // namespace
 
 uint8_t GetChipType(void* actor) {
@@ -393,6 +404,19 @@ void SetChipType(void* actor, uint8_t chipType) {
     // (The proxy mirror replicates this directly in trash_proxy::SkinProxy.) No-op if the
     // class has no setTex (chipPile sets its mesh = getChipPileType(chipType) elsewhere).
     if (void* fn = ResolveSetTexFn(cls)) {
+        ue_wrap::ParamFrame f(fn);
+        ue_wrap::Call(actor, f);
+    }
+}
+
+void SetChipTypeAndRebuild(void* actor, uint8_t chipType) {
+    if (!actor) return;
+    SetChipType(actor, chipType);  // write the enum byte (+ setTex for a clump; a no-op setTex for a pile)
+    // The pile builds its mesh in init() (getChipPileType(chipType) -> SetStaticMesh on both mesh
+    // components), NOT in setTex -- so a pile needs an explicit init() to re-skin from the new chipType.
+    // This mirrors loadData / loadPrimitiveData, which write chipType then call init(). No-op if the class
+    // has no init() (e.g. a clump, already repainted by setTex above).
+    if (void* fn = ResolveInitFn(R::ClassOf(actor))) {
         ue_wrap::ParamFrame f(fn);
         ue_wrap::Call(actor, f);
     }

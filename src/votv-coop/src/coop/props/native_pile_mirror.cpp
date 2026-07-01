@@ -58,13 +58,15 @@ void* Materialize(coop::element::ElementId eid, const std::wstring& className, u
     E::SetActorTickEnabled(native, false);         // no autonomous per-frame ubergraph
     E::SetActorSimulatePhysics(native, false);     // kinematic resting pile (the host positions it)
     E::SetActorRootMovable(native);                // else SetActorLocation (host pose / b3) silently no-ops on a Static root
-    // Skin the host's chipType visible mesh. The native's own UserConstructionScript already applied a
-    // per-instance random mesh-component rotation (the native rotation we want) + spawned its Collision
-    // component (the native collision we want) -- SetStaticMesh on the visible StaticMeshComponent swaps
-    // only the mesh asset, leaving rotation + collision intact.
-    if (void* comp = E::GetStaticMeshComponent(native)) {
-        if (void* mesh = ue_wrap::prop::ResolvePileMesh(chipType, native)) E::SetStaticMesh(comp, mesh);
-    }
+    // Skin the host's chipType the GAME's OWN way: write chipType + dispatch the pile's init(), which does
+    // getChipPileType(chipType) -> SetStaticMesh on BOTH the pile's StaticMesh AND Collision components (RE:
+    // actorChipPile 'init' export 80 -- the same call loadData/loadPrimitiveData make). The fresh SpawnActor
+    // above already ran init once via UserConstructionScript, but with the DEFAULT chipType=0 -> a type-0
+    // pile; this re-init re-skins it to the host's variant. An external single SetStaticMesh CANNOT do this
+    // (the pile owns two mesh components + a per-variant collision mesh), which is why the runtime mirror
+    // showed a wrong-type / wrong-texture pile. The per-instance random mesh rotation from UCS is preserved
+    // (init only touches the meshes, not the component rotation).
+    ue_wrap::prop::SetChipTypeAndRebuild(native, chipType);
     if (scale.X > 0.001f && scale.Y > 0.001f && scale.Z > 0.001f) E::SetActorScale3D(native, scale);
 
     if (!skipBind) {

@@ -78,6 +78,14 @@ void* ReskinProxy(coop::element::ElementId eid, uint8_t chipType, bool isClump, 
 // would leak). No-op if `eid` is not a tracked proxy. Game thread.
 void RetireProxy(coop::element::ElementId eid);
 
+// Retire ONLY the proxy ACTOR for `eid` (drive-evict -> Destroy -> RemoveFromRoot), WITHOUT unbinding
+// its Prop mirror / Element. The caller MUST have already rebound `eid` onto a replacement actor in
+// place (RegisterPropMirror rebindInPlace=true) -- this is the clump-proxy -> native-pile nativization
+// (increment 2), the exact inverse of the native -> clump morph hand-off. Contrast RetireProxy, the
+// FULL teardown that also unbinds the Element (which here would delete the Element the native now owns
+// = the destroy-before-load hazard). No-op if `eid` is not a tracked proxy. Game thread.
+void RetireProxyActorOnly(coop::element::ElementId eid);
+
 // Is `eid` a tracked trash proxy? Lets the wire receiver branch to ReskinProxy /
 // RetireProxy instead of the BP spawn-fresh path. Game thread.
 bool IsProxy(coop::element::ElementId eid);
