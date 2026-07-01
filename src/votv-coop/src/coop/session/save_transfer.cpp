@@ -14,6 +14,7 @@
 #include "coop/session/save_indicator_suppress.h"  // detect/suppress the SAVED HUD on join-save
 #include "ue_wrap/engine.h"      // b3: GetActorLocation/GetActorRotation (host current pile pos)
 #include "ue_wrap/log.h"
+#include "ue_wrap/prop.h"        // b3: IsChipPile (skip a grabbed clump -- the convert stream owns it)
 #include "ue_wrap/reflection.h"  // b3: IsLive (skip a dead/mid-carry host actor)
 #include "ue_wrap/save_capture.h"
 
@@ -606,7 +607,13 @@ void FlushDivergedPilePositionsForSlot_(int peerSlot, bool firstRun) {
         ++checked;
         coop::element::Element* el = coop::element::Registry::Get().Get(eid);
         void* actor = el ? el->GetActor() : nullptr;
-        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead / mid-carry clump -> skip (post-world stream owns it)
+        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead -> skip
+        // CRITICAL (docs/piles/12, 18:52): only a RESTING chipPile native gets a position correction. A pile
+        // the host is actively GRABBING/THROWING is a CLUMP (morphed), and its live actor is airborne on the
+        // throw arc -- the trash-channel convert stream (ToClump/ToPile) is its authority, delivered correctly
+        // (LAND drift ~0). The b3 flush must NOT compete: chasing the clump's mid-air waypoints armed identity-key
+        // updates + HOST-VACATE twins at airborne spots => the paired native+proxy dup. Skip non-native actors.
+        if (!ue_wrap::prop::IsChipPile(actor)) continue;  // grabbed clump / proxy -> the convert stream owns it
         const ue_wrap::FVector cur = ue_wrap::engine::GetActorLocation(actor);
         const float dx = cur.X - savePos.X, dy = cur.Y - savePos.Y, dz = cur.Z - savePos.Z;
         if (dx * dx + dy * dy + dz * dz <= kDivergeCm2) continue;  // unmoved (save IS current) -> no correction

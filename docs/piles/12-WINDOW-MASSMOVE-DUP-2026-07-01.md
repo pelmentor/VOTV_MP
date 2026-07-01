@@ -1,6 +1,24 @@
 # 12 — Join-window MASS-MOVE pile dup (2026-07-01)
 
-**Status: AS-BUILT (take 3 — THE OWNER), UNDER HANDS-ON.** Deployed `44937AC54FC0E2CD` (4/4 hash-verified).
+**Status: AS-BUILT (take 3.1 — OWNER + grabbed-clump gate), UNDER HANDS-ON.** Deployed `F22C0521BD250B7C`
+(4/4 hash-verified).
+
+## 18:52 — the owner over-reached onto actively-grabbed piles (fixed) [log-V]
+Take-3 owner FIRED and worked for the @old-resurrect class: the HOST late-arm delivered late moves (eid 4930 at
+drift 2134cm — the 5271-class gap closed), 22 identity-updates, 22 HOST-VACATE, 169 retires. But a new dup
+signature appeared: grabbing a pile pulled TWO clumps (a native + a co-located extra). NOT materialize-fail
+(`materialize FAILED`=0) and NOT a proxy leak (876 proxy spawn / 875 retire, balanced — mostly join-time
+nativization). Root: **the b3 flush was sending PropSnapPos for a pile the host was actively GRABBING/THROWING** —
+its live actor is an airborne CLUMP on the throw arc (eid 4965 flush `current=(1637,-269,6375)`, Z=6375 vs save
+Z=6098). The client chased those mid-air waypoints — `identity key UPDATED -> (…,6375)` and armed HOST-VACATE
+twins at AIRBORNE spots — while the trash-channel convert stream (the real authority) landed the native correctly
+(LAND drift 0). Two authorities fighting over the same live pile => the paired dup + bogus mid-air retires. The
+flush's own comment said `// mid-carry clump -> skip` but the condition (`!actor || !IsLive`) never skipped a
+clump (a clump is a live actor). Fix: `if (!ue_wrap::prop::IsChipPile(actor)) continue;` — only a RESTING
+chipPile native gets a correction; a grabbed clump is owned by the convert stream. This is NOT a separate track —
+it was the owner over-reaching; the gate confines it to moved-and-settled piles (the case it was built for).
+
+## Take 3 — the OWNER (host-authoritative pile identity through the join tail) [AS-BUILT]
 Host + client. NO protocol bump (reuses PropSnapPos). Full RE + timeline:
 `research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md`. SEPARATE class from `docs/piles/09`
 (single held-clump-at-join) and `docs/piles/11` (nativization) — the MASS version. [[project-pile-nativization-2026-06-30]]
