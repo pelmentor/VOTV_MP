@@ -273,6 +273,7 @@ add_library(votv-coop SHARED
     src/coop/props/trash_collect_sync.cpp
     src/coop/props/trash_pile_sync.cpp
     src/coop/props/trash_proxy.cpp
+    src/coop/props/native_pile_mirror.cpp
     src/coop/player/puppet_carry_drive.cpp
     src/coop/props/trash_clump_pose_stream.cpp
     src/coop/world/weather_sync.cpp
@@ -336,6 +337,7 @@ add_library(votv-coop SHARED
     src/coop/dev/heap_probe.cpp
     src/coop/dev/inventory_probe.cpp
     src/coop/dev/drone_probe.cpp
+    src/coop/dev/native_pile_inert_probe.cpp
     src/coop/dev/pinecone_probe.cpp
     src/coop/dev/sleep_probe.cpp
     src/coop/dev/event_trigger.cpp

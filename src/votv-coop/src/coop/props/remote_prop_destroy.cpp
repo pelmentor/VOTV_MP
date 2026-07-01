@@ -95,6 +95,10 @@ void DestroyResolvedLocalActor_(void* actor, const std::wstring& keyW,
     ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, actor);
     // Mark BEFORE the engine call so our K2_DestroyActor PRE observer sees it and skips the broadcast (echo).
     coop::prop_echo_suppress::MarkIncomingDestroy(actor);
+    // Un-root FIRST: a nativized runtime pile mirror (native_pile_mirror) is AddToRoot'd (no save/world ref
+    // to stop GC), so a rooted PendingKill actor would leak its GUObjectArray slot forever. Harmless no-op on
+    // a save-loaded native / keyed prop (never rooted by us). Mirrors the proxy's RetireProxy un-root.
+    R::RemoveFromRoot(actor);
     R::CallFunction(actor, g_destroyActorFn, nullptr);
 }
 

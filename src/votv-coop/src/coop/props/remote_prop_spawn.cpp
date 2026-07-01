@@ -35,6 +35,7 @@
 #include "coop/props/prop_lifecycle.h"
 #include "coop/props/remote_prop.h"
 #include "coop/props/trash_proxy.h"   // phase 1: the host-authoritative AStaticMeshActor trash mirror (dup fix)
+#include "coop/props/native_pile_mirror.h"  // nativization 2026-06-30: a rooted real chipPile native is the PILE mirror
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/fname_utils.h"
@@ -277,17 +278,34 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
         }
         const bool isClump = coop::trash_proxy::IsClumpClass(classW);
         ue_wrap::FVector  loc{payload.locX, payload.locY, payload.locZ};
-        ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};
-        void* proxy = coop::trash_proxy::SpawnProxy(payload.elementId, payload.chipType, isClump, senderSlot, loc, rot,
-                                                    ue_wrap::FVector{payload.scaleX, payload.scaleY, payload.scaleZ});
+        const ue_wrap::FVector scale{payload.scaleX, payload.scaleY, payload.scaleZ};
+        // PILE form in STEADY STATE (not the join-reconcile bracket) -> a ROOTED REAL actorChipPile_C
+        // native (native int_player_C hover GUI + collision + per-instance rotation), replacing the bare
+        // AStaticMeshActor proxy for piles. Scoped to !IsClaimTrackingActive: a steady-state runtime/
+        // host-only pile has NO save-loaded level twin, so it never races the in-bracket TryDestroyTwin
+        // reconcile below (which stays on the proven proxy path) -- native-spawn + twin-destroy are
+        // mutually exclusive, so a native+twin dup is impossible by construction. In-bracket level piles
+        // are already native via the IsBoundMirrorNative bind (save_identity_bind); the clump form (LifeSpan
+        // + autonomous re-pile) stays a proxy. Inertness PROVEN: the 2026-06-30 collision-ON inert probe
+        // (60s live + inert, native hover GUI present). [[lesson-runtime-staticmeshactor-must-be-movable]]
+        const bool nativePile = !isClump && !coop::join_membership_sweep::IsClaimTrackingActive();
+        void* proxy = nullptr;
+        if (nativePile) {
+            // Materialize binds + marks save-native internally (unless skipBind, where OnConvert owns the bind).
+            proxy = coop::native_pile_mirror::Materialize(payload.elementId, classW, payload.chipType,
+                                                          loc, scale, senderSlot, skipBind, /*rebindInPlace=*/false);
+        } else {
+            ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};
+            proxy = coop::trash_proxy::SpawnProxy(payload.elementId, payload.chipType, isClump, senderSlot, loc, rot, scale);
+            if (proxy && !skipBind)
+                coop::remote_prop::RegisterPropMirror(payload.elementId, proxy, L"", classW, senderSlot);
+        }
         if (proxy) {
             if (!skipBind) {
-                coop::remote_prop::RegisterPropMirror(payload.elementId, proxy, L"", classW, senderSlot);
-                // instant-world: hide the freshly-registered proxy until reveal. Proxies are already
-                // collision-less (collisionOff=false). hasMatchPos => a moved-save pile whose local native@old
-                // is still visible -> HOLD to quiescence; else (derived/window pile, no native twin) reveal at
-                // the curtain-lift. (skipBind = a convert re-skin of an existing proxy -> OnConvert owns it;
-                // g_revealed also guards against re-hiding an already-revealed one.)
+                // instant-world: hide the freshly-registered mirror until reveal. hasMatchPos => a moved-save
+                // pile whose local native@old is still visible -> HOLD to quiescence; else (derived/window
+                // pile, no native twin) reveal at the curtain-lift. (skipBind = a convert re-skin -> OnConvert
+                // owns it; g_revealed guards against re-hiding an already-revealed one.)
                 coop::mirror_defer::OnMirrorSpawned(payload.elementId, proxy, /*collisionOff=*/false,
                                                     /*holdUntilQuiescence=*/payload.hasMatchPos != 0);
             }
