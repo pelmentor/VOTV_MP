@@ -21,6 +21,7 @@
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/props/save_identity_bind.h"     // BindUnboundReCreates (identity layer the sequence calls)
 #include "coop/props/save_time_retire_util.h"  // FindExactMatch + UnmarkAndDestroy (shared kernel)
+#include "coop/session/ini_config.h"           // IsIniKeyTrue (pile_dup_probe gate)
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -58,6 +59,17 @@ std::unordered_map<uint32_t, PendingTwin> g_pendingSaveTimeTwin;
 // A host-vacate twin matches the stale native@old by POSITION alone (the host said "E left here"; whatever
 // same-spot chipPile lingers is the stale copy, regardless of chipType) -> arm with this wildcard chipType.
 constexpr uint8_t kAnyChipType = 0xFF;
+
+// PROBE (2026-07-01, gated [dev] pile_dup_probe): the mass-move dup class is VERIFIED-closed to ONE residual
+// (docs/piles/12). The current aggregate sweep log ("N confirmed retired") cannot tell WHY a twin's
+// FindExactMatch returns -1: (0) no unbound native@old = clean, (>1) co-located-ambiguous, or the orphan is
+// BOUND-to-the-wrong-eid (excluded from the unbound-only candidate set -> invisible to every retire path, the
+// predicted GC-pointer-reuse tail). Read-only per-twin diagnostic that distinguishes the three -- so we PROBE
+// the residual before touching the VERIFIED owner. [[feedback-probe-dont-guess-rule]]
+bool DupProbeOn() {
+    static const bool s_on = coop::ini_config::IsIniKeyTrue("pile_dup_probe");
+    return s_on;
+}
 // A twin retires when its eid is CONFIRMED moved @new: E's currently-bound native lives farther than this
 // from the twin's save-pos (a real host move is meters; a same-spot re-bind is ~0). (50 cm)^2.
 constexpr float kTwinMovedThresholdCm2 = 2500.f;
@@ -116,13 +128,26 @@ int SweepReconcileSaveTimeTwins() {
     // UNBOUND save-loaded copy, distinct from E's authoritative @new mirror).
     struct LiveNative { void* actor; int32_t idx; float x, y, z; uint8_t chipType; };
     std::vector<LiveNative> natives;
+    // PROBE-only parallel census of BOUND chipPile natives + the eid each is bound to. A native@old bound to an
+    // eid != the twin's eid is the bound-to-wrong-eid residual; it is deliberately EXCLUDED from `natives` so the
+    // sweep never sees it -- this census is the only way to observe it. Empty (and never walked into) when off.
+    struct BoundNative { void* actor; float x, y, z; uint32_t eid; };
+    std::vector<BoundNative> boundChip;
+    const bool probe = DupProbeOn();
     const int32_t n = R::NumObjects();
     for (int32_t i = 0; i < n; ++i) {
         void* o = R::ObjectAt(i);
         if (!o || !R::IsLive(o)) continue;
         if (!ue_wrap::prop::IsChipPile(o)) continue;                   // real actorChipPile_C only (NOT our proxy)
         if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;   // CDO
-        if (coop::prop_element_tracker::IsBoundMirrorNative(o)) continue;  // bound native is the mirror, not a twin
+        if (coop::prop_element_tracker::IsBoundMirrorNative(o)) {
+            if (probe) {
+                const ue_wrap::FVector bl = ue_wrap::engine::GetActorLocation(o);
+                boundChip.push_back({o, bl.X, bl.Y, bl.Z,
+                    static_cast<uint32_t>(coop::prop_element_tracker::GetPropElementIdForActor(o))});
+            }
+            continue;  // bound native is the mirror, not a twin
+        }
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(o);
         natives.push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z, ue_wrap::prop::GetChipType(o)});
     }
@@ -162,8 +187,38 @@ int SweepReconcileSaveTimeTwins() {
         if (idx >= 0) {
             consumedFlags[idx] = true;
             decisions.push_back({eid, natives[idx].actor, confirmed});
-        } else if (++p.unresolvedPasses >= kMaxTwinPasses) {
-            resolvedEids.push_back(eid);  // no native@old ever materialized here -> stop retrying (FPS-pin guard)
+        } else {
+            // PROBE: why did FindExactMatch MISS? Distinguish clean(0) / ambiguous(>1) / bound-to-wrong-eid.
+            if (probe) {
+                auto near = [&](float x, float y, float z, float r) {
+                    const float dx = x - p.x, dy = y - p.y, dz = z - p.z; return dx*dx+dy*dy+dz*dz <= r*r;
+                };
+                int u1 = 0, u30 = 0;
+                for (const LiveNative& nv : natives) { if (near(nv.x,nv.y,nv.z,1.f)) ++u1; else if (near(nv.x,nv.y,nv.z,30.f)) ++u30; }
+                int bWrong = 0, bSame = 0; uint32_t wrongEid = 0; float wrongD = 0.f;
+                for (const BoundNative& bn : boundChip) {
+                    if (!near(bn.x,bn.y,bn.z,30.f)) continue;
+                    const float dx = bn.x-p.x, dy = bn.y-p.y, dz = bn.z-p.z; const float d = std::sqrt(dx*dx+dy*dy+dz*dz);
+                    if (bn.eid == eid) ++bSame;
+                    else { ++bWrong; if (wrongEid == 0) { wrongEid = bn.eid; wrongD = d; } }
+                }
+                float eDist = -1.f; void* eActor = nullptr;
+                if (coop::element::Element* el = coop::element::Registry::Get().Get(static_cast<coop::element::ElementId>(eid)))
+                    if (void* b = el->GetActor(); b && R::IsLive(b)) {
+                        eActor = b; const ue_wrap::FVector bl = ue_wrap::engine::GetActorLocation(b);
+                        const float dx = bl.X-p.x, dy = bl.Y-p.y, dz = bl.Z-p.z; eDist = std::sqrt(dx*dx+dy*dy+dz*dz);
+                    }
+                UE_LOGI("[DUP-PROBE] eid=%u %s @old=(%.1f,%.1f,%.1f) FindExactMatch=MISS pass=%d | UNBOUND@old: "
+                        "%d<1cm %d<30cm | BOUND@old<30cm: %d wrong-eid (first eid=%u d=%.1fcm) + %d same-eid | "
+                        "E.bound=%p d_from_old=%.1fcm  --> %s",
+                        eid, p.hostVacate ? "[host-vacate]" : "[event-twin]", p.x, p.y, p.z, p.unresolvedPasses,
+                        u1, u30, bWrong, wrongEid, wrongD, bSame, eActor, eDist,
+                        bWrong ? "BOUND-TO-WRONG-EID residual (the predicted GC tail)"
+                               : (u1 ? "unbound-present-but-unmatched(?)"
+                                     : (u30 ? "unbound near but >1cm off (fuzzy)" : "CLEAN (no orphan @old)")));
+            }
+            if (++p.unresolvedPasses >= kMaxTwinPasses)
+                resolvedEids.push_back(eid);  // no native@old ever materialized here -> stop retrying (FPS-pin guard)
         }
     }
 
