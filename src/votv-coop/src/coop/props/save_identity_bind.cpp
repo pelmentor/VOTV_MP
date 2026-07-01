@@ -341,12 +341,17 @@ int BindUnboundReCreates() {
     for (int32_t i = 0; i < n; ++i) {
         void* o = R::ObjectAt(i);
         if (!o || !R::IsLive(o)) continue;
-        if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;       // CDO
-        if (PT::IsBoundMirrorNative(o)) continue;                          // already bound (survivor) -> skip
+        // FPS (2026-07-01, sync:npc_client 48ms hitch): the CHEAP, ALLOC-FREE class filter FIRST. The old order
+        // ran NameOf (a wstring ALLOCATION) + NameStartsWith on ALL ~330k GUObjectArray objects every reconcile
+        // pass (4 Hz during a mass-move) before this filter -- the dominant net_pump::Tick spike. >99.7% of the
+        // array is neither a chipPile nor a kerfur and is now rejected by pointer-compares alone; NameOf runs only
+        // for the ~870 that pass.
         const bool isChip = ue_wrap::prop::IsChipPile(o);
         bool isKerfur = false;
         if (!isChip) { void* c = R::ClassOf(o); isKerfur = c && coop::kerfur_entity::IsKerfurPropClass(c); }
-        if (!isChip && !isKerfur) continue;
+        if (!isChip && !isKerfur) continue;                                // cheap class filter -> 99.7% out, no alloc
+        if (R::NameStartsWith(R::NameOf(o), L"Default__")) continue;       // CDO (NameOf alloc: only the ~870 matches)
+        if (PT::IsBoundMirrorNative(o)) continue;                          // already bound (survivor) -> skip
         const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(o);
         (isChip ? chipN : kerfurN).push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z});
     }
