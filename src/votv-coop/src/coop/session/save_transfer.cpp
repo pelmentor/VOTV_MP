@@ -131,6 +131,20 @@ std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
 // next tick) is the real pacer on slower links.
 constexpr int kChunksPerTick = 4;
 
+// b3 LATE-ARM (docs/piles/12, the OWNER): the diverged-pile flush was a ONE-SHOT at ConnectReplayForSlot, so
+// a pile the host moves AFTER that instant (a cluster cleared late in the joiner's ~30-60s load tail) got NO
+// PropSnapPos -- the client never learned it moved, its frozen save-pos identity went stale, and
+// RE-BIND-by-position resurrected the @old copy (18:17 trace). Fix: keep flushing that joiner's authoritative
+// pile positions for a window past world-ready, so EVERY in-window move (whenever it happens) is delivered.
+// Per (slot,eid) last-sent position dedups the wire to actual position CHANGES (cold: a few dozen entries x an
+// O(1) map lookup per cadence tick). g_pileFlushArmUntil[slot] is set by FlushDivergedPilePositionsForSlot (the
+// one-shot call at ConnectReplayForSlot opens the window); TickHost re-runs on the cadence until it expires.
+std::unordered_map<coop::element::ElementId, ue_wrap::FVector> g_lastFlushedPilePos[coop::net::kMaxPeers];
+std::chrono::steady_clock::time_point g_pileFlushArmUntil[coop::net::kMaxPeers]{};
+std::chrono::steady_clock::time_point g_pileFlushLastRun[coop::net::kMaxPeers]{};
+constexpr auto kPileFlushLateWindow = std::chrono::seconds(25);       // cover a long load tail + late clusters
+constexpr auto kPileFlushCadence    = std::chrono::milliseconds(500); // 2 Hz re-flush (cold; deduped to changes)
+
 void SendBeginNoSave_(int slot) {
     coop::net::SaveTransferBeginPayload b{};
     b.totalBytes = 0;
@@ -469,6 +483,8 @@ void OnRequest(int peerSlot) {
             "slot '%ls' (stale; torn-read guard)", peerSlot, g_hostSlot.c_str());
 }
 
+void TickPileFlushLateArm();  // fwd: defined below (b3 late-arm cadence), called at the tail of TickHost
+
 void TickHost() {
     if (!g_session) return;
     for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
@@ -501,6 +517,7 @@ void TickHost() {
             hs = HostStream{};  // frees the 17MB blob
         }
     }
+    TickPileFlushLateArm();  // b3 OWNER: keep delivering authoritative pile positions through each joiner's tail
 }
 
 void CancelForSlot(int peerSlot) {
@@ -511,6 +528,8 @@ void CancelForSlot(int peerSlot) {
     g_blobKeys[peerSlot].clear();  // R2: drop any unconsumed blob baseline
     g_blobPileXforms[peerSlot].clear();  // v86 Path 1c: drop the unconsumed save-time pile map
     g_blobKerfurXforms[peerSlot].clear();  // scope A: drop the unconsumed save-time kerfur map
+    g_pileFlushArmUntil[peerSlot] = {};        // b3 late-arm: disarm the diverged-pile flush window
+    g_lastFlushedPilePos[peerSlot].clear();    // and drop its per-eid dedup baseline
 }
 
 // v86 Path 1c: the save-time position of pile `eid` captured at the blob instant for
@@ -568,11 +587,20 @@ bool TryGetSaveTimePileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVect
 // it diverged, send a PropSnapPos correction the client snaps onto the bound native at quiescence. Pure
 // position-compare (robust regardless of whether a convert was delivered). Cold path: once per join, a few
 // dozen entries x an O(1) registry lookup. The gate is already open (called after MarkSlotWorldReady).
-void FlushDivergedPilePositionsForSlot(int peerSlot) {
+// Core flush: send a PropSnapPos for every save-time pile whose host-current pos DIFFERS from what we last
+// delivered to this joiner (a real, not-yet-delivered move). `firstRun` (the ConnectReplayForSlot one-shot)
+// arms the late window + resets the dedup baseline; later cadence runs (TickHost) deliver only NEW moves.
+void FlushDivergedPilePositionsForSlot_(int peerSlot, bool firstRun) {
     if (!g_session || peerSlot < 1 || peerSlot >= coop::net::kMaxPeers) return;
     const auto& m = g_blobPileXforms[peerSlot];
     if (m.empty()) return;  // stale-fallback join (no save-time pile map captured)
+    auto& lastSent = g_lastFlushedPilePos[peerSlot];
+    if (firstRun) {
+        lastSent.clear();
+        g_pileFlushArmUntil[peerSlot] = std::chrono::steady_clock::now() + kPileFlushLateWindow;
+    }
     constexpr float kDivergeCm2 = 4.0f * 4.0f;  // >4cm moved (above settle jitter) = a real in-window move
+    constexpr float kResendCm2  = 4.0f * 4.0f;  // only re-send when the pos moved >4cm from what we last sent
     int sent = 0, checked = 0;
     for (const auto& [eid, savePos] : m) {
         ++checked;
@@ -582,20 +610,51 @@ void FlushDivergedPilePositionsForSlot(int peerSlot) {
         const ue_wrap::FVector cur = ue_wrap::engine::GetActorLocation(actor);
         const float dx = cur.X - savePos.X, dy = cur.Y - savePos.Y, dz = cur.Z - savePos.Z;
         if (dx * dx + dy * dy + dz * dz <= kDivergeCm2) continue;  // unmoved (save IS current) -> no correction
+        // Dedup: skip if we already delivered this eid at (essentially) this position (the late-arm re-runs 2 Hz).
+        if (auto it = lastSent.find(eid); it != lastSent.end()) {
+            const float sx = cur.X - it->second.X, sy = cur.Y - it->second.Y, sz = cur.Z - it->second.Z;
+            if (sx * sx + sy * sy + sz * sz <= kResendCm2) continue;  // already delivered @this pos -> no re-send
+        }
         const ue_wrap::FRotator rot = ue_wrap::engine::GetActorRotation(actor);
         coop::net::PropSnapPosPayload p{};
         p.eid = static_cast<uint32_t>(eid);
         p.locX = cur.X; p.locY = cur.Y; p.locZ = cur.Z;
         p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
         g_session->SendReliableToSlot(peerSlot, coop::net::ReliableKind::PropSnapPos, &p, sizeof(p));
+        lastSent[eid] = cur;
         ++sent;
         UE_LOGI("[PILE-B3] HOST slot %d pos-correction eid=%u save=(%.1f,%.1f,%.1f) -> current=(%.1f,%.1f,%.1f) "
-                "drift=%.1fcm (pile moved in-window; convert dropped -> deliver the position)",
+                "drift=%.1fcm (%s in-window move -> deliver the authoritative position)",
                 peerSlot, static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z,
-                cur.X, cur.Y, cur.Z, std::sqrt(dx * dx + dy * dy + dz * dz));
+                cur.X, cur.Y, cur.Z, std::sqrt(dx * dx + dy * dy + dz * dz), firstRun ? "one-shot" : "late-arm");
     }
-    UE_LOGI("[PILE-B3] HOST slot %d diverged-pile flush -- %d correction(s) sent of %d save-time pile(s) "
-            "(connect-snapshot save-authoritative hole closed)", peerSlot, sent, checked);
+    if (sent > 0 || firstRun)
+        UE_LOGI("[PILE-B3] HOST slot %d diverged-pile flush (%s) -- %d correction(s) sent of %d save-time pile(s) "
+                "(connect-snapshot save-authoritative hole closed; late-armed through the join tail)",
+                peerSlot, firstRun ? "one-shot arm" : "late-arm tick", sent, checked);
+}
+
+void FlushDivergedPilePositionsForSlot(int peerSlot) {
+    FlushDivergedPilePositionsForSlot_(peerSlot, /*firstRun=*/true);
+}
+
+// Host cadence (TickHost, host-only, ~per frame): keep flushing each armed joiner's authoritative pile
+// positions for kPileFlushLateWindow past its ConnectReplayForSlot one-shot, at kPileFlushCadence. Delivers a
+// move that happened AFTER the one-shot (the 18:17 residual: a cluster cleared late in the load tail).
+void TickPileFlushLateArm() {
+    if (!g_session) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
+        if (g_pileFlushArmUntil[slot].time_since_epoch().count() == 0) continue;  // never armed
+        if (now >= g_pileFlushArmUntil[slot]) {                                    // window expired -> disarm + free dedup
+            g_pileFlushArmUntil[slot] = {};
+            g_lastFlushedPilePos[slot].clear();
+            continue;
+        }
+        if (now - g_pileFlushLastRun[slot] < kPileFlushCadence) continue;          // debounce to the cadence
+        g_pileFlushLastRun[slot] = now;
+        FlushDivergedPilePositionsForSlot_(slot, /*firstRun=*/false);
+    }
 }
 
 bool TryGetSaveTimeKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out) {

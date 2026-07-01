@@ -12,6 +12,7 @@
 #include "coop/session/join_progress.h"
 #include "coop/creatures/npc_mirror.h"
 #include "coop/element/quiescence_drain.h"  // b3: ArmPendingPosCorrection / ApplyPendingPosCorrections (PropSnapPos)
+#include "coop/props/save_identity_bind.h"  // b3 OWNER: UpdateChipSavePosAndGetOld (retrack identity key on PropSnapPos)
 #include "coop/player/players_registry.h"
 #include "coop/creatures/world_actor_sync.h"  // v80 (B3b): non-Character event-actor mirror receivers
 #include "coop/props/prop_stick_sync.h"
@@ -406,6 +407,16 @@ bool HandleEntityEvent(net::Session& session,
         coop::element::quiescence_drain::ArmPendingPosCorrection(
             p.eid, ue_wrap::FVector{p.locX, p.locY, p.locZ},
             ue_wrap::FRotator{p.rotPitch, p.rotYaw, p.rotRoll});
+        // b3 OWNER (docs/piles/12): this PropSnapPos is the host's AUTHORITATIVE "E is at @new" -- use it for
+        // IDENTITY, not just to nudge the actor. (1) retrack our save-time key to @new so RE-BIND-by-position
+        // stops resurrecting the stale @old copy; (2) if E genuinely moved, arm a host-vacate twin so the sweep
+        // retires whatever save-loaded native@old lingers -- on the host's word, no fragile position-guess.
+        {
+            ue_wrap::FVector oldPos{};
+            if (coop::save_identity_bind::UpdateChipSavePosAndGetOld(
+                    p.eid, ue_wrap::FVector{p.locX, p.locY, p.locZ}, oldPos))
+                coop::element::quiescence_drain::ArmHostVacateTwin(p.eid, oldPos);
+        }
         if (coop::join_membership_sweep::HasLoadTailQuiesced())
             coop::element::quiescence_drain::ApplyPendingPosCorrections();
         break;

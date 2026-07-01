@@ -1,10 +1,39 @@
 # 12 — Join-window MASS-MOVE pile dup (2026-07-01)
 
-**Status: AS-BUILT (take 2), UNDER HANDS-ON.** Deployed `1C59BE738E04FDC9` (4/4 hash-verified). This is a
-CLIENT-ONLY fix. Prior attempts `76257bb0` (CONVERT-WINS) and `46e35edd` (twin-sweep per-eid confirmed-move)
-each targeted a survivor set that was NOT the corner (17:50 hands-on re-derivation below). Full RE + timeline:
-`research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md`. This is a SEPARATE class from `docs/piles/09`
-(single held-clump-at-join) and `docs/piles/11` (nativization) — it is the MASS version. [[project-pile-nativization-2026-06-30]]
+**Status: AS-BUILT (take 3 — THE OWNER), UNDER HANDS-ON.** Deployed `44937AC54FC0E2CD` (4/4 hash-verified).
+Host + client. NO protocol bump (reuses PropSnapPos). Full RE + timeline:
+`research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md`. SEPARATE class from `docs/piles/09`
+(single held-clump-at-join) and `docs/piles/11` (nativization) — the MASS version. [[project-pile-nativization-2026-06-30]]
+
+## Take 3 — the OWNER (host-authoritative pile identity through the join tail) [AS-BUILT]
+Takes 1-4 (`fa8bc344` create-edge, `76257bb0` CONVERT-WINS, `46e35edd` twin-sweep, `110b1bde` DUP-RETIRE) each
+removed a slice and left a new-named tail (FLOOR-kept → RE-BIND-resurrect → air) — the classic
+[[feedback-recurring-bug-is-architectural]] signal that the PATCH LEVEL was wrong. A 2nd forensic trace (18:17)
+nailed the disease: **a host in-window move keeps the SAME eid (same-eid morph), but the client identifies a
+keyless pile by its FROZEN save-pos — which lies after a move.** When E's @new mirror pointer GC-churns,
+`eidFree(E)` goes true and `RE-BIND-by-position` uses E's stale save-pos to "re-create" E — grabbing the leftover
+@old copy and binding it to E (a CORRECT bind of the WRONG actor). Once bound, every unbound-only retire is blind
+to it. Four client heuristics (ordinal bind, RE-BIND-by-position, twin sweep, DUP-RETIRE) all inferred identity
+from position with NO authority and RACED — RE-BIND resurrected what the retires wanted to kill. And the host's
+position flush was a ONE-SHOT, so a pile moved late in the join tail (eid 5271) got NO signal at all.
+
+The owner: `PropSnapPos(E,@new)` IS the host's authoritative "E is now at @new" — the client now USES it for
+IDENTITY (not just to nudge the actor), and the host DELIVERS it for every move:
+- **Host** (`save_transfer.cpp`): `FlushDivergedPilePositionsForSlot` is LATE-ARMED — re-runs at 2 Hz for 25 s
+  past each joiner's world-ready (`TickPileFlushLateArm`, from host `TickHost`), deduped per-(slot,eid) to actual
+  position CHANGES. Every in-window move is delivered, whenever it happens.
+- **Client**: on `PropSnapPos(E,@new)` — (1) `save_identity_bind::UpdateChipSavePosAndGetOld` retracks our
+  save-time identity key to @new, so RE-BIND-by-position searches @new and NEVER resurrects the @old copy (root
+  fix for the resurrect); (2) if E moved >50cm, `quiescence_drain::ArmHostVacateTwin` arms a HOST-VACATE twin —
+  the sweep retires whatever save-loaded native@old lingers, ON THE HOST'S WORD (force-confirmed, wildcard
+  chipType, NO >50% cap — the position-confirm guess is exactly what GC pointer-reuse corrupted).
+
+This makes PropSnapPos the single authoritative identity-sync channel. Verify-before-retire is preserved but the
+"verify" is now the HOST'S authority, not a client position guess ([[feedback-deliver-missing-owner-delivery-axis]],
+[[feedback-recurring-bug-is-architectural]]). RULE-2 follow-up once proven: collapse the now-redundant position
+heuristics (DUP-RETIRE / the event-armed twin confirm) into "retire iff host-vacated". Runbook:
+`research/handson_runbook_2026-07-01_massmove_dup.md` (take 3). Air-hang-on-pickup = separate carry track.
+`save_transfer.cpp` at 808 LOC → extract the b3 flush cluster to its own file (follow-up).
 
 ## 17:50 hands-on re-derivation (2 forensic agents on the full host+client logs) [log-V]
 The 46e35edd twin-sweep DID run (hash-verified) and behaved correctly (`27 pending -> 5 confirmed-moved retired

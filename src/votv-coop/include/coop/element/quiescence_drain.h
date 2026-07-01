@@ -65,6 +65,12 @@ void OnTick();
 // SweepReconcileSaveTimeTwins retires the stale native@old at quiescence. Idempotent per eid (latest wins).
 void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector& savePos, uint8_t chipType);
 
+// b3 OWNER (docs/piles/12): armed from a host PropSnapPos -- the host AUTHORITATIVELY moved E off `oldPos`, so
+// that save-pos is vacated. The sweep retires whatever save-loaded native@old lingers there on the host's word
+// (no client-side position-confirm guess, no >50% cap -- the guess is what GC pointer-reuse corrupted). This is
+// the missing "host mutated eid in-window -> retire the old" authority the client heuristics only inferred.
+void ArmHostVacateTwin(coop::element::ElementId eid, const ue_wrap::FVector& oldPos);
+
 // b3 (v90, PropSnapPos): a join-window position correction for a save-authoritative chipPile the host MOVED
 // while the joiner's reliable channel wasn't ready. Arm it on receipt; the latest wins. Applied at quiescence
 // (or immediately by the caller via ApplyPendingPosCorrections if already quiesced).

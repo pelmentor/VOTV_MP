@@ -434,6 +434,28 @@ int BindUnboundReCreates() {
     return rebound;
 }
 
+bool UpdateChipSavePosAndGetOld(coop::element::ElementId eid, const ue_wrap::FVector& newPos,
+                                ue_wrap::FVector& oldOut) {
+    if (!IsEnabled()) return false;
+    std::lock_guard<std::mutex> lk(g_mu);
+    constexpr float kMovedCm2 = 50.f * 50.f;  // >50cm = a real move (matches the sweep's twin threshold)
+    for (MAP::IdEntry& e : g_chipEntries) {
+        if (e.eid != static_cast<uint32_t>(eid)) continue;
+        oldOut = ue_wrap::FVector{e.savePosX, e.savePosY, e.savePosZ};
+        const float dx = newPos.X - e.savePosX, dy = newPos.Y - e.savePosY, dz = newPos.Z - e.savePosZ;
+        if (dx * dx + dy * dy + dz * dz <= kMovedCm2) return false;  // small nudge -> pos-correction alone
+        // TRACK the host's authoritative CURRENT pos as our identity key. This is the root fix for the RE-BIND
+        // resurrect (docs/piles/12): RE-BIND-by-position now searches for E's native at @new, so a GC-churned
+        // re-create binds at @new and the stale save copy left at @old is NEVER re-grabbed as E.
+        e.savePosX = newPos.X; e.savePosY = newPos.Y; e.savePosZ = newPos.Z;
+        UE_LOGI("save_identity_bind: identity key UPDATED eid=%u @old=(%.1f,%.1f,%.1f) -> @new=(%.1f,%.1f,%.1f) "
+                "(host PropSnapPos authoritative; RE-BIND now tracks @new -> never resurrects @old, docs/piles/12)",
+                static_cast<unsigned>(eid), oldOut.X, oldOut.Y, oldOut.Z, newPos.X, newPos.Y, newPos.Z);
+        return true;
+    }
+    return false;  // eid not in the chip identity map (not a keyless save pile / not a map-bearing joiner)
+}
+
 void ForceSaveChurnForTest() {
     static const bool s_on = coop::ini_config::IsIniKeyTrue("force_save_churn");
     static bool s_done = false;

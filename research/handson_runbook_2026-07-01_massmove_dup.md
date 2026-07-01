@@ -1,61 +1,63 @@
-# Hands-on runbook — join-window MASS-MOVE pile dup fix (2026-07-01, TAKE 2)
+# Hands-on runbook — join-window MASS-MOVE pile dup (2026-07-01, TAKE 3 — the OWNER)
 
-**Deployed DLL** `votv-coop.dll` sha256 `1C59BE738E04FDC9` (all 4 folders hash-verified). Built Release.
-CLIENT-ONLY fix (the joiner runs the new logic; the host is unchanged). No protocol change.
+**Deployed DLL** `votv-coop.dll` sha256 `44937AC54FC0E2CD` (all 4 folders hash-verified). Built Release.
+Host + client both changed (deploy everywhere). **No protocol bump** — reuses the existing PropSnapPos wire.
 
-## Why take 2 (17:50 re-derivation — 2 forensic agents on the full host+client logs)
-The 17:50 test still showed the corner half-filled. Forensics (docs/piles/12) proved the prior two fixes
-(`76257bb0` CONVERT-WINS, `46e35edd` twin-sweep) each fixed a survivor set that was NOT the corner. The corner
-is the **completeness-FLOOR-kept** set: when the host mass-moves a cluster in the join window and the joiner's
-snapshot bracket claims 0 of that class, the FLOOR (docs/piles/10) KEEPS the unclaimed local `@old` natives to
-avoid a false >50% world-wipe — but registers them NOWHERE, so nothing ever retires them once the pile's `@new`
-binds. They are `bound`-less save-loaded natives (GUI present, reconcile-on-interaction), so the unbound-only
-twin sweep structurally never sees them.
+## Why take 3 (the architectural pivot)
+Takes 1-4 (`fa8bc344`, `76257bb0`, `46e35edd`, `110b1bde`) each fixed a slice and left a new-named tail. Two
+forensic traces proved this is INSTANCES of one class, not the owner. Root (18:17 trace): a host in-window pile
+move keeps the SAME eid (same-eid morph), but the client identifies keyless piles by their FROZEN save-pos —
+which LIES after a move. When E's @new mirror pointer GC-churns, `eidFree(E)` goes true and RE-BIND-by-position
+uses E's stale save-pos to "re-create" E — grabbing the leftover @old copy and binding it to E (a correct bind
+of the wrong actor). Once bound, every unbound-only retire is blind to it. And the host's position flush was a
+ONE-SHOT, so a pile moved late in the join tail (e.g. eid 5271) got NO signal at all.
 
-## What changed (RE: research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md, docs/piles/12)
-`save_identity_bind::BindUnboundReCreates` — the client's quiescence re-bind loop already recovers a FLOOR
-orphan's eid BY POSITION from the client's OWN save-time identity map (`g_chipEntries`, eid<->savePos; both
-peers loaded the same save). Added the SYMMETRIC branch: for each map entry `{eid=E, savePos=@old}` whose E is
-BOUND to a live native `>50cm` from `@old` (positive per-eid evidence E moved `@new`), if an UNBOUND native
-still sits at `@old`, arm the save-time twin for E. The existing sweep then re-confirms the move and retires the
-stale `@old` orphan PER-EID (confirmed -> NO cap). Runs in the post-purge drain window (a mass-move IS a purge
-episode -> the drain is active). Verify-before-retire preserved: retire only on positive per-eid move evidence.
+## The owner (docs/piles/12)
+`PropSnapPos(E,@new)` is the host's authoritative "E is now at @new" — the client now USES it for IDENTITY, not
+just to nudge the actor, and the host DELIVERS it for every move:
+- **Host:** `FlushDivergedPilePositionsForSlot` is now LATE-ARMED — re-runs at 2 Hz for 25 s past each joiner's
+  world-ready (deduped per-eid to actual position changes), so a pile moved any time in the join tail is
+  delivered. (`save_transfer.cpp` `TickPileFlushLateArm`, called from host `TickHost`.)
+- **Client:** on `PropSnapPos(E,@new)`: (1) retrack our save-time identity key to @new (`UpdateChipSavePosAndGetOld`)
+  so RE-BIND-by-position searches @new and NEVER resurrects the @old copy; (2) if E genuinely moved (>50cm), arm
+  a HOST-VACATE twin — the sweep retires whatever save-loaded native@old lingers, on the host's word (no fragile
+  position-confirm guess, no >50% cap; those guesses are what GC pointer-reuse corrupted).
 
 ## Test (2 peers; you run hands-on, Claude does NOT launch)
 
 ### T1 — host clears a cluster DURING the join window (the repro)
 1. Host: load a save with a CLUSTER of chip piles in one corner. Start hosting.
 2. Client: begin connecting. **While the client is still joining**, the host grabs + throws MANY of the
-   cluster's piles away (clear the original corner).
-3. Client: finish joining, look at BOTH the original corner AND the new spots.
-4. **Expect (fix):** the original corner is EMPTY (no leftover `@old` dups); each moved pile appears ONCE at
-   its `@new` spot. Previously ~half the corner stayed filled with client-only dups.
+   cluster's piles away — including some **late** in the join (keep clearing as the client finishes loading).
+3. Client: finish joining; look at the original corner AND the new spots.
+4. **Expect:** the original corner is EMPTY; each moved pile appears ONCE at its @new spot. No leftover @old,
+   including for piles the host moved late in the window (take 2's residual).
 
-### T2 — the misplaced/snap-on-pickup piles
-1. If any pile is at a wrong spot, note whether it snaps to correct position on its own vs only when you grab it.
-2. **Expect:** the DUP `@old` copies are gone (retired), not merely relocated. (A genuinely misplaced single
-   pile whose convert was dropped — no dup, just wrong spot — is the SEPARATE B3 relocate axis, not this fix.)
+### T2 — the previously-stuck 2 corner piles
+1. Look specifically for the 1-2 piles that lingered at 18:17.
+2. **Expect:** gone. If any remain, note whether it's bound (has a GUI prompt / host sees it snap on pickup) —
+   that would be a residual for the next probe.
 
-### T3 — air-pickable pile with NO GUI prompt (SEPARATE track — just report)
-1. Look for a pile floating in mid-air that has NO interact prompt but you can still pick up.
-2. **Expect:** possibly still present (this is the materialize-FAILED -> NoCollision-proxy fallback track,
-   Root-class 3 — NOT addressed by this fix). Report if seen; it's the next separate increment.
+### T3 — air-hang on pickup (SEPARATE track — just report)
+1. If you pick up a pile and it hangs in the air, report it.
+2. **Expect:** likely resolved as a downstream effect of the dup fix (the host can now author the pile's identity);
+   if it persists it's a separate carry/pose track.
 
 ### T4 — no regression on a CLEAN join
 1. Client joins while the host does NOT touch the cluster.
-2. **Expect:** the cluster renders once, correctly. The DUP-RETIRE branch only fires when E's bound native is
-   `>50cm` from its save-pos (i.e. the host actually moved it), so an untouched pile is never retired.
+2. **Expect:** the cluster renders once, correctly. The host-vacate twin only arms when the host actually moves a
+   pile >50cm, so an untouched pile is never retired.
 
-## Read in the client log (joiner)
-- `save_identity_bind: DUP-RETIRE -- armed N save-time twin(s) from the identity map (eid bound @new but a
-  stale UNBOUND native lingers @save-pos = FLOOR-kept mass-move dup, docs/piles/12)` — the NEW branch firing.
-- Then `[PILE-1C] sweep-reconcile -- ... N confirmed-moved retired (per-eid, no cap)` on the next pass, with
-  the count rising to cover the FLOOR-kept orphans (previously the FLOOR-6 never entered the sweep).
-- `completeness FLOOR kept N unclaimed 'actorChipPile_C'` may still appear (the FLOOR still guards the wipe) —
-  but those N should now get retired shortly after by the DUP-RETIRE + sweep, not linger.
+## Read in the logs
+- HOST: `[PILE-B3] HOST slot N pos-correction eid=... (late-arm in-window move -> deliver the authoritative
+  position)` — a pile moved AFTER the one-shot now gets delivered (take 2 gap closed).
+- CLIENT: `save_identity_bind: identity key UPDATED eid=... @old -> @new (host PropSnapPos authoritative; RE-BIND
+  now tracks @new)` then `[PILE-B3] CLIENT armed HOST-VACATE twin eid=...` then `[PILE-1C] sweep-reconcile ...
+  confirmed-moved retired` covering those eids.
+- Should NOT see `RE-BIND chipPile by position ... @save-pos=(<an old corner pos>)` re-binding a stale @old
+  AFTER its identity key was updated to @new.
 
 ## Honest status
-Built + deployed + hash-verified 4/4; NOT hands-on (user present -> user runs the repro; Claude prepared
-ground only). No autonomous smoke run (user on PC). If 1-2 dups still linger after T1 -> the GC pointer-reuse
-residual (an `@old` re-bound to a WRONG eid escapes the unbound-only match) — a separate follow-up. T3
-air-pickable is a known separate track.
+Built + deployed + hash-verified 4/4; NOT hands-on (user present -> user runs the repro). No autonomous smoke
+(user on PC). A perf/correctness audit of the change is running. Note: `save_transfer.cpp` reached 808 LOC (8
+over the 800 soft cap) — the b3 flush cluster is flagged for extraction to its own file as a follow-up.

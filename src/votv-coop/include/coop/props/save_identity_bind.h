@@ -28,6 +28,8 @@
 #pragma once
 
 #include "coop/props/save_identity_map.h"  // IdMap, Family
+#include "coop/element/element.h"          // ElementId (UpdateChipSavePosAndGetOld)
+#include "ue_wrap/types.h"                 // FVector (UpdateChipSavePosAndGetOld)
 
 namespace coop::save_identity_bind {
 
@@ -62,6 +64,15 @@ void EmitBindSummary();
 // bind, never position, never cursor. Bound eids are skipped (no double-bind); co-located chips (>1 within 1cm)
 // ambiguous-skip. No-op when disabled / not armed / a v1/v2 peer (no keys). GT. Returns the count re-bound.
 int BindUnboundReCreates();
+
+// b3 OWNER (docs/piles/12): the host's PropSnapPos says keyless save-pile `eid` is now at `newPos`. Update our
+// save-time identity key for it (both peers loaded the identical save; this key is how RE-BIND-by-position
+// relocates a GC-churned re-create). Tracking the key to the host's authoritative CURRENT pos is what stops
+// RE-BIND from resurrecting the stale @old copy. Returns true + fills `oldOut` with the previous save-pos when
+// the pile genuinely MOVED (>50cm) -- the caller then arms a host-vacate twin to retire the @old. Returns false
+// for a small nudge (pos-correction alone handles it) or an eid not in the chip identity map. GT.
+bool UpdateChipSavePosAndGetOld(coop::element::ElementId eid, const ue_wrap::FVector& newPos,
+                                ue_wrap::FVector& oldOut);
 
 // DEV PROBE (gated on [dev] ini `force_save_churn`, RULE-2-exempts-probes): deterministically reproduce the
 // variant-1 precondition for a hands-on verify. The real engine-GC churn is non-deterministic (a sparse ~2 of

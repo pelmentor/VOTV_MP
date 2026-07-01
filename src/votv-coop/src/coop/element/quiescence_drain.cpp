@@ -49,8 +49,15 @@ struct PendingTwin {
     uint8_t chipType;
     int     unresolvedPasses = 0;  // bounded-keep: a twin held (unconfirmed) or unmatched across passes is
                                    // dropped after kMaxTwinPasses so it can never pin HasPendingWork() forever.
+    bool    hostVacate = false;    // b3 OWNER (docs/piles/12): armed from a host PropSnapPos = the host
+                                   // AUTHORITATIVELY moved E off this @old pos. Retire the stale native@old on
+                                   // the host's word -- NO client-side position-confirm guess, NO >50% cap
+                                   // (the host IS the authority; the guess is what GC pointer-reuse corrupted).
 };
 std::unordered_map<uint32_t, PendingTwin> g_pendingSaveTimeTwin;
+// A host-vacate twin matches the stale native@old by POSITION alone (the host said "E left here"; whatever
+// same-spot chipPile lingers is the stale copy, regardless of chipType) -> arm with this wildcard chipType.
+constexpr uint8_t kAnyChipType = 0xFF;
 // A twin retires when its eid is CONFIRMED moved @new: E's currently-bound native lives farther than this
 // from the twin's save-pos (a real host move is meters; a same-spot re-bind is ~0). (50 cm)^2.
 constexpr float kTwinMovedThresholdCm2 = 2500.f;
@@ -137,9 +144,14 @@ int SweepReconcileSaveTimeTwins() {
         const ue_wrap::FVector key{p.x, p.y, p.z};
         const int idx = coop::save_time_retire_util::FindExactMatch(
             natives, consumedFlags, key,
-            [&p](const LiveNative& nv) { return nv.chipType == p.chipType; });
+            [&p](const LiveNative& nv) { return p.chipType == kAnyChipType || nv.chipType == p.chipType; });
+        // b3 OWNER: a host-vacate twin is CONFIRMED by the host's authoritative PropSnapPos (E left this pos),
+        // not by re-guessing from E's bound-native position -- so any UNBOUND native still here is stale, retire
+        // it (no cap). Otherwise (event-armed twin) confirm the move the old way: E's bound native lives far.
         bool confirmed = false;
-        if (coop::element::Element* el =
+        if (p.hostVacate) {
+            confirmed = true;
+        } else if (coop::element::Element* el =
                 coop::element::Registry::Get().Get(static_cast<coop::element::ElementId>(eid))) {
             if (void* bound = el->GetActor(); bound && R::IsLive(bound)) {
                 const ue_wrap::FVector bl = ue_wrap::engine::GetActorLocation(bound);
@@ -222,6 +234,18 @@ void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector
     UE_LOGI("[PILE-09] CLIENT armed pending save-time twin eid=%u key=(%.1f,%.1f,%.1f) chipType=%u "
             "(in-window grabbed/moved or world-ready-miss pile -> sweep retires the stale native@old at quiescence)",
             static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z, static_cast<unsigned>(chipType));
+}
+
+void ArmHostVacateTwin(coop::element::ElementId eid, const ue_wrap::FVector& oldPos) {
+    if (eid == 0u || eid == coop::element::kInvalidId) return;
+    // b3 OWNER (docs/piles/12): the host's PropSnapPos said E moved off oldPos -> that pos is AUTHORITATIVELY
+    // vacated. Arm a host-vacate twin (wildcard chipType, retire without the position-confirm guess). Overwrites
+    // any event-armed twin for this eid -- the host's word supersedes the inference. Idempotent.
+    g_pendingSaveTimeTwin[static_cast<uint32_t>(eid)] =
+        PendingTwin{oldPos.X, oldPos.Y, oldPos.Z, kAnyChipType, 0, /*hostVacate=*/true};
+    UE_LOGI("[PILE-B3] CLIENT armed HOST-VACATE twin eid=%u @old=(%.1f,%.1f,%.1f) -- host authoritatively moved E "
+            "@new; the sweep retires whatever save-loaded native@old lingers here (docs/piles/12 owner)",
+            static_cast<unsigned>(eid), oldPos.X, oldPos.Y, oldPos.Z);
 }
 
 void ArmPendingPosCorrection(coop::element::ElementId eid,
