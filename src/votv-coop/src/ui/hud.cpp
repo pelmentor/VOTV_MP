@@ -70,12 +70,14 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     const ImVec2 textPos(ax - sz.x * 0.5f, ay - sz.y - gap);
     const ImVec2 bp(ax - barW * 0.5f, ay - barGap);
 
-    // Readability backing: a translucent rounded box behind the nick + bar so the
-    // label reads over ANY scene (bright sky, white wall, foliage).
+    // Plate extents (nick + bar union), kept for the voice-badge anchor below. The
+    // translucent black backing box once drawn from these extents is REMOVED (user
+    // 2026-07-02: no black rectangle behind the plate; if it ever returns, restore
+    // the AddRectFilled from git history) -- readability rides the 1px text outline
+    // + the health bar's own outline.
     const float padX = 6.f * s, padY = 3.f * s;
     const ImVec2 boxMin(std::min(textPos.x, bp.x) - padX, textPos.y - padY);
     const ImVec2 boxMax(std::max(textPos.x + sz.x, bp.x + barW) + padX, bp.y + barH + padY);
-    dl->AddRectFilled(boxMin, boxMax, IM_COL32(0, 0, 0, static_cast<int>(a * 140.f)), 4.f * s);
 
     TextOutlined(dl, font, px, textPos, textCol, outline, line);
 
