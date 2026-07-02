@@ -98,6 +98,17 @@ gates the worker out (`if (!GT::IsGameThread()) return;`) because spawning is al
      callee — a ProcessEvent observer can NEVER fire on it (see "Catching an EX_CallMath call" below). Do NOT
      register a BeginDeferred POST for a BP-ubergraph spawn; it won't fire. **The facility now exists:**
      `ue_wrap/ufunction_hook` (AS-BUILT, commit `d19ae4d4`) — reuse it.
+   - **⚠ a `UFunction::Func` patch only catches dispatches that INVOKE the thunk** — i.e. ProcessEvent
+     dispatches (native code → BP event, e.g. the AnimBP `BlueprintUpdateAnimation` head-fix) and calls
+     whose TARGET is native (`EX_CallMath` / `EX_FinalFunction` → native thunk). **A BP function called
+     from BP LOCALLY (`EX_LocalFinalFunction` / `EX_LocalVirtualFunction` with a SCRIPT target) dispatches
+     through `ProcessLocalScriptFunction` and touches NEITHER ProcessEvent NOR `UFunction::Func` — a Func
+     patch on it NEVER fires.** [V 2026-07-02: gm `loadObjects` (ubergraph `EX_LocalFinalFunction` call) —
+     Func POST installed on the live class, loadObjects demonstrably ran (its spawns landed), the POST never
+     fired; two DLL takes confirmed]. For such a seam: hook a VISIBLE caller upstream, a NATIVE callee
+     downstream (with a source filter), or **OBSERVE the function's EFFECT** (the pose gate uses load-tail
+     quiescence to observe loadObjects' end). Same blindness applies to `save_indicator_suppress`'s
+     saveAnim/addHint POST hooks (probe-only; latent).
    - **an INPUT that triggers a BP-internal action** (the pile grab) → hook the **input UFunction**
      (`InpActEvt_use` PRE) and read what the BP is about to act on — the input is VISIBLE even though
      everything it triggers is not.

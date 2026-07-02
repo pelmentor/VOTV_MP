@@ -107,7 +107,9 @@ SHIP: hl_einstein_v1sc.pak deployed to EVERY peer by tools/deploy-all.ps1
       (Content/Paks/LogicMods/votv-coop/; the pre-rename scientist.pak is auto-removed).
 RUNTIME (mod):   [v93 SKINS, AS-BUILT 2026-07-02 late evening -- REPLACED the role gate (RULE 2)]
   UE auto-mounts every pak in LogicMods/votv-coop → each PLAYER carries a skin NAME
-  (votv-coop.ini player_skin=, next to player_guid; default hl_einstein_v1sc; picked in
+  (votv-coop.ini player_skin=, next to player_guid; a NEW identity rolls a RANDOM starter
+  from the curated 6-list ∩ present paks -- walter/sci/rvi_scientist/luther/twhl2/twhl3,
+  fallback hl_einstein_v1sc; `4570180e` -- persisted once like the guid; picked in
   F1 > Cosmetics > Skins) → the name rides the Join payload (after the guid) + PlayerJoined
   (after the nick) + live SkinChange (kind 82, host-relayed) →
   RemotePlayer::Spawn(skinName)/ApplySkin + local_body::Tick (the LOCAL first-person body)

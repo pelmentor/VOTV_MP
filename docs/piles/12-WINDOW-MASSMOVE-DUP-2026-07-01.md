@@ -1,14 +1,35 @@
 # 12 — Join-window MASS-MOVE pile dup (2026-07-01)
 
-**Status (updated 2026-07-02): the MASS-MOVE DUP class is VERIFIED FIXED [V hands-on 19:06 "всё на своих
-местах"]** — owner (take 3) + grabbed-clump gate (take 3.1); commits `d43956f6` + `0e7e5349`. **ONE residual
-local dup remains** (user, post-19:41) — the [DUP-PROBE] diagnostic (`26dea6e4`) is ARMED to pin its cause on
-the next mass-move run (see the RESIDUAL section below; it did not fire on 20:17 because an ini-reader bug
-silently disabled the flag — root-fixed `f81256e4`). Thread statuses at the bottom: EHH = `d7620ed5` proved
-INCOMPLETE by 2026-07-02 hands-on (drop-EHH leaked on the `_42` release seam) → re-root-fixed `2b2e0531`
-(gesture-pairing latch, verdict pending); NEW: GHOST-WEDGE section (silent dead-eid deny → `d4833b9b`
-PropDestroy drain; keyed-churn re-bind = next thread); FPS `70e0d899` = **REFUTED-insufficient** by the
-19:41 log (see FPS section). Latest deploy DLL `BD70FB08`.
+**Status (updated 2026-07-02 LATE EVENING, take-6 arc, deploy DLL `56B2F9CD`):**
+
+- **MASS-MOVE DUP class: VERIFIED FIXED stands** [V hands-on 19:06] — owner (take 3) + grabbed-clump gate
+  (take 3.1), `d43956f6` + `0e7e5349`.
+- **NEW AS-BUILT `c7a0f5de` — the save-time map LIFECYCLE fix (the 19:23 client-FPS storm root):** the
+  per-slot blob maps (`g_blobPileXforms`/`g_blobKerfurXforms`) never emptied, so EVERY steady-state host
+  grab kept stamping save-time keys and every kToPile LAND armed the client a HOPELESS pending twin →
+  kMaxTwinPasses×250 ms full-array sweeps per drop, all session. Maps now retire at the b3 late-flush
+  expiry (~25 s post world-ready — their last consumer). [V 20:2x log: steady-state LANDs no longer
+  carry keys; the PILE-1C twin line is GONE from the steady drain.]
+- **OPEN — THE NEXT THREAD (2026-07-02 20:24-20:27 evidence, user: "клиент взаимодействует с дюп пайлом
+  своим локальным, который видит только он"): the UNBOUND-NATIVE case = one root, three symptoms.**
+  eid=4435: host moved the pile in the join window; the client's native for E **never bound** (the
+  identity walk shows `1 unbound chip [by position]` every pass, `0 re-bound`). Consequences: (a) the
+  stale native@old (1672,-379,6124) LIVES = the client-local dup — a real actorChipPile with no eid, so
+  its grab goes through the NATIVE system, no GrabIntent, invisible to the host (the L1-orphan shape);
+  (b) the armed `[PILE-B3] pos-correction eid=4435 → (1424,-373,6098)` can never apply (no bound actor)
+  and **pos-corrections have NO pass cap** (twins cap at 40, deferred destroys at 8 — pos-corrections
+  retry `++it; continue;` forever) → HasPendingWork pinned → **the 4 Hz steady drain re-arm is STILL
+  live** (20:25-20:26 log: continuous 4 Hz `quiescence_drain` + `save_identity_bind` walks). Fix per
+  rule 1 next session: the position re-bind must resolve E to the HOST-authoritative position (the b3
+  pos-correction key!) or by key where one exists — the keyed/position re-bind thread; plus a pass cap
+  or bind-failure terminalization for pos-corrections so an unbindable eid cannot pin the drain.
+- **GHOST-WEDGE half 2 `8c13858f` (wrong-class deny → host re-asserts the row via incremental PropSpawn,
+  debounced): AS-BUILT but the CLIENT half is a NO-OP** — the correctness audit traced the receive path:
+  `RegisterPropMirror` defaults `rebindInPlace=false` → `Install` silently rejects the duplicate eid.
+  The re-assert reaches peers and changes nothing. The receive-side rebind belongs to the same next
+  thread (eid row exists + key-resolves a DIFFERENT live actor ⇒ host evidence ⇒ rebind).
+- Older thread statuses: EHH `2b2e0531` verdict pending; [DUP-PROBE] armed (`f81256e4`); FPS `70e0d899`
+  superseded by the map-lifecycle fix above.
 
 ## 18:52 — the owner over-reached onto actively-grabbed piles (fixed 0e7e5349, then VERIFIED 19:06) [V]
 Take-3 owner FIRED and worked for the @old-resurrect class: the HOST late-arm delivered late moves (eid 4930 at

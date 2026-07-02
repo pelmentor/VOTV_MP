@@ -1,6 +1,110 @@
-# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS + take-4/5)
+# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS + take-4/5/6)
 
-## TAKE 5 (assbreather locomotion kill + 14 MORE kerfur skins) — test this first
+## TAKE 6 (your 19:1x-19:2x reports: join-jump STILL + FPS storm + ungrabbable pile + random starter) — test THIS first
+
+**Deployed (take 6 FINAL):** DLL `56B2F9CDBD049C89` on all 4 installs (protocol stays
+v94; paks unchanged). Join-fix arc: `3bb22e3b`..`99a9a06e` (two hook attempts) →
+**`614cade8` (the final mechanism)**; `c7a0f5de`+`c7f11957` (FPS storm), `8c13858f`
+(wedge deny heal), `4570180e` (random starter skin). Perf audit PASS zero-critical.
+
+**Your 20:0x/20:14 reports ("puppet peer нету вообще") — root found on the second
+verdict and the mechanism REPLACED (`614cade8`):** gm `loadObjects` is called
+BP-locally (`EX_LocalFinalFunction`), and script->script local calls dispatch through
+`ProcessLocalScriptFunction` — they touch NEITHER ProcessEvent NOR `UFunction::Func`,
+so ANY hook on loadObjects can never fire (both 20:07 and 20:14 logs: hook installed
+on the live class, loadObjects ran — its props spawned — POST silent; the gate never
+opened; the client never streamed; no puppet; every pile grab denied "puppet not
+live"). The whole save_apply_gate hook module is DELETED (RULE 2). The pose gate now
+OBSERVES loadObjects' effect instead of hooking its call: **load-tail quiescence**
+(the population-stability signal the destructive divergence sweep already trusts,
+which by construction flips only after loadObjects' spawn flux — including the player
+teleport — has ended; resets per world). Host keeps the worldUp gate.
+
+RETEST (client rejoin): client log must show `join_membership_sweep: ... DIVERGENCE
+SWEEP` / quiescence firing, and the HOST must see the puppet appear ONCE at the
+client's real spawn ~2-4 s after the client's world settles — no parked-spot
+teleports, no missing puppet. Then pile grabs from the client must work again.
+
+**VERDICT 20:2x (user): "щас работает" — puppet visible + pile interaction works on
+`56B2F9CD` [hands-on V for the stream/puppet mechanism]. The kerfur-skin surprise at boot
+was the client's own persisted 19:39 pick (kerfur_mannequin), by design — switched to
+walter2_v1sc at 20:25.**
+
+## NEW BUG 20:27 (user) — NEXT SESSION ENTRY: client-local DUP pile + still-live 4 Hz drain
+
+User: "клиент взаимодействует с дюп пайлом своим локальным, который видит только он".
+Evidence captured (client log 20:24-20:27, DLL `56B2F9CD`), full write-up in
+docs/piles/12 status block:
+- eid=4435: host moved the pile in the join window; the client's native NEVER BOUND
+  (`save_identity_bind: ... 1 unbound chip [by position] ... 0 re-bound` every pass).
+- => stale native@old (1672,-379,6124) lives = the client-only dup (no eid → native grab
+  → no GrabIntent → host-invisible, the L1-orphan shape). The 20:27:25 `use click at
+  (1357,-390)` with no GRAB-INTENT after it = him touching it.
+- => the armed `[PILE-B3] pos-correction eid=4435 → (1424,-373)` can never apply and has
+  NO pass cap (twins cap 40, destroys 8, pos-corrections NONE) → HasPendingWork pinned →
+  `quiescence_drain` re-arms at 4 Hz forever (20:25-26 log) — the FPS-storm's SECOND leg
+  (the first leg, hopeless steady-state twins, is fixed and confirmed gone from this log).
+- FIX per rule 1 next session = the keyed/position RE-BIND thread (now 3 instances:
+  eid 2947, 3129, 4435) + terminalize/cap unbindable pos-corrections + the deny-heal
+  receive half (audit: RegisterPropMirror rebindInPlace=false → Install rejects the dup
+  eid → the 8c13858f re-assert is currently a client-side NO-OP).
+
+**Your four reports, each root-fixed from THIS session's logs (19:10-19:24):**
+1. **"клиент всё ещё прыгает по координатам где хост был"** — take-4 gated the stream on
+   world coherence, but the 19:10 log proved world-ready fires ~4 s BEFORE the game
+   PLACES the pawn: the client streamed its parked spot (-37695,69978) — the map's
+   pre-placement parking every load passes through (the host parks there too, hence
+   "где хост был") — until gm `loadObjects` teleported it at :58. The stream now ALSO
+   requires the pawn-placement latch: a Func-table POST hook on the game's own
+   `loadObjects` (the function that applies `playerTransform` from the save). First
+   streamed pose = your REAL placed position, both roles (host mid-world-change is
+   gated the same way).
+2. **"нестабильный ФПС у клиента"** — measured, not guessed: [HITCH-SRC] showed OUR
+   net_pump::Tick at 21-22 ms, 4-5×/sec, through all of 19:23-19:24. Root: the
+   join-window save-time maps never emptied, so EVERY host pile grab all session long
+   stamped a save-time key, every LAND armed the client a HOPELESS reconcile twin, and
+   each twin pinned the quiescence drain to 40 passes × 250 ms of full-GUObjectArray
+   sweeps. The maps now retire when the join window truly closes (b3 late-flush expiry,
+   ~25 s after world-ready) — steady-state pile play arms nothing.
+3. **"pile с GUI взаимодействия, который нельзя взять вообще"** — host log 19:24: eid=3129
+   denied 8× with "live actor is trashBitsPile_C, not a chipPile (cross-peer identity
+   smear)" — a SILENT deny branch (take-2 covered only the not-live branch), so your
+   client kept its stale pile-row forever. Now every terminal deny answers with truth:
+   wrong-class → the host re-broadcasts the authoritative row (one debounced incremental
+   PropSpawn) and your client re-binds the eid to the real entity. NOTE the smear's
+   UPSTREAM (how one eid named different actors on two peers) is the next thread
+   (keyed-prop GC-churn re-bind by KEY) — this fix un-wedges the interaction; the
+   specific orphaned pile actor may still need the host to cycle it once.
+4. **NEW FEATURE: random starter skin** — a NEW peer (no `player_skin=` in its ini) now
+   rolls one of: walter_v1sc, sci_v1sc, rvi_scientist_v1sc, luther_v1sc,
+   twhl_scientist2_v1sc, twhl_scientist3_v1sc — filtered to paks actually present in
+   LogicMods/votv-coop on that install (fallback hl_einstein_v1sc if none). Persisted on
+   first boot like the guid; existing inis keep their choice.
+
+**Take-6 tests:**
+1. **Join-jump**: client menu-join while you (host) walk around. Host screen: the client
+   puppet must appear ONCE, at the client's real spawn, when its world is applied — no
+   hop to a far point, no 3-second far-away freeze, no snap-back. Client log check:
+   `save_apply_gate: gm loadObjects DONE` BEFORE the first pose goes out.
+2. **FPS**: client plays piles (grab/drop a dozen) 15+ minutes after joining. The
+   [HITCH-SRC] 21 ms storm must be gone from the log; grab/drop feels smooth. Host log:
+   one `[PILE-09] slot N join window CLOSED (b3 late-flush expiry)` line ~25 s after the
+   join, then NO more `[PILE-09] CLIENT armed pending save-time twin` on the client for
+   steady-state drops.
+3. **Wedged pile class**: if you find another GUI-but-ungrabbable pile: press E once,
+   wait ~2 s, aim again and press E — it should either grab or visibly re-resolve
+   (host log: "re-asserting the authoritative row"). Report if a pile stays wedged
+   through that.
+4. **Random starter**: delete `player_skin=` line from copy2's votv-coop.ini (or use a
+   fresh install), boot — it should roll one of the six and persist it (log:
+   "new identity rolled starter skin ...").
+
+**To recheck 19:24's stuck pile specifically:** it heals on restart anyway (runtime state);
+the deny-heal covers future occurrences live.
+
+---
+
+## TAKE 5 (assbreather locomotion kill + 14 MORE kerfur skins) — test after take-6
 
 **Deployed (take 5):** DLL `D6903F22605BF503` on all 4 installs (protocol stays v94 —
 no wire change; paks unchanged: hl_einstein `AE49002C`, rvi `ED666BE5`).
