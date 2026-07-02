@@ -7,7 +7,13 @@ GoldSrc scientist. The pipeline generalizes to any HL1 humanoid `.mdl`.
 **STATUS (2026-07-02 evening take 2: FEATURE COMPLETE [V x4 incl. coop visual "Работает
 amazing"]; the v2 "wide" profile look was REJECTED in-game the same evening ("переделай
 обратно под v1") -- the scientist is re-cooked on v1 "narrow" (pak `AE49002C`, deployed
-8/8) and v1 is the DEFAULT again.** The model + pak + packages are `hl_einstein_v1sc`
+8/8).** LATE-NIGHT ADDENDUM (the 2nd-model postmortem, commit `41c3f41b`): the rvi
+model converted with the einstein profile shipped BROKEN with zero warnings -- the
+converter now MEASURES fit (profile auto-select scoring + coverage report + the
+ancestor bone resolver + learn-from-manual-PSK; §4/§5/§6e); rvi re-cooked from the
+user's own pose = pak `ED666BE5` 4/4, verdict pending. There is no DEFAULT_PROFILE
+anymore -- auto-select or a learned per-model profile decides (v1 stays the einstein
+pick by rest-fit). The model + pak + packages are `hl_einstein_v1sc`
 (the "scientist" naming is retired, rename `6f4d41d1` stands); the repose profile comes
 from the `tools/client_model/profiles/` LIBRARY -- v1 narrow = DEFAULT (in-game look
 preferred), v2 wide (format-2 R+t local deltas, learned from the user's
@@ -294,10 +300,12 @@ Tools (all in `tools/client_model/`, dev-only, RULE 3):
 **The deliverable:** `research/pak_re/hl_einstein_v1sc.pak` (~570 KB, V11, 4 files) →
 `VotV/Content/Mods/VOTVCoop/{hl_einstein_v1sc,tex_hl_einstein_v1sc}.uasset/.uexp` → load as
 `/Game/Mods/VOTVCoop/hl_einstein_v1sc` (object `kerfurOmega_KelSkin`) +
-`.../tex_hl_einstein_v1sc` (512x256 PF_B8G8R8A8 atlas). Cooked mesh (v2 wide profile):
-1 section, 1062 verts, 708 tris, 101-bone anthro rig, rigid (1 influence),
-0 pelvis-fallbacks, atlas-remapped UVs (19 tiles), winding template-matched (signed volume
--107216, same side as the template's -161625 -- see STATUS).
+`.../tex_hl_einstein_v1sc` (512x256 PF_B8G8R8A8 atlas). Cooked mesh (v1 narrow profile,
+the deployed `AE49002C` re-cook -- the v2-profile cook was the same shape wider):
+1 section, 1062 verts, 708 tris, 101-bone anthro rig, rigid (1 influence), all bones
+keyword-resolved, atlas-remapped UVs (19 tiles), winding template-matched (same side as
+the template's -161625 signed volume -- see STATUS). Second model: `rvi_scientist_v1sc`
+(764 verts, 38-bone skeleton) cooked from the user's own pose, pak `ED666BE5`.
 
 Workspace: `research/pak_re/` (gitignored) — `mesh_out/` (mdl_extract outputs),
 `modpak/` (pak staging), `extracted/` (repak-extracted game meshes = the cook template),

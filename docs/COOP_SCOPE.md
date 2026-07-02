@@ -36,17 +36,35 @@ items.
 - **Multiplayer menu (in VOTV's main menu)** — Host (choose save / New
   Game, load, listen) + Connect (enter IP, join) + server browser (future).
   Native UMG widget built at runtime by our C++ mod; no VOTV asset edited.
-  Decided 2026-05-22 (user). Design: `docs/MULTIPLAYER_UI.md`. Build gated
-  on the Phase 3 session API.
+  Decided 2026-05-22 (user). Design: `docs/MULTIPLAYER_UI.md`.
+  STATUS 2026-07-02: **SHIPPED** (docs/MULTIPLAYER_UI.md "BUILT"; the menu
+  shell + host save picker + server browser live in `src/votv-coop/src/ui/` +
+  `coop/session/multiplayer_menu.cpp`). The "build gated on Phase 3" note is
+  history — Phase 3 shipped long ago.
 
 - **Nameplate ping readout** — the floating per-player nameplate shows the
   round-trip latency to that peer in parentheses after the nickname, e.g.
   `Player 2 (42 ms)`. Owner: per-machine (each side measures RTT to the peer).
   Decided 2026-05-23 (user). Reason: at-a-glance connection health while
-  playing. Depends on: the Phase 3 session adding an RTT measurement (ping/pong
-  or timestamped pose-ack); the nameplate already renders OUR own UMG text
-  (`engine::SpawnNameplateWidget`), so this is appending to that string. Build
-  after the basic pose-sync `play` path works on two machines.
+  playing. STATUS 2026-07-02: **SHIPPED** — `coop/player/nameplate.cpp`
+  Plate.ping (`GetPing()`, "<1ms" LAN form) rendered by `ui/hud.cpp`; the
+  nameplate itself moved from the old UMG widget to our ImGui screen-space
+  projection. The "build after pose-sync works" note is history.
+
+- **Player cosmetics: body SKINS + per-peer nameplate visibility** — every
+  player carries a persisted body-skin choice (converter paks + builtin
+  kerfur bodies + native dr_kel; F1 > Cosmetics > Skins browser) and a
+  persisted "show my nameplate" pref; BOTH are replicated per-player state
+  (Join/PlayerJoined identity fields + SkinChange(82)/NameplateChange(83)
+  live changes) so every peer — including late joiners — agrees. Decided
+  2026-07-02 (user: local body must wear the own skin; skins are a system
+  with an F1 browser like gmod; "любой пир может выключить свой nameplate"
+  synced). STATUS 2026-07-02: **AS-BUILT** (v93 skins `bfee8f62`, v94
+  nameplate pref `23f2ca51`, builtin kerfur bodies `98678bf1`; docs/
+  COOP_CLIENT_MODEL.md §3 + COOP_SYNC_MAP rows) — hands-on verdict pending
+  (runbook 2026-07-02 take-4). NOT in scope: asset replication (a peer
+  missing a skin pak sees kel; by design), ragdoll-body reskin (documented
+  gap).
 
 - **Coop chat + session event log** — an in-game chat where players type messages
   to each other, AND a system/event feed that posts connection JOINS, DISCONNECTS,
@@ -67,6 +85,10 @@ items.
   Methodology: extends Phase 3 transport (new MsgType: ChatText / SystemEvent over
   the reliable channel). Cross-link: the chat widget is the same UMG-at-runtime
   family as the multiplayer menu + nameplate.
+  STATUS 2026-07-02: **SHIPPED** — T-chat (`coop/comms/chat_sync.cpp` +
+  `ui/chat_input`, v60) + the system feed (`coop/comms/chat_feed.cpp`:
+  connect/join/leave/skin/nameplate lines); the reliable channel became the
+  session's 3-lane reliable transport, exactly the shape this entry called for.
 
 - **Master server + opt-in public server browser** — a central master server
   that lists coop hosts who opted IN (a checkbox shown when creating a host
@@ -75,6 +97,11 @@ items.
   direct-IP connect, which stays). Owner: host opts in per-session; master
   server is external infrastructure (host-registers / heartbeats / delists).
   Decided 2026-05-23 (user). Reason: discoverability without sharing IPs.
+  STATUS 2026-07-02: **SHIPPED** — `ui/server_browser.cpp` (live lobby feed =
+  master `GET /v1/lobbies` via `lobby_client`, heartbeat age, direct-connect
+  row that works with the master down) + the master-up flow overriding the
+  signaling URL/token per session (`harness/config.cpp`; env/ini overrides =
+  the dev framework).
   Methodology phase: this is a WAN concern (Phase 7+ per COOP_METHODOLOGY 3.1
   "LAN first ... WAN is a Phase 7+ concern"); the LAN direct-IP path ships
   first. Privacy: opt-in only (default OFF); no host is listed without the
