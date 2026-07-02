@@ -155,3 +155,7 @@ tools/client_model/mesh_extract/obj/
 
 # repak unpack junk (never commit)
 /Engine/
+
+# third-party model assets (Valve/COF), local only -- never commit
+tools/cof_simonkitty_v1sc/
+tools/hl_einstein_v1sc/
