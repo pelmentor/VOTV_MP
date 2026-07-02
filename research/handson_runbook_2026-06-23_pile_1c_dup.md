@@ -1,11 +1,12 @@
 # Hands-on runbook -- Path 1c: join-window pile DUP fix (in-window drop repro)
 
-**Deployed:** `votv-coop.dll` MD5 `FD9D2DC67496CF96B7953F72282067EE` (host + client + copy2 + dev), proto **v86**.
-> NOTE (2026-06-23, L5 work after take-4): the deployed DLL is no longer the take-4 pile build (`D3C5BEA`) --
-> the L5 FPS-hitch work rebuilt on top. **The take-4 PILE self-seed fix is intact in this build** (committed
-> `5b01bc0e`); the L5 changes are an UNVERIFIED interactable migration (door detection regresses to ~50/57 --
-> irrelevant to the pile test) + diagnostic instrumentation + `perf_probe=1`. For the PILE hands-on below,
-> the door regression does not matter; ignore any door-sync oddity. The save-time pile capture is unchanged.
+**Deployed:** `votv-coop.dll` MD5 `34F6F5658F5E9D32619507C3D5BF1F40` (host + client + copy2 + dev), proto **v86**.
+> NOTE (2026-06-24, after the L5 fixes verified structurally): the deployed DLL rebuilt twice on top of take-4
+> (take-3 interactable backstop `933FE4BB` -> beta device_occupancy `34F6F565`). **The take-4 PILE self-seed
+> fix is intact** in this build (committed `5b01bc0e`, in every later build). The L5 changes (interactable
+> stream-settle+backstop + device_occupancy edge-resolve + instrumentation + `perf_probe=1`) are UNRELATED to
+> the pile test -- the interactable migration is now verified (door detection is correct-for-world, not a
+> regression), so there is no door oddity to ignore any more. The save-time pile capture is unchanged.
 **HEAD:** take-4 fix `5b01bc0e` (1c `4c286cae` + load-tail `124fbc9d` + **self-seed the capture, this commit**; the take-3 OnRequest gate `57ad49e5` was REMOVED -- it never fired). Push HELD.
 **Test flag:** `pile_delta_probe=1` is set in both deployed inis -> the in-game JOIN-WINDOW cues + the
 `[PILE-DELTA]`/`[PILE-CENSUS]` probe logs are ON.
@@ -61,13 +62,30 @@ moves them in the join window.
 5. **Client:** once loaded, look at BOTH the path AND the asphalt.
 
 ### PASS / FAIL (what the client must see -- AFTER the ~10-15 s sweep settles)
-- **PASS:** **4 chipPiles total** -- all on the **asphalt** (the host's new position). The path has **no
-  leftover piles**. A brief flash of 8 right at join that RESOLVES to 4 within ~15 s is the PASS path (the
-  sweep removed the late natives@old). 2 kerfur (wherever they ended). No doubled piles after it settles.
-- **FAIL:** **8 chipPiles PERSIST** past ~20 s -- 4 on the path (old/save) AND 4 on the asphalt (new). The
-  sweep didn't resolve it -> grep `[PILE-1C] sweep-reconcile` (did it run? how many removed? did the valve
-  abort?).
+- **PASS (visual):** **4 chipPiles total** -- all on the **asphalt** (the host's new position). The path has
+  **no leftover piles**. A brief flash of 8 right at join that RESOLVES to 4 within ~15 s is the PASS path
+  (the sweep removed the late natives@old). 2 kerfur (wherever they ended). No doubled piles after settle.
+- **FAIL:** **8 chipPiles PERSIST** past ~20 s -- 4 on the path (old/save) AND 4 on the asphalt (new).
 - Kerfur is the control: it never duped before and must not now (single channel).
+
+### STRICT GATE (visual no-dup is NECESSARY but NOT SUFFICIENT -- attribute it to the SAVE-TIME path)
+The take-3 hands-on FALSE-PASSED: no dup visually, but `P=0` (save-time map empty) -> the no-dup was the
+**non-deterministic loc-dedup/doom fallback**, NOT the save-time path. So a clean visual ALONE does not prove
+the fix. ALL THREE must hold (I grep them):
+1. **HOST `P > 0`:** `save_transfer: slot N -- captured K keyed-prop keys + P pile save-time xforms` with
+   **P ~ the host's live chipPile count (hundreds, not 0, not 4)**. P=0 => the save-time capture did NOT take
+   -> the run is INVALID regardless of the visual (it was the fallback). (Self-seed line
+   `prop_element_tracker: ... self-seeded M ... -> P pile save-time xform(s)` is the take-4 mint; M>0 ok.)
+2. **CLIENT sweep fired by COUNT:** `[PILE-1C] sweep-reconcile -- N of M pending save-time twin(s) removed`
+   with **N == the moved-pile count (4)** and **NOT `sweep-reconcile ABORTED ... >50%`**. N=0 (or the line
+   absent) while the dup still cleared => the loc-fallback resolved it, NOT the save-time path => FAIL the
+   strict gate even if the visual is clean.
+3. **CLIENT match was by SAVE-TIME KEY, not loc-fallback:** the `[PILE-DELTA] eid=... matchPos=(...)
+   nearestNative_d=X.Xcm` lines show the moved piles' save-time key matched their native within ~0.1-1cm
+   (`nearestNative_d` small). `nearestNative_d=NONE` on a moved pile => the save-time key found no native
+   (the take-1 load-tail race) -> the sweep at #2 is what must then catch it.
+- **VERDICT:** PASS only if visual-4 AND P>0 AND `[PILE-1C] sweep-reconcile N=4` (not ABORTED). A clean
+  visual with P=0 or N=0 is the take-3 false-pass -> report it, do NOT call it fixed.
 
 ---
 
