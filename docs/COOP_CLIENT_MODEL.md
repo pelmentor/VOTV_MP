@@ -193,21 +193,26 @@ Still open (separate, later): (3) client seeing its OWN body as scientist (local
 
 ## 4. Offline pipeline — BUILT (tools/client_model/) + how to reproduce
 
-Reproduce the pak from the source mdl (all pure Python; `python`, not `python3`, has numpy):
+Reproduce the pak from the source mdl (all pure Python; `python`, not `python3`, has numpy).
+2026-07-02: the model carries its ORIGINAL name `hl_einstein_v1sc` (the early "scientist"
+naming is retired); the repose profile comes from the `tools/client_model/profiles/` LIBRARY
+(`default` = v2 "wide", format 2 R+t deltas — see profiles/README.md):
 ```
 # 1. extract HL model -> geometry + per-vertex bone + bone WORLD matrices + textures
 python tools/client_model/mdl_extract.py tools/hl_einstein_v1sc/hl_einstein_v1sc.mdl \
        research/pak_re/mesh_out/hl_einstein
-# 2. AUTO repose A-pose -> VOTV T-pose (+ scale to dr_kel height) via the learned profile (§5)
+# 2. AUTO repose A-pose -> VOTV T-pose (+ scale) via the DEFAULT library profile (§5)
 python tools/client_model/repose.py apply research/pak_re/mesh_out/hl_einstein \
-       tools/client_model/votv_tpose_profile.json tools/hl_einstein_v1sc/scientist_tpose.obj
+       default tools/hl_einstein_v1sc/hl_einstein_v1sc_tpose.obj
 # 3. COOK: Y-mirror to cooked space + HL->anthro rigid remap + splice into kerfurOmega template
-python tools/client_model/ue_cook.py    # -> research/pak_re/mesh_out/hl_einstein/scientist.uasset/.uexp
-# 4. PACK (copy cook output into staging, then repak)
-cp research/pak_re/mesh_out/hl_einstein/scientist.uasset \
-   research/pak_re/mesh_out/hl_einstein/scientist.uexp \
+python tools/client_model/ue_cook.py    # -> research/pak_re/mesh_out/hl_einstein/hl_einstein_v1sc.uasset/.uexp
+# 3b. TEXTURE: atlas -> cooked UTexture2D package tex_hl_einstein_v1sc
+python tools/client_model/ue_tex.py cook research/pak_re/mesh_out/hl_einstein/atlas.png \
+       research/pak_re/mesh_out/hl_einstein/tex_hl_einstein_v1sc
+# 4. PACK (copy the 4 cook outputs into staging, then repak)
+cp research/pak_re/mesh_out/hl_einstein/{hl_einstein_v1sc,tex_hl_einstein_v1sc}.{uasset,uexp} \
    research/pak_re/modpak/VotV/Content/Mods/VOTVCoop/
-research/pak_re/tools/repak.exe pack --version V11 research/pak_re/modpak research/pak_re/scientist.pak
+research/pak_re/tools/repak.exe pack --version V11 research/pak_re/modpak research/pak_re/hl_einstein_v1sc.pak
 ```
 
 Tools (all in `tools/client_model/`, dev-only, RULE 3):

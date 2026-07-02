@@ -123,7 +123,7 @@ void Tick(bool connected, bool /*isHost*/) {
                 // 'tex' -- overriding it needs NO cooked material. Applied to BOTH body slots
                 // (the two-body invariant). Graceful: tex null -> stays garbled kel (rung-2 look).
                 void* sciTex = ue_wrap::asset_load::LoadObjectByPath(
-                    L"/Game/Mods/VOTVCoop/tex_scientist.tex_scientist");
+                    L"/Game/Mods/VOTVCoop/tex_hl_einstein_v1sc.tex_hl_einstein_v1sc");
                 if (sciTex) {
                     int bound = 0;
                     void* comps[2] = { Pup::GetMeshPlayerVisibleComponent(sciA),
@@ -139,8 +139,8 @@ void Tick(bool connected, bool /*isHost*/) {
                             "(atlas is the last rung); RIGHT unchanged garbled = binding no-op (param name / "
                             "MID parent) -> read this log.", bound);
                 } else {
-                    UE_LOGW("[CLIENTMODEL-PROBE] tex_scientist NOT loaded (pak stale? path?) -- RIGHT stays "
-                            "rung-2 garbled kel-material look");
+                    UE_LOGW("[CLIENTMODEL-PROBE] tex_hl_einstein_v1sc NOT loaded (pak stale? path?) -- RIGHT "
+                            "stays rung-2 garbled kel-material look");
                 }
             }
             UE_LOGI("[CLIENTMODEL-PROBE] RIGHT scientist puppet=%p mesh=%p @(%.0f,%.0f,%.0f) -- verdicts "

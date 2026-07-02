@@ -53,7 +53,7 @@ void* LoadObjectByPath(const wchar_t* fullObjectPath) {
     if (obj) {
         // Log the loaded object's identity + package chain so a NAME COLLISION is
         // visible: our pak export is named `kerfurOmega_KelSkin` (same as the game's
-        // own mesh). If the outer/package is `/Game/Mods/VOTVCoop/scientist` we got
+        // own mesh). If the outer/package is `/Game/Mods/VOTVCoop/hl_einstein_v1sc` we got
         // OURS; if it's the game's kerfurAnthro package, StaticLoadObject resolved to
         // the resident game object instead (docs/COOP_CLIENT_MODEL.md 6a/8 rename).
         void* outer  = R::OuterOf(obj);

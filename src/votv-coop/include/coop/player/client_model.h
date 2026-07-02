@@ -1,7 +1,7 @@
 // coop/player/client_model.h -- the remote CLIENT puppet's custom body mesh.
 //
 // Goal (docs/COOP_CLIENT_MODEL.md): remote CLIENT puppets render a custom
-// character model (a cooked USkeletalMesh shipped in scientist.pak) while the
+// character model (a cooked USkeletalMesh shipped in hl_einstein_v1sc.pak) while the
 // HOST puppet stays Dr. Kel. The custom mesh rides the SAME
 // kerfurOmegaV1_Skeleton as the stock kel skin, so the local anthro AnimBP
 // drives it 1:1 -- only the SkeletalMesh swaps; the AnimClass stays the local

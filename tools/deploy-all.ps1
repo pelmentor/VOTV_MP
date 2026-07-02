@@ -47,7 +47,8 @@ $deployScript = Join-Path $PSScriptRoot "deploy-loader.ps1"
 # at startup, so dropping it under Content/Paks/LogicMods/votv-coop/ makes the
 # mesh resident before our boot thread runs. Optional: absent pak == puppets keep
 # the kel skin (graceful-degrade in coop::client_model).
-$clientPak = Join-Path $root "research\pak_re\scientist.pak"
+# 2026-07-02: model renamed to its ORIGINAL name -- scientist.pak -> hl_einstein_v1sc.pak.
+$clientPak = Join-Path $root "research\pak_re\hl_einstein_v1sc.pak"
 
 foreach ($t in $targets) {
     if (-not (Test-Path $t.Path)) {
@@ -66,7 +67,14 @@ foreach ($t in $targets) {
     # ...\VotV\Binaries\Win64; the pak lives under ...\VotV\Content\Paks\LogicMods.
     $votvDir = Split-Path -Parent (Split-Path -Parent $t.Path)   # Win64 -> Binaries -> VotV
     $pakDir  = Join-Path $votvDir "Content\Paks\LogicMods\votv-coop"
-    $pakDest = Join-Path $pakDir "scientist.pak"
+    $pakDest = Join-Path $pakDir "hl_einstein_v1sc.pak"
+    # One-time hygiene: the pre-rename deliverable must not stay mounted alongside the
+    # renamed one (two paks with the same package content = double-mount ambiguity).
+    $stalePak = Join-Path $pakDir "scientist.pak"
+    if (-not $Remove -and (Test-Path $stalePak)) {
+        try { Remove-Item $stalePak -Force -ErrorAction Stop; Write-Host "  removed STALE scientist.pak" -ForegroundColor Yellow }
+        catch { Write-Host "  WARN: stale scientist.pak is LOCKED (game running?) -- remove it before the next launch" -ForegroundColor Red }
+    }
     if ($Remove) {
         if (Test-Path $pakDest) { Remove-Item $pakDest -Force; Write-Host "  removed client pak" -ForegroundColor DarkGray }
     } elseif (Test-Path $clientPak) {

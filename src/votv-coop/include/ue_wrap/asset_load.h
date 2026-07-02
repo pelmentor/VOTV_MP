@@ -15,7 +15,7 @@
 namespace ue_wrap::asset_load {
 
 // Load + return the UObject at `fullObjectPath` (e.g.
-// L"/Game/Mods/VOTVCoop/scientist.kerfurOmega_KelSkin"), or nullptr if the
+// L"/Game/Mods/VOTVCoop/hl_einstein_v1sc.kerfurOmega_KelSkin"), or nullptr if the
 // RyRuntime plugin is absent, the pak isn't mounted, or the path doesn't
 // resolve. Synchronous (forces the package load). The caller caches the
 // result; this performs no caching of its own.

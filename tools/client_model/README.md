@@ -16,17 +16,22 @@ it natively via the anthro AnimBP), target rig = **anthro `kerfurOmegaV1_Skeleto
 ```
 source.mdl
   → mdl_extract.py   model.obj(+usemtl per face) + model.bones.json(+bone WORLD mats) + tex/*.png
-  → repose.py apply  scientist_tpose.obj      (auto A-pose→VOTV T-pose + scale; profile-driven)
+  → repose.py apply  <model>_tpose.obj        (auto A-pose→VOTV T-pose + scale; PROFILE-driven --
+                                               profiles/ library, `default` = the current standard)
   → atlas.py         atlas.png + atlas.json   (all tex/*.png shelf-packed, 1px clamp-extend gutter)
-  → ue_cook.py       scientist.uasset/.uexp   (Y-mirror PSK→cooked, HL→anthro rigid remap,
+  → ue_cook.py       <model>.uasset/.uexp     (Y-mirror PSK→cooked, HL→anthro rigid remap,
                                                per-face atlas UV remap + v-flip, winding matched
                                                to the TEMPLATE's measured signed-volume side,
                                                splice into kerfurOmega_KelSkin cooked template)
-  → ue_tex.py cook   tex_scientist.uasset/.uexp (atlas.png → cooked UTexture2D PF_B8G8R8A8 inline)
-  → repak pack       scientist.pak            (VotV/Content/Mods/VOTVCoop/*, V11, 4 files)
+  → ue_tex.py cook   tex_<model>.uasset/.uexp (atlas.png → cooked UTexture2D PF_B8G8R8A8 inline)
+  → repak pack       <model>.pak              (VotV/Content/Mods/VOTVCoop/*, V11, 4 files)
   → mod runtime:     mount pak + LoadObject + both-slot SetSkeletalMesh + slot-0 MID
                      SetTextureParameterValue('tex') by peer role
 ```
+
+Current model = `hl_einstein_v1sc` (its ORIGINAL name; the early "scientist" naming is
+retired). Profiles: `profiles/README.md` — v2 "wide" (format 2, R+t deltas) is the
+DEFAULT; v1 "narrow" stays in the library.
 
 Adding a NEW HL model = the six steps above (no Blender). See `docs/COOP_CLIENT_MODEL.md §4`
 for exact commands. Use `python` (has numpy), not `python3`.
@@ -34,11 +39,13 @@ for exact commands. Use `python` (has numpy), not `python3`.
 ## Tools here
 - **`mdl_extract.py`** — GoldSrc/HL1 `.mdl` → `model.obj` (A-pose) + `model.bones.json`
   (hierarchy + per-vertex bone + **HL bone WORLD matrices**) + `tex/*.png`. Pure Python.
-- **`repose.py`** — the repose automation. `learn` extracts the VOTV T-pose profile from a
-  manual example; `apply` auto-reposes any HL Bip01 model to T-pose + scale. Validated:
-  reproduces the manual example to residual ~0. See `docs/COOP_CLIENT_MODEL.md §5`.
-- **`votv_tpose_profile.json`** — the learned "VOTV T-pose standard" (22 per-bone local
-  rotations + target height). Reusable across models.
+- **`repose.py`** — the repose automation. `learn` extracts a VOTV T-pose profile from a
+  manual example; `apply` auto-reposes any HL Bip01 model to T-pose + scale (`default` =
+  the library default). Validated: reproduces each manual example to residual ~0 (v2 =
+  0.00005 max). See `docs/COOP_CLIENT_MODEL.md §5`.
+- **`profiles/`** — the profile LIBRARY (one json per learned example; format 1 =
+  rotation-only, format 2 = full R+t local deltas). `profiles/README.md` = provenance
+  table; DEFAULT_PROFILE in repose.py names the default (v2 wide).
 - **`atlas.py`** — shelf-packs `tex/*.png` into ONE atlas + `atlas.json` name→pixel-rect map
   (1px clamp-extend gutter; no mips cooked so 1px kills bilinear bleed).
 - **`ue_cook.py`** — THE COOK. Sources the reposed OBJ, applies the exact PSK→cooked Y-mirror,
@@ -62,10 +69,11 @@ for exact commands. Use `python` (has numpy), not `python3`.
 ## Related (kept in place, referenced)
 - `research/pak_re/` — workspace (gitignored): `mesh_out/` (mdl_extract + cook outputs),
   `modpak/` (pak staging), `extracted/` (cook template = repak-extracted game meshes),
-  `tools/repak.exe` (packer), `scientist.pak` (the deliverable).
+  `tools/repak.exe` (packer), `hl_einstein_v1sc.pak` (the deliverable).
 - `tools/hl_einstein_v1sc/` — example HL1 scientist `.mdl` + `dr_kel.psk` (reference skin)
-  + `scientist_tpose.obj` (reposed) + the manual example `hl_einstein_v1sc.psk` (Valve
-  asset / local only).
+  + `hl_einstein_v1sc_tpose.obj` (reposed, v2 profile) + the manual examples
+  `hl_einstein_v1sc.psk` (v1 narrow) / `hl_einstein_v1sc_new_profile.psk` (v2 wide)
+  (Valve asset / local only).
 - `tools/SourceIO/` — Blender addon (GoldSrc `.mdl` import); `reference/psk-psa-v9.1.2/`
   — PSK import/export. Used for the manual repose example.
 

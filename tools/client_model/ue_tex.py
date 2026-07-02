@@ -36,8 +36,9 @@ from PIL import Image
 import ue_pkg
 
 TEMPLATE = r"D:\Projects\Programming\VOTV_MP\research\pak_re\extracted\VotV\Content\meshes\kel\4\tex_kel3_skin"
-NEW_PKG_PATH = "/Game/Mods/VOTVCoop/tex_scientist"
-NEW_OBJ_NAME = "tex_scientist"
+# Model keeps its ORIGINAL name (user 2026-07-02): tex package follows the mesh.
+NEW_PKG_PATH = "/Game/Mods/VOTVCoop/tex_hl_einstein_v1sc"
+NEW_OBJ_NAME = "tex_hl_einstein_v1sc"
 NEW_PF = "PF_B8G8R8A8"
 
 # ---- FName hashes (validated 19/19 vs the template name map) ----

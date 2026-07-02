@@ -8,17 +8,18 @@
 namespace coop::client_model {
 
 namespace {
-// Package `scientist` at mount root /Game/Mods/VOTVCoop/ (auto-mounted from
-// Content/Paks/LogicMods/votv-coop/scientist.pak). The OBJECT name is still
-// `kerfurOmega_KelSkin` -- the cook spliced the scientist into the kel-skin
-// template and did not rename the export (docs/COOP_CLIENT_MODEL.md 6a). The
-// full package.object path disambiguates from the game's OWN kerfurOmega_KelSkin
+// Package `hl_einstein_v1sc` (the model's ORIGINAL name, user 2026-07-02; was
+// "scientist") at mount root /Game/Mods/VOTVCoop/ (auto-mounted from
+// Content/Paks/LogicMods/votv-coop/hl_einstein_v1sc.pak). The OBJECT name is still
+// `kerfurOmega_KelSkin` -- the cook spliced the model into the kel-skin template
+// and did not rename the export (docs/COOP_CLIENT_MODEL.md 6a). The full
+// package.object path disambiguates from the game's OWN kerfurOmega_KelSkin
 // (a different package: /Game/meshes/kerfurAnthro/sk/...).
 constexpr const wchar_t* kClientMeshPath =
-    L"/Game/Mods/VOTVCoop/scientist.kerfurOmega_KelSkin";
+    L"/Game/Mods/VOTVCoop/hl_einstein_v1sc.kerfurOmega_KelSkin";
 // The atlas texture cooked alongside the mesh (same pak, own package).
 constexpr const wchar_t* kClientTexPath =
-    L"/Game/Mods/VOTVCoop/tex_scientist.tex_scientist";
+    L"/Game/Mods/VOTVCoop/tex_hl_einstein_v1sc.tex_hl_einstein_v1sc";
 
 void* g_mesh = nullptr;
 bool  g_tried = false;

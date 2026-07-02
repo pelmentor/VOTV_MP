@@ -93,7 +93,7 @@ bool RemotePlayer::Spawn(bool useClientModel) {
     void* animClass = Pup::GetMeshPlayerVisibleAnimClass(local);
 
     // Custom client model (docs/COOP_CLIENT_MODEL.md): a puppet representing a
-    // remote CLIENT peer wears the custom body mesh from scientist.pak instead of
+    // remote CLIENT peer wears the custom body mesh from hl_einstein_v1sc.pak instead of
     // the local kel skin. Same kerfurOmegaV1_Skeleton, so the local anthro
     // AnimClass (kept as-is) drives it 1:1. Graceful-degrade: if the pak is
     // absent GetClientPuppetMesh() returns null and we keep the kel skin.

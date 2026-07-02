@@ -19,8 +19,9 @@ import ue_pkg
 import ue_skelmesh as sm
 
 SCI_DIR = r"D:\Projects\Programming\VOTV_MP\research\pak_re\mesh_out\hl_einstein"
-OUT = r"D:\Projects\Programming\VOTV_MP\research\pak_re\mesh_out\hl_einstein\scientist"
-REPOSED = r"D:\Projects\Programming\VOTV_MP\tools\hl_einstein_v1sc\scientist_tpose.obj"
+# Model keeps its ORIGINAL name (user 2026-07-02): package hl_einstein_v1sc, not "scientist".
+OUT = r"D:\Projects\Programming\VOTV_MP\research\pak_re\mesh_out\hl_einstein\hl_einstein_v1sc"
+REPOSED = r"D:\Projects\Programming\VOTV_MP\tools\hl_einstein_v1sc\hl_einstein_v1sc_tpose.obj"
 ATLAS = os.path.join(SCI_DIR, "atlas.json")   # tools/client_model/atlas.py output
 
 TEMPLATE = r"D:\Projects\Programming\VOTV_MP\research\pak_re\extracted\VotV\Content\meshes\kerfurAnthro\sk\kerfurOmega_KelSkin"

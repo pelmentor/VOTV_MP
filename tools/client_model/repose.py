@@ -13,6 +13,11 @@ manual PSK to floating-point zero.
   learn <origDir> <posed.psk> <profile.json>   # extract the standard from the example
   apply <origDir> <profile.json> <out.obj>     # auto-repose a NEW model's A-pose
         [--validate <psk>]                      #   ...and check vs a ground-truth psk
+  apply <origDir> default <out.obj>            # ...with the DEFAULT library profile
+
+Profiles live in the LIBRARY tools/client_model/profiles/ (one json per learned
+example, provenance in profiles/README.md); DEFAULT_PROFILE below names the default
+(user 2026-07-02: keep a base of profiles, new one as default).
 
 <origDir> = mdl_extract output (model.obj + model.bones.json with bone world matrices).
 Pipeline: mdl_extract -> repose.apply -> ue_cook. Dev/RE tool (RULE 3).
@@ -23,6 +28,12 @@ import struct
 import sys
 
 import numpy as np
+
+# The library default (the "VOTV T-pose standard" every new model gets unless a
+# profile is named explicitly). Swap by editing this one line; the library keeps
+# every learned profile side by side (profiles/README.md).
+DEFAULT_PROFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "profiles", "tpose_v2_wide_2026-07-02.json")
 
 
 # ---------- IO ----------
@@ -125,23 +136,35 @@ def learn(orig_dir, posed_psk, prof_out):
             RestL = np.linalg.inv(WA[pa]) @ WA[b]
             WTu[b] = WTu[pa] @ RestL
 
-    # transferable = per-bone LOCAL POSE ROTATION: pose[b] = rot( RestL_A[b]^-1 @ L_Tu[b] )
-    pose_rot = {}
+    # transferable = per-bone LOCAL POSE DELTA: a FULL rigid (R + t) in the bone's own
+    # rest frame -- pose[b] = RestL_A[b]^-1 @ L_Tu[b]. Format 1 stored only the rotation
+    # part; that reproduced a pure RE-POSE (the v1 narrow example) to ~0 but silently
+    # dropped JOINT TRANSLATIONS -- the v2 wide example moves shoulder/arm joints
+    # outward, and rotation-only left a 16-unit residual (2026-07-02). The translation
+    # rides in the rest-local frame, so it transfers by bone NAME like the rotation.
+    pose_local = {}
     for b in range(nb):
         pa = parent[b]
         if pa < 0:
-            pose_rot[b] = orthonormal(WTu[b]).tolist()       # root: store world rotation
+            M = np.eye(4); M[:3, :3] = orthonormal(WTu[b])   # root: world rotation @ origin
+            pose_local[b] = M.tolist()
         else:
             RestL = np.linalg.inv(WA[pa]) @ WA[b]
             LTu = np.linalg.inv(WTu[pa]) @ WTu[b]
-            pr = orthonormal(np.linalg.inv(RestL) @ LTu)
-            pose_rot[b] = pr.tolist()
+            D = np.linalg.inv(RestL) @ LTu
+            M = np.eye(4); M[:3, :3] = orthonormal(D); M[:3, 3] = D[:3, 3]
+            pose_local[b] = M.tolist()
 
-    up = int(np.argmax(P.max(0) - P.min(0)))
+    # UP is a CONSTANT of the target space, never inferred from the mesh: the PSK/cook
+    # space is UE Z-up (the cook is a pure Y-negation, SPEC.md). The old argmax(bbox)
+    # heuristic broke the moment a T-pose ARM SPAN (X) grew wider than the height --
+    # learn then measured "height" along the arms and grounded the model sideways
+    # (2026-07-02: the new-profile example read up=axis0, self-reproduce residual 17.58).
+    up = 2
     prof = {
-        "skeleton": "HL_Bip01", "source": os.path.basename(posed_psk),
+        "format": 2, "skeleton": "HL_Bip01", "source": os.path.basename(posed_psk),
         "bones": names, "parent": parent,
-        "pose_rot": [pose_rot[b] for b in range(nb)],
+        "pose_local": [pose_local[b] for b in range(nb)],
         "target_height": float(P[:, up].max() - P[:, up].min()),
         "up_axis": up,
         "foot": float(P[:, up].min()),
@@ -161,22 +184,29 @@ def learn(orig_dir, posed_psk, prof_out):
 # ---------- apply ----------
 def _apply(V, vbone, WA, parent, prof, names):
     nb = len(parent)
-    # Match pose rotations by bone NAME -- a new model's skeleton can differ from the
+    # Match pose deltas by bone NAME -- a new model's skeleton can differ from the
     # profile's (e.g. this one adds fingers/toes). Bones absent from the profile get an
     # identity local pose (keep their rest orientation); they still inherit their parent's
     # repose through the hierarchy. Root ("Bip01") stores a WORLD rotation (see learn).
-    pmap = {n: np.array(r, float) for n, r in zip(prof["bones"], prof["pose_rot"])}
-    I3 = np.eye(3)
-    pose = [pmap.get(names[b], I3) for b in range(nb)]
+    # Profile formats: 1 = rotation-only (pose_rot, 3x3; pre-2026-07-02 library entries),
+    # 2 = full rigid local delta (pose_local, 4x4; carries JOINT TRANSLATIONS -- the wide
+    # T-pose moves shoulder/arm joints, which rotation-only silently dropped). Both load;
+    # normalization to 4x4 happens here so ONE apply path serves the whole library.
+    if prof.get("format", 1) >= 2:
+        pmap = {n: np.array(m, float) for n, m in zip(prof["bones"], prof["pose_local"])}
+    else:
+        pmap = {n: rot4(np.array(r, float)) for n, r in zip(prof["bones"], prof["pose_rot"])}
+    I4 = np.eye(4)
+    pose = [pmap.get(names[b], I4) for b in range(nb)]
     order = sorted(range(nb), key=lambda b: (0 if parent[b] < 0 else 1, b))
     WTu = [None] * nb
     for b in order:
         pa = parent[b]
         if pa < 0:
-            WTu[b] = rot4(pose[b])                            # root world rot at origin
+            WTu[b] = pose[b]                                  # root world rot at origin
         else:
             RestL = np.linalg.inv(WA[pa]) @ WA[b]
-            LT = RestL @ rot4(pose[b])                        # keep new bone offset, apply std rotation
+            LT = RestL @ pose[b]                              # keep new bone offset, apply std delta
             WTu[b] = WTu[pa] @ LT
     # rigid per-bone repose into unit T-space
     Vu = np.empty_like(V)
@@ -237,7 +267,8 @@ def main():
         learn(a[1], a[2], a[3])
     elif len(a) >= 4 and a[0] == "apply":
         val = a[a.index("--validate") + 1] if "--validate" in a else None
-        apply(a[1], a[2], a[3], val)
+        prof = DEFAULT_PROFILE if a[2] == "default" else a[2]
+        apply(a[1], prof, a[3], val)
     else:
         print(__doc__)
 
