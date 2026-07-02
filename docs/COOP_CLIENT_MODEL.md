@@ -4,7 +4,8 @@
 model (the user's own mesh) while the HOST stays Dr. Kel. First model = a Half-Life 1
 GoldSrc scientist. The pipeline generalizes to any HL1 humanoid `.mdl`.
 
-**STATUS (2026-07-02, geometry VERIFIED in-game -- textures are the active axis):**
+**STATUS (2026-07-02, ALL axes VERIFIED in-game -- geometry + texture + winding; the coop
+visual (host+client facing each other, §3C) is the last unexercised step):**
 - **RUNTIME = DONE + PROVEN WORKING (§3), commit `320c0ab4`.** Autonomous 2-peer LAN test
   (host s_1234 + fresh client): pak auto-mounts, `URyRuntimeObjectHelpers::LoadObject` returns
   OUR package's SkeletalMesh, `RemotePlayer::Spawn` applies it to the client puppet (role-gated:
@@ -28,18 +29,36 @@ GoldSrc scientist. The pipeline generalizes to any HL1 humanoid `.mdl`.
     Probe: `coop/dev/client_model_probe` ([dev] client_model_probe=1) -- kept as the visual
     harness for the texture iterations.
 - **POSE (A-pose→T-pose) = SOLVED + AUTOMATED (§5).**
-- **TEXTURES = THE ACTIVE AXIS (§7) -- rungs 1-3 AS-BUILT (`72a21a42`), rung-3 LOOK PENDING.**
+- **TEXTURES = DONE + VERIFIED IN-GAME [V hands-on 2026-07-02 "теперь нормально"] -- full ladder:**
   Rung 1 [V static RE]: slot-0 material `inst_kel4_body` = MIC of `mat_object_sk` with ONE
   texture parameter **`tex`** (value tex_kel3_skin) -> MID binding viable, no cooked material.
-  Rung 2 [AS-BUILT + parse-verified]: `tools/client_model/ue_tex.py` cooks a PNG into a cooked
-  `UTexture2D` package (PF_B8G8R8A8, 1 mip, inline; full package rename incl. the REAL name-map
-  hash recipe, §8); first texture (Sci3_Chest_ 64x88) packed -- scientist.pak = 4 files.
-  Rung 3 [AS-BUILT]: runtime `CreateDynamicMaterialInstance` + `SetTextureParameterValue`
-  wrappers; client_model_probe binds the texture on the RIGHT puppet's slot-0 MID on BOTH body
-  slots. Expected look: torso-colored body (single texture, no atlas). AWAITING the user look.
-  Rung 4 [OPEN]: atlas-bake the 19 PNGs + per-face UV remap in ue_cook -> final look; then wire
-  the texture bind into the FEATURE apply path (client_model / puppet spawn), not just the probe.
-- Deployed state: DLL `a142e2bc` + pak `319f39d6` (4 files), all 4 install folders hash-verified.
+  Rung 2 [V]: `tools/client_model/ue_tex.py` cooks a PNG into a cooked `UTexture2D` package
+  (PF_B8G8R8A8, 1 mip, inline; full package rename incl. the REAL name-map hash recipe, §8).
+  Rung 3 [V hands-on "текстура растянута" = exactly the expected single-tile stretch]: runtime
+  `CreateDynamicMaterialInstance(slot0)` + `SetTextureParameterValue('tex')` chain PROVEN.
+  Rung 4 [V hands-on]: `tools/client_model/atlas.py` shelf-packs the 19 PNGs into one 512x256
+  atlas (1px duplicated-edge gutter; no mips so 1px suffices); ue_cook remaps every corner UV
+  into its `usemtl` tile INCLUDING the V-orientation fix (cooked v = 1 - obj_v: GoldSrc t=0 =
+  texture top, OBJ stores v-up, UE samples v-down with mip row 0 = PNG row 0 -- rung 3 was
+  per-tile v-flipped, invisible in the garble). Byte-verified: 1062/1062 UVs inside tile rects.
+- **WINDING root-fixed [V hands-on 2026-07-02, exposed by rung 4]:** the real textures revealed
+  an INSIDE-OUT render (front faces culled -- "смотрю спереди, вижу спину... как будто изнутри")
+  present since the FIRST cook: the old "geometric-outward = front" heuristic was an assumption,
+  and it is BACKWARDS vs the engine -- cooked UE meshes store **CW-outward** winding (template
+  kerfurOmega_KelSkin signed volume = **-161625**; our cook emitted +102223). The geometry pass
+  could not catch it: a closed mesh's SILHOUETTE is winding-invariant and the garble hid the
+  facing. Fix: ue_cook now MEASURES the template's signed-volume side (divergence theorem --
+  exact, immune to the concavity noise that made a centroid-ray test read 0.469-vs-0.716) and
+  matches it; SHADING normals are decoupled from index winding (always geometric-outward).
+- **FEATURE texture bind wired (not just the probe):** `client_model::GetClientPuppetTexture()`
+  (one-shot cache) + `ApplyClientPuppetTexture()` (slot-0 MID + 'tex' on BOTH body slots);
+  `RemotePlayer::Spawn` calls it right after SpawnPuppet on custom-mesh puppets. Client puppets
+  get mesh + texture; host puppet stays kel. The COOP VISUAL (host+client facing each other,
+  §3C) is the only not-yet-exercised path -- solo probe verified the probe-side bind only.
+- Deployed state: DLL `fff53e04` + pak `5edabac7` (4 files: winding-fixed atlas-UV mesh +
+  512x256 atlas texture), all 4 install folders hash-verified 8/8. Audit (2026-07-02): all
+  functions COLD-path, zero findings >= 80 confidence; remote_player.cpp 913 LOC past the
+  800 soft cap -> queued extraction: ragdoll subsystem -> remote_player_ragdoll.{h,cpp}.
 
 **Locked decisions (RULE 1 no-crutch, RULE 3 no-editor-at-runtime):**
 - A REAL cooked `USkeletalMesh` the engine skins natively (NOT a ProceduralMesh +
@@ -58,21 +77,23 @@ OFFLINE (dev machine, tools/client_model/):   [DONE, automated]
   hl_einstein_v1sc.mdl
    → mdl_extract.py   → model.obj + model.bones.json(+bone WORLD mats) + tex/*.png
    → repose.py apply  → scientist_tpose.obj        (auto A-pose→VOTV T-pose + scale, §5)
+   → atlas.py         → atlas.png + atlas.json      (19 tiles → 512x256, 1px gutter)
    → ue_cook.py       → scientist.uasset/.uexp      (Y-mirror to cooked space, HL→anthro
-                                                     rigid bone remap, splice into template)
-   → repak pack       → scientist.pak               (VotV/Content/Mods/VOTVCoop/scientist, V11)
+                                                     rigid bone remap, per-face atlas UV remap,
+                                                     TEMPLATE-MATCHED winding, splice into template)
+   → ue_tex.py        → tex_scientist.uasset/.uexp  (atlas.png → cooked UTexture2D, §8 rename)
+   → repak pack       → scientist.pak               (VotV/Content/Mods/VOTVCoop/*, V11, 4 files)
 SHIP: scientist.pak deployed to EVERY peer by tools/deploy-all.ps1 (Content/Paks/LogicMods/votv-coop/).
-RUNTIME (mod):   [DONE + PROVEN -- §3, commit 320c0ab4 + 8df26e05]
+RUNTIME (mod):   [DONE + PROVEN -- §3, commits 320c0ab4 + 8df26e05 + rung-4]
   UE auto-mounts the pak → client_model::GetClientPuppetMesh() LoadObjects the mesh once →
   net_pump role gate (slot 0 host = kel; slots >= 1 clients = custom) →
   RemotePlayer::Spawn(useClientModel) → SpawnPuppet applies the skin to BOTH body slots
-  (mesh_playerVisible + native ACharacter::Mesh -- the two-body invariant) + local anthro AnimBP.
-TEXTURE (offline+runtime):  [rungs 1-3 AS-BUILT -- §7]
-  ue_tex.py cooks tex/*.png → cooked UTexture2D in the same pak → runtime binds it via
-  CreateDynamicMaterialInstance(slot0) + SetTextureParameterValue('tex', tex).
+  (mesh_playerVisible + native ACharacter::Mesh -- the two-body invariant) + local anthro AnimBP
+  → ApplyClientPuppetTexture: slot-0 MID + SetTextureParameterValue('tex') on both slots.
 ```
 
-Two halves: the offline cook (§4/§5, geometry VERIFIED in-game) and the runtime (§3, DONE).
+Two halves: the offline cook (§4/§5, geometry+texture+winding VERIFIED in-game) and the
+runtime (§3 + the texture bind, DONE; coop visual pending).
 
 The repose (§5) is learned ONCE from a manual example and is now a reusable profile;
 adding a NEW model is just `mdl_extract → repose.py apply → ue_cook → repak` (no Blender).
@@ -206,11 +227,12 @@ Tools (all in `tools/client_model/`, dev-only, RULE 3):
 - `mesh_extract/` (C#/CUE4Parse) — game-mesh study. `cue4parse_ref/` — CUE4Parse reader
   sources (MIT) = the byte-order spec. `SPEC.md` — byte-exact cook spec.
 
-**The deliverable:** `research/pak_re/scientist.pak` (58 KB, V11) →
-`VotV/Content/Mods/VOTVCoop/scientist.uasset/.uexp` → loads as
-`/Game/Mods/VOTVCoop/scientist` (object `kerfurOmega_KelSkin`). Cooked mesh: 1 section,
-1062 verts, 708 tris, 101-bone anthro rig, rigid (1 influence), 0 pelvis-fallbacks
-(all verts mapped to real anthro bones), winding 0.76 outward.
+**The deliverable:** `research/pak_re/scientist.pak` (~570 KB, V11, 4 files) →
+`VotV/Content/Mods/VOTVCoop/{scientist,tex_scientist}.uasset/.uexp` → load as
+`/Game/Mods/VOTVCoop/scientist` (object `kerfurOmega_KelSkin`) + `.../tex_scientist`
+(512x256 PF_B8G8R8A8 atlas). Cooked mesh: 1 section, 1062 verts, 708 tris, 101-bone anthro
+rig, rigid (1 influence), 0 pelvis-fallbacks, atlas-remapped UVs (19 tiles), winding
+template-matched (signed volume -102223, same side as the template's -161625 -- see STATUS).
 
 Workspace: `research/pak_re/` (gitignored) — `mesh_out/` (mdl_extract outputs),
 `modpak/` (pak staging), `extracted/` (repak-extracted game meshes = the cook template),
@@ -260,8 +282,12 @@ a. **CLOSED [V]:** object name `kerfurOmega_KelSkin` at the new package path loa
    texture package IS cleanly renamed -- ue_tex.py does the full rename, §8 recipe.)
 b. **Still approximate (visually acceptable so far):** tangents (computed normal + a
    perpendicular); ImportedBounds = template's; vertex colors = white.
-c. **CLOSED [V]:** winding is correct in-game -- the scientist shape reads as a solid
-   humanoid (hands-on 2026-07-02), no inside-out look.
+c. **REOPENED by rung 4, then ROOT-FIXED [V]:** the earlier "no inside-out look" call was
+   premature -- the garbled texture masked the facing and a closed mesh's silhouette is
+   winding-invariant, so the geometry look could not falsify winding at all. Rung-4 real
+   textures exposed a full INSIDE-OUT render. Root fix: ue_cook matches the TEMPLATE's
+   measured signed-volume winding side, never an assumed convention (STATUS block has the
+   numbers). Re-verified hands-on same day ("теперь нормально").
 d. **CLOSED [V]:** UE loads the package whose name-map still references the template's
    paths (mesh package loads + renders; imports resolve to the game's skeleton/materials
    as intended).
@@ -269,11 +295,11 @@ e. **Pose generalization** unverified on a 2nd model (§5) — only the source m
 
 ---
 
-## 7. Textures — THE ACTIVE AXIS (chosen plan + probe-first ladder, 2026-07-02)
+## 7. Textures — DONE [V hands-on 2026-07-02] (the as-built ladder)
 The cook reuses the template's material array (kerfurOmega/kel materials, 3 slots; the
-1 spliced section uses slot 0). So the scientist renders with a **kel texture sampled
-through the scientist's UVs = garbled** — confirmed in-game 2026-07-02 (shape/rig/anim
-verified correct; only the texture is wrong).
+1 spliced section uses slot 0). Without our texture the scientist renders with a **kel
+texture sampled through the scientist's UVs = garbled** — that was the pre-ladder state;
+the ladder below fixed it (STATUS block has the verified as-built summary).
 
 The scientist's own textures ARE extracted: `research/pak_re/mesh_out/hl_einstein/tex/*.png`
 (19 GoldSrc textures) named by the PSK materials (`th_einstein_Sci3(Chest).bmp`, …).
@@ -289,17 +315,18 @@ The scientist's own textures ARE extracted: `research/pak_re/mesh_out/hl_einstei
 - (iii) multi-section/multi-material: only if a single ATLAS proves insufficient for a 708-tri
   GoldSrc model (unlikely). Not now.
 
-**Probe-first ladder (each rung verified before the next):**
-1. **RE the kel material chain STATICALLY** (SDK dump / FModel): is slot 0's material (or its
-   parent) parameterized with a TEXTURE parameter (name?), or does it sample a hardcoded
-   TextureObject? MID `SetTextureParameterValue` only works on a parameter. If unparameterized,
-   find a parameterized game material to use as the MID base instead.
-2. **Cook ONE UTexture2D** (single dominant scientist texture, no atlas yet) into the pak;
-   verify `LoadObject` returns class='Texture2D' (parse-level probe).
-3. **Runtime render probe:** in `client_model_probe`, MID + SetTextureParameterValue on the
-   RIGHT puppet's slot 0 → user looks: scientist-colored = texture cook + binding proven.
-4. **Atlas bake:** composite the 19 PNGs into one atlas + remap the OBJ UVs per-face at cook
-   (pure PIL/numpy); recook mesh+atlas → final look. Multi-section only if atlas quality fails.
+**Probe-first ladder — ALL RUNGS DONE [V]:**
+1. **[V] RE the kel material chain STATICALLY:** slot-0 `inst_kel4_body` = MIC of
+   `mat_object_sk` with ONE texture parameter **`tex`** → MID binding viable.
+2. **[V] Cook ONE UTexture2D** (Sci3_Chest_ 64x88, no atlas): `LoadObject` returned
+   class='Texture2D' in-game.
+3. **[V hands-on "текстура растянута"] Runtime render probe:** MID + `SetTextureParameterValue`
+   on the RIGHT puppet → the stretched chest texture = cook + binding chain proven.
+4. **[V hands-on "теперь нормально"] Atlas bake:** `atlas.py` (19 PNGs → 512x256, 1px
+   duplicated-edge gutter) + per-face UV remap in ue_cook (usemtl → tile rect, v-flip fix)
+   → real scientist look. Multi-section never needed. Exposed + root-fixed the WINDING
+   assumption on the way (STATUS). Feature bind wired into `RemotePlayer::Spawn` via
+   `client_model::ApplyClientPuppetTexture`.
 
 ---
 

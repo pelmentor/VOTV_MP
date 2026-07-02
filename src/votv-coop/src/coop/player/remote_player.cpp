@@ -97,9 +97,11 @@ bool RemotePlayer::Spawn(bool useClientModel) {
     // the local kel skin. Same kerfurOmegaV1_Skeleton, so the local anthro
     // AnimClass (kept as-is) drives it 1:1. Graceful-degrade: if the pak is
     // absent GetClientPuppetMesh() returns null and we keep the kel skin.
+    bool usedClientModel = false;
     if (useClientModel) {
         if (void* customMesh = coop::client_model::GetClientPuppetMesh()) {
             skin = customMesh;
+            usedClientModel = true;
             UE_LOGI("RemotePlayer::Spawn: CLIENT peer -> custom client mesh %p "
                     "(anthro AnimClass %p kept, same skeleton)", customMesh, animClass);
         }
@@ -178,6 +180,11 @@ bool RemotePlayer::Spawn(bool useClientModel) {
     // can validate actor_ with IsLiveByIndex (recycling-proof) rather than plain
     // IsLive (which a GC-recycled address defeats). See internalIdx_ in the header.
     internalIdx_ = R::InternalIndexOf(actor_);
+
+    // Custom-mesh puppets also get the custom body texture (slot-0 MID on both
+    // body components). After SpawnPuppet: both SetSkeletalMesh writes are done,
+    // so the MID override cannot be reset by a later mesh swap.
+    if (usedClientModel) coop::client_model::ApplyClientPuppetTexture(actor_);
 
     // Eager-resolve the Inc3 hurt-flash material + UFunctions so the first damage
     // flash on this puppet does zero GUObjectArray name walks (cached forever).

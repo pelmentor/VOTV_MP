@@ -23,4 +23,18 @@ namespace coop::client_model {
 // result is remembered so a missing pak is not re-probed on every puppet spawn.
 void* GetClientPuppetMesh();
 
+// The custom mesh's body texture (the 19-tile atlas cooked by
+// tools/client_model/atlas.py + ue_tex.py), lazily loaded + cached like the
+// mesh. Null when the pak lacks it.
+void* GetClientPuppetTexture();
+
+// Bind the custom texture onto a spawned client puppet: slot-0 MID +
+// SetTextureParameterValue('tex') on BOTH body components (the two-body
+// invariant -- puppet.cpp spawn notes). The slot-0 material inst_kel4_body is a
+// MIC of mat_object_sk whose diffuse is the 'tex' texture param, so no cooked
+// material is needed. Returns false (no-op) when the texture or components are
+// unavailable -- the puppet then renders the custom mesh with the stock kel
+// material (mis-mapped but harmless). Game thread only.
+bool ApplyClientPuppetTexture(void* puppetActor);
+
 }  // namespace coop::client_model

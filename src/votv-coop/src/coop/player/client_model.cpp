@@ -1,7 +1,9 @@
 #include "coop/player/client_model.h"
 
 #include "ue_wrap/asset_load.h"
+#include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
+#include "ue_wrap/puppet.h"
 
 namespace coop::client_model {
 
@@ -14,9 +16,14 @@ namespace {
 // (a different package: /Game/meshes/kerfurAnthro/sk/...).
 constexpr const wchar_t* kClientMeshPath =
     L"/Game/Mods/VOTVCoop/scientist.kerfurOmega_KelSkin";
+// The atlas texture cooked alongside the mesh (same pak, own package).
+constexpr const wchar_t* kClientTexPath =
+    L"/Game/Mods/VOTVCoop/tex_scientist.tex_scientist";
 
 void* g_mesh = nullptr;
 bool  g_tried = false;
+void* g_tex = nullptr;
+bool  g_texTried = false;
 }  // namespace
 
 void* GetClientPuppetMesh() {
@@ -29,6 +36,34 @@ void* GetClientPuppetMesh() {
         UE_LOGW("client_model: no custom client mesh (pak absent or load failed) -- client "
                 "puppets keep the default kel skin");
     return g_mesh;
+}
+
+void* GetClientPuppetTexture() {
+    if (g_texTried) return g_tex;
+    g_texTried = true;
+    g_tex = ue_wrap::asset_load::LoadObjectByPath(kClientTexPath);
+    if (!g_tex)
+        UE_LOGW("client_model: no custom client texture (pak absent or load failed) -- custom "
+                "mesh renders with the stock kel material");
+    return g_tex;
+}
+
+bool ApplyClientPuppetTexture(void* puppetActor) {
+    namespace E = ue_wrap::engine;
+    namespace Pup = ue_wrap::puppet;
+    void* tex = GetClientPuppetTexture();
+    if (!tex || !puppetActor) return false;
+    void* comps[2] = { Pup::GetMeshPlayerVisibleComponent(puppetActor),
+                       Pup::GetNativeBodyMeshComponent(puppetActor) };
+    int bound = 0;
+    for (void* comp : comps) {
+        if (!comp) continue;
+        void* mid = E::CreateDynamicMaterialInstance(comp, 0);
+        if (mid && E::SetTextureParameterValue(mid, L"tex", tex)) ++bound;
+    }
+    UE_LOGI("client_model: custom texture %p bound on %d/2 puppet body slots (puppet=%p)",
+            tex, bound, puppetActor);
+    return bound == 2;
 }
 
 }  // namespace coop::client_model

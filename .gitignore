@@ -148,3 +148,7 @@ docs/piles/test-evidence/
 # Consolidated-pile generated RE dumps (bytecode/reflection JSON -- dev/RE only, same policy as
 # research/bp_reflection above; the 419k-line mainGamemode.json etc. -- regenerate, never commit)
 docs/piles/re-artifacts/
+
+# mesh_extract C# build junk (tools/client_model)
+tools/client_model/mesh_extract/bin/
+tools/client_model/mesh_extract/obj/
