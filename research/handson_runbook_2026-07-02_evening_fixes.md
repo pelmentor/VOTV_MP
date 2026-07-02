@@ -1,4 +1,43 @@
-# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS + take-4)
+# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS + take-4/5)
+
+## TAKE 5 (assbreather locomotion kill + 14 MORE kerfur skins) — test this first
+
+**Deployed (take 5):** DLL `D6903F22605BF503` on all 4 installs (protocol stays v94 —
+no wire change; paks unchanged: hl_einstein `AE49002C`, rvi `ED666BE5`).
+
+**Your two reports, both root-fixed measured-not-guessed:**
+1. **"locomotion stopped ticking after assbreather, other skins broken after"** —
+   `sk/assbreather` is a BROKEN GAME ASSET the game itself never loads: its root
+   bone is `rootKerfur_010` (a Blender-duplicate leftover), which does NOT exist in
+   kerfurOmegaV1_Skeleton. Applying it breaks the skeleton→mesh bone-0 mapping and
+   poisons the body's AnimInstance; the instance survives later mesh swaps (same
+   skeleton asset), so every skin after it stayed frozen. It is REMOVED from the
+   builtin list; a 4-check census (skeleton import + root bone + every bone ∈
+   skeleton + export name) now gates every entry —
+   `tools/client_model/builtin_skin_census.py`, re-run at each game re-target.
+   The antibreather LOOK is still there: `kerfur_antibreather` = the asset the
+   game actually uses for its antibreather kerfur (census 4/4 OK).
+   Your frozen session heals on RESTART (runtime-only poison; your ini is fine —
+   it points at `femscientist`).
+2. **"ты добавил НЕ ВСЕ скины anthro керфуров"** — верно: the old asset extraction
+   was partial (3032 of 42941 pak files) and blind to skins outside kerfurAnthro/sk.
+   Listed the REAL pak, extracted + censused everything: **25 verified builtins**
+   (was 12 with 1 poisoned). NEW: kerfur_antibreather, kerfur_argplush,
+   kerfur_alien, kerfur_fleshly, kerfur_skeleton, kerfur_vargskeleton,
+   kerfur_maxwell, kerfur_erie, kerfur_erie_v4, kerfur_igetis, kerfur_monique,
+   kerfur_krampus, kerfur_mynet, kerfur_furfur.
+
+**Take-5 tests:**
+1. RESTART both peers (heals the poisoned anim state from the old session).
+2. F1 > Cosmetics > Skins: `assbreather` is GONE; 14 new kerfur_* tiles present
+   (list scrolls). Pick `kerfur_antibreather` — the antibreather look, walking
+   normally on both screens. Spot-check a few new ones (maxwell, skeleton,
+   krampus...) — locomotion must keep ticking through EVERY switch, and a
+   converter skin (rvi/femscientist) then dr_kel must come back clean after.
+
+---
+
+## Take 4 (previous deploy `94C3D016E482ABAE`, superseded by the DLL above)
 
 **Deployed (take 4, LATE NIGHT):** DLL `94C3D016E482ABAE` (protocol **v93→v94** — BOTH
 peers must run THIS dll; older ones are version-gated out) on all 4 installs +
@@ -27,7 +66,8 @@ Take-4 adds, on top of everything take-3b had:
 3. **Kerfur robot skins (builtin)** — the skins browser now also lists the game's own
    anthro-kerfur bodies (no pak needed): kerfur_omega (+_h/_m/_nc variants),
    kerfur_maid, kerfur_ariral, kerfur_ariral_suit, kerfur_keljoy, kerfur_mannequin,
-   skerfuro, scrappy_keith, assbreather. They carry their own materials (no atlas
+   skerfuro, scrappy_keith, assbreather (REMOVED in take 5 — broken game asset, see
+   the take-5 header). They carry their own materials (no atlas
    texture) and animate on the same rig as every converter skin. No preview tiles yet
    (text tiles) — drop a `<name>.png/.bmp` next to the paks if you want previews.
 4. **JOIN-JUMP fix** — "клиент прыгает по позициям где проходил хост": a joining
