@@ -62,6 +62,10 @@ bool IsNativeSkin(const std::string& name) {
 
 void* GetSkinMesh(const std::string& name) {
     if (IsNativeSkin(name) || !coop::skins::IsValidSkinName(name)) return nullptr;
+    // v94 builtin kerfur skins: the game's own kerfurOmegaV1_Skeleton bodies,
+    // loaded by asset path (no pak; materials ship with the mesh).
+    if (const wchar_t* builtin = coop::skins::BuiltinSkinPath(name))
+        return ResolveCached(g_meshCache, name, builtin, "mesh");
     const std::wstring w = Widen(name);
     // Package <name>, object kerfurOmega_KelSkin: the converter splices every
     // model into the kel-skin template and does not rename the export
@@ -73,6 +77,7 @@ void* GetSkinMesh(const std::string& name) {
 
 void* GetSkinTexture(const std::string& name) {
     if (IsNativeSkin(name) || !coop::skins::IsValidSkinName(name)) return nullptr;
+    if (coop::skins::BuiltinSkinPath(name)) return nullptr;  // builtins carry their own materials
     const std::wstring w = Widen(name);
     return ResolveCached(g_texCache, name,
                          L"/Game/Mods/VOTVCoop/tex_" + w + L".tex_" + w, "texture");
@@ -113,16 +118,23 @@ bool ApplySkinToBody(void* mainPlayerActor, const std::string& name, void* nativ
     }
     // Slot-0 MID 'tex' override on both slots (inst_kel4_body is a MIC of
     // mat_object_sk whose diffuse is the 'tex' param -- no cooked material needed).
+    // No texture (v94 builtin kerfur skins carry their OWN materials) -> CLEAR the
+    // slot-0 override instead, or a previous pak skin's MID atlas stays painted
+    // over the builtin's material (the dr_kel revert lesson applied here).
     int bound = 0;
-    if (void* tex = GetSkinTexture(name)) {
-        for (void* comp : comps) {
-            if (!comp) continue;
+    void* tex = GetSkinTexture(name);
+    for (void* comp : comps) {
+        if (!comp) continue;
+        if (tex) {
             void* mid = E::CreateDynamicMaterialInstance(comp, 0);
             if (mid && E::SetTextureParameterValue(mid, L"tex", tex)) ++bound;
+        } else {
+            E::SetComponentMaterial(comp, 0, nullptr);
         }
     }
-    UE_LOGI("client_model: %p -> skin '%s' (mesh %d/2 slots, tex %d/2)",
-            mainPlayerActor, name.c_str(), done, bound);
+    UE_LOGI("client_model: %p -> skin '%s' (mesh %d/2 slots, %s)",
+            mainPlayerActor, name.c_str(), done,
+            tex ? "atlas tex bound" : "own materials (override cleared)");
     return done > 0;
 }
 

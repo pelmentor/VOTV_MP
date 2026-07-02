@@ -16,6 +16,29 @@ namespace fs = std::filesystem;
 std::vector<SkinEntry> g_entries;
 bool g_scanned = false;
 
+// v94 builtin skins (user 2026-07-02): the game's own anthro-kerfur bodies. Every
+// entry is a SkeletalMesh on kerfurOmegaV1_Skeleton -- the exact rig our converter
+// template (kerfurOmega_KelSkin) binds, proven player-compatible in-game -- so it
+// animates with the player AnimBP like any converter skin. Materials ship WITH
+// these meshes (client_model applies no 'tex' MID override for builtins).
+// kerfurOmega_KelSkin itself is intentionally absent: that asset is the kel look
+// dr_kel already provides via the pristine native mesh.
+struct BuiltinSkin { const char* name; const wchar_t* path; };
+constexpr BuiltinSkin kBuiltinSkins[] = {
+    { "kerfur_omega",       L"/Game/meshes/kerfurAnthro/sk/kerfurOmegaV1.kerfurOmegaV1" },
+    { "kerfur_omega_h",     L"/Game/meshes/kerfurAnthro/sk/kerfurOmegaV1_h.kerfurOmegaV1_h" },
+    { "kerfur_omega_m",     L"/Game/meshes/kerfurAnthro/sk/kerfurOmegaV1_m.kerfurOmegaV1_m" },
+    { "kerfur_omega_nc",    L"/Game/meshes/kerfurAnthro/sk/kerfurOmegaV1_nc.kerfurOmegaV1_nc" },
+    { "kerfur_maid",        L"/Game/meshes/kerfurAnthro/sk/KerfurO_maid.KerfurO_maid" },
+    { "kerfur_ariral",      L"/Game/meshes/kerfurAnthro/sk/kerfurOmega_ariralSkin.kerfurOmega_ariralSkin" },
+    { "kerfur_ariral_suit", L"/Game/meshes/kerfurAnthro/sk/kerfurOmega_ariralSuitSkin.kerfurOmega_ariralSuitSkin" },
+    { "kerfur_keljoy",      L"/Game/meshes/kerfurAnthro/sk/kerfurOmega_keljoySkin.kerfurOmega_keljoySkin" },
+    { "kerfur_mannequin",   L"/Game/meshes/kerfurAnthro/sk/kerfurOmega_mannequinSkin.kerfurOmega_mannequinSkin" },
+    { "skerfuro",           L"/Game/meshes/kerfurAnthro/sk/skerfuro.skerfuro" },
+    { "scrappy_keith",      L"/Game/meshes/kerfurAnthro/sk/ScrappyKeith.ScrappyKeith" },
+    { "assbreather",        L"/Game/meshes/kerfurAnthro/sk/assbreather.assbreather" },
+};
+
 }  // namespace
 
 bool IsValidSkinName(const std::string& name) {
@@ -26,6 +49,12 @@ bool IsValidSkinName(const std::string& name) {
         if (!ok) return false;
     }
     return true;
+}
+
+const wchar_t* BuiltinSkinPath(const std::string& name) {
+    for (const auto& b : kBuiltinSkins)
+        if (name == b.name) return b.path;
+    return nullptr;
 }
 
 std::wstring PakDir() {
@@ -47,11 +76,26 @@ const std::vector<SkinEntry>& Entries(bool rescan) {
     g_entries.push_back({kNativeSkinName, L""});  // the stock body is always offered
 
     const std::wstring dirW = PakDir();
+
+    // Builtin kerfur skins: always offered (game assets, no pak). Preview tile =
+    // the same sidecar convention, looked up in the pak dir by skin name.
+    std::error_code ec;
+    for (const auto& b : kBuiltinSkins) {
+        std::wstring preview;
+        if (!dirW.empty()) {
+            for (const wchar_t* pext : {L".png", L".bmp"}) {
+                fs::path cand = fs::path(dirW) / b.name;
+                cand += pext;
+                if (fs::is_regular_file(cand, ec)) { preview = cand.wstring(); break; }
+            }
+        }
+        g_entries.push_back({b.name, std::move(preview)});
+    }
+
     if (dirW.empty()) {
-        UE_LOGW("skin_registry: LogicMods/votv-coop pak dir not found -- only dr_kel offered");
+        UE_LOGW("skin_registry: LogicMods/votv-coop pak dir not found -- dr_kel + builtins only");
         return g_entries;
     }
-    std::error_code ec;
     for (const auto& de : fs::directory_iterator(dirW, ec)) {
         if (!de.is_regular_file(ec)) continue;
         const fs::path& p = de.path();
@@ -69,6 +113,11 @@ const std::vector<SkinEntry>& Entries(bool rescan) {
         if (!ascii || !IsValidSkinName(stem)) {
             UE_LOGW("skin_registry: pak '%ls' has a non-portable stem -- skipped (allowed: "
                     "[A-Za-z0-9_-], <=48 chars)", p.filename().c_str());
+            continue;
+        }
+        if (stem == kNativeSkinName || BuiltinSkinPath(stem)) {
+            UE_LOGW("skin_registry: pak '%ls' shadows a builtin skin name -- skipped "
+                    "(rename the pak)", p.filename().c_str());
             continue;
         }
         // Preview tile = sibling <stem>.png or <stem>.bmp (user convention).

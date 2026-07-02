@@ -1,12 +1,17 @@
 // coop/player/skin_registry.h -- the installed body-skin catalog (F1 browser source).
 //
-// A "skin" is one converter pak in <game>/VotV/Content/Paks/LogicMods/votv-coop/:
-// the pak filename stem IS the skin name AND the package name the runtime loads
-// (/Game/Mods/VOTVCoop/<name>.kerfurOmega_KelSkin -- every pak from
-// tools/client_model/ splices into that template object). A sibling <name>.png
-// or <name>.bmp is the browser preview tile (user convention 2026-07-02:
-// previews live NEXT to the pak). Entry 0 is always "dr_kel" -- the native
-// stock body, no pak.
+// Three skin sources, one namespace:
+//   - "dr_kel" (entry 0): the native stock body, no asset load (pristine-mesh revert).
+//   - BUILTIN skins (v94, user 2026-07-02 "добавь скин керфура робота"): the game's
+//     own kerfurOmegaV1_Skeleton bodies (the anthro robot kerfur + its skin variants),
+//     loaded by their game asset path -- no pak needed, materials come with the mesh.
+//   - Converter paks in <game>/VotV/Content/Paks/LogicMods/votv-coop/: the pak
+//     filename stem IS the skin name AND the package name the runtime loads
+//     (/Game/Mods/VOTVCoop/<name>.kerfurOmega_KelSkin -- every pak from
+//     tools/client_model/ splices into that template object).
+// A sibling <name>.png or <name>.bmp in the pak dir is the browser preview tile
+// (user convention 2026-07-02: previews live NEXT to the paks; works for builtin
+// names too -- drop a kerfur_omega.png there).
 //
 // Filesystem only -- no UObject access, no network. The UI (render thread) is
 // the only caller of Entries(); keep it that way (single-caller discipline, no
@@ -39,8 +44,15 @@ struct SkinEntry {
 // pak-dir scans alike.
 bool IsValidSkinName(const std::string& name);
 
-// The catalog: entry 0 = dr_kel, then one entry per *.pak in the LogicMods
-// votv-coop folder (invalid stems skipped + logged). First call scans;
+// v94 builtin skins: skin name -> full game object path of a body mesh on the
+// player-compatible kerfurOmegaV1_Skeleton rig (the rig our converter template
+// kerfurOmega_KelSkin binds -- proven player-compatible in-game). nullptr when
+// `name` is not a builtin. Pure table lookup; any thread.
+const wchar_t* BuiltinSkinPath(const std::string& name);
+
+// The catalog: entry 0 = dr_kel, then the builtin kerfur skins, then one entry
+// per *.pak in the LogicMods votv-coop folder (invalid stems skipped + logged;
+// a pak shadowing a builtin name is skipped -- builtins win). First call scans;
 // rescan=true re-scans (the browser's Refresh / tab open). RENDER-THREAD ONLY
 // (the F1 browser); other threads use names, not the catalog.
 const std::vector<SkinEntry>& Entries(bool rescan = false);
