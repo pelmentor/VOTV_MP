@@ -722,6 +722,8 @@ DWORD WINAPI TimelineThread(LPVOID param) {
     // v93 skins: the persisted body-skin choice (same ini; a fresh identity is assigned
     // the current scientist). local_body owns it; the Join payload reads it from there.
     coop::local_body::SetInitialSkin(cfg::ReadPlayerSkin());
+    // v94: the persisted nameplate pref (absent = visible). The Join prefs byte reads it.
+    coop::nameplate::SetInitialLocalVisible(cfg::ReadIniValue("nameplate", "1") != "0");
 
     // The OMEGA WARNING is on screen during the FIRST few seconds (the intro/menu
     // world), BEFORE we `open` gameplay. Sample widgets across that window so the

@@ -18,6 +18,8 @@
 
 #include "coop/player/players_registry.h"  // kMaxPeers
 
+namespace coop::net { class Session; }
+
 namespace coop::nameplate {
 
 // One projected label (plain data; the render thread reads it). nick is a fixed
@@ -52,5 +54,37 @@ void GetSnapshot(Snapshot& out);
 // True if there is at least one label to draw -- the overlay uses this (lock-free)
 // to decide whether to run the always-on HUD pass. Any thread.
 bool HasAny();
+
+// ---- per-player visibility pref (v94; user 2026-07-02: any peer can hide its
+// OWN plate, synced so every peer -- including late joiners -- agrees) ----
+// The VISIBILITY AXIS is owned HERE (the nameplate domain); the wire layer
+// (player_handshake) parses Join/PlayerJoined/NameplateChange and stores into
+// this module, exactly like skins store into RemotePlayer::ApplySkin. The whole
+// store is ATOMIC (any-thread): writers span the game thread (wire handlers),
+// the render thread (the F1 checkbox request path) and the bringup thread
+// (session-start reset via player_handshake::Reset on the TimelineThread).
+
+// Boot-time init from votv-coop.ini nameplate= (harness, before the pump ticks).
+void SetInitialLocalVisible(bool visible);
+
+// The local pref. Any thread (atomic) -- the F1 checkbox reads it.
+bool LocalVisible();
+
+// UI entry (render thread): persist to votv-coop.ini, apply locally, announce
+// to the session (host: broadcast; client: to host for rebroadcast).
+void RequestLocalVisible(bool visible);
+
+// Wire store: peer `slot` announced its pref. Update() skips hidden slots from
+// the next snapshot on. Any thread (atomic slot flags).
+void StoreVisibleForSlot(int slot, bool visible);
+bool VisibleForSlot(int slot);
+
+// Session wiring + lifecycle edges (called by subsystems / player_handshake's
+// reset paths -- the session-start reset runs on the BRINGUP thread by design).
+// Disconnect resets the slot to VISIBLE so a reused slot never inherits the
+// departed peer's pref.
+void Install(coop::net::Session* session);
+void ResetSlots();
+void OnSlotDisconnected(int slot);
 
 }  // namespace coop::nameplate

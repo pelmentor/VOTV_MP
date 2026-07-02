@@ -177,6 +177,10 @@ inline bool IsPreWorldSendableKind(ReliableKind k) {
     // the joiner renders the OLD skin for the whole session (audit 2026-07-02 HIGH --
     // the v90-b3 "mutation during the window" class, killed at the gate itself).
     case ReliableKind::SkinChange:
+    // v94 nameplate pref: same family, same reasoning -- the receiver is a plain
+    // per-slot flag store (coop::nameplate), engine-free pre-puppet. Gating it would
+    // re-create the exact load-window swallow SkinChange had.
+    case ReliableKind::NameplateChange:
     case ReliableKind::SaveTransferRequest:
     case ReliableKind::SaveTransferBegin:
     case ReliableKind::SaveTransferChunk:

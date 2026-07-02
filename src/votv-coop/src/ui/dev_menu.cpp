@@ -14,6 +14,7 @@
 #include "coop/dev/spawn_menu_unlock.h"
 #include "coop/dev/spawn_npc.h"
 #include "coop/dev/teleport_client.h"
+#include "coop/player/nameplate.h"
 #include "coop/session/ini_config.h"
 #include "ui/skins_panel.h"
 
@@ -236,6 +237,16 @@ void RenderEvents() {
 // live in ui/skins_panel.cpp; this is just the tree hook).
 void RenderSkins() { ui::skins_panel::Render(); }
 
+// v94: the local player's plate-visibility pref. SYNCED (live NameplateChange +
+// the Join prefs byte for late joiners) and persisted (votv-coop.ini nameplate=).
+void RenderNameplatePref() {
+    bool on = coop::nameplate::LocalVisible();
+    if (ImGui::Checkbox("Show my nameplate to other players", &on))
+        coop::nameplate::RequestLocalVisible(on);
+    ImGui::TextDisabled("Off = your floating name/health bar disappears on every peer's");
+    ImGui::TextDisabled("screen -- synced live and to late joiners; persists across sessions.");
+}
+
 // ---- the strict nested taxonomy (refined as features land) -------------------
 // Player > Movement/Vitals/HUD ; Game > Weather/Entities/Events ; Network >
 // Stats/Session ; Cosmetics > Skins (the v93 model browser -- the one non-dev
@@ -259,7 +270,8 @@ const std::vector<Cat>& Tree() {
             { "Session",  {}, true },
         }, true },
         { "Cosmetics", {
-            { "Skins",    { { &RenderSkins, false } }, false },
+            { "Skins",     { { &RenderSkins, false } }, false },
+            { "Nameplate", { { &RenderNameplatePref, false } }, false },
         }, false },
     };
     return kTree;

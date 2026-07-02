@@ -82,6 +82,17 @@ void AnnounceLocalSkin(coop::net::Session& session, const std::string& name);
 bool HandleSkinChange(coop::net::Session& session,
                       const coop::net::Session::ReliableMessage& msg);
 
+// v94 nameplate pref: announce the LOCAL player's plate visibility mid-session
+// (same trust/relay shape as AnnounceLocalSkin). The at-join state rides the
+// prefs flags byte in the Join payload. Game thread only.
+void AnnounceLocalNameplate(coop::net::Session& session, bool visible);
+
+// v94: handle a delivered NameplateChange ([u8 slot][u8 visible]). Host:
+// forgery-checked + stored (coop::nameplate) + rebroadcast; client: host-only
+// sender, stored. Returns true when recognized.
+bool HandleNameplateChange(coop::net::Session& session,
+                           const coop::net::Session::ReliableMessage& msg);
+
 // Reset per-slot caches. Called from event_feed::OnSessionStart so a
 // Session::Stop()/Start() in the same process sees clean state.
 void Reset();

@@ -694,7 +694,15 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 93;  // v93: player SKINS -- SkinChange reliable (82) + the skin
+inline constexpr uint16_t kProtocolVersion = 94;  // v94: per-player DISPLAY PREFS -- a [u8 flags] byte appended
+                                                  // to Join + PlayerJoined (after each skin field); bit0 =
+                                                  // "show my nameplate" (user 2026-07-02: any peer can hide its
+                                                  // OWN plate, SYNCED so a late joiner agrees), bits 1..7
+                                                  // reserved for future prefs (no proto bump per new bool).
+                                                  // Live change = NameplateChange reliable (83). Builtin
+                                                  // kerfur-omega skins added to the skin registry (name ->
+                                                  // game asset path; same SkinChange wire as pak skins).
+                                                  // v93: player SKINS -- SkinChange reliable (82) + the skin
                                                   // name appended to Join (after guid) + PlayerJoined (after
                                                   // nick). Every player carries a persisted body-skin choice
                                                   // (votv-coop.ini player_skin=, default hl_einstein_v1sc);
@@ -1834,6 +1842,17 @@ enum class ReliableKind : uint8_t {
                        //     gating it swallowed a change made during a joiner's load window (audit
                        //     2026-07-02). A peer missing the skin's pak falls back to the native kel
                        //     body (graceful; logged).
+    NameplateChange = 83,  // 2026-07-02 (v94): a player toggled "show my nameplate" in F1 > Cosmetics.
+                       //     Payload: [u8 slot][u8 visible(0/1)]. Same trust shape as SkinChange:
+                       //     CLIENT->HOST slot MUST equal senderPeerSlot (forgery guard; a peer only
+                       //     hides ITS OWN plate), host stores (coop::nameplate per-slot visibility)
+                       //     and REBROADCASTS (originator excluded); HOST->ALL with slot=0 for the
+                       //     host's own toggle. The at-join state rides the v94 prefs flags byte in
+                       //     Join/PlayerJoined (bit0), so late joiners agree without extra wire (the
+                       //     user's ask: no "ghost plate" for peers who joined after the toggle).
+                       //     PRE-WORLD-SENDABLE: receiver is a plain flag store, engine-free -- the
+                       //     SkinChange load-window lesson applied from birth. Slot resets to VISIBLE
+                       //     on disconnect (a slot reuse must not inherit the departed peer's pref).
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not

@@ -6,6 +6,7 @@
 #include "coop/element/registry.h"
 #include "coop/net/session.h"
 #include "coop/player/local_body.h"
+#include "coop/player/nameplate.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
 #include "coop/player/skin_registry.h"
@@ -54,6 +55,26 @@ void StoreSkinForSlot(int slot, std::string name) {
     g_skinBySlot[slot] = std::move(name);
     if (RemotePlayer* p = coop::players::Registry::Get().Puppet(static_cast<uint8_t>(slot)))
         p->ApplySkin(g_skinBySlot[slot]);
+}
+
+// v94 display-prefs flags byte (appended to Join + PlayerJoined after the skin
+// field). Bit layout is the wire contract -- extend with new bits, never re-order.
+constexpr uint8_t kPrefNameplateVisible = 0x01;
+
+uint8_t BuildLocalPrefsFlags() {
+    uint8_t f = 0;
+    if (coop::nameplate::LocalVisible()) f |= kPrefNameplateVisible;
+    return f;
+}
+
+uint8_t PrefsFlagsForSlot(int slot) {
+    uint8_t f = 0;
+    if (coop::nameplate::VisibleForSlot(slot)) f |= kPrefNameplateVisible;
+    return f;
+}
+
+void StorePrefsFlagsForSlot(int slot, uint8_t flags) {
+    coop::nameplate::StoreVisibleForSlot(slot, (flags & kPrefNameplateVisible) != 0);
 }
 
 // Parse one [u8 len][ASCII] field. Returns bytes consumed (0 = malformed/absent);
@@ -191,6 +212,7 @@ void Reset() {
     for (auto& nick : g_remoteNickBySlot) nick = L"Remote player";
     for (auto& g : g_guidBySlot) g.clear();
     for (auto& s : g_skinBySlot) s.clear();
+    coop::nameplate::ResetSlots();  // v94: per-slot plate prefs back to visible
     g_joinSentBySlot.fill(false);
     g_joinAnnouncedBySlot.fill(false);
 }
@@ -246,6 +268,10 @@ void MaybeSendJoinToSlot(net::Session& session, int slot,
         const uint8_t skinLen = static_cast<uint8_t>(skin.size() > 48 ? 48 : skin.size());
         joinPayload.push_back(skinLen);
         joinPayload.insert(joinPayload.end(), skin.begin(), skin.begin() + skinLen);
+        // v94 display prefs: [u8 flags] after the skin (bit0 = nameplate visible) --
+        // the at-join announce that keeps LATE JOINERS in agreement with a peer that
+        // hid its plate before they arrived (the user's "no ghost plate" ask).
+        joinPayload.push_back(BuildLocalPrefsFlags());
         joinPayloadBuilt = true;
     }
     if (session.SendReliableToSlot(slot, net::ReliableKind::Join,
@@ -270,6 +296,7 @@ void OnSlotDisconnected(int slot) {
     g_remoteNickBySlot[slot].clear();
     g_guidBySlot[slot].clear();  // v73: drop the departed peer's inventory GUID for this slot
     g_skinBySlot[slot].clear();  // v93: a reconnect (or a different peer on this slot) re-announces its skin
+    coop::nameplate::OnSlotDisconnected(slot);  // v94: plate pref back to visible for a slot reuse
 }
 
 const std::wstring& NicknameForSlot(int slot) {
@@ -358,13 +385,21 @@ bool HandleJoinMessage(net::Session& session,
     // v93 skins: [u8 skinlen][skin ASCII] follows the guid. Tolerated absent (pre-v93
     // never reaches here -- ParseHeader rejects -- but a malformed field just leaves the
     // slot's skin empty = native kel until a SkinChange lands).
+    size_t skinFieldLen = 0;
     if (guidFieldLen > 0 && nickFieldLen + guidFieldLen < nickRemaining) {
         std::string skin;
-        if (ParseSkinField(nickStart + nickFieldLen + guidFieldLen,
-                           nickRemaining - nickFieldLen - guidFieldLen, &skin) > 0 &&
-            !skin.empty()) {
+        skinFieldLen = ParseSkinField(nickStart + nickFieldLen + guidFieldLen,
+                                      nickRemaining - nickFieldLen - guidFieldLen, &skin);
+        if (skinFieldLen > 0 && !skin.empty()) {
             StoreSkinForSlot(senderSlot, std::move(skin));
         }
+    }
+    // v94 display prefs: [u8 flags] follows the skin field (bit0 = nameplate visible).
+    // Tolerated absent (malformed upstream fields just leave the defaults = visible).
+    if (skinFieldLen > 0 &&
+        nickFieldLen + guidFieldLen + skinFieldLen < nickRemaining) {
+        StorePrefsFlagsForSlot(senderSlot,
+                               nickStart[nickFieldLen + guidFieldLen + skinFieldLen]);
     }
     // Install mirror Player Element for this sender so future
     // ItemActivate/Weather/etc. packets bearing senderElementId
@@ -439,11 +474,13 @@ bool HandleJoinMessage(net::Session& session,
 namespace {
 
 // Build a PlayerJoined reliable payload describing peer `slot` (its eid +
-// nick + v93 skin). Wire layout (parsed field-by-field, same as Join):
-//   [uint8 slot][uint32 eid][uint8 nicklen][nick UTF-8][uint8 skinlen][skin ASCII]
+// nick + v93 skin + v94 prefs flags). Wire layout (parsed field-by-field, same
+// as Join):
+//   [uint8 slot][uint32 eid][uint8 nicklen][nick UTF-8][uint8 skinlen][skin ASCII][uint8 flags]
 std::vector<uint8_t> BuildPlayerJoinedPayload(uint8_t slot, uint32_t eid,
                                               const std::wstring& nick,
-                                              const std::string& skin) {
+                                              const std::string& skin,
+                                              uint8_t prefsFlags) {
     std::vector<uint8_t> out;
     out.resize(5);
     out[0] = slot;
@@ -455,6 +492,7 @@ std::vector<uint8_t> BuildPlayerJoinedPayload(uint8_t slot, uint32_t eid,
     const uint8_t skinLen = static_cast<uint8_t>(skin.size() > 48 ? 48 : skin.size());
     out.push_back(skinLen);
     out.insert(out.end(), skin.begin(), skin.begin() + skinLen);
+    out.push_back(prefsFlags);
     return out;
 }
 
@@ -473,7 +511,8 @@ void BroadcastPlayerJoinedFromHost(net::Session& session, int joinerSlot,
     {
         const std::vector<uint8_t> p =
             BuildPlayerJoinedPayload(static_cast<uint8_t>(joinerSlot),
-                                     joinerEid, joinerNick, SkinForSlot(joinerSlot));
+                                     joinerEid, joinerNick, SkinForSlot(joinerSlot),
+                                     PrefsFlagsForSlot(joinerSlot));
         for (int x = 1; x < net::kMaxPeers; ++x) {
             if (x == joinerSlot) continue;
             if (!session.IsSlotReady(x)) continue;
@@ -496,7 +535,8 @@ void BroadcastPlayerJoinedFromHost(net::Session& session, int joinerSlot,
         if (!el || !el->IsMirror()) continue;  // identity not yet known
         const std::vector<uint8_t> p =
             BuildPlayerJoinedPayload(static_cast<uint8_t>(x), el->GetId(),
-                                     NicknameForSlot(x), SkinForSlot(x));
+                                     NicknameForSlot(x), SkinForSlot(x),
+                                     PrefsFlagsForSlot(x));
         session.SendReliableToSlot(joinerSlot, net::ReliableKind::PlayerJoined,
                                    p.data(), static_cast<int>(p.size()));
     }
@@ -576,12 +616,18 @@ bool HandlePlayerJoined(net::Session& session,
         }
     }
     // v93 skins: [u8 skinlen][skin] follows the nick (host-relayed identity).
+    size_t skinFieldLen = 0;
     if (nickFieldLen > 0 && nickFieldLen < nickRemaining) {
         std::string skin;
-        if (ParseSkinField(nickStart + nickFieldLen, nickRemaining - nickFieldLen, &skin) > 0 &&
-            !skin.empty()) {
+        skinFieldLen = ParseSkinField(nickStart + nickFieldLen,
+                                      nickRemaining - nickFieldLen, &skin);
+        if (skinFieldLen > 0 && !skin.empty()) {
             StoreSkinForSlot(describedSlot, std::move(skin));
         }
+    }
+    // v94 display prefs: [u8 flags] follows the skin field.
+    if (skinFieldLen > 0 && nickFieldLen + skinFieldLen < nickRemaining) {
+        StorePrefsFlagsForSlot(describedSlot, nickStart[nickFieldLen + skinFieldLen]);
     }
     nick = SanitizeNickname(nick);
     g_remoteNickBySlot[describedSlot] = nick;
@@ -782,6 +828,76 @@ bool HandleSkinChange(net::Session& session,
     StoreSkinForSlot(describedSlot, name);
     coop::chat_feed::Push(NicknameForSlot(describedSlot) + L" changed skin to " +
                           std::wstring(name.begin(), name.end()));
+    return true;
+}
+
+namespace {
+
+// [u8 slot][u8 visible] -- the NameplateChange wire form (host rebroadcasts verbatim).
+std::vector<uint8_t> BuildNameplateChangePayload(uint8_t slot, bool visible) {
+    return { slot, static_cast<uint8_t>(visible ? 1 : 0) };
+}
+
+}  // namespace
+
+void AnnounceLocalNameplate(net::Session& session, bool visible) {
+    UE_ASSERT_GAME_THREAD("AnnounceLocalNameplate");
+    const uint8_t selfSlot = coop::players::Registry::Get().LocalPeerId();
+    if (selfSlot >= net::kMaxPeers) return;  // not in a session yet -- the Join will carry it
+    const std::vector<uint8_t> p = BuildNameplateChangePayload(selfSlot, visible);
+    if (session.role() == net::Role::Host) {
+        for (int x = 1; x < net::kMaxPeers; ++x) {
+            if (!session.IsSlotReady(x)) continue;
+            session.SendReliableToSlot(x, net::ReliableKind::NameplateChange,
+                                       p.data(), static_cast<int>(p.size()));
+        }
+    } else {
+        session.SendReliableToSlot(0, net::ReliableKind::NameplateChange,
+                                   p.data(), static_cast<int>(p.size()));
+    }
+    UE_LOGI("player_handshake: announced local nameplate %s (slot %u)",
+            visible ? "VISIBLE" : "HIDDEN", static_cast<unsigned>(selfSlot));
+}
+
+bool HandleNameplateChange(net::Session& session,
+                           const net::Session::ReliableMessage& msg) {
+    UE_ASSERT_GAME_THREAD("HandleNameplateChange");
+    if (msg.payloadLen < 2) {
+        UE_LOGW("player_handshake: NameplateChange payload %zu B too short -- dropping",
+                static_cast<size_t>(msg.payloadLen));
+        return true;
+    }
+    const uint8_t describedSlot = msg.payload[0];
+    const bool visible = msg.payload[1] != 0;
+    if (describedSlot >= net::kMaxPeers) return true;
+
+    if (session.role() == net::Role::Host) {
+        // Forgery guard: a client may only toggle ITS OWN plate.
+        if (msg.senderPeerSlot != describedSlot || describedSlot == 0) {
+            UE_LOGW("player_handshake: NameplateChange slot=%u from senderSlot=%d -- forged, dropping",
+                    static_cast<unsigned>(describedSlot), msg.senderPeerSlot);
+            return true;
+        }
+        coop::nameplate::StoreVisibleForSlot(describedSlot, visible);
+        // Rebroadcast to every other ready client (originator excluded).
+        const std::vector<uint8_t> p = BuildNameplateChangePayload(describedSlot, visible);
+        for (int x = 1; x < net::kMaxPeers; ++x) {
+            if (x == describedSlot) continue;
+            if (!session.IsSlotReady(x)) continue;
+            session.SendReliableToSlot(x, net::ReliableKind::NameplateChange,
+                                       p.data(), static_cast<int>(p.size()));
+        }
+        return true;
+    }
+
+    // Client: only the host relays plate prefs.
+    if (msg.senderPeerSlot != 0) {
+        UE_LOGW("player_handshake: NameplateChange from non-host senderPeerSlot=%d -- dropping",
+                msg.senderPeerSlot);
+        return true;
+    }
+    if (describedSlot == coop::players::Registry::Get().LocalPeerId()) return true;  // our own echo
+    coop::nameplate::StoreVisibleForSlot(describedSlot, visible);
     return true;
 }
 

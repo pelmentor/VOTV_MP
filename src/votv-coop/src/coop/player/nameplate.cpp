@@ -1,12 +1,18 @@
 #include "coop/player/nameplate.h"
 
+#include "coop/comms/chat_feed.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
+#include "coop/session/player_handshake.h"
 #include "coop/voice/voice_chat.h"
+#include "harness/config.h"
+#include "ue_wrap/game_thread.h"
 #include "ue_wrap/engine.h"
+#include "ue_wrap/log.h"
 #include "ue_wrap/types.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +30,18 @@ namespace {
 std::mutex        g_mu;
 Snapshot          g_snap;
 std::atomic<int>  g_count{0};
+
+// v94 per-player plate visibility. ALL of it is atomic (any-thread by
+// construction): the local pref is read by the render-thread F1 checkbox; the
+// per-slot store is written by game-thread wire handlers AND by the bringup-
+// thread session-start reset (player_handshake::Reset runs on the
+// TimelineThread -- a game-thread assert here would trip on every session
+// start, the hot_path_guard.h "one-shot session-start helper" trap; audit
+// 2026-07-02). Stored INVERTED as hidden-by-slot so the zero-init default is
+// the correct one -- absent info never hides a plate.
+std::atomic<coop::net::Session*> g_session{nullptr};
+std::atomic<bool>                g_localVisible{true};
+std::array<std::atomic<bool>, coop::players::kMaxPeers> g_hiddenBySlot{};
 
 // Distance fade (MTA nametag shape): fully opaque close up, fading to nothing far
 // away so a distant peer's label doesn't clutter the screen. Pulled in 2026-06-08
@@ -87,6 +105,8 @@ void Update() {
     // plain 0.. sweep labels every remote and skips self -- same pattern event_feed
     // uses. (Starting at 1 silently hid the host's nameplate on every client.)
     for (int slot = 0; slot < static_cast<int>(coop::players::kMaxPeers); ++slot) {
+        if (g_hiddenBySlot[slot].load(std::memory_order_relaxed))
+            continue;  // v94: that peer hid its own plate (synced pref)
         RemotePlayer* p = reg.Puppet(static_cast<uint8_t>(slot));
         if (!p || !p->valid()) continue;
 
@@ -133,6 +153,60 @@ void GetSnapshot(Snapshot& out) {
 
 bool HasAny() {
     return g_count.load(std::memory_order_relaxed) > 0;
+}
+
+// ---- v94 per-player visibility pref (see header) ----
+
+void SetInitialLocalVisible(bool visible) {
+    g_localVisible.store(visible, std::memory_order_relaxed);
+}
+
+bool LocalVisible() {
+    return g_localVisible.load(std::memory_order_relaxed);
+}
+
+void RequestLocalVisible(bool visible) {
+    // Render thread (the F1 checkbox). Persist NOW (WriteIniValue is
+    // thread-safe/atomic-swap); state + announce hop to the game thread --
+    // the RequestSkin discipline.
+    harness::config::WriteIniValue("nameplate", visible ? "1" : "0");
+    ue_wrap::game_thread::Post([visible] {
+        g_localVisible.store(visible, std::memory_order_relaxed);
+        UE_LOGI("nameplate: local plate -> %s (persisted; announcing)",
+                visible ? "VISIBLE" : "HIDDEN");
+        if (coop::net::Session* s = g_session.load(std::memory_order_acquire))
+            coop::player_handshake::AnnounceLocalNameplate(*s, visible);
+        coop::chat_feed::Push(visible ? L"Nameplate: shown to other players"
+                                      : L"Nameplate: hidden from other players");
+    });
+}
+
+void StoreVisibleForSlot(int slot, bool visible) {
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    const bool hidden = !visible;
+    if (g_hiddenBySlot[slot].exchange(hidden, std::memory_order_relaxed) != hidden)
+        UE_LOGI("nameplate: slot %d plate -> %s", slot, visible ? "VISIBLE" : "HIDDEN");
+}
+
+bool VisibleForSlot(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return true;
+    return !g_hiddenBySlot[slot].load(std::memory_order_relaxed);
+}
+
+void Install(coop::net::Session* session) {
+    g_session.store(session, std::memory_order_release);
+}
+
+void ResetSlots() {
+    // Session-start reset -- runs on the BRINGUP thread (TimelineThread) via
+    // player_handshake::Reset; the store is atomic, so no game-thread hop needed.
+    for (auto& h : g_hiddenBySlot) h.store(false, std::memory_order_relaxed);
+}
+
+void OnSlotDisconnected(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    // A reused slot must not inherit the departed peer's pref.
+    g_hiddenBySlot[slot].store(false, std::memory_order_relaxed);
 }
 
 }  // namespace coop::nameplate
