@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <random>
 #include <string>
 #include <vector>
@@ -79,7 +80,15 @@ static bool ParseIniLine(const std::string& line, std::string& key, std::string&
     return !key.empty();
 }
 
+// One lock for every votv-coop.ini access in this process. Writers come from TWO
+// threads (render: skins-panel RequestSkin / voice-panel device save; game: boot
+// default-writes) -- an unserialized read-modify-write pair can interleave and one
+// writer rebuilds the file from the other's half-written state. Readers take it too
+// so a read never observes the (pre-atomic-rename) transition.
+static std::mutex g_iniMutex;
+
 std::string ReadIniValue(const char* key, const char* def) {
+    std::lock_guard<std::mutex> lk(g_iniMutex);
     const std::wstring path = ModuleDir() + L"\\votv-coop.ini";
     FILE* f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"r") != 0 || !f) return def;
@@ -94,6 +103,7 @@ std::string ReadIniValue(const char* key, const char* def) {
 }
 
 void WriteIniValue(const char* key, const char* value) {
+    std::lock_guard<std::mutex> lk(g_iniMutex);
     const std::wstring path = ModuleDir() + L"\\votv-coop.ini";
     // Scrub CR/LF from the value (an embedded newline -- e.g. pasted into a text field --
     // would split the "key=value" line and corrupt the NEXT key on read-back), then
@@ -106,11 +116,37 @@ void WriteIniValue(const char* key, const char* value) {
     const std::string newLine = std::string(key) + "=" + safe + "\n";
     // Read existing lines, replacing the key's line IN PLACE if present (so we keep
     // the rest of the ini -- sections, comments, other keys -- untouched).
+    //
+    // DESTRUCTION GUARDS (born 2026-07-02: the HOST's ini lost everything above its
+    // last-appended keys -- [dev] header, devkeys=1, enabled=1 -- and the F1 dev menu
+    // silently vanished; the file had been rebuilt from appends after an obliteration):
+    //   1. if the ini EXISTS but cannot be opened for read (editor/AV/backup holding a
+    //      lock), ABORT the write -- the old code carried on with an EMPTY line list
+    //      and truncated the whole file down to the one new key;
+    //   2. the new content goes to votv-coop.ini.new, then MoveFileExW REPLACE_EXISTING
+    //      swaps it in ATOMICALLY -- the old truncate-then-write left a window (crash,
+    //      kill, power) where the file on disk was empty/partial.
     std::vector<std::string> lines;
     bool found = false;
     {
         FILE* f = nullptr;
-        if (_wfopen_s(&f, path.c_str(), L"r") == 0 && f) {
+        errno_t rc = 1;
+        for (int attempt = 0; attempt < 5; ++attempt) {   // transient sharing locks
+            rc = _wfopen_s(&f, path.c_str(), L"r");
+            if (rc == 0 && f) break;
+            // Existence re-checked PER ATTEMPT (not a pre-loop snapshot): an ini
+            // created between a stale snapshot and a transiently-failing open must
+            // not take the "fresh file" path and get rebuilt down to one key.
+            if (::GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) break;
+            ::Sleep(20);
+        }
+        if ((rc != 0 || !f) &&
+            ::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            UE_LOGW("config: WriteIniValue('%s') SKIPPED -- votv-coop.ini exists but is "
+                    "locked for read; refusing to rebuild the file blind", key);
+            return;
+        }
+        if (rc == 0 && f) {
             char line[512];
             while (std::fgets(line, sizeof(line), f)) {
                 std::string s(line);
@@ -132,13 +168,32 @@ void WriteIniValue(const char* key, const char* value) {
             lines.back() += "\n";
         lines.push_back(newLine);
     }
+    const std::wstring tmp = path + L".new";
     FILE* f = nullptr;
-    if (_wfopen_s(&f, path.c_str(), L"w") != 0 || !f) {
-        UE_LOGW("config: WriteIniValue('%s') could not open votv-coop.ini for write", key);
+    if (_wfopen_s(&f, tmp.c_str(), L"w") != 0 || !f) {
+        UE_LOGW("config: WriteIniValue('%s') could not open votv-coop.ini.new for write", key);
         return;
     }
-    for (const auto& l : lines) std::fputs(l.c_str(), f);
-    std::fclose(f);
+    // Every write checked BEFORE the swap: a disk-full/IO-error .new must never be
+    // atomically installed over the good ini (that would be the one data-loss path
+    // this whole function exists to close -- audit 2026-07-02).
+    bool wrote = true;
+    for (const auto& l : lines)
+        if (std::fputs(l.c_str(), f) == EOF) { wrote = false; break; }
+    if (std::ferror(f)) wrote = false;
+    if (std::fclose(f) != 0) wrote = false;
+    if (!wrote) {
+        ::DeleteFileW(tmp.c_str());
+        UE_LOGW("config: WriteIniValue('%s') writing votv-coop.ini.new FAILED (disk?) -- "
+                "ini left unchanged", key);
+        return;
+    }
+    if (!::MoveFileExW(tmp.c_str(), path.c_str(),
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        UE_LOGW("config: WriteIniValue('%s') atomic swap failed (err=%lu) -- ini left "
+                "unchanged, votv-coop.ini.new kept", key, ::GetLastError());
+        return;
+    }
     UE_LOGI("config: persisted %s=%s", key, safe.c_str());
 }
 
