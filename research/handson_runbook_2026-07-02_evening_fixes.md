@@ -1,24 +1,67 @@
-# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS)
+# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile + SKINS + take-4)
 
-**Deployed (take 3b, SKINS + audit fix):** DLL `1B00C0DB22751C37` (protocol **v93** —
-both peers must update; v92 peers are version-gated out with an "update your mod"
-message) + pak `hl_einstein_v1sc.pak` `AE49002C2A5DB1DB` (v1 narrow profile) + preview
-PNGs, all 4 installs; `rvi_scientist_v1sc.pak`/.bmp (user-placed) intact.
-Take-2 was DLL `BD70FB08...` — superseded before its hands-on by the skins build; all
-take-2 changes (EHH pairing `2b2e0531`, wedge drain `d4833b9b`, nameplate `9180a386`,
-hygiene `9eda3faf`, v1-profile revert `e094093d`) are IN this DLL too, still verdict
-PENDING. NO autonomous smoke ran (user at the PC — this runbook IS the test).
-**Audits (2 agents on the diff):** perf/hot-path = all PASS (local_body::Tick alloc-free
-at pump rate, 1 Hz gate real, no per-frame FS scan, no SkinChange double-relay; WARN:
-remote_player.cpp 841>800 LOC — remote_player_spawn extraction QUEUED). Correctness =
-one HIGH confirmed + FIXED before this deploy: SkinChange was not pre-world-sendable, so
-a skin changed while a joiner sat in its 30-60 s load window was silently dropped
-forever (the v90-b3 "mutation during the window" class) — SkinChange added to
-IsPreWorldSendableKind (receiver is engine-free pre-puppet). Everything else clean:
-wire bounds, forgery guards, name validation at all 4 boundaries, revert symmetry,
-thread discipline, proto wiring.
+**Deployed (take 4, LATE NIGHT):** DLL `94C3D016E482ABAE` (protocol **v93→v94** — BOTH
+peers must run THIS dll; older ones are version-gated out) on all 4 installs +
+re-cooked `rvi_scientist_v1sc.pak` `ED666BE5` (see item 5 below).
+**Audits (2 agents on the diff): perf = PASS zero-critical** (all new paths O(1)/
+event-edge; ini mutex never taken at frame rate; WARN: player_handshake.cpp 904>800 →
+player_prefs_wire extraction QUEUED). **Correctness = 1 MED + 2 LOW found, ALL
+root-fixed before this deploy:** (MED) nameplate ResetSlots ran on the bringup thread
+→ the whole visibility store is now atomic any-thread (no assert trap, no race);
+(LOW) unchecked fputs before the ini atomic swap → write errors now abort the swap;
+(LOW) exists-check TOCTOU → re-checked per retry attempt. Wire bounds (byte-exact
+offset traces incl. empty-skin), forgery guards, lane ordering (toggle can never
+overtake its Join), builtin-skin safety = all PASS.
+Take-4 adds, on top of everything take-3b had:
+1. **F1 dev menu RESTORED on the host** — root cause found: the host's votv-coop.ini
+   had lost its HEAD (the `[dev]` header, `enabled=1`, `devkeys=1` — everything above
+   the appended probe keys) so the dev switch read absent. The ini has been rebuilt
+   (your probe flags + guid + skin preserved) AND the underlying destroyer is fixed:
+   WriteIniValue now aborts instead of rebuilding the file blind when the ini is
+   read-locked, writes via an atomic .new+rename swap (no truncate window), and all
+   ini access is serialized by one mutex.
+2. **Nameplate OFF toggle (v94, synced)** — F1 > Cosmetics > Nameplate: "Show my
+   nameplate to other players" checkbox. Off = your plate disappears on EVERY peer's
+   screen; synced live (NameplateChange) AND to late joiners (Join/PlayerJoined prefs
+   byte); persists in votv-coop.ini `nameplate=`; slot resets to visible on disconnect.
+3. **Kerfur robot skins (builtin)** — the skins browser now also lists the game's own
+   anthro-kerfur bodies (no pak needed): kerfur_omega (+_h/_m/_nc variants),
+   kerfur_maid, kerfur_ariral, kerfur_ariral_suit, kerfur_keljoy, kerfur_mannequin,
+   skerfuro, scrappy_keith, assbreather. They carry their own materials (no atlas
+   texture) and animate on the same rig as every converter skin. No preview tiles yet
+   (text tiles) — drop a `<name>.png/.bmp` next to the paks if you want previews.
+4. **JOIN-JUMP fix** — "клиент прыгает по позициям где проходил хост": a joining
+   client streamed its pose through the WHOLE load window (menu pawn, then the pawn
+   being teleported through the HOST-SAVE positions as loadObjects applied). The
+   sender now streams only when its own world is authoritative (the same coherence
+   predicate as ClientWorldReady) — the host-side puppet spawns at the client's REAL
+   first in-world position.
 
-## NEW: the v93 SKINS system (what to test first)
+Take-2/3b changes (EHH pairing `2b2e0531`, wedge drain `d4833b9b`, nameplate box
+`9180a386`, hygiene `9eda3faf`, v1-profile revert `e094093d`, SKINS v93 `bfee8f62`)
+are all IN this DLL, still verdict PENDING. NO autonomous smoke ran (user at the PC —
+this runbook IS the test).
+
+## NEW take-4 tests (do these first)
+1. **Dev menu back**: host F1 — Player/Game/Network categories are back (Cosmetics
+   was the only one you could see). If still missing: read the top of
+   votv-coop.ini — `[dev] enabled=1` + `devkeys=1` must be there.
+2. **Nameplate toggle**: client F1 > Cosmetics > Nameplate → uncheck. Host: the
+   client's floating name/health bar disappears (chat line "Nameplate: hidden...").
+   Re-check → back. Then leave it OFF, disconnect, rejoin — the host must STILL not
+   see it (the Join prefs byte). Host toggling its own works the same on the client.
+3. **Kerfur skins**: F1 > Cosmetics > Skins → pick `kerfur_omega` — your body (look
+   down) + your puppet on the other screen become the robot kerfur with its own
+   textures. Try `kerfur_maid` / `skerfuro` for fun. Then back to a converter skin
+   (hl_einstein/rvi) — the atlas texture must come back clean; then `dr_kel` —
+   native body, no stuck atlas.
+4. **Join-jump**: watch a client join from the host. The client puppet must NOT
+   teleport-hop through places you (the host) have been — it should appear once,
+   at the client's real spawn spot, when the client's world is up.
+   Log marker (client): `net_pump: ClientWorldReady announced` — poses start only
+   after this line now.
+
+## The v93 SKINS system (from take 3b — still test if not yet done)
 Every player now has a persistent body skin (`votv-coop.ini player_skin=`, written next
 to `player_guid=`; a fresh identity gets `hl_einstein_v1sc` — so BY DEFAULT the HOST is
 now ALSO a scientist; pick `dr_kel` in the browser if you want the host back to kel, it
@@ -81,10 +124,13 @@ If a skin shows KEL on the other peer: that peer's log will say
   mount / LoadObject path) — the paths changed to hl_einstein_v1sc this build.
 
 ## Honest status
-Take-2 changes (EHH pairing, wedge drain, nameplate, v1-profile model) AS-BUILT +
-audited / cook-validated — verdict PENDING. Take-3b SKINS: AS-BUILT, compiled clean,
-deployed 4/4 (DLL `1B00C0DB`), NO smoke (user at PC), two audit agents: perf all-PASS,
-correctness 1 HIGH found + root-fixed pre-handoff (SkinChange pre-world gate). Protocol
-v92→v93: BOTH peers must run this DLL. QUEUED extractions: remote_player_spawn
-(841>800), puppet_diag (967>800). The wedge's UPSTREAM root (keyed-prop GC-churn
+Take-4 (ini hardening + nameplate toggle + kerfur skins + join-jump gate): AS-BUILT,
+compiled clean, deployed 4/4 (DLL `94C3D016`), NO smoke (user at PC — this runbook is
+the test); two audit agents ran on the diff — perf PASS zero-critical, correctness
+1 MED + 2 LOW all root-fixed pre-handoff (see header). Protocol v93→v94: BOTH peers
+must run this DLL. Take-2/3b changes (EHH
+pairing, wedge drain, nameplate box, v1-profile model, SKINS system) still verdict
+PENDING, all in this DLL. rvi pak re-cooked from the user's own pose (`ED666BE5`).
+QUEUED extractions: remote_player_spawn (841>800), puppet_diag (967>800),
+player_handshake (~900 after v94). The wedge's UPSTREAM root (keyed-prop GC-churn
 re-bind by KEY) is still the next thread.

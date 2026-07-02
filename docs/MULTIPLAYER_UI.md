@@ -8,8 +8,11 @@ runtime-UMG built by our C++ mod (the "chosen" approach below) — see the `ui/`
 modules: `server_browser.cpp`, `host_save_picker.cpp`, `roster.cpp`,
 `scoreboard.cpp`, `dev_menu.cpp`, `moderation.cpp`, `hud.cpp`,
 `skins_panel.cpp` (2026-07-02: the F1 > Cosmetics > Skins model browser —
-gmod-style preview tiles from the LogicMods pak catalog, AS-BUILT; see
-docs/COOP_CLIENT_MODEL.md §3 for the v93 skins runtime). This doc is kept
+gmod-style preview tiles from the LogicMods pak catalog + the v94 builtin
+kerfur bodies, AS-BUILT; see docs/COOP_CLIENT_MODEL.md §3 for the skins
+runtime). F1 > Cosmetics > Nameplate (v94, AS-BUILT 2026-07-02): the "show my
+nameplate to other players" checkbox — a SYNCED per-peer pref (NameplateChange
++ the Join prefs byte; persists in votv-coop.ini `nameplate=`). This doc is kept
 for the **design rationale** (why runtime UMG, not BPModLoader/paks); the code is
 the truth for the as-built UI.
 
