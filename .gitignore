@@ -152,3 +152,6 @@ docs/piles/re-artifacts/
 # mesh_extract C# build junk (tools/client_model)
 tools/client_model/mesh_extract/bin/
 tools/client_model/mesh_extract/obj/
+
+# repak unpack junk (never commit)
+/Engine/
