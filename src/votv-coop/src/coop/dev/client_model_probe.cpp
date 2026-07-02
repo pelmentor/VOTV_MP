@@ -6,6 +6,7 @@
 #include "coop/player/players_registry.h"
 #include "coop/session/ini_config.h"
 
+#include "ue_wrap/asset_load.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/hot_path_guard.h"  // UE_ASSERT_GAME_THREAD
 #include "ue_wrap/log.h"
@@ -115,12 +116,38 @@ void Tick(bool connected, bool /*isHost*/) {
             if (sciA) {
                 E::SetActorRotation(sciA, ue_wrap::FRotator{0.f, YawToward(rightSpot, pl), 0.f});
                 applyToNativeSlot(sciA, sciMesh, L"RIGHT");
+
+                // Rung 3 (texture ladder, COOP_CLIENT_MODEL.md 7): bind our cooked UTexture2D
+                // onto the RIGHT puppet's slot-0 material via a MID. The slot material is
+                // inst_kel4_body (a MIC of mat_object_sk) whose diffuse is texture parameter
+                // 'tex' -- overriding it needs NO cooked material. Applied to BOTH body slots
+                // (the two-body invariant). Graceful: tex null -> stays garbled kel (rung-2 look).
+                void* sciTex = ue_wrap::asset_load::LoadObjectByPath(
+                    L"/Game/Mods/VOTVCoop/tex_scientist.tex_scientist");
+                if (sciTex) {
+                    int bound = 0;
+                    void* comps[2] = { Pup::GetMeshPlayerVisibleComponent(sciA),
+                                       Pup::GetNativeBodyMeshComponent(sciA) };
+                    for (void* comp : comps) {
+                        if (!comp) continue;
+                        void* mid = E::CreateDynamicMaterialInstance(comp, 0);
+                        if (mid && E::SetTextureParameterValue(mid, L"tex", sciTex)) ++bound;
+                        UE_LOGI("[CLIENTMODEL-PROBE] RIGHT tex bind: comp=%p mid=%p tex=%p", comp, mid, sciTex);
+                    }
+                    UE_LOGI("[CLIENTMODEL-PROBE] RIGHT texture bound on %d/2 slots -- verdict: RIGHT torso-"
+                            "colored (chest texture over the whole body) = TEXTURE COOK + MID BINDING WORK "
+                            "(atlas is the last rung); RIGHT unchanged garbled = binding no-op (param name / "
+                            "MID parent) -> read this log.", bound);
+                } else {
+                    UE_LOGW("[CLIENTMODEL-PROBE] tex_scientist NOT loaded (pak stale? path?) -- RIGHT stays "
+                            "rung-2 garbled kel-material look");
+                }
             }
             UE_LOGI("[CLIENTMODEL-PROBE] RIGHT scientist puppet=%p mesh=%p @(%.0f,%.0f,%.0f) -- verdicts "
                     "(same mesh in BOTH slots, nothing hidden): LEFT kel + RIGHT humanoid-blob = cook "
-                    "geometry WORKS (garbled texture EXPECTED); LEFT kel + RIGHT empty = our render data "
-                    "fails to draw in-engine; RIGHT still a clean kel = something re-applies the class "
-                    "default (new fact).", sciA, sciMesh, rightSpot.X, rightSpot.Y, rightSpot.Z);
+                    "geometry WORKS; LEFT kel + RIGHT empty = our render data fails to draw in-engine; "
+                    "RIGHT still a clean kel = something re-applies the class default (new fact).",
+                    sciA, sciMesh, rightSpot.X, rightSpot.Y, rightSpot.Z);
         } else {
             UE_LOGW("[CLIENTMODEL-PROBE] scientist mesh NULL (pak absent / load failed) -- only the LEFT "
                     "kel control spawned");

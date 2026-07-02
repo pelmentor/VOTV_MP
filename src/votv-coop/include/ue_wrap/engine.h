@@ -591,6 +591,19 @@ bool ClearSkeletalMesh(void* skeletalMeshComponent);
 // UseAnimBlueprint). Drives the puppet's pose. Game thread only.
 bool SetAnimClass(void* skeletalMeshComponent, void* animBlueprintClass);
 
+// UPrimitiveComponent::CreateDynamicMaterialInstance(ElementIndex) -- create (or
+// return the existing) MID for the slot, parented to the slot's CURRENT material
+// (SourceMaterial null, OptionalName zeroed = NAME_None). The MID inherits the
+// parent's parameters; overriding a texture parameter re-skins the slot with NO
+// cooked material needed (client-model textures, COOP_CLIENT_MODEL.md 7).
+// Returns the UMaterialInstanceDynamic*, or null. Game thread only.
+void* CreateDynamicMaterialInstance(void* component, int32_t elementIndex);
+
+// UMaterialInstanceDynamic::SetTextureParameterValue(ParameterName, Value). The
+// kel body materials expose their diffuse as texture parameter 'tex'
+// (inst_kel4_body MIC RE 2026-07-02). Game thread only.
+bool SetTextureParameterValue(void* materialInstanceDynamic, const wchar_t* paramName, void* texture);
+
 // UStaticMeshComponent::SetStaticMesh(NewMesh) -- swap the static-mesh asset onto
 // a UStaticMeshComponent (the host-authoritative trash-proxy mirror re-skinning
 // pile<->clump; the client resolves NewMesh from chipType via getChipPileType).

@@ -294,11 +294,16 @@ Repath the package `kerfurOmega_KelSkin` → `scientist` inside the `.uasset` na
 LoadObject is clean (`/Game/Mods/VOTVCoop/scientist.scientist`). Rewrite the 2 name-map
 entries, recompute their FName hashes, shift post-name-map summary offsets + export
 SerialOffset + BulkDataStartOffset by the length delta.
-**FName hashes CRACKED (verified 6/6):** each entry stores 2 uint16 after the FString —
-`CasePreservingHash = FCrc::StrCrc32(name) & 0xFFFF` (CRC32 poly 0xEDB88320, reflected),
-`NonCasePreservingHash = StrCrc32(name.lower()) & 0xFFFF`. Safe to implement in
-`ue_pkg`/`ue_cook`. Not done because the object-name path works for LoadObject; do it only
-if the first in-game load fails on the name.
+**FName hashes CRACKED for real (validated 19/19 BOTH slots vs tex_kel3_skin, 2026-07-02;
+the earlier "verified 6/6" formula was WRONG on the NonCase slot):** each name-map entry
+stores 2 uint16 after the FString, in this order —
+`NonCasePreservingHash = Strihash_DEPRECATED(name) & 0xFFFF` (uppercase each char, process
+ONLY the low byte per char, MSB-first CRC table poly 0x04C11DB7, init 0, no final invert),
+then `CasePreservingHash = FCrc::StrCrc32(name) & 0xFFFF` (reflected 0xEDB88320, each char
+processed as 4 LE bytes, init/final invert standard). Implemented + self-tested in
+`tools/client_model/ue_tex.py` (`name_entry()` / `selftest`), which also does the full
+package rename (name map + offset shifting + export table patch) that this section
+originally deferred.
 
 ---
 

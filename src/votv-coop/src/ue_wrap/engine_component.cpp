@@ -16,6 +16,7 @@
 #include "ue_wrap/engine.h"
 
 #include "ue_wrap/call.h"
+#include "ue_wrap/fname_utils.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
@@ -70,6 +71,21 @@ bool ResolveMeshFns() {
     if (g_skeletalMeshClass && !g_setAnimClassFn)
         g_setAnimClassFn = R::FindFunction(g_skeletalMeshClass, P::name::SetAnimClassFn);
     return g_setSkeletalMeshFn && g_setAnimClassFn;
+}
+
+void* g_midPrimCompClass = nullptr;   // UPrimitiveComponent (owns CreateDynamicMaterialInstance)
+void* g_createMidFn = nullptr;
+void* g_midClass = nullptr;           // UMaterialInstanceDynamic (owns SetTextureParameterValue)
+void* g_setTexParamFn = nullptr;
+
+bool ResolveMidFns() {
+    if (!g_midPrimCompClass) g_midPrimCompClass = R::FindClass(L"PrimitiveComponent");
+    if (g_midPrimCompClass && !g_createMidFn)
+        g_createMidFn = R::FindFunction(g_midPrimCompClass, L"CreateDynamicMaterialInstance");
+    if (!g_midClass) g_midClass = R::FindClass(L"MaterialInstanceDynamic");
+    if (g_midClass && !g_setTexParamFn)
+        g_setTexParamFn = R::FindFunction(g_midClass, L"SetTextureParameterValue");
+    return g_createMidFn && g_setTexParamFn;
 }
 
 void* g_staticMeshCompClass = nullptr;  // owns SetStaticMesh
@@ -189,6 +205,29 @@ bool SetComponentVisible(void* component, bool visible, bool propagate) {
         Call(component, f);
     }
     return true;
+}
+
+void* CreateDynamicMaterialInstance(void* component, int32_t elementIndex) {
+    if (!component || !ResolveMidFns()) {
+        UE_LOGE("engine: CreateDynamicMaterialInstance unresolved (comp=%p fn=%p)",
+                component, g_createMidFn);
+        return nullptr;
+    }
+    ParamFrame f(g_createMidFn);
+    f.Set<int32_t>(L"ElementIndex", elementIndex);
+    // SourceMaterial stays null (use the slot's current material as the MID parent);
+    // OptionalName stays zeroed (FName{0,0} == NAME_None).
+    if (!Call(component, f)) return nullptr;
+    return f.Get<void*>(L"ReturnValue");
+}
+
+bool SetTextureParameterValue(void* materialInstanceDynamic, const wchar_t* paramName, void* texture) {
+    if (!materialInstanceDynamic || !texture || !ResolveMidFns()) return false;
+    const R::FName pn = ue_wrap::fname_utils::StringToFName(paramName);
+    ParamFrame f(g_setTexParamFn);
+    f.Set<R::FName>(L"ParameterName", pn);
+    f.Set<void*>(L"Value", texture);
+    return Call(materialInstanceDynamic, f);
 }
 
 bool DestroyComponent(void* component, void* contextObject) {
