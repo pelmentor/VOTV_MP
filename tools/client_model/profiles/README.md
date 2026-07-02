@@ -7,8 +7,8 @@ by bone NAME to any HL Bip01 model.
 
 | file | format | learned from | look | status |
 |---|---|---|---|---|
-| `tpose_v2_wide_2026-07-02.json` | 2 (R+t local deltas) | `hl_einstein_v1sc_new_profile.psk` | wide arm span 209.5, matches the anthro template proportions (215) | **DEFAULT** |
-| `tpose_v1_narrow_2026-07-01.json` | 1 (rotation-only) | `hl_einstein_v1sc.psk` | narrow arm span 177.1 (the first manual example) | library |
+| `tpose_v1_narrow_2026-07-01.json` | 1 (rotation-only) | `hl_einstein_v1sc.psk` | narrow arm span 177.1 (the first manual example) | **DEFAULT** — in-game look preferred (hands-on 2026-07-02 evening) |
+| `tpose_v2_wide_2026-07-02.json` | 2 (R+t local deltas) | `hl_einstein_v1sc_new_profile.psk` | wide arm span 209.5, matches the anthro template proportions (215) | library — in-game look REJECTED 2026-07-02 evening ("переделай обратно под v1"); template-matched span did not beat the narrow look
 
 Format 1 = per-bone local ROTATION only (reproduces a pure re-pose; drops joint
 translations). Format 2 = full rigid local delta (R + t in the bone's rest frame; carries

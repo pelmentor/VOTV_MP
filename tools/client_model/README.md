@@ -30,8 +30,8 @@ source.mdl
 ```
 
 Current model = `hl_einstein_v1sc` (its ORIGINAL name; the early "scientist" naming is
-retired). Profiles: `profiles/README.md` — v2 "wide" (format 2, R+t deltas) is the
-DEFAULT; v1 "narrow" stays in the library.
+retired). Profiles: `profiles/README.md` — v1 "narrow" is the DEFAULT (in-game verdict
+2026-07-02 evening: the v2 "wide" look was rejected; v2 stays in the library).
 
 Adding a NEW HL model = the six steps above (no Blender). See `docs/COOP_CLIENT_MODEL.md §4`
 for exact commands. Use `python` (has numpy), not `python3`.
@@ -71,7 +71,7 @@ for exact commands. Use `python` (has numpy), not `python3`.
   `modpak/` (pak staging), `extracted/` (cook template = repak-extracted game meshes),
   `tools/repak.exe` (packer), `hl_einstein_v1sc.pak` (the deliverable).
 - `tools/hl_einstein_v1sc/` — example HL1 scientist `.mdl` + `dr_kel.psk` (reference skin)
-  + `hl_einstein_v1sc_tpose.obj` (reposed, v2 profile) + the manual examples
+  + `hl_einstein_v1sc_tpose.obj` (reposed, v1 profile) + the manual examples
   `hl_einstein_v1sc.psk` (v1 narrow) / `hl_einstein_v1sc_new_profile.psk` (v2 wide)
   (Valve asset / local only).
 - `tools/SourceIO/` — Blender addon (GoldSrc `.mdl` import); `reference/psk-psa-v9.1.2/`

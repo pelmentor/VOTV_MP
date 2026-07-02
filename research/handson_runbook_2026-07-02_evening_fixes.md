@@ -1,7 +1,9 @@
-# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + new model profile)
+# Hands-on runbook — 2026-07-02 evening batch (EHH + wedge + nameplate + model profile)
 
-**Deployed:** DLL `BD70FB082E3B6726` + pak `hl_einstein_v1sc.pak` `2114216399348297`,
-hash-verified 8/8 across all 4 installs; stale `scientist.pak` removed from all 4.
+**Deployed (take 2):** DLL `BD70FB082E3B6726` + pak `hl_einstein_v1sc.pak`
+`AE49002C2A5DB1DB` (re-cooked on the **v1 narrow profile** — the v2 wide look was
+REJECTED in-game, user: "переделай обратно под v1"), hash-verified 8/8 across all 4
+installs; stale `scientist.pak` removed from all 4.
 Commits: `2b2e0531` (EHH pairing) + `d4833b9b` (wedge drain) + `9180a386` (nameplate) +
 `9eda3faf` (latch hygiene) + `6f4d41d1` (profile library + rename). Audit on the two fixes:
 all PASS, zero blocking findings.
@@ -14,16 +16,16 @@ all PASS, zero blocking findings.
    real pile. No more "host must hand-cycle the pile".
 3. **Nameplate** — the translucent black backing box is gone (text outline carries
    readability). Restorable from git.
-4. **Client model** — NEW repose profile (your `hl_einstein_v1sc_new_profile.psk`):
-   reproduced at residual 0.00005 (float-zero), wide T-pose matching the anthro template
-   proportions (209.5 vs 215 arm span; old narrow was 177). Model + pak + packages renamed
-   to `hl_einstein_v1sc`. Profile LIBRARY at `tools/client_model/profiles/` (v2 wide =
-   default, v1 narrow kept).
+4. **Client model** — VERDICT IN (take 1): the v2 wide profile look was REJECTED
+   in-game → the scientist is RE-COOKED on the **v1 narrow profile** (this pak,
+   `AE49002C`; repose reproduces the v1 manual PSK at max 0.00009). v1 is the library
+   DEFAULT again; v2 wide stays in `tools/client_model/profiles/` unused. The
+   `hl_einstein_v1sc` rename stands.
 
 ## The test (host + client, normal pile play)
-1. **Model look**: client's puppet on the host screen = the scientist with the NEW
-   proportions (wider shoulders/arms — should deform less during animation). Verdict:
-   better or worse than before?
+1. **Model look**: client's puppet on the host screen = the scientist back on the
+   FAMILIAR v1 proportions (narrow, the look that passed 2026-07-02 morning). Confirm
+   it matches what you liked.
 2. **Nameplates**: no black rectangle behind nick/health bar; text still readable.
 3. **E-drop**: carry a pile clump, E-drop it repeatedly — NO "EHHH" on release.
    Client log marker per drop: `[USE-RELEASE] paired E-release CANCELLED`.

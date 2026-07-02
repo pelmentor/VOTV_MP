@@ -4,16 +4,18 @@
 model (the user's own mesh) while the HOST stays Dr. Kel. First model = a Half-Life 1
 GoldSrc scientist. The pipeline generalizes to any HL1 humanoid `.mdl`.
 
-**STATUS (2026-07-02 evening: FEATURE COMPLETE [V x4 incl. coop visual "Работает amazing"]
-+ the NEW REPOSE PROFILE and the ORIGINAL-NAME rename are AS-BUILT `6f4d41d1`, in-game
-verdict PENDING.** The model + pak + packages are now `hl_einstein_v1sc` (the "scientist"
-naming is retired); the repose profile comes from the `tools/client_model/profiles/`
-LIBRARY -- v2 "wide" (format-2 R+t local deltas, learned from the user's
-`hl_einstein_v1sc_new_profile.psk` at residual 0.00005) is the DEFAULT, v1 "narrow" is
-kept. Two pipeline root-fixes en route: learn's up-axis is a CONSTANT of the target space
-(argmax-bbox broke when the wide arm span exceeded the height), and format-2 profiles
-carry JOINT TRANSLATIONS that rotation-only silently dropped. Probe client_model_probe
-retained per the probes-exempt rule, flag off.)**
+**STATUS (2026-07-02 evening take 2: FEATURE COMPLETE [V x4 incl. coop visual "Работает
+amazing"]; the v2 "wide" profile look was REJECTED in-game the same evening ("переделай
+обратно под v1") -- the scientist is re-cooked on v1 "narrow" (pak `AE49002C`, deployed
+8/8) and v1 is the DEFAULT again.** The model + pak + packages are `hl_einstein_v1sc`
+(the "scientist" naming is retired, rename `6f4d41d1` stands); the repose profile comes
+from the `tools/client_model/profiles/` LIBRARY -- v1 narrow = DEFAULT (in-game look
+preferred), v2 wide (format-2 R+t local deltas, learned from the user's
+`hl_einstein_v1sc_new_profile.psk` at residual 0.00005) kept in the library. The two
+pipeline root-fixes from the v2 work STAND regardless of the verdict: learn's up-axis is
+a CONSTANT of the target space (argmax-bbox broke when the wide arm span exceeded the
+height), and format-2 profiles carry JOINT TRANSLATIONS that rotation-only silently
+dropped. Probe client_model_probe retained per the probes-exempt rule, flag off.)**
 - **RUNTIME = DONE + PROVEN WORKING (§3), commit `320c0ab4`.** Autonomous 2-peer LAN test
   (host s_1234 + fresh client): pak auto-mounts, `URyRuntimeObjectHelpers::LoadObject` returns
   OUR package's SkeletalMesh, `RemotePlayer::Spawn` applies it to the client puppet (role-gated:
@@ -281,10 +283,11 @@ export a posed PSK); `repose.py learn` extracts a transferable PROFILE from it. 
   the arms and grounded the model sideways (residual 17.58 until fixed).
 
 **The PROFILE LIBRARY (`tools/client_model/profiles/`, user 2026-07-02: keep a base of
-profiles):** `tpose_v2_wide_2026-07-02.json` (format 2, learned from
-`hl_einstein_v1sc_new_profile.psk`, **DEFAULT** via `repose.py` DEFAULT_PROFILE / CLI
-`default`) + `tpose_v1_narrow_2026-07-01.json` (format 1, kept). provenance table:
-`profiles/README.md`.
+profiles):** `tpose_v1_narrow_2026-07-01.json` (format 1, **DEFAULT** via `repose.py`
+DEFAULT_PROFILE / CLI `default` -- the in-game verdict 2026-07-02 evening preferred its
+look) + `tpose_v2_wide_2026-07-02.json` (format 2, learned from
+`hl_einstein_v1sc_new_profile.psk`; look rejected in-game, kept in the library).
+provenance table: `profiles/README.md`.
 
 **Validation:** each profile reproduces ITS example to float-zero — v2: max 0.00005;
 v1: max 0.00009 (379 verts, ~190-unit model). Lossless representation.

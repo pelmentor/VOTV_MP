@@ -31,9 +31,11 @@ import numpy as np
 
 # The library default (the "VOTV T-pose standard" every new model gets unless a
 # profile is named explicitly). Swap by editing this one line; the library keeps
-# every learned profile side by side (profiles/README.md).
+# every learned profile side by side (profiles/README.md). v1 narrow is the default
+# by IN-GAME VERDICT (2026-07-02 evening: the v2 wide look was rejected hands-on;
+# v2 stays in the library).
 DEFAULT_PROFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "profiles", "tpose_v2_wide_2026-07-02.json")
+                               "profiles", "tpose_v1_narrow_2026-07-01.json")
 
 
 # ---------- IO ----------
