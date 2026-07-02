@@ -33,7 +33,6 @@
 #include "coop/player/remote_player.h"
 #include "coop/props/remote_prop.h"
 #include "coop/props/save_identity_bind.h"  // (b) re-bind-on-re-seed: BindUnboundReCreates (09:54 ghost fix)
-#include "coop/session/save_apply_gate.h"  // join-jump #2: pawn-placement latch (gm loadObjects POST)
 #include "coop/session/save_transfer.h"
 #include "coop/session/subsystems.h"
 
@@ -314,11 +313,6 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // active stream (one bool per slot).
     if (session.role() == coop::net::Role::Host) coop::save_transfer::TickHost();
 
-    // Pawn-placement latch install (join-jump #2, 2026-07-02). UNGATED on purpose: the
-    // hook must be armed BEFORE this world's gm loadObjects fires, and the gm class
-    // loads with the map (well before the local pawn resolves) -- a world-up-gated
-    // install could lose the race on a fast load. One latched bool once installed.
-    coop::save_apply_gate::EnsureInstalled();
 
     // World-up gate (v56 menu-window balloon fix, 2026-06-10). A menu-mode
     // save-transfer joiner runs this Tick at 60 Hz while still at the MAIN
@@ -942,22 +936,36 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         // through was streamed as OUR pose -- garbage AT THE SOURCE, so the SENDER
         // gates (one owner).
         //
-        // Take-5 (2026-07-02 verdict "клиент всё ещё прыгает"): the take-4 predicate
-        // (ClientWorldReady coherence) was NECESSARY but NOT SUFFICIENT -- the world
-        // + prop registry are coherent off the level-default props SECONDS before
-        // the game's load chain PLACES the local pawn (gm loadObjects ->
-        // transformToPlayer at the load tail; the 19:10 log: parked spot
-        // (-37695,69978) streamed for ~4 s after the announce). Pose authority
-        // therefore ALSO requires the pawn-placement latch (save_apply_gate:
-        // loadObjects POST seen for THIS pawn's world) -- for BOTH roles: a host
-        // mid-world-change is as unplaced as a joining client. The first streamed
-        // pose is now the pawn's REAL placed position; a world change closes the
-        // gate by pawn identity until the new world's loadObjects fires.
+        // Take-6 final (two failed attempts first, both 2026-07-02): the take-4
+        // predicate (ClientWorldReady coherence) fires SECONDS before the game
+        // PLACES the pawn -- the world + prop registry are coherent off the
+        // level-default props while the pawn still sits at the map's parked spot
+        // (-37695,69978); gm loadObjects -> transformToPlayer teleports it at the
+        // load TAIL (19:10 log: announce :54, placement :58, the 4 s of streamed
+        // parking = the "jump"). A Func-table POST latch on loadObjects was built
+        // and FAILED: gm loadObjects is called from the ubergraph via
+        // EX_LocalFinalFunction, and script->script local calls dispatch through
+        // ProcessLocalScriptFunction -- they touch NEITHER ProcessEvent NOR
+        // UFunction::Func (20:07 + 20:14 verdicts: hook installed on the live
+        // class, loadObjects demonstrably ran, POST never fired; the client never
+        // streamed at all -- see docs/COOP_DISPATCH_VISIBILITY.md).
+        //
+        // The gate therefore uses the signal that OBSERVES loadObjects' effect
+        // instead of hooking its call: load-tail QUIESCENCE (join_membership_sweep
+        // g_sweepFired) -- the keyless-prop + NPC + chipPile population is stable
+        // for 10 scans x 200 ms only after loadObjects' spawn flux (which contains
+        // the player teleport) has ENDED. It is the same signal the DESTRUCTIVE
+        // divergence sweep already trusts, it resets per world/bracket (a
+        // mid-session world change closes the gate until the new world's tail
+        // settles), and it is client-scoped -- exactly where the join-jump lives.
+        // The HOST keeps the worldUp gate: its own load window matters only while
+        // a client is connected through a host world-change (pre-existing take-4
+        // residual, никем не наблюдался; the client side is the reported bug).
         const bool poseAuthoritative =
-            (isHost ? worldUp
-                    : (g_worldReadyAnnounced.load(std::memory_order_relaxed) &&
-                       !g_reAnnounceWorldReady.load(std::memory_order_relaxed))) &&
-            coop::save_apply_gate::IsSaveAppliedFor(g_netLocal);
+            isHost ? worldUp
+                   : (g_worldReadyAnnounced.load(std::memory_order_relaxed) &&
+                      !g_reAnnounceWorldReady.load(std::memory_order_relaxed) &&
+                      coop::join_membership_sweep::HasLoadTailQuiesced());
         if (poseAuthoritative)
             coop::local_streams::Tick(session, g_netLocal, g_netLocalController);
     }
