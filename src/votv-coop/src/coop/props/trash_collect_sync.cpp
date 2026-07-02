@@ -692,6 +692,10 @@ void Install(coop::net::Session* session) {
 
 void OnDisconnect() {
     g_session.store(nullptr, std::memory_order_release);
+    // Session teardown resets the gesture latch (symmetry with trash_channel's client
+    // toggles): a press cancelled just before the disconnect must not eat a release
+    // dispatched in the next session (audit hygiene 2026-07-02).
+    g_cancelPairedUseRelease = false;
 }
 
 bool DebugSendGrabIntent(uint32_t eid) {
