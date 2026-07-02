@@ -341,8 +341,34 @@ void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
     coop::element::Element* pe = coop::element::Registry::Get().Get(static_cast<coop::element::ElementId>(eid));
     void* pa   = pe ? pe->GetActor() : nullptr;
     void* pile = (pa && R::IsLiveByIndex(pa, pe->GetInternalIdx())) ? pa : nullptr;
-    if (!pile || !ue_wrap::prop::IsChipPile(pile)) {
-        UE_LOGW("[GRAB-INTENT] DENIED eid=%u slot=%u -- pile actor not live / not a chipPile", eid, senderSlot);
+    if (!pile) {
+        // The eid is UNRESOLVABLE on the host (no row / stale-dead actor pointer) while the requester
+        // still resolves a mirror to it -- a stale-identity ghost. 2026-07-02 wedge: a GC-churned keyed
+        // prop left the eid-2947 row pointing at a freed address; a chipPile RECYCLED that address on
+        // the client, the stale reverse entry mis-resolved its aim, and it re-sent the same doomed grab
+        // 12x while this deny stayed SILENT -- unwedged only when the host hand-cycled the real pile.
+        // Broadcast PropDestroy(eid) instead: positive per-eid host-authoritative evidence (the
+        // join-reconcile-sweep-safety shape); every peer DRAINS its row for the eid (a stale row
+        // resolves no live actor -> UnregisterPropMirror only, no world actor destroyed; peers without
+        // the row no-op in steady state) and the requester's next aim re-resolves to the REAL entity.
+        // No transition race: a host-grab-in-flight eid is denied at GATE 1 (g_carry) above, and input
+        // dispatch + packet processing are both game-thread-serialized. The host's own corpse row is
+        // the reaper's to drain (one owner; this edge only reports the death).
+        UE_LOGW("[GRAB-INTENT] DENIED eid=%u slot=%u -- eid unresolvable on the host (row=%s actor=%p) -> "
+                "broadcasting PropDestroy(eid) so every peer drains its stale ghost row",
+                eid, senderSlot, pe ? "stale-dead" : "absent", pa);
+        coop::net::PropDestroyPayload dp{};
+        dp.key.len   = 0;   // eid-only: mirror rows are eid-keyed on every peer
+        dp.elementId = eid;
+        s.SendPropDestroy(dp);
+        return;
+    }
+    if (!ue_wrap::prop::IsChipPile(pile)) {
+        // A LIVE actor of the wrong class: the identity names a real entity, so NEVER destroy on a
+        // class mismatch -- deny only, and log the class (each named class = the next smear lead).
+        UE_LOGW("[GRAB-INTENT] DENIED eid=%u slot=%u -- live actor %p class '%ls' is not a chipPile "
+                "(cross-peer identity smear?)", eid, senderSlot, pile,
+                R::ClassNameOf(pile).c_str());
         return;
     }
 
