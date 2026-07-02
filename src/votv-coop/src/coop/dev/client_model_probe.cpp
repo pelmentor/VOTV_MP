@@ -76,6 +76,21 @@ void Tick(bool connected, bool /*isHost*/) {
         const ue_wrap::FVector leftSpot { center.X + rx * 80.f, center.Y + ry * 80.f, center.Z };
         const ue_wrap::FVector rightSpot{ center.X - rx * 80.f, center.Y - ry * 80.f, center.Z };
 
+        // CONFOUND FIX (take 2, 2026-07-02): take 1 showed BOTH puppets as clean kel -- but a
+        // 1062-vert scientist cannot draw a pixel-perfect kel under ANY material, so the kel
+        // pixels were NOT our mesh's render data: mainPlayer_C carries a SECOND body on the
+        // inherited ACharacter::Mesh slot (mesh_playerVisible's AttachParent) that overlaps it
+        // 1:1 (puppet.cpp spawn notes) and was covering the subject. Hide that slot on BOTH
+        // puppets (propagate=false -- the child mesh_playerVisible keeps its own visibility)
+        // so what you see IS mesh_playerVisible's mesh: LEFT kel control / RIGHT our mesh.
+        auto hideNativeSlot = [](void* actor, const wchar_t* which) {
+            void* slot = Pup::GetNativeBodyMeshComponent(actor);
+            void* slotAsset = Pup::GetComponentSkeletalMeshAsset(slot);
+            const bool ok = slot && E::SetComponentVisible(slot, false, /*propagate=*/false);
+            UE_LOGI("[CLIENTMODEL-PROBE] %ls native ACharacter::Mesh slot=%p carried asset=%p -> hidden=%d "
+                    "(the 1:1 overlap body that masked take 1)", which, slot, slotAsset, ok ? 1 : 0);
+        };
+
         // LEFT: the local kel skin -- the known-good CONTROL (proves a display puppet renders here).
         void* kelA = Pup::SpawnPuppet(leftSpot, kelSkin, animCls);
         if (!kelA) {
@@ -86,16 +101,21 @@ void Tick(bool connected, bool /*isHost*/) {
             break;  // world mid-transition -- retry next tick
         }
         E::SetActorRotation(kelA, ue_wrap::FRotator{0.f, YawToward(leftSpot, pl), 0.f});
+        hideNativeSlot(kelA, L"LEFT");
         UE_LOGI("[CLIENTMODEL-PROBE] LEFT control kel puppet=%p mesh=%p @(%.0f,%.0f,%.0f)",
                 kelA, kelSkin, leftSpot.X, leftSpot.Y, leftSpot.Z);
 
         // RIGHT: our pak scientist mesh -- the SUBJECT.
         if (sciMesh) {
             void* sciA = Pup::SpawnPuppet(rightSpot, sciMesh, animCls);
-            if (sciA) E::SetActorRotation(sciA, ue_wrap::FRotator{0.f, YawToward(rightSpot, pl), 0.f});
-            UE_LOGI("[CLIENTMODEL-PROBE] RIGHT scientist puppet=%p mesh=%p @(%.0f,%.0f,%.0f) -- verdicts: "
-                    "HL-scientist shape = cook WORKS; kel robot = render data is still the template; "
-                    "nothing there = cook produced no usable render geometry.",
+            if (sciA) {
+                E::SetActorRotation(sciA, ue_wrap::FRotator{0.f, YawToward(rightSpot, pl), 0.f});
+                hideNativeSlot(sciA, L"RIGHT");
+            }
+            UE_LOGI("[CLIENTMODEL-PROBE] RIGHT scientist puppet=%p mesh=%p @(%.0f,%.0f,%.0f) -- verdicts "
+                    "(native slot now hidden on BOTH): LEFT kel + RIGHT humanoid-blob/scientist = cook "
+                    "geometry WORKS (garbled texture EXPECTED); LEFT kel + RIGHT empty = our render data "
+                    "fails to draw; LEFT empty too = the hide killed the child as well (probe bug, not cook).",
                     sciA, sciMesh, rightSpot.X, rightSpot.Y, rightSpot.Z);
         } else {
             UE_LOGW("[CLIENTMODEL-PROBE] scientist mesh NULL (pak absent / load failed) -- only the LEFT "

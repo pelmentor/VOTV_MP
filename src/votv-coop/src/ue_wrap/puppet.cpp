@@ -149,6 +149,16 @@ void* GetMeshPlayerVisibleAnimClass(void* mainPlayerPawn) {
     return animClass;
 }
 
+void* GetNativeBodyMeshComponent(void* mainPlayerActor) {
+    if (!mainPlayerActor) return nullptr;
+    return ReadPtr(mainPlayerActor, P::off::ACharacter_Mesh);
+}
+
+void* GetComponentSkeletalMeshAsset(void* skinnedComponent) {
+    if (!skinnedComponent) return nullptr;
+    return ReadPtr(skinnedComponent, P::off::USkinnedMesh_SkeletalMesh);
+}
+
 void* GetSkeletalMeshComponent(void* puppetActor) {
     if (!puppetActor) return nullptr;
     // If the puppet was destroyed (level change), its cached component is freed

@@ -37,6 +37,17 @@ void* GetMeshPlayerVisibleComponent(void* mainPlayerPawn);
 // fails; the live component is the source of truth.) Returns the UClass*, or null.
 void* GetMeshPlayerVisibleAnimClass(void* mainPlayerPawn);
 
+// The inherited ACharacter::Mesh native body slot (@0x0280) -- mesh_playerVisible's
+// AttachParent. On mainPlayer_C it carries its OWN kel body that overlaps
+// mesh_playerVisible 1:1 (puppet.cpp spawn notes: "both peers see overlapping
+// bodies as ONE body"), so a custom mesh applied to mesh_playerVisible alone stays
+// covered by this slot's kel unless it is hidden. Returns the component, or null.
+void* GetNativeBodyMeshComponent(void* mainPlayerActor);
+
+// The USkeletalMesh asset a skinned component currently holds (raw
+// USkinnedMesh_SkeletalMesh field read). Diagnostic/compare use. Null-safe.
+void* GetComponentSkeletalMeshAsset(void* skinnedComponent);
+
 // Spawn AmainPlayer_C with inertPawn=true (AutoPossessPlayer/AI=0,
 // bBlockInput=1). The class's built-in mesh_playerVisible carries the
 // player body skin + IK leg bones; we just neuter the per-screen
