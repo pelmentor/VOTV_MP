@@ -24,6 +24,7 @@
 #include "coop/net/session.h"
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"  // K-6  // OnClientWorldReady (v75 deferred-adoption per-world reset)
+#include "coop/creatures/wisp_grab_hold.h"  // Killer Wisp v2: grab-window body placement (ticks AFTER the puppet pose loop)
 #include "coop/props/remote_prop_spawn.h"  // OnClientWorldReadyResetSweep (deferred prop sweep per-world reset)
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/session/player_handshake.h"
@@ -1093,6 +1094,12 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
         if (g_puppets[slot].valid()) g_puppets[slot].Tick();
     }
+
+    // Killer-wisp grab-window body placement (v2 choreography). MUST run AFTER the
+    // puppet Tick loop above: a held victim puppet is snapped to the wisp's
+    // 'playerGrab' socket, overwriting the streamed pose for the hold window (the
+    // module's own liveness guards release it). Cheap no-op when nothing is held.
+    coop::wisp_grab_hold::Tick();
 
     // Pose-apply diagnostic emit (once/sec). target = the latest pose received for this slot;
     // puppet = its rendered location AFTER this frame's interp Tick; trail = how far the

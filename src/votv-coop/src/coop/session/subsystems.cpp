@@ -16,7 +16,9 @@
 #include "coop/player/nameplate.h"   // v94: plate-pref session wiring (Install)
 #include "coop/player/sleep_sync.h"
 #include "coop/creatures/wisp_attack_sync.h"   // Killer Wisp coop: host detect + neutralize + relay
+#include "coop/creatures/wisp_grab_hold.h"     // Killer Wisp v2: grab-window body placement (per-slot/full teardown)
 #include "coop/creatures/wisp_tear_mirror.h"   // Killer Wisp coop: victim kill + tear mirror
+#include "coop/session/pause_guard.h"          // 2026-07-04: coop no-pause invariant (ESC pause froze clients)
 #include "coop/items/player_inventory_sync.h"  // v73 per-player inventory (host file scaffold)
 #include "coop/dev/inventory_probe.h"    // v73 Inc4: SP self-test for the apply (engine write) path
 #include "coop/dev/sleep_probe.h"
@@ -265,6 +267,7 @@ void DisconnectSlot(coop::net::Session& session, int slot) {
     coop::trash_proxy::OnDisconnectForSlot(slot);   // phase 1: retire the leaver's trash proxies BEFORE the generic mirror drain (else the rooted AStaticMeshActor leaks -- CRITICAL-1)
     coop::trash_channel::OnGrabHolderLeft(slot);    // v84 Increment 2: free any pile the leaver held via a client grab
     coop::puppet_carry_drive::OnPeerLeft(slot);     // v84 Increment 2: drop the leaver's puppet-held clump drive
+    coop::wisp_grab_hold::OnPeerLeft(static_cast<uint8_t>(slot));  // v2 wisp choreography: drop the leaver's grab-window puppet hold
     coop::remote_prop::OnDisconnectForSlot(slot);
     coop::item_activate::OnDisconnectForSlot(slot);
     coop::device_occupancy::OnDisconnectForSlot(slot);  // v63: release a leaver's device claims
@@ -320,6 +323,7 @@ DisconnectStats DisconnectAll() {
     coop::sleep_sync::OnDisconnect();
     coop::wisp_attack_sync::OnDisconnect();  // v72: clear damage-cancel latch + handled-wisp edges + pending despawns
     coop::wisp_tear_mirror::OnDisconnect();  // v72: clear any armed victim-death deadline
+    coop::wisp_grab_hold::OnDisconnect();    // v2 choreography: release a live self-grab (un-strand MOVE_None) + drop holds
     coop::player_inventory_sync::OnDisconnect();  // v73: host flush all inventories; client clear send-dedup
     coop::email_sync::OnDisconnect();
     coop::signal_sync::OnDisconnect();
@@ -378,6 +382,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_convert::Tick(); }  // v67: drain deferred kerfur conversion requests/converges (cheap no-op when empty)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_command::Tick(); }  // v74: drain menu commands + advance the ownership-follow loop (cheap no-op when idle)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::prop_stick_sync::Tick(); }  // v68: broadcast recorded stick commits NOW -- must precede local_streams' release edge (net_pump runs TickGameplay first)
+    { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:pause_guard"}; coop::pause_guard::Tick(isConnected); }  // 2026-07-04: coop no-pause invariant -- un-pause the world while connected (ESC menu stays usable; a paused peer froze its pose stream)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:sleep"}; coop::sleep_sync::Tick(); }  // v71: isSleep edge poll + WAITING dilation enforcement + the client need clamp
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:wisp_attack"}; coop::wisp_attack_sync::Tick(); }  // v72: host detect wisp-grabs-client -> neutralize + relay (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:wisp_tear"}; coop::wisp_tear_mirror::Tick(); }  // v72: discharge the victim's scheduled ragdoll death (any peer, no-op until armed)

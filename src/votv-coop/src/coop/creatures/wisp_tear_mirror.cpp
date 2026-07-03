@@ -2,6 +2,7 @@
 
 #include "coop/creatures/wisp_tear_mirror.h"
 
+#include "coop/creatures/wisp_grab_hold.h"
 #include "coop/element/element.h"
 #include "coop/element/registry.h"
 #include "coop/net/protocol.h"
@@ -53,6 +54,9 @@ void OnWispGrab(const coop::net::WispGrabPayload& p, uint8_t senderPeerSlot) {
     if (delay > 8000u) delay = 8000u;
     g_killAtMs = NowMs() + delay;
     g_killWispEid = p.wispElementId;
+    // v2 choreography: ride our local mirror's 'playerGrab' socket for the window (the
+    // native Capture experience -- attach + MOVE_None + camera decouple; grab_hold owns it).
+    coop::wisp_grab_hold::EngageSelf(p.wispElementId, delay);
     UE_LOGI("wisp_tear[victim]: WispGrab accepted (wispEid=%u) -- scheduling OUR ragdoll death in %u ms",
             p.wispElementId, delay);
 }
@@ -84,6 +88,13 @@ void OnWispTear(const coop::net::WispTearPayload& p, uint8_t senderPeerSlot) {
         return;
     }
     PlayTearOnWisp(el->GetActor(), p.victimSlot);
+    // v2 choreography (third peers): hold the VICTIM's puppet at the mirror's socket for
+    // the grab window. On the victim's own machine victimSlot==own slot -- no self-puppet;
+    // its first-person ride came in with WispGrab (EngageSelf). Host never receives its
+    // own broadcast (RelayGrab engages directly).
+    const uint8_t mySlot = coop::players::Registry::Get().LocalPeerId();
+    if (static_cast<uint8_t>(p.victimSlot) != mySlot)
+        coop::wisp_grab_hold::EngagePuppet(p.wispElementId, static_cast<uint8_t>(p.victimSlot));
 }
 
 void Tick() {
@@ -95,6 +106,9 @@ void Tick() {
         UE_LOGW("wisp_tear[victim]: kill deadline elapsed but local player not live -- skipping");
         return;
     }
+    // v2: undo the grab FIRST (detach + restore movement/camera) -- the native
+    // releasePlayer shape is detach-then-ragdoll. Safe no-op if the ride never engaged.
+    coop::wisp_grab_hold::ReleaseSelf();
     // The kill = DIRECT ragdollMode(true,false,true) (NOT kill() -- see the RE addendum:
     // kill() no-ops behind immortal/startInvinc, ragdollMode does not). Native death -> menu
     // -> rejoin (the settled permadeath-rejoinable policy).

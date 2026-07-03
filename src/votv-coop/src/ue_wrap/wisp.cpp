@@ -17,6 +17,7 @@
 #include "ue_wrap/types.h"       // FVector (InGrabRange distance)
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 
 namespace ue_wrap::wisp {
@@ -69,11 +70,24 @@ T ReadAt(void* obj, int32_t off) {
 
 }  // namespace
 
+namespace {
+// Resolve every killerwisp member from a KNOWN killerwisp_C UClass -- shared by
+// EnsureResolved (FindClass path, probe/dev callers) and IsKillerWisp's candidate-class
+// self-resolve (no GUObjectArray walk). Returns true once published.
+bool ResolveFromClass(void* cls);
+}  // namespace
+
 bool EnsureResolved() {
     if (g_resolved.load(std::memory_order_acquire)) return true;
 
     void* cls = R::FindClass(P::name::NpcClass_KillerWisp);  // L"killerwisp_C"
     if (!cls) return false;  // BP class not loaded yet -- caller retries on a later tick
+    return ResolveFromClass(cls);
+}
+
+namespace {
+bool ResolveFromClass(void* cls) {
+    if (g_resolved.load(std::memory_order_acquire)) return true;
 
     // FName lookups are case-SENSITIVE (the 2026-06-12 casing bug) -- the names below
     // match the live CXXHeaderDump member spellings exactly (note LEG_R is upper-case).
@@ -112,9 +126,28 @@ bool EnsureResolved() {
             static_cast<unsigned>(playerDmgOff), static_cast<unsigned>(targetOff), releaseFn);
     return true;
 }
+}  // namespace
 
 bool IsKillerWisp(void* obj) {
-    if (!obj || !g_resolved.load(std::memory_order_acquire) || !g_wispCls) return false;
+    if (!obj) return false;
+    if (!g_resolved.load(std::memory_order_acquire)) {
+        // Self-resolve from the CANDIDATE's own class -- O(1), NO GUObjectArray walk (the
+        // EnsurePlainWispResolved shape). CRITICAL fix (perf audit 2026-07-03 night):
+        // every production caller (host attack Tick, client tear mirror, grab hold) gates
+        // on IsKillerWisp BEFORE any member accessor that runs EnsureResolved, so without
+        // this the wrapper only ever resolved when the dev probe's unguarded ReadState
+        // ran -- the whole killerwisp lane was probe-armed-only
+        // ([[lesson-gated-probe-verify-the-gate]]). While unresolved this pays one
+        // NameEquals per candidate; sessions that never spawn a killerwisp keep paying
+        // that (trivial: FName compare per tracked NPC per tick), everyone else latches
+        // on the first real killerwisp. Exact-name only: a hypothetical subclass resolves
+        // via EnsureResolved instead (killerwisp_C has no subclasses in VOTV).
+        void* candCls = R::ClassOf(obj);
+        if (!candCls || !R::NameEquals(R::NameOf(candCls), P::name::NpcClass_KillerWisp))
+            return false;
+        if (!ResolveFromClass(candCls)) return false;
+    }
+    if (!g_wispCls) return false;
     void* cls = R::ClassOf(obj);
     if (!cls) return false;
     void* bases[1] = { g_wispCls };
@@ -141,6 +174,189 @@ bool InGrabRange(void* wisp, void* target) {
     const ue_wrap::FVector t = ue_wrap::engine::GetActorLocation(target);
     const float dx = w.X - t.X, dy = w.Y - t.Y, dz = w.Z - t.Z;
     return (dx * dx + dy * dy + dz * dz) <= kGrabRadiusSq;
+}
+
+float DistanceTo(void* wisp, void* target) {
+    if (!wisp || !target) return 3.4e38f;
+    const ue_wrap::FVector w = ue_wrap::engine::GetActorLocation(wisp);
+    const ue_wrap::FVector t = ue_wrap::engine::GetActorLocation(target);
+    const float dx = w.X - t.X, dy = w.Y - t.Y, dz = w.Z - t.Z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool WriteTarget(void* wisp, void* pawnOrNull) {
+    if (!wisp || !EnsureResolved() || !IsKillerWisp(wisp)) return false;
+    *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(wisp) + g_targetOff) = pawnOrNull;
+    return true;
+}
+
+namespace {
+// canReach parity trace (resolved once; the KismetSystemLibrary CDO + UFunction are
+// process-stable native objects -- never GC'd, latch-safe like kerfur.cpp's KSL latch).
+void* g_kslCdo   = nullptr;  // Default__KismetSystemLibrary (the static-call dispatch object)
+void* g_traceFn  = nullptr;  // LineTraceSingleForObjects
+// The native canReach's object set: lib_obj.obj_statDyn = {WorldStatic, WorldDynamic}
+// (EObjectTypeQuery1=0, 2=1; TEnumAsByte = 1 byte each). Static storage: the engine only
+// READS an in-param TArray (const ref), it never reallocs/frees it.
+uint8_t g_traceObjTypes[2] = {0, 1};
+#pragma pack(push, 4)
+struct TArrayControl { void* data; int32_t num; int32_t max; };
+#pragma pack(pop)
+}  // namespace
+
+bool CanReach(void* wisp, void* target) {
+    if (!wisp || !target) return false;
+    if (!g_traceFn || !g_kslCdo) {
+        if (!g_kslCdo) g_kslCdo = R::FindClassDefaultObject(L"KismetSystemLibrary");
+        if (!g_traceFn) {
+            if (void* kc = R::FindClass(L"KismetSystemLibrary"))
+                g_traceFn = R::FindFunction(kc, L"LineTraceSingleForObjects");
+        }
+        if (!g_traceFn || !g_kslCdo) return false;  // unresolvable -> blocked (native default)
+    }
+    const ue_wrap::FVector start = ue_wrap::engine::GetActorLocation(wisp);
+    const ue_wrap::FVector end   = ue_wrap::engine::GetActorLocation(target);
+    ParamFrame f(g_traceFn);
+    if (!f.valid()) return false;
+    f.Set<void*>(L"WorldContextObject", wisp);
+    f.Set<ue_wrap::FVector>(L"Start", start);
+    f.Set<ue_wrap::FVector>(L"End", end);
+    TArrayControl objTypes{g_traceObjTypes, 2, 2};
+    f.SetRaw(L"ObjectTypes", &objTypes, sizeof(objTypes));
+    f.Set<bool>(L"bTraceComplex", false);
+    // ActorsToIgnore stays the zero-initialized empty TArray (frame is zeroed);
+    // DrawDebugType 0 = None; OutHit is an in-frame zeroed FHitResult (POD members
+    // only -- FName/floats/weak ptrs -- so no destructor concerns on our frame).
+    f.Set<bool>(L"bIgnoreSelf", true);
+    if (!ue_wrap::Call(g_kslCdo, f)) return false;
+    const bool hit = f.Get<bool>(L"ReturnValue");
+    return !hit;  // native canReach: reachable == the trace did NOT hit
+}
+
+bool GrabSocketWorldLocation(void* wisp, ue_wrap::FVector& out) {
+    void* mesh = BodyMesh(wisp);
+    if (!mesh) return false;
+    return ue_wrap::engine::GetBoneWorldLocationByName(mesh, L"playerGrab", out);
+}
+
+// ---- v2 victim-side grab choreography (the native Capture player template) ------------
+
+namespace {
+// mainPlayer-side grab-state members (the Capture template targets). Resolved once from
+// the live local player's own class chain (FindBoolProperty climbs SuperStruct, so the
+// APawn / SpringArm bitfields resolve through mainPlayer_C). Tri-state latch like the
+// plain-wisp block: 0 unresolved / 1 ok / -1 permanently dead (member name drift).
+std::atomic<int> g_grabStateResolve{0};
+int32_t g_heldByte = -1;        uint8_t g_heldMask = 0;         // AmainPlayer_C::held
+int32_t g_ctrlYawByte = -1;     uint8_t g_ctrlYawMask = 0;      // APawn::bUseControllerRotationYaw
+int32_t g_lagOff = -1;                                          // AmainPlayer_C::lag (spring arm)
+int32_t g_pawnCtrlByte = -1;    uint8_t g_pawnCtrlMask = 0;     // lag's bUsePawnControlRotation
+void*   g_setMoveModeFn = nullptr;                              // UCharacterMovementComponent::SetMovementMode
+
+constexpr uint8_t kMOVE_None    = 0;
+constexpr uint8_t kMOVE_Walking = 1;
+
+bool EnsureGrabStateResolved(void* localPlayer) {
+    const int st = g_grabStateResolve.load(std::memory_order_acquire);
+    if (st == 1) return true;
+    if (st == -1) return false;
+    void* cls = R::ClassOf(localPlayer);
+    if (!cls) return false;
+    // TRANSIENT misses (a component instance not yet live) leave the state at 0 so a
+    // later grab retries; only a NAME miss on a live chain latches -1 (name drift --
+    // retrying cannot heal it).
+    void* cmc = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(localPlayer) + P::off::ACharacter_CharacterMovement);
+    if (!cmc || !R::IsLive(cmc)) return false;
+    const int32_t lagOff = R::FindPropertyOffset(cls, L"lag");
+    void* lagComp = (lagOff >= 0)
+        ? *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(localPlayer) + lagOff)
+        : nullptr;
+    if (lagOff >= 0 && (!lagComp || !R::IsLive(lagComp))) return false;
+    int32_t heldByte = -1, ctrlYawByte = -1, pawnCtrlByte = -1;
+    uint8_t heldMask = 0, ctrlYawMask = 0, pawnCtrlMask = 0;
+    void* setMoveMode = R::FindFunction(R::ClassOf(cmc), L"SetMovementMode");
+    if (lagOff < 0 ||
+        !R::FindBoolProperty(cls, L"held", heldByte, heldMask) ||
+        !R::FindBoolProperty(cls, L"bUseControllerRotationYaw", ctrlYawByte, ctrlYawMask) ||
+        !R::FindBoolProperty(R::ClassOf(lagComp), L"bUsePawnControlRotation",
+                             pawnCtrlByte, pawnCtrlMask) ||
+        !setMoveMode) {
+        g_grabStateResolve.store(-1, std::memory_order_release);
+        UE_LOGW("wisp: grab-choreography members unresolved (held/ctrlYaw/lag/pawnCtrlRot/"
+                "SetMovementMode) -- victim grab degrades to the flat v1 death");
+        return false;
+    }
+    g_heldByte = heldByte;       g_heldMask = heldMask;
+    g_ctrlYawByte = ctrlYawByte; g_ctrlYawMask = ctrlYawMask;
+    g_lagOff = lagOff;
+    g_pawnCtrlByte = pawnCtrlByte; g_pawnCtrlMask = pawnCtrlMask;
+    g_setMoveModeFn = setMoveMode;
+    g_grabStateResolve.store(1, std::memory_order_release);
+    UE_LOGI("wisp: resolved grab-choreography members (held@0x%X lag@0x%X)",
+            static_cast<unsigned>(heldByte), static_cast<unsigned>(lagOff));
+    return true;
+}
+
+void WriteBit(void* obj, int32_t byteOff, uint8_t mask, bool value) {
+    uint8_t* b = reinterpret_cast<uint8_t*>(obj) + byteOff;
+    if (value) *b |= mask; else *b &= static_cast<uint8_t>(~mask);
+}
+
+bool CallSetMovementMode(void* localPlayer, uint8_t mode) {
+    void* cmc = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(localPlayer) + P::off::ACharacter_CharacterMovement);
+    if (!cmc || !R::IsLive(cmc) || !g_setMoveModeFn) return false;
+    ParamFrame f(g_setMoveModeFn);
+    if (!f.valid()) return false;
+    f.Set<uint8_t>(L"NewMovementMode", mode);
+    f.Set<uint8_t>(L"NewCustomMode", uint8_t{0});
+    return ue_wrap::Call(cmc, f);
+}
+}  // namespace
+
+bool ApplyGrabToLocalPlayer(void* wispActor, void* localPlayer) {
+    if (!wispActor || !localPlayer || !R::IsLive(wispActor) || !R::IsLive(localPlayer)) return false;
+    void* wispMesh = BodyMesh(wispActor);
+    if (!wispMesh) { UE_LOGW("wisp: ApplyGrab -- no live wisp body mesh"); return false; }
+    if (!EnsureGrabStateResolved(localPlayer)) return false;
+    // The Capture template, in the bytecode's own order.
+    if (!CallSetMovementMode(localPlayer, kMOVE_None))
+        UE_LOGW("wisp: ApplyGrab -- SetMovementMode(None) failed (continuing)");
+    if (!ue_wrap::engine::AttachActorToComponentSocket(localPlayer, wispMesh, L"playerGrab")) {
+        // Attach is the load-bearing step: without it there is no ride -- restore movement.
+        CallSetMovementMode(localPlayer, kMOVE_Walking);
+        UE_LOGW("wisp: ApplyGrab -- socket attach FAILED, movement restored (flat death remains)");
+        return false;
+    }
+    void* playerMesh = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(localPlayer) + P::off::ACharacter_Mesh);
+    if (playerMesh && R::IsLive(playerMesh))
+        ue_wrap::engine::SetSceneComponentVisibility(playerMesh, true, false);
+    WriteBit(localPlayer, g_heldByte, g_heldMask, true);
+    WriteBit(localPlayer, g_ctrlYawByte, g_ctrlYawMask, false);
+    void* lagComp = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(localPlayer) + g_lagOff);
+    if (lagComp && R::IsLive(lagComp))
+        WriteBit(lagComp, g_pawnCtrlByte, g_pawnCtrlMask, false);
+    UE_LOGI("wisp: ApplyGrab -- local player attached to 'playerGrab' (MOVE_None, held=1, "
+            "camera decoupled) -- the native Capture template");
+    return true;
+}
+
+bool ReleaseGrabOnLocalPlayer(void* localPlayer) {
+    if (!localPlayer || !R::IsLive(localPlayer)) return false;
+    if (g_grabStateResolve.load(std::memory_order_acquire) != 1) return false;  // never grabbed
+    ue_wrap::engine::DetachActorFromParent(localPlayer);
+    CallSetMovementMode(localPlayer, kMOVE_Walking);
+    WriteBit(localPlayer, g_heldByte, g_heldMask, false);
+    WriteBit(localPlayer, g_ctrlYawByte, g_ctrlYawMask, true);
+    void* lagComp = *reinterpret_cast<void**>(
+        reinterpret_cast<uint8_t*>(localPlayer) + g_lagOff);
+    if (lagComp && R::IsLive(lagComp))
+        WriteBit(lagComp, g_pawnCtrlByte, g_pawnCtrlMask, true);
+    UE_LOGI("wisp: ReleaseGrab -- local player detached, movement + camera flags restored");
+    return true;
 }
 
 void* ReadLimbComponent(void* wisp, Limb limb) {

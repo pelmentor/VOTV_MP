@@ -758,8 +758,9 @@ inline constexpr const wchar_t* GameplayStaticsClass = L"GameplayStatics";
 // -- is reachable by every targeting path inspected."). The 2 event/late-game
 // additions (killerwisp_C, ventCrawler_C; 2026-06-13) ride the same pose-mirror
 // path. killerwisp_C IS targeting-compatible (AIPerception + Target APawn, same
-// shape as the 12 -- SDK-verified); its kill/dismember of a REMOTE peer still
-// needs the per-victim effect relay (the wisp/NPC kill-claim design). ventCrawler
+// shape as the 12 -- SDK-verified); its kill of a REMOTE peer is coop-driven: the
+// v1 per-victim relay (1ae92a1a, probe-verified 2026-07-03) + the v2 grab
+// choreography + aggro selector (wisp_attack_sync + wisp_grab_hold). ventCrawler
 // wall-crawl pitch/roll is smoke-pending (yaw-only stream).
 inline constexpr const wchar_t* NpcClass_Zombie       = L"npc_zombie_C";
 inline constexpr const wchar_t* NpcClass_KerfurOmega  = L"kerfurOmega_C";

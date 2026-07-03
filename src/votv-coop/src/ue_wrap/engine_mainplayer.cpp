@@ -463,6 +463,32 @@ bool ForceMainPlayerGetUp(void* mainPlayer) {
     return Call(mainPlayer, f);
 }
 
+bool SetMainPlayerCanRagdoll(void* mainPlayer, bool allowed) {
+    if (!mainPlayer || !R::IsLive(mainPlayer)) return false;
+    // canRagdoll @0x0D10 (mainPlayer.hpp:278) -- ragdollMode()'s own pre-condition
+    // early-out. The Killer Wisp false-grab belt forces it FALSE for the grab window:
+    // the grab montage's d1 notify writes playerDamaged inline (bytecode -- the
+    // AddPlayerDamage PRE-cancel cannot see it) and the drop notify ends the montage
+    // with an unconditional ragdollMode(true,false,true) -- an HP pin cannot stop a
+    // ragdoll-DEATH, this flag can, and it is the game's own gate. Plain BP bool with
+    // no setter (inline EX_LetBool writes) -- the masked write IS the game's own
+    // mechanism. Byte+mask cached once: property LAYOUT is stable for a game build
+    // (only class POINTERS go stale across level travel; none is cached here).
+    static int32_t sCanRagByte = -1;
+    static uint8_t sCanRagMask = 0;
+    if (sCanRagByte < 0) {
+        int32_t b = -1; uint8_t m = 0;
+        if (!R::FindBoolProperty(R::ClassOf(mainPlayer), L"canRagdoll", b, m)) {
+            UE_LOGW("engine: mainPlayer canRagdoll bool not resolvable -- ragdoll gate unavailable");
+            return false;
+        }
+        sCanRagByte = b; sCanRagMask = m;
+    }
+    uint8_t* p = reinterpret_cast<uint8_t*>(mainPlayer) + sCanRagByte;
+    if (allowed) *p |= sCanRagMask; else *p &= static_cast<uint8_t>(~sCanRagMask);
+    return true;
+}
+
 
 bool InvokeAddPlayerDamage(void* mainPlayer, float damage) {
     if (!mainPlayer || !R::IsLive(mainPlayer)) return false;

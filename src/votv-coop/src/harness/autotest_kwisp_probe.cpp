@@ -86,26 +86,34 @@ void RunAutonomousKwispProbe() {
     UE_LOGI("kwisp_probe: starting on host (waiting 55 s for world + client transport)");
     ::Sleep(55000);
 
-    // 1. Resolve host pawn + slot-1 puppet; teleport the host outside the 5000u acquire radius.
+    // 1. Resolve host pawn + slot-1 puppet; teleport the host outside the 5000u acquire
+    // radius. POLL up to ~95 s more (first-launch shader compiles / a loaded machine can
+    // push the client's world-up well past the 55 s settle -- the 2026-07-03 late-night
+    // re-run aborted at exactly this line on a fixed sleep).
     struct Setup { void* host = nullptr; void* puppet = nullptr; bool ok = false; };
     auto setup = std::make_shared<Setup>();
-    RunGT([setup](std::atomic<int>& d) {
-        setup->host = LocalPlayerPawn();
-        coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(1);
-        setup->puppet = rp ? rp->GetActor() : nullptr;
-        if (setup->host && setup->puppet && R::IsLive(setup->puppet)) {
-            const ue_wrap::FVector ploc = E::GetActorLocation(setup->puppet);
-            const ue_wrap::FVector away{ploc.X + 8000.f, ploc.Y, ploc.Z + 100.f};
-            const bool tp = E::TeleportTo(setup->host, away, ue_wrap::FRotator{0.f, 180.f, 0.f});
-            UE_LOGI("kwisp_probe: host teleported 8000u from the puppet (ok=%d) -- outside the "
-                    "5000u acquire radius; the puppet is the ONLY eligible player-class target", tp ? 1 : 0);
-            setup->ok = true;
-        }
-        d.store(1);
-    });
+    // 64 x 3 s (~3.2 min past the settle): a cold FRESH-client join = world load + 21 MB
+    // save transfer + reload; the 2026-07-03 night runs blew the old ~96 s window twice.
+    for (int attempt = 0; attempt < 64 && !setup->ok; ++attempt) {
+        RunGT([setup](std::atomic<int>& d) {
+            setup->host = LocalPlayerPawn();
+            coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(1);
+            setup->puppet = rp ? rp->GetActor() : nullptr;
+            if (setup->host && setup->puppet && R::IsLive(setup->puppet)) {
+                const ue_wrap::FVector ploc = E::GetActorLocation(setup->puppet);
+                const ue_wrap::FVector away{ploc.X + 8000.f, ploc.Y, ploc.Z + 100.f};
+                const bool tp = E::TeleportTo(setup->host, away, ue_wrap::FRotator{0.f, 180.f, 0.f});
+                UE_LOGI("kwisp_probe: host teleported 8000u from the puppet (ok=%d) -- outside the "
+                        "5000u acquire radius; the puppet is the ONLY eligible player-class target", tp ? 1 : 0);
+                setup->ok = true;
+            }
+            d.store(1);
+        });
+        if (!setup->ok) ::Sleep(3000);
+    }
     if (!setup->ok) {
-        UE_LOGW("kwisp_probe: VERDICT ABORT -- host pawn=%p puppet=%p (client not joined?)",
-                setup->host, setup->puppet);
+        UE_LOGW("kwisp_probe: VERDICT ABORT -- host pawn=%p puppet=%p (client never joined "
+                "within the poll window)", setup->host, setup->puppet);
         return;
     }
     ::Sleep(1500);  // let the teleport settle

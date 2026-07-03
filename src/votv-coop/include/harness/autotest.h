@@ -291,4 +291,12 @@ DWORD WINAPI WispLaneTestThread(LPVOID arg);
 void RunAutonomousKwispProbe();
 DWORD WINAPI KwispProbeThread(LPVOID arg);
 
+// Pause-guard e2e (2026-07-04, harness/autotest_pauseguard.cpp). CLIENT-ONLY: after settle,
+// pause the world via the game's own SetGamePaused verb (the exact state the ESC menu's
+// EX_CallMath pause engages), then sample IsGamePaused -- the coop pause_guard must clear it
+// within ~a tick. VERDICT PASS iff the pause reads false within 1 s (and the client log shows
+// the guard's un-pause line). Gated by env VOTVCOOP_RUN_PAUSE_TEST=1.
+void RunAutonomousPauseGuardTest();
+DWORD WINAPI PauseGuardTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

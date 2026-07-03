@@ -136,6 +136,10 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // host teleported away -- localizes where the "ignores peers" chain breaks.
     SpawnIf("VOTVCOOP_RUN_KWISP_PROBE", "killerwisp acquisition probe", &KwispProbeThread, role);
 
+    // Pause-guard e2e: the CLIENT pauses its world via the game's own SetGamePaused verb (the
+    // ESC state); the coop no-pause invariant must clear it within ~a tick. VERDICT in the log.
+    SpawnIf("VOTVCOOP_RUN_PAUSE_TEST", "pause-guard e2e", &PauseGuardTestThread, role);
+
     // TEST-ONLY local-player movement oscillator: circles the local player so the OTHER
     // peer's interp has a MOVING source. Verification rig for the interp-starvation fix
     // (static-source smokes show trail~=0 and hide the bug). Enable on ONE peer; read the

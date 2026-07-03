@@ -28,6 +28,8 @@
 
 #pragma once
 
+namespace ue_wrap { struct FVector; }
+
 namespace ue_wrap::wisp {
 
 // Resolve killerwisp_C UClass + the field offsets (Target / grab / tryGrab / killed /
@@ -65,6 +67,61 @@ bool ReadState(void* wisp, State& out);
 // puppet (or an NPC) the host happens to be far from is chased but never grabbed/killed.
 // Pure 3D distance read (actor locations), no UFunction. False on null. Game thread.
 bool InGrabRange(void* wisp, void* target);
+
+// 3D distance wisp->target in cm (FLT_MAX on null / dead read) -- the v2 two-stage
+// close uses it against the contact radius before firing the synthetic grab, so the
+// wisp visibly swoops onto its victim first (native Capture fires at MoveTo acceptance
+// ~5u, not at the 550u arm radius). Game thread.
+float DistanceTo(void* wisp, void* target);
+
+// Raw write of the wisp's `Target` @0x0610 (APawn* or null). The BP has NO setter --
+// scanForActors writes the field inline via EX_LetObj, so this masked write IS the
+// game's own write mechanism (same legitimacy class as wisp_C `landed`). The v2 aggro
+// selector re-asserts its host-authoritative pick through this every Tick, dominating
+// the BP's own nearest-pick re-scan. False if unresolved / not a killerwisp. Game thread.
+bool WriteTarget(void* wisp, void* pawnOrNull);
+
+// Native-parity LOS test -- the BP's canReach() shape (killerwisp.json 1b): a
+// LineTraceSingleForObjects from the wisp to `target` on the {WorldStatic, WorldDynamic}
+// object set (lib_obj.obj_statDyn); reachable == the trace did NOT hit. Pawns are not in
+// the object set, so neither body self-blocks. The native canReach player-arm hard-codes
+// GetPlayerPawn(0) as the trace end, so it cannot answer "can the wisp reach THIS
+// puppet" -- this wrapper is that answer. False (blocked) on any resolution failure --
+// the caller treats unreachable as not-attackable, the native default. Game thread.
+bool CanReach(void* wisp, void* target);
+
+// World location of the wisp body mesh's 'playerGrab' socket -- the native victim hold
+// point (Capture attaches the grabbed player there). The cross-peer hold drives the
+// victim PUPPET to this point each tick. False if the mesh/socket is unresolvable
+// (out untouched). Game thread.
+bool GrabSocketWorldLocation(void* wisp, ue_wrap::FVector& out);
+
+// ---- v2 victim-side grab choreography (the native Capture player template) ------------
+// The native kill sequence is hard-bound to player 0: Capture does (bytecode, killerwisp
+// .json @12313 region): player.CMC.SetMovementMode(MOVE_None) -> player.K2_AttachTo
+// Component(wisp.Mesh, 'playerGrab', KeepWorld x3, weld) -> mainPlayer.Mesh.SetVisibility
+// (true) -> mainPlayer.held := true -> pawn.bUseControllerRotationYaw := false ->
+// mainPlayer.lag.bUsePawnControlRotation := false (camera decoupled so the ride owns the
+// view). On a VICTIM CLIENT we replay exactly that template against the LOCAL player and
+// the LOCAL wisp MIRROR -- the montage + the timed death ride the existing WispTear/
+// WispGrab paths. Divergence note: we attach SnapToTarget (loc/rot) instead of the
+// native KeepWorld because our Capture-equivalent fires at the <=200u close radius, not
+// at MoveTo-acceptance contact -- KeepWorld from 2 m away would leave the victim hanging
+// off-socket for the whole ride.
+
+// Replay the Capture player-side template: `localPlayer` (the LOCAL possessed
+// mainPlayer_C) is grabbed by `wispActor` (the local killerwisp mirror -- or the real
+// wisp on the host). Idempotent enough for a one-shot call per grab; the caller latches.
+// False if the wisp mesh / player members are unresolvable (logged; the flat v1 death
+// still runs). Game thread.
+bool ApplyGrabToLocalPlayer(void* wispActor, void* localPlayer);
+
+// Undo the grab template on the local player: K2_DetachFromActor (KeepWorld) +
+// SetMovementMode(MOVE_Walking) + held := false + restore the two rotation-follow
+// flags. Called right before the scheduled ragdoll death fires (native releasePlayer
+// shape: detach FIRST, then ragdoll) and on session teardown (a mid-grab disconnect
+// must not strand the player in MOVE_None). Safe no-op if never grabbed. Game thread.
+bool ReleaseGrabOnLocalPlayer(void* localPlayer);
 
 // The wisp's four limb static-mesh components -- the gib weld targets (killerwisp.hpp:
 // leg_L@0x0550, arm_L@0x0558, LEG_R@0x0560, arm_R@0x0568). On the kill, the BP spawns a

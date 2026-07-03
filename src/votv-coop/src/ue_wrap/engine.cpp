@@ -124,6 +124,48 @@ bool ExecuteConsoleCommand(const wchar_t* command) {
 }
 
 namespace {
+// World-pause verbs (coop pause_guard). GameplayStatics CDO + the two UFunctions are
+// process-stable natives -- latch once. Separate from g_storyGsCdo below (that block's
+// lifetime notes are save-boot-specific; sharing would tangle the concerns).
+void* g_pauseGsCdo   = nullptr;
+void* g_isPausedFn   = nullptr;  // UGameplayStatics::IsGamePaused(WorldContextObject)
+void* g_setPausedFn  = nullptr;  // UGameplayStatics::SetGamePaused(WorldContextObject, bPaused)
+
+bool ResolvePauseFns() {
+    if (g_pauseGsCdo && g_isPausedFn && g_setPausedFn) return true;
+    if (!g_pauseGsCdo) g_pauseGsCdo = R::FindClassDefaultObject(P::name::GameplayStaticsClass);
+    if (g_pauseGsCdo) {
+        void* cls = R::ClassOf(g_pauseGsCdo);
+        if (cls) {
+            if (!g_isPausedFn)  g_isPausedFn  = R::FindFunction(cls, L"IsGamePaused");
+            if (!g_setPausedFn) g_setPausedFn = R::FindFunction(cls, L"SetGamePaused");
+        }
+    }
+    return g_pauseGsCdo && g_isPausedFn && g_setPausedFn;
+}
+}  // namespace
+
+bool IsGamePaused() {
+    // False on any resolution miss -- the pause guard then idles (never a false unpause).
+    if (!ResolvePauseFns() || !EnsureWorldContext()) return false;
+    ParamFrame f(g_isPausedFn);
+    if (!f.valid()) return false;
+    f.Set<void*>(L"WorldContextObject", g_worldContext);
+    if (!Call(g_pauseGsCdo, f)) return false;
+    return f.Get<bool>(L"ReturnValue");
+}
+
+bool SetGamePaused(bool paused) {
+    if (!ResolvePauseFns() || !EnsureWorldContext()) return false;
+    ParamFrame f(g_setPausedFn);
+    if (!f.valid()) return false;
+    f.Set<void*>(L"WorldContextObject", g_worldContext);
+    f.Set<bool>(L"bPaused", paused);
+    if (!Call(g_pauseGsCdo, f)) return false;
+    return f.Get<bool>(L"ReturnValue");
+}
+
+namespace {
 // Cached across the harness's boot retry loop (LoadStorySave is polled until we're
 // in gameplay). The CDO + UFunctions never move; the slot is loaded from disk ONCE.
 void* g_storyGsCdo = nullptr;

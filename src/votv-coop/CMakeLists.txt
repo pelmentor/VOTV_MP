@@ -313,6 +313,7 @@ add_library(votv-coop SHARED
     src/coop/session/session_manager.cpp
     src/coop/session/join_progress.cpp
     src/coop/session/net_pump.cpp
+    src/coop/session/pause_guard.cpp
     src/coop/session/subsystems.cpp
     src/coop/player/local_streams.cpp
     src/coop/interactables/device_occupancy.cpp
@@ -320,6 +321,7 @@ add_library(votv-coop SHARED
     src/coop/interactables/signal_catch_sync.cpp
     src/coop/player/sleep_sync.cpp
     src/coop/creatures/wisp_attack_sync.cpp
+    src/coop/creatures/wisp_grab_hold.cpp
     src/coop/creatures/wisp_tear_mirror.cpp
     src/coop/items/player_inventory_sync.cpp
     src/coop/items/inventory_wire.cpp
@@ -396,6 +398,7 @@ add_library(votv-coop SHARED
     src/harness/autotest_eventforce.cpp
     src/harness/autotest_wisplane.cpp
     src/harness/autotest_kwisp_probe.cpp
+    src/harness/autotest_pauseguard.cpp
     src/harness/autotest_move_osc.cpp
     src/harness/autotest_saveui.cpp
     src/harness/config.cpp

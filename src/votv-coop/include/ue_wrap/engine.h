@@ -23,6 +23,16 @@ namespace ue_wrap::engine {
 // (cached). Returns false if anything could not be resolved. Game thread only.
 bool ExecuteConsoleCommand(const wchar_t* command);
 
+// World pause state, through the game's own verbs (UGameplayStatics::IsGamePaused /
+// SetGamePaused on the cached world context). The coop pause_guard polls + clears
+// the pause while a session is connected (a paused peer stops ticking its world --
+// pause is a single-player concept; MTA precedent: no world pause exists in a
+// session). IsGamePaused returns false on any resolution miss (the guard then
+// idles -- never a false unpause). SetGamePaused returns the engine's own success
+// bool. Game thread only.
+bool IsGamePaused();
+bool SetGamePaused(bool paused);
+
 // Travel to VOTV's MAIN MENU via the game's own verb, AmainGamemode_C::transition(
 // "/Game/menu") (full path -- the short name does not resolve). Works regardless of
 // player state (direct gamemode call, NO pause needed -> dead-player-safe). Pair with
@@ -757,6 +767,15 @@ bool SetMainPlayerRagdollMode(void* mainPlayer, bool ragdoll, bool passOut, bool
 // orphan PUPPET use StopPuppetMeshRagdoll below (the tick-driven cleanup this
 // relies on can't run on a tickless orphan).
 bool ForceMainPlayerGetUp(void* mainPlayer);
+
+// AmainPlayer_C::canRagdoll (@0x0D10) -- ragdollMode()'s own pre-condition: false
+// early-outs EVERY ragdoll cause on this pawn. The Killer Wisp false-grab window
+// forces it false on the HOST (the grab montage's d1/drop notifies write
+// playerDamaged + fire ragdollMode(true,false,true) bytecode-internally -- an HP
+// pin cannot stop a ragdoll-DEATH; this native gate can), then restores true on
+// the window's falling edge. Raw masked write of a plain setter-less BP bool.
+// Returns false on null/dead pawn or if the bool can't be resolved. Game thread.
+bool SetMainPlayerCanRagdoll(void* mainPlayer, bool allowed);
 
 // AmainPlayer_C::"Add Player Damage"(Damage, damageLocation, fullBody, blood, Source)
 // -- the primary player-damage entry. vitals Inc3-WIRE: the OWNER peer invokes this on
