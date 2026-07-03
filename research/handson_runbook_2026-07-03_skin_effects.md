@@ -159,10 +159,12 @@ TEST (needs NIGHT): host F1 > Events > wisps -> NOW! -> BOTH peers should see th
 glowing swarm land in the forest ring (~0.5-0.75 km out) and wander; jump the clock to day
 -> they fade out on both. KNOWN fidelity edge: the mirror's fade-in fires when the streamed
 pose reads grounded -- if a wisp descends "not falling" (CMC mode) the fade could fire mid-air.
-KNOWN OPEN (your report, recorded): killerwisp IGNORES peers -- its special kill sequence
-(grab-arm/canReach/socket-lift/fatality) is hard-bound to player 0; the June relay is not
-enough. Next thread: probe target acquisition live, then build the full socket-hold sequence
-vs puppets.
+KNOWN OPEN (your report) -- killerwisp vs peers, PROBED same night: the June chain is ALIVE
+(probe: wisp acquired the puppet, relayed, the client ragdoll-DIED ok=1) -- so the real gap is
+the EXPERIENCE you named: no grab/lift/socket choreography for a peer victim (you just drop
+dead ~3.5 s later; the wisp mimes the tear alone) = the special kill sequence exists only for
+player 0. v2 design recorded: victim-side attach to the local wisp MIRROR's playerGrab socket
++ fatality montage; host-side puppet socket-hold via a carry-style pose override. Not built yet.
 
 ## EVENT TRIGGERING + MIRROR (your report) -- what changed + what I need from you
 

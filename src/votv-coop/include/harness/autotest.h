@@ -283,4 +283,12 @@ DWORD WINAPI EventForceTestThread(LPVOID arg);
 void RunAutonomousWispLaneTest();
 DWORD WINAPI WispLaneTestThread(LPVOID arg);
 
+// Killerwisp-vs-peers acquisition probe (2026-07-03, harness/autotest_kwisp_probe.cpp). HOST-ONLY,
+// READ-ONLY: SpawnKillerWispOnClient with the host teleported outside the 5000u acquire radius,
+// then 2 s FSM samples (Target classification / harmless / tryGrab / grab / distances / inRange)
+// for 90 s -- localizes WHERE the "wisp ignores peers" chain breaks (acquisition vs movement vs
+// relay trigger). Gated by env VOTVCOOP_RUN_KWISP_PROBE=1.
+void RunAutonomousKwispProbe();
+DWORD WINAPI KwispProbeThread(LPVOID arg);
+
 }  // namespace harness::autotest

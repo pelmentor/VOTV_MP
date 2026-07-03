@@ -132,6 +132,10 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // the pose-walk dead-retire broadcast. Assert via log diff.
     SpawnIf("VOTVCOOP_RUN_WISPLANE_TEST", "wisp mirror-lane e2e", &WispLaneTestThread, role);
 
+    // Killerwisp-vs-peers probe: read-only FSM sampling around SpawnKillerWispOnClient with the
+    // host teleported away -- localizes where the "ignores peers" chain breaks.
+    SpawnIf("VOTVCOOP_RUN_KWISP_PROBE", "killerwisp acquisition probe", &KwispProbeThread, role);
+
     // TEST-ONLY local-player movement oscillator: circles the local player so the OTHER
     // peer's interp has a MOVING source. Verification rig for the interp-starvation fix
     // (static-source smokes show trail~=0 and hide the bug). Enable on ONE peer; read the
