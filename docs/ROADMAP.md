@@ -6,9 +6,12 @@ gate — don't proceed until met.
 
 Legend: ☐ not started · ◐ in progress · ☑ done.
 
-**Quick status (updated 2026-07-02):** Phases 0-5 done. Transport is
+**Quick status (updated 2026-07-03):** Phases 0-5 done. Transport is
 **GameNetworkingSockets v1.5.1** (3 lanes, `kMaxPeers=4`). The protocol is at
-**v94**. Shipped surface: the MTA Element/Registry/Mirror foundation; NPC /
+**v95** (EventFire=84: the scheduled/story-event replay channel — host observes
+settime fires via passEvents growth, clients replay per the per-row dupe-matrix
+policy; COOP_SYNC_MAP `EventFire` block is canonical). Shipped surface: the MTA
+Element/Registry/Mirror foundation; NPC /
 WorldActor / save-snapshot-on-connect / terminals / doors+lights+keypads /
 kerfur (prop⇄NPC) / events / voice / inventory / sleep / effects sync; the
 host-authoritative pile/trash channel incl. client grab/carry/throw and the

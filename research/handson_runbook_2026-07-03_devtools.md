@@ -60,7 +60,7 @@ column visible across the map; the same event also advances the treehouse build 
 one event by design). **It is already in the menu:** F1 → Game → Events → Story →
 **`treehouse_0`** (red = Dangerous → **Ctrl+click**).
 
-**UPDATE (same day, take 3): the EventFire channel is BUILT (v95, DLL `DF0C0295`)** — the
+**UPDATE (same day, take 3): the EventFire channel is BUILT (v95)** — the
 campfire now replays on the client too. This section's caveat is superseded; the campfire test
 moved to `handson_runbook_2026-07-03_eventfire.md` test 1.
 
