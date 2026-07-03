@@ -1,7 +1,48 @@
-# Hands-on runbook 2026-07-03 — skin take-3 + join-line + TIME instant + inner-mesh
+# Hands-on runbook 2026-07-03 — skin take-3 + join-line + TIME instant + NORMALS + EVENTS-NOW
 
-**Deployed: DLL `D9B66A83DCC20D7C` on all 4 installs** (hash-verified; protocol **v96** —
-both peers MUST be on this DLL to connect). Includes everything below (smoke x3 PASS).
+**Deployed: DLL `1CDD6079A5241162` on all 4 installs** (hash-verified; protocol **v96** —
+both peers MUST be on this DLL to connect). Supersedes `D9B66A83` (adds the events
+NOW!/badges feature; no wire change). Evening additions NOT yet smoke-tested (you were at
+the PC — no autonomous launches): the events feature is dev-menu-only (no hot path while
+the menu is closed) and the model paks were verified offline (renders + hash x5).
+
+## EVENING ADDITIONS (after your two reports)
+
+### 1. DARK-SUIT root fix (all v1sc suits) — rebuilt paks deployed
+Your re-diagnosis was right: not inner geometry — NORMALS. The converter recomputed
+shading normals from face windings; the GoldSrc scientist COAT is a double-sided sheet
+(outer+inner copies), so the accumulation cancelled itself -> near-black white coat from
+most angles (your screenshot: white sleeves = single-sided, dark body = doubled). Root
+fix: the mdl's AUTHORED normals (studiomdl smoothing groups) now ride the whole pipeline
+(extract -> repose rotation -> cook pack); the recompute is deleted. Offline lambert
+renders (game-matching backface cull): coat charcoal -> proper white cloth shading,
+front/side/back. ALL 15 deployed models rebuilt on their same profiles + redeployed
+(walter `cd369fed` / sci `3cacd30b` / luther `99043feb` / einstein `3bf9d7ac` ...), your
+source-folder paks + convert.bat dist updated too.
+TEST: sci/walter/luther/einstein etc. — the coat must read as WHITE cloth with normal
+shading from every angle (no more charcoal side/back).
+
+### 2. EVENTS: почему "тыкаю и ничего" + the NOW! button
+RE of the map trigger graph (votv-event-trigger-graph-RE-2026-07-03.md): for 14 events
+the fire button only ARMS a level VOLUME; the effect fires when you WALK INTO it
+(obelisk's volume = the base entrance — exactly your "сработал когда зашёл на базу").
+The F1 events tab now shows, per volume-gated row:
+  [volume-gated] -> idle;  [ARMED - walk-in pending] -> fire pressed, waiting for the
+  walk-in;  [FIRED] -> consumed (N=0). Badges refresh ~1 Hz while the tab is open.
+And a **NOW! button** per such row = arm (clients still get the arm broadcast) + drive
+the volume's OWN overlap handler with your pawn — the native walk-in dispatch, no faked
+state. Dangerous rows keep the Ctrl+click guard.
+Non-volume rows got gate notes in the tooltip (signals = instant in the SETI pool;
+bedEvent = fires on next sleep; agrav = needs isPhysicalEvents; treehouse = instant
+build step; etc).
+Found + documented a GAME bug: paperGray's activator carries bigmRoar's box key (arming
+paperGray activates the wrong volume). NOW! on paperGray still works (drives the box
+directly); its ARMED badge can never light up through the native arm.
+TEST: F1 > Events > obelisk -> row shows [volume-gated]; press the fire button -> badge
+goes [ARMED]; press NOW! -> the obelisk chain completes immediately (alarm etc.) without
+walking anywhere. Try wisps / mann / vent the same way.
+
+---
 Autonomous 2-peer LAN smoke: PASS (both peers stable, puppets spawned, no RAM breach); rig log
 lines below are from that run. For the test, the inis are pre-set: HOST `player_skin=kerfur_omega`,
 CLIENT `player_skin=kerfur_mynet` (change freely in F1).
