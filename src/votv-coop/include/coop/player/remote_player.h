@@ -257,13 +257,14 @@ private:
     // because the wire no longer carries them).
     float meshOffsetZ_ = 0.f;    // = local mesh_playerVisible.RelativeLocation.Z (raw, +0x11C)
     float meshOffsetYaw_ = 0.f;  // = atan2(mesh forward) - actor yaw (BP-authored mesh frame shim)
-    // Nameplate/voice head anchor: the SMOOTHED 'head'-bone world position of the
-    // currently-rendered mesh (plushie while ragdolled, skin mesh otherwise) --
-    // GetHeadPosition reads the bone live (one dispatch) and low-pass filters it
-    // (tau ~70 ms; teleports snap). mutable: the filter advances inside a const
-    // getter, keyed to real elapsed time so multi-caller ticks are idempotent.
-    mutable ue_wrap::FVector headAnchor_{};
-    mutable uint64_t         headAnchorAtMs_ = 0;
+    // Nameplate/voice head anchor: the 'head'-bone world position of the currently-
+    // rendered mesh (plushie while ragdolled, skin mesh otherwise). X/Y are RAW
+    // (super snappy -- user 2026-07-03); only the HEIGHT runs through a tau ~70 ms
+    // low-pass (head bob / crouch blend / flop shake), teleports snap. mutable: the
+    // filter advances inside a const getter, keyed to real elapsed time so
+    // multi-caller ticks are idempotent.
+    mutable float    headAnchorZ_ = 0.f;
+    mutable uint64_t headAnchorAtMs_ = 0;
     // Placeholder until the peer's Join reliable message lands (typically within
     // a few RTT of connect). nameplate::Update repaints when SetNickname changes
     // this. The old "Player 2" default was misleading -- both ends saw "Player 2"

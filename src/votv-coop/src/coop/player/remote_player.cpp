@@ -828,27 +828,24 @@ ue_wrap::FVector RemotePlayer::GetHeadPosition() const {
         raw = GetLocation();
         raw.Z += 30.f;
     }
-    // Smooth the anchor (user: "just smooth out the movement"): time-based
-    // exponential approach with tau ~70 ms -- soaks up per-frame anim/IK head
-    // jitter and the ragdoll's violent shakes while tracking walking with an
-    // imperceptible lag. dt comes from real elapsed time, so the multiple
-    // same-tick callers (nameplate + voice) advance the filter only once; a
-    // TELEPORT-sized jump (>2 m) or the first call snaps instead of gliding.
+    // Smoothing (user refinement 2026-07-03: "smooth ТОЛЬКО высоту; X/Y super snappy"):
+    // X/Y pass through RAW -- the plate must track walking/strafing with ZERO lag (the
+    // full-vector filter read as trailing). The jitter worth hiding is VERTICAL (head
+    // bob, crouch blends, the flop's shakes), so only Z runs through the tau ~70 ms
+    // low-pass. dt comes from real elapsed time, so the multiple same-tick callers
+    // (nameplate + voice) advance the filter only once; a teleport-sized Z jump (>2 m)
+    // or the first sample snaps instead of gliding.
     const uint64_t now = NowMs();
-    const float dx = raw.X - headAnchor_.X, dy = raw.Y - headAnchor_.Y, dz = raw.Z - headAnchor_.Z;
-    const float dist2 = dx * dx + dy * dy + dz * dz;
-    constexpr float kSnapCm2 = 200.f * 200.f;
-    if (headAnchorAtMs_ == 0 || dist2 > kSnapCm2) {
-        headAnchor_ = raw;
+    const float dz = raw.Z - headAnchorZ_;
+    constexpr float kSnapZCm = 200.f;
+    if (headAnchorAtMs_ == 0 || dz > kSnapZCm || dz < -kSnapZCm) {
+        headAnchorZ_ = raw.Z;
     } else if (now > headAnchorAtMs_) {
         const float dtMs = static_cast<float>(now - headAnchorAtMs_);
-        const float alpha = 1.f - std::exp(-dtMs / 70.f);
-        headAnchor_.X += dx * alpha;
-        headAnchor_.Y += dy * alpha;
-        headAnchor_.Z += dz * alpha;
+        headAnchorZ_ += dz * (1.f - std::exp(-dtMs / 70.f));
     }
     headAnchorAtMs_ = now;
-    return headAnchor_;
+    return {raw.X, raw.Y, headAnchorZ_};
 }
 
 void RemotePlayer::SetNickname(std::wstring name) { nickname_ = std::move(name); }
