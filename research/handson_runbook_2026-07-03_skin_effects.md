@@ -114,12 +114,16 @@ natively (that part is the game's own settime walk).
 - WHICH events did you trigger when the mirror looked broken? Name 2-3 -- I'll check each against
   the lane matrix and either fix the verdict or build the missing lane next.
 
-## INNER-MESH (sci_v1sc / walter_v1sc / luther_v1sc "inner вылазит")
+## INNER-MESH -- **REVERTED** (user 18:3x: "ты удалил им всем руки")
 
-The GoldSrc ports carry an LD dm_base torso+arms shell under the HD coat (+ sci had a second
-Gordon face INSIDE the head + all had an inner mouth plane). The converter now ray-scans every
-face group and auto-drops fully-enclosed interior shells (census: 16/16 models clean; shirt/
-belt/glasses survive); dm_base/Gordon_head force-stripped for these three. Rebuilt paks are on
-models/ + host+client+copy2 installs. Test: pick sci_v1sc / walter_v1sc / luther_v1sc -- no
-geometry poking through the coat/head at any animation. Your convert.bat got the fix too
-(portable dist rebuilt).
+The interior-scan strip was WRONG: dm_base is not a hidden inner shell on these models -- it
+carries the VISIBLE forearms+hands (in bind pose the outstretched arms live in the same narrow
+Z band 36-61 as the coat torso, which the bbox analysis misread as "coat band only"). All three
+models lost their arms. Full revert `9963078f` (converter back to pre-scan, RULE 2: the
+enclosure heuristic + strip/keep flags deleted); paks rebuilt from the original MDLs with the
+pre-scan converter (the exact code state of the verified 25-skin census `805ae0f8`) and
+redeployed: sci `5c4dcd1b` / walter `8839e725` / luther `2fc3593c` -- hash-identical across
+your source folder + models/ + host+client+copy2. Portable dist rebuilt reverted; your own
+convert.bat copy (walter2 folder) was still the clean 07-02 build, untouched.
+The original "inner вылазит" complaint is REOPENED -- a future fix needs per-model VISUAL
+before/after proof (rendered), not a geometric enclosure heuristic.
