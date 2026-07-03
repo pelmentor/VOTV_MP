@@ -392,7 +392,8 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
 // cancels). This SIDE-EFFECT-FREE suppressor covers the SECOND PRESS seam (_38): on a CLIENT pile interaction
 // it only CANCELS the dispatch (kills the parallel deny) -- it does NOT send a grab/throw intent or play a cue
 // (_41 is the sole author of those). Same recognition as OnPileUseIntercept's client branch: carrying, or aimed
-// at a bound-native / proxy pile. On cancel it ARMS the paired-release latch (a cancelled press's _42 must die
+// at ANY native pile (bound or unbound -- the 2026-07-03 twin-grab gate) / proxy pile. On cancel it ARMS the
+// paired-release latch (a cancelled press's _42 must die
 // with it -- see g_cancelPairedUseRelease; the RELEASE seam is pairing-only, NOT condition-derived).
 static bool OnPileUseDenySuppress(void* self, void* /*params*/) {
     if (!self) return false;
@@ -403,8 +404,11 @@ static bool OnPileUseDenySuppress(void* self, void* /*params*/) {
         cancel = true;  // carrying a clump -> this press is the throw toggle -> the native press would deny
     } else {
         void* aimedNative = ue_wrap::engine::ReadMainPlayerLookAtActor(self);
-        if (aimedNative && ue_wrap::prop::IsChipPile(aimedNative) && PT::IsBoundMirrorNative(aimedNative)) {
-            cancel = true;  // aimed at a bound native pile -> a grab press that would deny
+        if (aimedNative && ue_wrap::prop::IsChipPile(aimedNative)) {
+            // ANY native pile aim -- bound OR unbound -- mirrors _41's shape (audit
+            // 45bdb7ac W-2): _41 cancels the unbound press too now (the twin-grab
+            // gate), so _38 must die with it or the native deny "EHHH" plays alone.
+            cancel = true;
         } else {
             const ue_wrap::FVector  camLoc = ue_wrap::engine::GetCameraLocation();
             const ue_wrap::FRotator camRot = ue_wrap::engine::GetCameraRotation();

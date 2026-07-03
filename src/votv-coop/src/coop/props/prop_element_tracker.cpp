@@ -606,7 +606,16 @@ SeedCounts SeedWalk_(std::vector<void*>* outNewActors) {
                 // and net_pump re-broadcast it as an incremental keyless PropSpawn every
                 // 20 s re-seed. The set insert above still refreshes membership (the
                 // O(1) snapshot de-dupe), it just is not "newness" any more.
-                if (GetPropElementIdForActor(obj) != coop::element::kInvalidId) continue;
+                // FRESHNESS (audit 45bdb7ac W-3, the IsBoundMirrorNative D1 pattern):
+                // trust the binding only if THIS actor is still the live occupant of
+                // the element's slot -- a recycled address pointing at a dead element's
+                // row must still express as new (the express is that prop's only
+                // delivery).
+                if (const coop::element::ElementId beid = GetPropElementIdForActor(obj);
+                    beid != coop::element::kInvalidId) {
+                    coop::element::Element* el = coop::element::Registry::Get().Get(beid);
+                    if (el && R::IsLiveByIndex(obj, el->GetInternalIdx())) continue;
+                }
                 ++c.newlyTracked;
                 // R1: yield the newly-adopted actor so the steady-world re-seed
                 // can broadcast ONE incremental PropSpawn for it (the eid is

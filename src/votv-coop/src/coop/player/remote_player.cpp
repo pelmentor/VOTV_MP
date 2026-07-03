@@ -838,7 +838,10 @@ ue_wrap::FVector RemotePlayer::GetHeadPosition() const {
     const uint64_t now = NowMs();
     const float dz = raw.Z - headAnchorZ_;
     constexpr float kSnapZCm = 200.f;
-    if (headAnchorAtMs_ == 0 || dz > kSnapZCm || dz < -kSnapZCm) {
+    // Snap test is NaN-ROUTING (audit 45bdb7ac W-1): a physics-NaN'd bone read must fall
+    // into the snap branch (heals the tick raw turns finite), not the advance branch
+    // (which would poison headAnchorZ_ forever -- NaN fails every > comparison).
+    if (headAnchorAtMs_ == 0 || !(dz >= -kSnapZCm && dz <= kSnapZCm)) {
         headAnchorZ_ = raw.Z;
     } else if (now > headAnchorAtMs_) {
         const float dtMs = static_cast<float>(now - headAnchorAtMs_);
