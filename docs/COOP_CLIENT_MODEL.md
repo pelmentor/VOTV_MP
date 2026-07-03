@@ -170,6 +170,14 @@ LogicMods/votv-coop on EVERY peer and it appears in everyone's F1 browser.
 > WIC-decoded). Peer without the pak: kel fallback, logged. AS-BUILT; hands-on pending
 > (runbook 2026-07-02 evening take 3).
 >
+> **SKIN EFFECTS (2026-07-03 `23704962`+`8c813c44`):** builtin kerfur skins additionally
+> rebuild the variant ACTOR's cosmetic rig on the dressed body — `coop/player/skin_effects`
+> + `ue_wrap/scs_rig` (runtime SCS read, template-faithful dormancy — the sentient-only
+> light/sparks stay OFF per take-2). RT face (4 omega bodies, kerfusFace_C scene-capture),
+> mynet electricity + step bursts, keljoy squeak. Receiver-local, nothing on the wire. RE:
+> research/findings/votv-kerfur-variant-effects-RE-2026-07-03.md; hands-on pending (runbook
+> 2026-07-03 skin_effects take 2, DLL `41D23E3320F6E173`).
+>
 > The pre-skins AS-BUILT below stays as the PROVEN mechanics record: the skin is applied to
 > BOTH body slots (SpawnPuppetMainPlayer writes it to mesh_playerVisible AND the native
 > ACharacter::Mesh AttachParent) -- see the STATUS block's two-body invariant. The 3C coop test

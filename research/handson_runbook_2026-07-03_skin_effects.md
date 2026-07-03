@@ -74,8 +74,9 @@ own classes (no hand-copied effect tables — the SCS templates/CDO are read at 
 
 - Face is gated to the 4 omega bodies (other variant meshes have no screen slot; maid is a
   single-material mesh — measured).
-- kerfur_maid / kerfur_krampus have no variant actor in the game: they wear the BASE alive
-  rig, no face.
+- kerfur_maid / kerfur_krampus have no variant actor in the game: base-class profile, which
+  after take-2 instances nothing visible (its SCS cosmetics are all dormant sentient nodes) —
+  they are mesh-only skins, no face.
 - The col (paintable) kerfur NPC's picked color is per-instance state and is NOT on the wire —
   separate note in the NPC-sync answer; unrelated to player skins.
 - The kerfusFace actors live at world origin area (0,0,10) — same spot the game parks every

@@ -205,8 +205,11 @@ int32_t FunctionFrameSize(void* function);
 int32_t FindParamOffset(void* function, const wchar_t* paramName);
 
 // Byte offset of an INSTANCE property named `propName` on `owningClass` (a
-// UClass*). Walks the class's own ChildProperties chain only (does NOT climb to
-// SuperStruct). Returns -1 if not found. Used to locate fields like
+// UClass*). Walks the class's own ChildProperties chain, then CLIMBS the
+// SuperStruct chain on miss (audit fix 2026-05-25; this comment previously
+// claimed local-only -- stale, corrected 2026-07-03 when scs_rig relied on
+// the climb for ULocalLightComponent fields queried via PointLightComponent).
+// Returns -1 if not found. Used to locate fields like
 // `UMovementComponent::Velocity` for direct memory access. Cache the result;
 // the linear walk is fine one-shot but bad in a hot loop.
 int32_t FindPropertyOffset(void* owningClass, const wchar_t* propName);
