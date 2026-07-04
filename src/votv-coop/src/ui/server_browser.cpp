@@ -16,6 +16,7 @@
 #include "coop/net/protocol.h"  // kProtocolVersion (the v59 "Ver" mismatch tint)
 #include "coop/session/session_manager.h"
 #include "harness/config.h"   // local-only ini persistence for the name + last direct address
+#include "ui/scale.h"
 #include "ue_wrap/log.h"
 
 #include "imgui.h"
@@ -31,6 +32,7 @@ namespace {
 
 namespace sm = coop::session_manager;
 using Row = coop::net::lobby::LobbyRow;
+using ui::scale::S;
 
 std::atomic<bool> g_open{false};
 std::atomic<bool> g_justOpened{false};   // Open() -> Render triggers one auto-refresh
@@ -73,10 +75,10 @@ void Render() {
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(780.0f, 480.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(S(780.0f), S(480.0f)), ImGuiCond_Appearing);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.0f), S(14.0f)));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.07f, 0.09f, 0.97f));
 
     bool open = true;
@@ -94,7 +96,7 @@ void Render() {
         // to the NEXT Host/Join (persisted in session_manager; wins over the config default).
         ImGui::TextUnformatted("Your name:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(S(220.0f));
         if (ImGui::InputText("##nick", g_nick, sizeof(g_nick))) sm::SetNickname(g_nick);
         // Persist the name once the user finishes editing (not per-keystroke) so it
         // sticks across relaunches via votv-coop.ini's net.nick (the same key boot reads).
@@ -102,7 +104,7 @@ void Render() {
         ImGui::Spacing();
 
         // Host controls row.
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(S(220.0f));
         ImGui::InputText("##hostname", g_hostName, sizeof(g_hostName));
         ImGui::SameLine();
         ImGui::Checkbox("Locked", &g_hostLocked);
@@ -113,13 +115,13 @@ void Render() {
             // old immediate HostLobby-on-the-current-world path is gone, RULE 2.)
             ui::host_save_picker::Open(g_hostName, g_hostLocked, /*playersMax=*/4);
         }
-        ImGui::SameLine(0.0f, 24.0f);
+        ImGui::SameLine(0.0f, S(24.0f));
         if (ImGui::Button("Refresh")) sm::Refresh();
 
         // Direct-connect row (rung 0 -- works even with the master down).
         ImGui::TextDisabled("Direct connect:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(S(220.0f));
         // Enter in the address field = Connect (the chat-input lesson 2026-07-04).
         const bool ipEnter = ImGui::InputText("##directip", g_directIp, sizeof(g_directIp),
                                               ImGuiInputTextFlags_EnterReturnsTrue);
@@ -147,12 +149,12 @@ void Render() {
                                        ImGuiTableFlags_PadOuterX;
         if (ImGui::BeginTable("##serverlist", 6, tflags, ImVec2(0.0f, -footer))) {
             ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("",        ImGuiTableColumnFlags_WidthFixed, 22.0f);   // lock
+            ImGui::TableSetupColumn("",        ImGuiTableColumnFlags_WidthFixed, S(22.0f));   // lock
             ImGui::TableSetupColumn("Name",    ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Players", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-            ImGui::TableSetupColumn("Age",     ImGuiTableColumnFlags_WidthFixed, 54.0f);
-            ImGui::TableSetupColumn("World",   ImGuiTableColumnFlags_WidthFixed, 140.0f);
-            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+            ImGui::TableSetupColumn("Players", ImGuiTableColumnFlags_WidthFixed, S(70.0f));
+            ImGui::TableSetupColumn("Age",     ImGuiTableColumnFlags_WidthFixed, S(54.0f));
+            ImGui::TableSetupColumn("World",   ImGuiTableColumnFlags_WidthFixed, S(140.0f));
+            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, S(76.0f));
             ImGui::TableHeadersRow();
 
             for (int i = 0; i < static_cast<int>(g_rows.size()); ++i) {
@@ -211,13 +213,13 @@ void Render() {
         const bool selOwn = hasSel && !ownLobby.empty() && g_rows[g_selected].lobbyId == ownLobby;
         const bool canConnect = hasSel && !selOwn;
         if (!canConnect) ImGui::BeginDisabled();
-        if (ImGui::Button(selOwn ? "Your server" : "Connect", ImVec2(120.0f, 0.0f)) && canConnect)
+        if (ImGui::Button(selOwn ? "Your server" : "Connect", ImVec2(S(120.0f), 0.0f)) && canConnect)
             if (sm::JoinLobby(g_rows[g_selected].lobbyId, g_rows[g_selected].name,
                               g_rows[g_selected].proto)) Close();
         if (!canConnect) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Close", ImVec2(90.0f, 0.0f))) open = false;
-        ImGui::SameLine(0.0f, 18.0f);
+        if (ImGui::Button("Close", ImVec2(S(90.0f), 0.0f))) open = false;
+        ImGui::SameLine(0.0f, S(18.0f));
         const std::string status = sm::Status();
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.00f, 1.0f), "%s", status.c_str());
 

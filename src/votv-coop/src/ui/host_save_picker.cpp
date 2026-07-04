@@ -5,6 +5,7 @@
 #include "ui/server_browser.h"
 #include "coop/session/join_progress.h"
 #include "coop/session/session_manager.h"
+#include "ui/scale.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/save_browser.h"
 
@@ -20,6 +21,7 @@ namespace {
 
 namespace sm = coop::session_manager;
 namespace sb = ue_wrap::save_browser;
+using ui::scale::S;
 
 std::atomic<bool> g_open{false};
 
@@ -114,9 +116,9 @@ void Render() {
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(720.0f, 520.0f), ImGuiCond_Appearing);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+    ImGui::SetNextWindowSize(ImVec2(S(720.0f), S(520.0f)), ImGuiCond_Appearing);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.0f), S(14.0f)));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.07f, 0.09f, 0.98f));
 
     bool open = true;
@@ -137,10 +139,10 @@ void Render() {
         if (ImGui::BeginTable("##savelist", 5, tflags, ImVec2(0.0f, -footer))) {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn("Name",    ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Mode",    ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Day",     ImGuiTableColumnFlags_WidthFixed, 50.0f);
-            ImGui::TableSetupColumn("Health",  ImGuiTableColumnFlags_WidthFixed, 64.0f);
-            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Mode",    ImGuiTableColumnFlags_WidthFixed, S(80.0f));
+            ImGui::TableSetupColumn("Day",     ImGuiTableColumnFlags_WidthFixed, S(50.0f));
+            ImGui::TableSetupColumn("Health",  ImGuiTableColumnFlags_WidthFixed, S(64.0f));
+            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, S(70.0f));
             ImGui::TableHeadersRow();
 
             for (int i = 0; i < static_cast<int>(g_saves.size()); ++i) {
@@ -170,7 +172,7 @@ void Render() {
         ImGui::Separator();
         ImGui::TextUnformatted("New Game (Story):");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(S(220.0f));
         // Enter in the name field = the primary action (the chat-input lesson
         // 2026-07-04: a text field with one obvious action submits on Enter).
         const bool nameEnter = ImGui::InputTextWithHint(
@@ -205,12 +207,12 @@ void Render() {
         ImGui::Separator();
         const bool hasSel = g_selected >= 0 && g_selected < static_cast<int>(g_saves.size());
         if (!hasSel) ImGui::BeginDisabled();
-        if (ImGui::Button("Host selected save", ImVec2(170.0f, 0.0f)) && hasSel)
+        if (ImGui::Button("Host selected save", ImVec2(S(170.0f), 0.0f)) && hasSel)
             DoHostExisting(g_saves[g_selected]);
         if (!hasSel) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(90.0f, 0.0f))) open = false;
-        ImGui::SameLine(0.0f, 18.0f);
+        if (ImGui::Button("Cancel", ImVec2(S(90.0f), 0.0f))) open = false;
+        ImGui::SameLine(0.0f, S(18.0f));
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.00f, 1.0f), "Lobby: %s%s  (max %d)",
                            g_hostName.c_str(), g_hostLocked ? "  [locked]" : "", g_hostMax);
     }

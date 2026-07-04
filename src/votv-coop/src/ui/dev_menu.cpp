@@ -18,6 +18,8 @@
 #include "coop/dev/teleport_client.h"
 #include "coop/player/nameplate.h"
 #include "coop/session/ini_config.h"
+#include "ui/fonts.h"
+#include "ui/scale.h"
 #include "ui/skins_panel.h"
 
 #include <cctype>
@@ -28,6 +30,8 @@
 
 namespace ui::dev_menu {
 namespace {
+
+using ui::scale::S;
 
 // One control in the content pane. `render` draws its own ImGui widget(s) so an
 // item can be a button, a checkbox reflecting live state, a slider, etc. `dev`
@@ -82,13 +86,13 @@ void RenderSetClock() {
     ImGui::TextDisabled("(sun %.3f)", frac);
     static int s_day = -1, s_hour = -1, s_min = -1;
     if (s_day < 0) { s_day = day; s_hour = hour; s_min = minute; }  // seed once from the live clock
-    ImGui::SetNextItemWidth(90.f);
+    ImGui::SetNextItemWidth(S(90.f));
     ImGui::InputInt("day##clk", &s_day);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(74.f);
+    ImGui::SetNextItemWidth(S(74.f));
     ImGui::InputInt("h##clk", &s_hour);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(74.f);
+    ImGui::SetNextItemWidth(S(74.f));
     ImGui::InputInt("m##clk", &s_min);
     if (s_day < 1) s_day = 1;
     if (s_hour < 0) s_hour = 0;
@@ -105,7 +109,7 @@ void RenderSetClock() {
     ImGui::SameLine();
     ImGui::TextDisabled("(host only)");
     float f = frac;
-    ImGui::SetNextItemWidth(260.f);
+    ImGui::SetNextItemWidth(S(260.f));
     if (ImGui::SliderFloat("Sun position", &f, 0.0f, 0.999f, "%.3f"))
         SC::SetTimeFraction(f);  // live: drag moves the sun (totalTime := frac * MaxTime)
     ImGui::TextDisabled("Visual only (sun angle). The clock above is what events/save follow.");
@@ -124,7 +128,7 @@ void RenderObjectOverlay() {
     if (ImGui::Checkbox("World object overlay", &on)) OO::SetEnabled(on);
     ImGui::SameLine();
     ImGui::TextDisabled("(labels projected onto nearby objects)");
-    ImGui::Indent(22.f);
+    ImGui::Indent(S(22.f));
     ImGui::BeginDisabled(!on);
     bool names = OO::LayerNames();
     if (ImGui::Checkbox("Object names", &names)) OO::SetLayerNames(names);
@@ -139,10 +143,10 @@ void RenderObjectOverlay() {
     ImGui::SameLine();
     ImGui::TextDisabled("(sim/rest + static/frozen/sleep)");
     float r = OO::RadiusM();
-    ImGui::SetNextItemWidth(170.f);
+    ImGui::SetNextItemWidth(S(170.f));
     if (ImGui::SliderFloat("Radius (m)", &r, 5.f, 100.f, "%.0f")) OO::SetRadiusM(r);
     ImGui::EndDisabled();
-    ImGui::Unindent(22.f);
+    ImGui::Unindent(S(22.f));
 }
 
 void RenderRagdollBones() {
@@ -184,12 +188,12 @@ void RenderSpawnMenuUnlock() {
     if (ImGui::Checkbox("Prop spawn menu in story mode (Q)", &on)) SM::SetEnabled(on);
     ImGui::SameLine();
     ImGui::TextDisabled("(host/local only)");
-    ImGui::Indent(22.f);
+    ImGui::Indent(S(22.f));
     ImGui::TextDisabled("Enables the sandbox Q spawn menu in story mode.");
     if (ImGui::Button("Open spawn menu now")) SM::OpenNow();
     ImGui::SameLine();
     ImGui::TextDisabled("(or press Q while enabled)");
-    ImGui::Unindent(22.f);
+    ImGui::Unindent(S(22.f));
 }
 
 // Case-insensitive substring (the filter box; avoids imgui_internal.h).
@@ -216,7 +220,7 @@ void RenderEvents() {
     ImGui::TextDisabled("Volume-gated events show a badge: fire only ARMS a level volume; NOW! completes it");
     ImGui::TextDisabled("instantly (drives the volume's own overlap with your pawn -- the native walk-in).");
     static char filter[32] = {};
-    ImGui::SetNextItemWidth(180.f);
+    ImGui::SetNextItemWidth(S(180.f));
     ImGui::InputTextWithHint("##evfilter", "filter (name / category / time / effect)...", filter, sizeof(filter));
     ImGui::Separator();
     // Horizontal scrollbar: the effect column can run past the panel on a narrow window, so the user can
@@ -239,7 +243,7 @@ void RenderEvents() {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.40f, 1.0f));
         else if (ev.risk == ET::Risk::Caution)
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.45f, 1.0f));
-        const bool clicked = ImGui::Button(ev.name, ImVec2(150, 0));
+        const bool clicked = ImGui::Button(ev.name, ImVec2(S(150.f), 0));
         if (ev.risk != ET::Risk::Safe) ImGui::PopStyleColor();
         const bool hoveredBtn = ImGui::IsItemHovered();
         ImGui::SameLine();
@@ -315,6 +319,23 @@ void RenderNameplatePref() {
     ImGui::TextDisabled("screen -- synced live and to late joiners; persists across sessions.");
 }
 
+// Overlay font family (2026-07-04, user compare ask): live switch between the
+// embedded families. SetFamily persists votv-coop.ini ui.font and requests the
+// atlas rebuild (applies on the next frame -- the whole overlay re-bakes).
+void RenderFontPref() {
+    namespace F = ui::fonts;
+    const F::Family cur = F::CurrentFamily();
+    ImGui::TextUnformatted("Overlay font:");
+    for (int i = 0; i < F::kFamilyCount; ++i) {
+        const auto f = static_cast<F::Family>(i);
+        if (i > 0) ImGui::SameLine();
+        if (ImGui::RadioButton(F::FamilyLabel(f), cur == f)) F::SetFamily(f);
+    }
+    ImGui::TextDisabled("Applies instantly to the whole overlay (chat, menus, nameplates).");
+    ImGui::TextDisabled("Saved to votv-coop.ini (ui.font). JetBrains Mono / Cascadia Code");
+    ImGui::TextDisabled("are monospace; Roboto is proportional.");
+}
+
 // ---- the strict nested taxonomy (refined as features land) -------------------
 // Player > Movement/Vitals/HUD ; Game > Weather/Entities/Events ; Network >
 // Stats/Session ; Cosmetics > Skins (the v93 model browser -- the one non-dev
@@ -340,6 +361,7 @@ const std::vector<Cat>& Tree() {
         { "Cosmetics", {
             { "Skins",     { { &RenderSkins, false } }, false },
             { "Nameplate", { { &RenderNameplatePref, false } }, false },
+            { "Interface", { { &RenderFontPref, false } }, false },
         }, false },
     };
     return kTree;
@@ -376,8 +398,8 @@ void Render() {
     // Wider default + a MIN-size constraint so the content panel never gets cramped (user: elements
     // didn't fit, had to widen every time). The min applies even when imgui.ini saved a narrow size,
     // so it self-corrects an already-too-narrow window on next open; the user can still grow it.
-    ImGui::SetNextWindowSize(ImVec2(820, 460), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(720, 320), ImVec2(100000.0f, 100000.0f));
+    ImGui::SetNextWindowSize(ImVec2(S(820.f), S(460.f)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(S(720.f), S(320.f)), ImVec2(100000.0f, 100000.0f));
     if (!ImGui::Begin("VOTV Coop  -  Menu (F1)", nullptr, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
         return;
@@ -387,7 +409,7 @@ void Render() {
     // bar (solid slate frame + light-blue label + taller row) so it clearly outranks
     // its plain, indented sub-category items below. NoTreePushOnOpen -> we own the
     // child indent explicitly (no TreePop bookkeeping).
-    ImGui::BeginChild("##nav", ImVec2(185, 0), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##nav", ImVec2(S(185.f), 0), ImGuiChildFlags_Borders);
     bool firstCat = true;
     for (const auto& cat : tree) {
         if (cat.dev && !devMode) continue;
@@ -402,13 +424,13 @@ void Render() {
             ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen);
         ImGui::PopStyleColor(4);
         if (!open) continue;
-        ImGui::Indent(14.0f);
+        ImGui::Indent(S(14.0f));
         for (const auto& sub : cat.subs) {
             if (sub.dev && !devMode) continue;
             const bool selected = (g_selSub == &sub);
             if (ImGui::Selectable(sub.name, selected)) { g_selCat = &cat; g_selSub = &sub; }
         }
-        ImGui::Unindent(14.0f);
+        ImGui::Unindent(S(14.0f));
     }
     ImGui::EndChild();
 

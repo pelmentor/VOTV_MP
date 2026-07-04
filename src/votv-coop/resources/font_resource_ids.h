@@ -1,9 +1,18 @@
-// resources/font_resource_ids.h -- RCDATA ids for the vendored Roboto TTFs
+// resources/font_resource_ids.h -- RCDATA ids for the vendored overlay TTFs
 // embedded INTO the DLL (user 2026-07-04: no loose font files; the overlay is
 // self-contained per RULE 3 -- a UE .pak would need the engine's pak FS to read).
 // Shared by fonts.rc (the embed) and ui/fonts.cpp (the load).
+//
+// Families (Regular + Bold pairs; licenses in assets/fonts/LICENSE-*.txt):
+//   Roboto         -- Apache 2.0
+//   JetBrains Mono -- OFL 1.1
+//   Cascadia Code  -- OFL 1.1
 
 #pragma once
 
-#define IDR_FONT_ROBOTO_REGULAR 301
-#define IDR_FONT_ROBOTO_BOLD    302
+#define IDR_FONT_ROBOTO_REGULAR   301
+#define IDR_FONT_ROBOTO_BOLD      302
+#define IDR_FONT_JBMONO_REGULAR   303
+#define IDR_FONT_JBMONO_BOLD      304
+#define IDR_FONT_CASCADIA_REGULAR 305
+#define IDR_FONT_CASCADIA_BOLD    306

@@ -1,8 +1,13 @@
-// resources/fonts.rc -- embed the vendored Roboto TTFs (assets/fonts, Apache 2.0,
-// license at assets/fonts/LICENSE-Roboto.txt) into the DLL as RCDATA so the
-// overlay needs no loose font files next to the binary.
+// resources/fonts.rc -- embed the vendored overlay TTFs (assets/fonts; Roboto =
+// Apache 2.0, JetBrains Mono + Cascadia Code = OFL 1.1, licenses alongside the
+// files) into the DLL as RCDATA so the overlay needs no loose font files next
+// to the binary.
 
 #include "font_resource_ids.h"
 
-IDR_FONT_ROBOTO_REGULAR RCDATA "../assets/fonts/Roboto-Regular.ttf"
-IDR_FONT_ROBOTO_BOLD    RCDATA "../assets/fonts/Roboto-Bold.ttf"
+IDR_FONT_ROBOTO_REGULAR   RCDATA "../assets/fonts/Roboto-Regular.ttf"
+IDR_FONT_ROBOTO_BOLD      RCDATA "../assets/fonts/Roboto-Bold.ttf"
+IDR_FONT_JBMONO_REGULAR   RCDATA "../assets/fonts/JetBrainsMono-Regular.ttf"
+IDR_FONT_JBMONO_BOLD      RCDATA "../assets/fonts/JetBrainsMono-Bold.ttf"
+IDR_FONT_CASCADIA_REGULAR RCDATA "../assets/fonts/CascadiaCode-Regular.ttf"
+IDR_FONT_CASCADIA_BOLD    RCDATA "../assets/fonts/CascadiaCode-Bold.ttf"

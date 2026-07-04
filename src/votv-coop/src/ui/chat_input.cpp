@@ -4,6 +4,7 @@
 
 #include "coop/comms/chat_sync.h"
 #include "ui/fonts.h"
+#include "ui/scale.h"
 
 #include "imgui.h"
 
@@ -79,10 +80,11 @@ void Render() {
     if (chatFont) ImGui::PushFont(chatFont);
 
     const ImGuiIO& io = ImGui::GetIO();
-    constexpr float pad = 14.f;
+    using ui::scale::S;
+    const float pad = S(14.f);
     // Sit just under the chat feed (the feed's bottom edge is at 0.5 of the
     // screen height -- ui/hud.cpp DrawChat kBottomFrac).
-    ImGui::SetNextWindowPos(ImVec2(pad, io.DisplaySize.y * 0.5f + 6.f),
+    ImGui::SetNextWindowPos(ImVec2(pad, io.DisplaySize.y * 0.5f + S(6.f)),
                             ImGuiCond_Always, ImVec2(0.f, 0.f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     const ImGuiWindowFlags flags =
@@ -92,7 +94,7 @@ void Render() {
     if (ImGui::Begin("##coop_chat_input", nullptr, flags)) {
         ImGui::TextDisabled("say:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(560.f);
+        ImGui::SetNextItemWidth(S(560.f));
         if (g_focusPending) { ImGui::SetKeyboardFocusHere(); g_focusPending = false; }
         const bool submitted = ImGui::InputText(
             "##chatline", g_buf, sizeof(g_buf),

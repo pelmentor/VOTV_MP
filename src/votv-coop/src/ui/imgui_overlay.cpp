@@ -38,6 +38,7 @@
 #include "ui/toast.h"
 #include "ui/chat_input.h"
 #include "ui/fonts.h"
+#include "ui/scale.h"
 #include "ui/voice_panel.h"
 #include "coop/comms/chat_sync.h"
 #include "coop/session/multiplayer_menu.h"
@@ -291,9 +292,26 @@ bool BringUpDX11(IDXGISwapChain* sc) {
                                   // the OS cursor hidden during play); the WM_SETCURSOR
                                   // hide + SetCursorPos no-op keep it the only one + tracking
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // arrow-key move + Enter/Space activate
-    ImGui::StyleColorsDark();
-    // Overlay fonts (embedded Roboto w/ Cyrillic; ui::fonts). Must precede the first
-    // NewFrame -- the DX11 backend bakes the atlas lazily on frame 1.
+    // Resolution scale: seed from the game window's client size BEFORE the first
+    // bake so fonts + style are born at the right size for this resolution
+    // (ui/scale.h -- the overlay is proportional, not fixed-1080p-px).
+    RECT rc{};
+    if (::GetClientRect(desc.OutputWindow, &rc))
+        ui::scale::NoteViewport(static_cast<float>(rc.right - rc.left),
+                                static_cast<float>(rc.bottom - rc.top));
+    ui::scale::ConsumeRebuild();  // the initial bake right here applies it
+    // Reset-then-scale, exactly like MaybeRescale: ScaleAllSizes is cumulative,
+    // and a SEH-swallowed half-bring-up can re-enter here with an already-scaled
+    // style on the leaked context (audit WARN-2) -- scaling again would compound.
+    {
+        ImGuiStyle& st = ImGui::GetStyle();
+        st = ImGuiStyle();
+        ImGui::StyleColorsDark();
+        st.ScaleAllSizes(ui::scale::Ui());
+    }
+    // Overlay fonts (embedded family w/ Cyrillic, freetype-rasterized at the
+    // scaled px; ui::fonts). Must precede the first NewFrame -- the DX11
+    // backend bakes the atlas lazily on frame 1.
     ui::fonts::Load();
 
     if (!ImGui_ImplWin32_Init(desc.OutputWindow)) {
@@ -340,10 +358,33 @@ void DrawToasts() {
     ui::toast::Render();
 }
 
+// Per-frame (render thread, BEFORE NewFrame): follow the game window's client
+// size. On a quantized scale change (or an F1 font-family switch) re-bake the
+// atlas at the new real pixel size, drop the backend's device objects (the
+// next NewFrame lazily re-creates them, re-uploading the font texture), and
+// re-derive the style from defaults at the new factor (ScaleAllSizes is
+// cumulative/lossy -- always reset-then-scale, never scale-again).
+void MaybeRescale() {
+    RECT rc{};
+    if (g_hwnd && ::GetClientRect(g_hwnd, &rc))
+        ui::scale::NoteViewport(static_cast<float>(rc.right - rc.left),
+                                static_cast<float>(rc.bottom - rc.top));
+    if (!ui::scale::ConsumeRebuild()) return;
+    ui::fonts::Load();  // clears + re-bakes the atlas at the new px/family
+    ImGui_ImplDX11_InvalidateDeviceObjects();
+    ImGuiStyle& st = ImGui::GetStyle();
+    st = ImGuiStyle();
+    ImGui::StyleColorsDark();
+    st.ScaleAllSizes(ui::scale::Ui());
+    UE_LOGI("imgui_overlay: UI re-scaled (factor %.2f, client %ldx%ld)", ui::scale::Ui(),
+            rc.right - rc.left, rc.bottom - rc.top);
+}
+
 // SEH-guarded per-frame ImGui pass (render thread). A fault here must NOT take down
 // the game's render thread -- swallow it and leave the menu hidden.
 void RenderFrameGuarded() {
     __try {
+        MaybeRescale();
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();  // sets io.MousePos from the real OS cursor (WM_MOUSEMOVE / GetCursorPos)
         // Draw the ImGui software cursor only for interactive surfaces (F1 menu, or

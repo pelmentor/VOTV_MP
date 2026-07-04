@@ -2,6 +2,8 @@
 
 #include "ui/toast.h"
 
+#include "ui/scale.h"
+
 #include "imgui.h"
 
 #include <chrono>
@@ -49,7 +51,7 @@ void Render() {
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
-                                   vp->WorkPos.y + 24.0f),
+                                   vp->WorkPos.y + ui::scale::S(24.0f)),
                             ImGuiCond_Always, ImVec2(0.5f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.65f);
     ImGui::Begin("##coop_toasts", nullptr,

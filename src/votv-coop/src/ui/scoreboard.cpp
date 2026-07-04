@@ -6,6 +6,7 @@
 #include "coop/session/session_manager.h"  // ListedState / SetListed (the host hide toggle)
 #include "coop/player/roster.h"
 #include "coop/voice/voice_chat.h"
+#include "ui/scale.h"
 #include "ui/voice_icons.h"
 
 #include "imgui.h"
@@ -15,6 +16,8 @@
 
 namespace ui::scoreboard {
 namespace {
+
+using ui::scale::S;
 
 // Pending permanent-ban confirmation (render-thread only). >=0 == a ban is
 // awaiting the modal's confirm; the nick is copied for the prompt text so the
@@ -28,12 +31,12 @@ char g_banConfirmNick[24] = {};
 void StatusDot(bool connected) {
     const ImVec4 col = connected ? ImVec4(0.36f, 0.85f, 0.42f, 1.0f)
                                  : ImVec4(0.60f, 0.60f, 0.62f, 1.0f);
-    const float radius = 4.0f;
+    const float radius = S(4.0f);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::GetWindowDrawList()->AddCircleFilled(
         ImVec2(p.x + radius, p.y + ImGui::GetTextLineHeight() * 0.5f),
         radius, ImGui::GetColorU32(col));
-    ImGui::Dummy(ImVec2(radius * 2.0f + 6.0f, ImGui::GetTextLineHeight()));
+    ImGui::Dummy(ImVec2(radius * 2.0f + S(6.0f), ImGui::GetTextLineHeight()));
 }
 
 }  // namespace
@@ -50,14 +53,14 @@ void Render() {
                             ImGuiCond_Always, ImVec2(0.5f, 0.0f));  // upper-centre, below the top HUD
     // 460 wide (was 300 -- truncated nicks + "LAN HOST" clipped, user round-1
     // screenshot 2026-06-12); auto height.
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(S(460.0f), 0.0f), ImGuiCond_Always);
 
     // Clean translucent panel: padded, rounded, borderless, dark bg so it reads over
     // any scene. Own header (no OS-style title bar).
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 13.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16.0f), S(13.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(8.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(S(6.0f), S(6.0f)));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.07f, 0.09f, 0.94f));
 
     const ImGuiWindowFlags flags =
@@ -75,7 +78,7 @@ void Render() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.98f, 1.00f, 1.0f));
         ImGui::TextUnformatted("PLAYERS");
         ImGui::PopStyleColor();
-        ImGui::SameLine(0.0f, 8.0f);
+        ImGui::SameLine(0.0f, S(8.0f));
         if (s.inSession) ImGui::TextColored(ImVec4(0.45f, 0.78f, 1.00f, 1.0f), "%d online", s.count);
         else             ImGui::TextDisabled("offline");
         if (vs.enabled != 0 && vs.started != 0) {
@@ -100,12 +103,12 @@ void Render() {
             ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
             // Voice state icon (v66; the user's mute-icon-on-playerlist ask).
             // Click = self: toggle mute; remote: per-player volume popup.
-            if (voiceOn) ImGui::TableSetupColumn("Mic", ImGuiTableColumnFlags_WidthFixed, 26.0f);
+            if (voiceOn) ImGui::TableSetupColumn("Mic", ImGuiTableColumnFlags_WidthFixed, S(26.0f));
             // Connection type (user 2026-06-10): how the game is hosted on the
             // host row ("LAN HOST"/"P2P HOST") + each link's transport ("LAN"/
             // "P2P"/"P2P RELAY"; "VIA HOST" for peer clients on a client board).
-            ImGui::TableSetupColumn("Link", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-            ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+            ImGui::TableSetupColumn("Link", ImGuiTableColumnFlags_WidthFixed, S(72.0f));
+            ImGui::TableSetupColumn("Ping", ImGuiTableColumnFlags_WidthFixed, S(50.0f));
             for (int i = 0; i < s.count; ++i) {
                 const coop::roster::Row& r = s.rows[i];
                 const char* nick = r.nick[0] ? r.nick : (r.isLocal ? "Player" : "Remote player");
@@ -153,7 +156,7 @@ void Render() {
                     }
                 } else {
                     ImGui::TextColored(nickCol, "%s", nick);
-                    if (r.isLocal) { ImGui::SameLine(0.0f, 6.0f); ImGui::TextDisabled("(you)"); }
+                    if (r.isLocal) { ImGui::SameLine(0.0f, S(6.0f)); ImGui::TextDisabled("(you)"); }
                 }
 
                 // Voice column (v66): the per-player mic-state icon. Self row:
@@ -174,7 +177,7 @@ void Render() {
                         !self && r.slot >= 0 &&
                         r.slot < static_cast<int>(coop::players::kMaxPeers) &&
                         vs.slotVolume[r.slot] <= 0.001f;
-                    if (ImGui::InvisibleButton("##vicon", ImVec2(20.0f, ih))) {
+                    if (ImGui::InvisibleButton("##vicon", ImVec2(S(20.0f), ih))) {
                         if (self) coop::voice_chat::SetMuted(vs.muted == 0);
                         else if (r.connected) ImGui::OpenPopup("##vvol");
                     }
@@ -187,7 +190,7 @@ void Render() {
                                        : idle        ? coop::voice_chat::VoiceIcon::Talking
                                                      : icon;
                     ui::voice_icons::Draw(ImGui::GetWindowDrawList(),
-                                          ImVec2(cell.x + 10.0f, cell.y + ih * 0.5f),
+                                          ImVec2(cell.x + S(10.0f), cell.y + ih * 0.5f),
                                           ih * 0.95f, shown,
                                           localSilenced ? 0.55f : idle ? 0.30f : 1.0f);
                     if (ImGui::IsItemHovered()) {
@@ -266,13 +269,13 @@ void Render() {
             ImGui::Text("Permanently ban %s?", g_banConfirmNick);
             ImGui::TextDisabled("Disconnected now and blocked by IP on reconnect.");
             ImGui::Spacing();
-            if (ImGui::Button("Ban", ImVec2(110, 0))) {
+            if (ImGui::Button("Ban", ImVec2(S(110.f), 0))) {
                 coop::moderation::BanSlot(g_banConfirmSlot);
                 g_banConfirmSlot = -1;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(110, 0))) {
+            if (ImGui::Button("Cancel", ImVec2(S(110.f), 0))) {
                 g_banConfirmSlot = -1;
                 ImGui::CloseCurrentPopup();
             }

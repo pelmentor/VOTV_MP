@@ -5,6 +5,7 @@
 #include "coop/player/local_body.h"
 #include "coop/player/skin_registry.h"
 #include "ui/imgui_overlay.h"
+#include "ui/scale.h"
 
 #include <map>
 #include <string>
@@ -23,7 +24,7 @@ struct Preview {
 std::map<std::string, Preview> g_previews;
 bool g_scanned = false;
 
-constexpr float kTileW = 112.f;   // tile content width
+constexpr float kTileW = 112.f;   // tile content width (1080p-authored; S() at use)
 constexpr float kTileImgH = 112.f;
 
 const Preview& PreviewFor(const coop::skins::SkinEntry& e) {
@@ -60,8 +61,10 @@ void Render() {
     ImGui::Separator();
 
     // gmod-style tile grid: as many tiles per row as the pane fits.
+    using ui::scale::S;
+    const float tileW = S(kTileW), tileImgH = S(kTileImgH);
     const float availW = ImGui::GetContentRegionAvail().x;
-    const float cellW = kTileW + ImGui::GetStyle().ItemSpacing.x;
+    const float cellW = tileW + ImGui::GetStyle().ItemSpacing.x;
     int perRow = static_cast<int>(availW / cellW);
     if (perRow < 1) perRow = 1;
 
@@ -82,10 +85,10 @@ void Render() {
         bool clicked;
         if (pv.srv) {
             // Fit the image into the tile box preserving aspect.
-            float iw = kTileW, ih = kTileImgH;
+            float iw = tileW, ih = tileImgH;
             if (pv.w > 0 && pv.h > 0) {
-                const float s = (kTileW / pv.w < kTileImgH / pv.h) ? kTileW / pv.w
-                                                                   : kTileImgH / pv.h;
+                const float s = (tileW / pv.w < tileImgH / pv.h) ? tileW / pv.w
+                                                                 : tileImgH / pv.h;
                 iw = pv.w * s; ih = pv.h * s;
             }
             // ImTextureID is ImU64 since 1.91.4 -- pointer goes through uintptr_t.
@@ -95,11 +98,11 @@ void Render() {
         } else {
             clicked = ImGui::Button(e.name == coop::skins::kNativeSkinName ? "Dr. Kel\n(default)"
                                                                            : "(no preview)",
-                                    ImVec2(kTileW, kTileImgH));
+                                    ImVec2(tileW, tileImgH));
         }
         if (isCurrent) ImGui::PopStyleColor(3);
         // Name line under the tile, clipped to the tile width.
-        ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + kTileW);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + tileW);
         if (isCurrent) ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.6f, 1.0f), "%s", e.name.c_str());
         else           ImGui::TextUnformatted(e.name.c_str());
         ImGui::PopTextWrapPos();

@@ -50,6 +50,25 @@ target_include_directories(minhook PUBLIC ${MINHOOK_DIR}/include)
 # the same static-CRT as the mod (like minhook). Backends: DX11 + DX12 (we
 # auto-detect the RHI at the swapchain) + Win32 (input). Source in third_party/imgui.
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui)
+
+# FreeType (FTL license, vendored 2.13.3) -- the imgui_freetype atlas rasterizer
+# (proper hinting; visibly sharper than stb_truetype at 16-18 px UI sizes, user
+# 2026-07-04). All optional deps OFF/internal so the build stays self-contained
+# (RULE 3: zero loose runtime files, zero system dev packages).
+# FreeType's own cmake_minimum_required(3.0...3.5) resets the policy scope, so
+# CMP0091 (MSVC_RUNTIME_LIBRARY) would record as OLD on its targets and the
+# static-CRT property below would be silently ignored (audit WARN-1: Release
+# was /MT only by cl's no-flag default; Debug would mix /MT into /MTd). Force
+# NEW for subdirectories so the property is honored deterministically.
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+set(FT_DISABLE_ZLIB     ON  CACHE BOOL "" FORCE)  # internal zlib copy
+set(FT_DISABLE_BZIP2    ON  CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG      ON  CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON  CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI   ON  CACHE BOOL "" FORCE)
+set(SKIP_INSTALL_ALL    ON  CACHE BOOL "" FORCE)
+add_subdirectory(third_party/freetype EXCLUDE_FROM_ALL)
+
 add_library(imgui STATIC
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
@@ -59,8 +78,13 @@ add_library(imgui STATIC
     ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
     ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
     ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    ${IMGUI_DIR}/misc/freetype/imgui_freetype.cpp
 )
 target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
+# IMGUI_ENABLE_FREETYPE makes FreeType the DEFAULT atlas builder (since 1.81) --
+# every font in the atlas (chat, panels, nameplates) rasterizes through it.
+target_compile_definitions(imgui PUBLIC IMGUI_ENABLE_FREETYPE)
+target_link_libraries(imgui PUBLIC freetype)
 
 # --- GameNetworkingSockets (BSD-3, vendored as git submodule, pinned v1.5.1) ---
 #
@@ -383,6 +407,7 @@ add_library(votv-coop SHARED
     src/ui/toast.cpp
     src/ui/chat_input.cpp
     src/ui/fonts.cpp
+    src/ui/scale.cpp
     resources/fonts.rc
     src/coop/player/roster.cpp
     src/coop/session/ban_list.cpp
@@ -481,6 +506,9 @@ if (MSVC)
 
     # Dear ImGui likewise (created before the global CMAKE_MSVC_RUNTIME_LIBRARY).
     set_property(TARGET imgui PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # FreeType (the imgui_freetype rasterizer) must match the static CRT too.
+    set_property(TARGET freetype PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
     set_property(TARGET xinput1_3 PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(xinput1_3 PRIVATE /W4 /permissive-)

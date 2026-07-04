@@ -6,6 +6,7 @@
 #include "coop/voice/voice_chat.h"
 #include "coop/voice/voice_playback.h"
 #include "harness/config.h"
+#include "ui/scale.h"
 #include "ui/voice_icons.h"
 
 #include "imgui.h"
@@ -90,9 +91,10 @@ void Render() {
     VC::GetUiSnapshot(s);
 
     const ImGuiIO& io = ImGui::GetIO();
+    using ui::scale::S;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.45f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(S(380.0f), 0.0f), ImGuiCond_Always);
     // Begin's close-X needs a plain bool*; bridge the atomic through a local
     // and write back the X-close at the end (both early-out and tail paths).
     bool open = true;
@@ -118,20 +120,20 @@ void Render() {
             const float frac = std::clamp((s.micLevelDb + 60.0f) / 60.0f, 0.0f, 1.0f);
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("Mic");
-            ImGui::SameLine(60.0f);
+            ImGui::SameLine(S(60.0f));
             const ImVec4 barCol = s.transmitting ? ImVec4(0.30f, 0.80f, 0.40f, 1.0f)
                                                  : ImVec4(0.45f, 0.50f, 0.56f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barCol);
             char db[24];
             std::snprintf(db, sizeof(db), "%.0f dB", s.micLevelDb);
-            ImGui::ProgressBar(frac, ImVec2(-34.0f, 0.0f), db);
+            ImGui::ProgressBar(frac, ImVec2(-S(34.0f), 0.0f), db);
             ImGui::PopStyleColor();
             ImGui::SameLine();
             const ImVec2 p = ImGui::GetCursorScreenPos();
             ui::voice_icons::Draw(ImGui::GetWindowDrawList(),
-                                  ImVec2(p.x + 9.0f, p.y + ImGui::GetTextLineHeight() * 0.6f),
-                                  16.0f, static_cast<VC::VoiceIcon>(s.localIcon), 1.0f);
-            ImGui::Dummy(ImVec2(20.0f, ImGui::GetTextLineHeight()));
+                                  ImVec2(p.x + S(9.0f), p.y + ImGui::GetTextLineHeight() * 0.6f),
+                                  S(16.0f), static_cast<VC::VoiceIcon>(s.localIcon), 1.0f);
+            ImGui::Dummy(ImVec2(S(20.0f), ImGui::GetTextLineHeight()));
         }
 
         bool muted = s.muted != 0;

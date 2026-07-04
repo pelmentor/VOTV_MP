@@ -3,6 +3,7 @@
 #include "ui/console.h"
 
 #include "coop/session/join_progress.h"
+#include "ui/scale.h"
 #include "ue_wrap/log.h"
 
 #include "imgui.h"
@@ -99,13 +100,14 @@ void Render() {
     if (!IsOpen()) return;
 
     const ImGuiIO& io = ImGui::GetIO();
+    using ui::scale::S;
     // Bottom-anchored panel, wide + short, semi-transparent -- a Quake-style drop console.
     const float w = io.DisplaySize.x * 0.56f;
-    const float h = 260.0f;
-    ImGui::SetNextWindowPos(ImVec2(16.0f, io.DisplaySize.y - h - 16.0f), ImGuiCond_Appearing);
+    const float h = S(260.0f);
+    ImGui::SetNextWindowPos(ImVec2(S(16.0f), io.DisplaySize.y - h - S(16.0f)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Appearing);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.04f, 0.06f, 0.88f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(6.0f));
 
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
     if (ImGui::Begin("Console###coop_console", nullptr, flags)) {
@@ -126,7 +128,7 @@ void Render() {
                 startIdx = total - live;
                 for (uint32_t i = 0; i < live; ++i) snap[n++] = g_ring[(startIdx + i) % kRingCap];
             }
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(4.0f), S(1.0f)));
             for (int i = 0; i < n; ++i) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ColorFor(snap[i].level));
                 ImGui::TextUnformatted(snap[i].text);

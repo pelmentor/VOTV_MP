@@ -3,6 +3,7 @@
 #include "ui/loading_screen.h"
 
 #include "coop/session/join_progress.h"
+#include "ui/scale.h"
 
 #include "imgui.h"
 
@@ -13,6 +14,7 @@ namespace ui::loading_screen {
 namespace {
 
 namespace jp = coop::join_progress;
+using ui::scale::S;
 
 // Horizontal-centered text within the current window.
 void CenteredText(const char* s) {
@@ -29,13 +31,13 @@ void IndeterminateBar(float barW) {
     const float h = ImGui::GetFrameHeight();
     const ImVec2 p1(p0.x + barW, p0.y + h);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p0, p1, IM_COL32(26, 30, 38, 255), 3.0f);  // track
+    dl->AddRectFilled(p0, p1, IM_COL32(26, 30, 38, 255), S(3.0f));  // track
     const float seg = barW * 0.28f;
     const float span = barW + seg;
     const float x = std::fmod(static_cast<float>(ImGui::GetTime()) * (barW * 0.9f), span) - seg;
     const float lx0 = p0.x + (x < 0.0f ? 0.0f : x);
     const float lx1 = p0.x + ((x + seg) > barW ? barW : (x + seg));
-    if (lx1 > lx0) dl->AddRectFilled(ImVec2(lx0, p0.y), ImVec2(lx1, p1.y), IM_COL32(92, 150, 210, 255), 3.0f);
+    if (lx1 > lx0) dl->AddRectFilled(ImVec2(lx0, p0.y), ImVec2(lx1, p1.y), IM_COL32(92, 150, 210, 255), S(3.0f));
     ImGui::Dummy(ImVec2(barW, h));
 }
 
@@ -51,15 +53,15 @@ void Render() {
     if (v.phase == jp::Phase::Idle) return;
 
     const ImGuiIO& io = ImGui::GetIO();
-    const float barW = 380.0f;
+    const float barW = S(380.0f);
 
     // A small CENTERED panel over the clean menu background (the menu widgets are hidden by
     // multiplayer_menu while a join is active). NOT a full-screen opaque cover -- a subtle
     // semi-transparent backing for legibility, auto-sized to the content.
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22.0f, 20.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(22.0f), S(20.0f)));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.04f, 0.05f, 0.07f, 0.72f));
 
     // AlwaysAutoResize sizes the panel to its content; the 380-wide progress bar sets the
@@ -74,7 +76,7 @@ void Render() {
         CenteredText("MULTIPLAYER");
         ImGui::PopStyleColor();
         ImGui::SetWindowFontScale(1.0f);
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        ImGui::Dummy(ImVec2(0.0f, S(8.0f)));
 
         // Status line.
         char status[160];
@@ -98,7 +100,7 @@ void Render() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.84f, 0.90f, 1.0f));
         CenteredText(status);
         ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        ImGui::Dummy(ImVec2(0.0f, S(8.0f)));
 
         // Progress bar.
         if (v.phase == jp::Phase::Receiving && v.total > 0) {
@@ -112,7 +114,7 @@ void Render() {
         } else {
             IndeterminateBar(barW);
         }
-        ImGui::Dummy(ImVec2(0.0f, 12.0f));
+        ImGui::Dummy(ImVec2(0.0f, S(12.0f)));
 
         if (v.mode == jp::Mode::Host) {
             // HOST boot: NO Cancel button. The user is loading their OWN world to host;
@@ -124,7 +126,7 @@ void Render() {
         } else {
             // Cancel: abort the CLIENT join (the harness drains the request -> Stop +
             // reopen browser; a session-death flee then lands us at the main menu).
-            const float btnW = 120.0f;
+            const float btnW = S(120.0f);
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - btnW) * 0.5f);
             if (ImGui::Button("Cancel", ImVec2(btnW, 0.0f))) jp::RequestCancel();
         }

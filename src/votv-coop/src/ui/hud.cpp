@@ -8,6 +8,7 @@
 #include "coop/player/nameplate.h"
 #include "coop/voice/voice_chat.h"
 #include "ui/fonts.h"
+#include "ui/scale.h"
 #include "ui/voice_icons.h"
 
 #include "imgui.h"
@@ -20,6 +21,8 @@
 namespace ui::hud {
 namespace {
 
+using ui::scale::S;  // 1080p-authored px -> live-resolution px (ui/scale.h)
+
 // Nameplate BASE text size (px) -- the size up CLOSE. The whole plate scales DOWN with
 // distance (p.scale, ~1/distance, computed in coop::nameplate::DistanceScale) so it stays
 // proportional to the peer's on-screen body instead of looming over a far, shrunken
@@ -29,14 +32,15 @@ namespace {
 // (DistanceAlpha); p.scale is capped at 1.0 so the plate is never bigger than this.
 constexpr float kNickPx = 16.f;
 
-// Draw `text` at `size` with a cheap 1px outline (4-way offset) so it stays legible
-// over any scene.
+// Draw `text` at `size` with a cheap outline (4-way offset, ~1px at 1080p and
+// proportional above) so it stays legible over any scene.
 void TextOutlined(ImDrawList* dl, ImFont* font, float size, ImVec2 pos,
                   ImU32 col, ImU32 outline, const char* text) {
-    dl->AddText(font, size, ImVec2(pos.x - 1.f, pos.y), outline, text);
-    dl->AddText(font, size, ImVec2(pos.x + 1.f, pos.y), outline, text);
-    dl->AddText(font, size, ImVec2(pos.x, pos.y - 1.f), outline, text);
-    dl->AddText(font, size, ImVec2(pos.x, pos.y + 1.f), outline, text);
+    const float o = std::max(1.f, S(1.f));
+    dl->AddText(font, size, ImVec2(pos.x - o, pos.y), outline, text);
+    dl->AddText(font, size, ImVec2(pos.x + o, pos.y), outline, text);
+    dl->AddText(font, size, ImVec2(pos.x, pos.y - o), outline, text);
+    dl->AddText(font, size, ImVec2(pos.x, pos.y + o), outline, text);
     dl->AddText(font, size, pos, col, text);
 }
 
@@ -56,17 +60,17 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     // so a far peer's label stays proportional to their shrunken on-screen body. p.scale
     // is 1.0 up close (capped) and shrinks ~1/distance to a legible floor far away.
     const float s = std::clamp(p.scale, 0.20f, 1.f);
-    const float px = kNickPx * s;
-    const float barW = 44.f * s, barH = 5.f * s;
-    const float gap = 10.f * s;    // nick sits sz.y + gap above the head anchor
-    const float barGap = 4.f * s;  // bar sits barGap below the anchor
+    const float px = S(kNickPx) * s;
+    const float barW = S(44.f) * s, barH = S(5.f) * s;
+    const float gap = S(10.f) * s;    // nick sits sz.y + gap above the head anchor
+    const float barGap = S(4.f) * s;  // bar sits barGap below the anchor
 
     ImFont* font = ImGui::GetFont();
     const ImVec2 sz = font->CalcTextSizeA(px, FLT_MAX, 0.f, line);
     // Keep the whole nameplate on-screen: a peer in FRONT of you but whose head sits
     // past a screen edge still shows the label at the edge instead of vanishing.
     const ImGuiIO& io = ImGui::GetIO();
-    constexpr float m = 6.f;
+    const float m = S(6.f);
     const float halfW = std::max(sz.x, barW) * 0.5f;
     const float ax = std::clamp(p.x, m + halfW, io.DisplaySize.x - m - halfW);
     const float ay = std::clamp(p.y, m + sz.y + gap, io.DisplaySize.y - m - barH - barGap);
@@ -78,7 +82,7 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     // 2026-07-02: no black rectangle behind the plate; if it ever returns, restore
     // the AddRectFilled from git history) -- readability rides the 1px text outline
     // + the health bar's own outline.
-    const float padX = 6.f * s, padY = 3.f * s;
+    const float padX = S(6.f) * s, padY = S(3.f) * s;
     const ImVec2 boxMin(std::min(textPos.x, bp.x) - padX, textPos.y - padY);
     const ImVec2 boxMax(std::max(textPos.x + sz.x, bp.x + barW) + padX, bp.y + barH + padY);
 
@@ -94,8 +98,8 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     // Voice badge (v66): right of the plate backing, scaled+faded with it
     // (the SVC nameplate icon placement, design SS3.1).
     if (p.voiceIcon != 0) {
-        const float ih = 13.f * s;
-        ui::voice_icons::Draw(dl, ImVec2(boxMax.x + 4.f * s + ih * 0.5f,
+        const float ih = S(13.f) * s;
+        ui::voice_icons::Draw(dl, ImVec2(boxMax.x + S(4.f) * s + ih * 0.5f,
                                          (boxMin.y + boxMax.y) * 0.5f),
                               ih, static_cast<coop::voice_chat::VoiceIcon>(p.voiceIcon), a);
     }
@@ -136,10 +140,10 @@ void DrawObjectOverlay() {
     // Always-on status line (top-right): proves the overlay is live + shows the
     // in-range tracked/untracked counts even when no label is on screen.
     if (os.status[0]) {
-        constexpr float kStatusPx = 13.f;
-        const ImVec2 sz = font->CalcTextSizeA(kStatusPx, FLT_MAX, 0.f, os.status);
-        TextOutlined(dl, font, kStatusPx,
-                     ImVec2(io.DisplaySize.x - sz.x - 10.f, 8.f),
+        const float statusPx = S(13.f);
+        const ImVec2 sz = font->CalcTextSizeA(statusPx, FLT_MAX, 0.f, os.status);
+        TextOutlined(dl, font, statusPx,
+                     ImVec2(io.DisplaySize.x - sz.x - S(10.f), S(8.f)),
                      IM_COL32(255, 235, 130, 235), IM_COL32(0, 0, 0, 200), os.status);
     }
 
@@ -148,8 +152,9 @@ void DrawObjectOverlay() {
         if (L.alpha <= 0.02f) continue;
         // Cull labels projected outside the viewport (small margin keeps a label
         // attached to an object sliding off the edge from popping).
-        if (L.x < -60.f || L.y < -60.f ||
-            L.x > io.DisplaySize.x + 60.f || L.y > io.DisplaySize.y + 60.f) continue;
+        const float cm = S(60.f);
+        if (L.x < -cm || L.y < -cm ||
+            L.x > io.DisplaySize.x + cm || L.y > io.DisplaySize.y + cm) continue;
 
         // Same billboard shape as the nameplates: base size up close, ~1/distance
         // shrink to a legible floor.
@@ -165,13 +170,13 @@ void DrawObjectOverlay() {
         const ImU32 grey    = IM_COL32(225, 225, 225, static_cast<int>(a * 225.f));
         const ImU32 outline = IM_COL32(0, 0, 0, static_cast<int>(a * 210.f));
 
-        dl->AddCircleFilled(ImVec2(L.x, L.y), 2.5f * s, kindCol);
+        dl->AddCircleFilled(ImVec2(L.x, L.y), S(2.5f) * s, kindCol);
 
-        const float px1 = 13.f * s, px2 = 11.f * s;
-        float tx = L.x + 7.f * s;
-        float ty = L.y - 6.f * s;
-        if (L.line1[0]) { TextOutlined(dl, font, px1, ImVec2(tx, ty), kindCol, outline, L.line1); ty += px1 + 1.f; }
-        if (L.line2[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line2);   ty += px2 + 1.f; }
+        const float px1 = S(13.f) * s, px2 = S(11.f) * s;
+        float tx = L.x + S(7.f) * s;
+        float ty = L.y - S(6.f) * s;
+        if (L.line1[0]) { TextOutlined(dl, font, px1, ImVec2(tx, ty), kindCol, outline, L.line1); ty += px1 + S(1.f); }
+        if (L.line2[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line2);   ty += px2 + S(1.f); }
         if (L.line3[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line3); }
     }
 }
@@ -182,7 +187,7 @@ void DrawChat() {
     if (cs.count <= 0) return;
 
     const ImGuiIO& io = ImGui::GetIO();
-    constexpr float pad = 14.f;
+    const float pad = S(14.f);
     // Anchor the window's BOTTOM-LEFT corner at the left edge, RAISED to ~mid-screen height.
     // The chat used to sit in the bottom-left corner; the user (2026-06-08) wanted it higher,
     // around the middle. Pivot (0,1) keeps it growing UPWARD as lines stack (newest at the
@@ -202,8 +207,10 @@ void DrawChat() {
     // scene), word-wrap at a fixed column width, and the feed's new fade-IN ramp.
     ImFont* font = ui::fonts::Chat();
     if (!font) font = ImGui::GetFont();
-    const float px = ui::fonts::Chat() ? ui::fonts::kChatPx : ImGui::GetFontSize();
-    const float wrapW = std::min(io.DisplaySize.x * 0.42f, 640.f);
+    // ChatPx() = the px the chat font was BAKED at (scaled): drawing at exactly
+    // that size renders the crisp 1:1 rasterization, no bitmap resample.
+    const float px = ui::fonts::Chat() ? ui::fonts::ChatPx() : ImGui::GetFontSize();
+    const float wrapW = std::min(io.DisplaySize.x * 0.42f, S(640.f));
 
     // Per-slot nick palette (8 entries, wraps). Matches the scoreboard's hue family:
     // distinct, readable on dark AND bright scenes at full alpha.
@@ -237,6 +244,7 @@ void DrawChat() {
             const char* end = l.text + std::strlen(l.text);
             const char* nickEnd = l.text + ((l.nickLen && l.nickLen < std::strlen(l.text))
                                             ? l.nickLen : 0);
+            const float o = std::max(1.f, S(1.f));  // outline offset (see TextOutlined)
             while (s < end) {
                 const char* rowEnd = font->CalcWordWrapPositionA(px / font->FontSize, s, end, wrapW);
                 if (rowEnd == s) rowEnd = s + 1;  // never stall on a single overlong glyph
@@ -247,15 +255,15 @@ void DrawChat() {
                 while (seg < rowEnd) {
                     const char* segEnd = (seg < nickEnd && nickEnd < rowEnd) ? nickEnd : rowEnd;
                     const ImU32 col = (seg < nickEnd) ? nickCol : body;
-                    dl->AddText(font, px, ImVec2(x - 1.f, pos.y), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x + 1.f, pos.y), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x, pos.y - 1.f), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x, pos.y + 1.f), outline, seg, segEnd);
+                    dl->AddText(font, px, ImVec2(x - o, pos.y), outline, seg, segEnd);
+                    dl->AddText(font, px, ImVec2(x + o, pos.y), outline, seg, segEnd);
+                    dl->AddText(font, px, ImVec2(x, pos.y - o), outline, seg, segEnd);
+                    dl->AddText(font, px, ImVec2(x, pos.y + o), outline, seg, segEnd);
                     dl->AddText(font, px, ImVec2(x, pos.y), col, seg, segEnd);
                     x += font->CalcTextSizeA(px, FLT_MAX, 0.f, seg, segEnd).x;
                     seg = segEnd;
                 }
-                ImGui::Dummy(ImVec2(x - pos.x, px + 2.f));
+                ImGui::Dummy(ImVec2(x - pos.x, px + S(2.f)));
                 s = rowEnd;
                 while (s < end && *s == ' ') ++s;  // swallow the wrap-point space
             }
@@ -296,7 +304,7 @@ void DrawLocalVoiceIcon() {
     // (user, 2026-06-13). x=170 clears the vitals readout; a compact 28 px badge
     // sat near the bottom edge (user 2026-06-18: the prior 72 px badge was far too
     // large).
-    ui::voice_icons::Draw(dl, ImVec2(170.f, io.DisplaySize.y - 36.f), 28.f, icon, 0.9f);
+    ui::voice_icons::Draw(dl, ImVec2(S(170.f), io.DisplaySize.y - S(36.f)), S(28.f), icon, 0.9f);
 }
 
 // Dev ragdoll skeleton ESP (coop::dev::ragdoll_bone_overlay snapshot): bone->parent
@@ -313,25 +321,25 @@ void DrawRagdollBones() {
     const ImGuiIO& io = ImGui::GetIO();
 
     if (rs.status[0]) {
-        constexpr float kStatusPx = 13.f;
-        const ImVec2 sz = font->CalcTextSizeA(kStatusPx, FLT_MAX, 0.f, rs.status);
-        TextOutlined(dl, font, kStatusPx,
-                     ImVec2(io.DisplaySize.x - sz.x - 10.f, 26.f),
+        const float statusPx = S(13.f);
+        const ImVec2 sz = font->CalcTextSizeA(statusPx, FLT_MAX, 0.f, rs.status);
+        TextOutlined(dl, font, statusPx,
+                     ImVec2(io.DisplaySize.x - sz.x - S(10.f), S(26.f)),
                      IM_COL32(255, 190, 120, 235), IM_COL32(0, 0, 0, 200), rs.status);
     }
 
     for (int i = 0; i < rs.count; ++i) {
         const auto& L = rs.lines[i];
         // Cull segments fully outside the viewport (margin keeps partially-visible limbs).
-        const float m = 80.f;
+        const float m = S(80.f);
         if ((L.x1 < -m && L.x2 < -m) || (L.y1 < -m && L.y2 < -m) ||
             (L.x1 > io.DisplaySize.x + m && L.x2 > io.DisplaySize.x + m) ||
             (L.y1 > io.DisplaySize.y + m && L.y2 > io.DisplaySize.y + m)) continue;
         const ImU32 col = (L.kind == 0) ? IM_COL32(255, 170, 64, 235)    // local native ragdoll
                                         : IM_COL32(110, 205, 255, 235);  // remote mirror body
-        dl->AddLine(ImVec2(L.x1, L.y1), ImVec2(L.x2, L.y2), col, 1.6f);
-        dl->AddCircleFilled(ImVec2(L.x1, L.y1), 2.2f, col);
-        dl->AddCircleFilled(ImVec2(L.x2, L.y2), 2.2f, col);
+        dl->AddLine(ImVec2(L.x1, L.y1), ImVec2(L.x2, L.y2), col, S(1.6f));
+        dl->AddCircleFilled(ImVec2(L.x1, L.y1), S(2.2f), col);
+        dl->AddCircleFilled(ImVec2(L.x2, L.y2), S(2.2f), col);
     }
 }
 

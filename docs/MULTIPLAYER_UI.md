@@ -15,14 +15,24 @@ runtime). F1 > Cosmetics > Nameplate (v94, AS-BUILT 2026-07-02): the "show my
 nameplate to other players" checkbox — a SYNCED per-peer pref (NameplateChange
 + the Join prefs byte; persists in votv-coop.ini `nameplate=`).
 **Overlay typography + chat (AS-BUILT 2026-07-04, `684f6670`+`1e6c86ea`;
-hands-on = runbook 0j):** Roboto Regular 16px (vendored Apache-2.0 TTFs,
-EMBEDDED in the DLL as RCDATA — `ui/fonts.cpp`) is the default font of the
-WHOLE overlay; Bold 18px is the chat face; Cyrillic glyph ranges on both, so
-chat is UTF-8 end-to-end (the deliberate ASCII '?'-squash is retired). Chat
-feed: 220ms fade-in + fade-out tail, per-slot colored nick, 4-way outline,
-word-wrap; chat input: Up/Down send-history; console: focus-on-open + command
-history; the save-name + direct-IP fields submit on Enter. MP-created saves
-stamp `Version` at create (`c81f1c2d` — the red "unk!" fix; runbook 0f).
+hands-on = runbook 0j):** vendored TTFs EMBEDDED in the DLL as RCDATA
+(`ui/fonts.cpp`) — Regular 16px is the default font of the WHOLE overlay,
+Bold 18px is the chat face; Cyrillic glyph ranges on both, so chat is UTF-8
+end-to-end (the deliberate ASCII '?'-squash is retired). Chat feed: 220ms
+fade-in + fade-out tail, per-slot colored nick, 4-way outline, word-wrap;
+chat input: Up/Down send-history; console: focus-on-open + command history;
+the save-name + direct-IP fields submit on Enter. MP-created saves stamp
+`Version` at create (`c81f1c2d` — the red "unk!" fix; runbook 0f).
+**Resolution scale + font families (AS-BUILT 2026-07-04 late):** the whole
+overlay is resolution-PROPORTIONAL — `ui/scale.h` owns ONE factor
+(clientHeight/1080, quantized to sixths), fonts re-bake at `px * scale`
+through imgui_freetype (vendored FreeType 2.13.3; sharper hinting than
+stb_truetype), the style rescales (reset + ScaleAllSizes), and every pixel
+constant in `ui/` goes through `S()`; a live resize/res change re-bakes on
+the next frame. THREE embedded families — JetBrains Mono (default), Roboto,
+Cascadia Code (all Cyrillic-cmap-verified; OFL/Apache licenses in
+assets/fonts) — switchable live in F1 > Cosmetics > Interface, persisted as
+votv-coop.ini `ui.font`.
 This doc is kept for the **design rationale** (why runtime UMG, not
 BPModLoader/paks); the code is the truth for the as-built UI.
 
