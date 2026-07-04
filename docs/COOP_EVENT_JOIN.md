@@ -109,8 +109,11 @@ kerfur=reconcile lane [V]; atv=lane [V].
   host 1 Hz `activeEvents_senders` membership diff -> edge log
   (`event_active: BEGIN/END class=... n=... elapsed=...`), plus the join-edge would-be-snapshot
   log in `subsystems::ConnectReplayForSlot`. Proves the seam on real events before any wire.
-  (probe-don't-guess) Seam proof pending a real event during a session (dev `event_force` or a
-  scheduled fire).
+  (probe-don't-guess) **Seam PROVEN [V: 2026-07-04 21:38 autonomous eventforce run, host log]:**
+  forced obelisk -> `BEGIN class=obelisk_C n=1` within 1 s of the native FORCED dispatch; its
+  alarm chain -> `BEGIN class=trigger_alarm_C n=2` (refcount exercised) and
+  `END class=trigger_alarm_C n=1 elapsed=65s`; `eventforce_test: VERDICT PASS` + client REPLAY
+  line unaffected.
 - **Phase 1:** EventSnapshot wire + joiner replay with active-override for replay-safe
   rows. Pyramid mid-join = the acceptance test.
 - **Phase 2:** event_cue join snapshot (closes the starRain gap); class->row map filled
