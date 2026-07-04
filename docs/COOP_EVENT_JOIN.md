@@ -74,7 +74,7 @@ Joiner handling per the EXTENDED dupe matrix (one new column on the existing pol
 
 | Policy class | Late-join answer |
 |---|---|
-| replay-safe rows (piramid, obelisk, treehouse_*, ...) | REPLAY locally at join — with an **active-override**: the snapshot marks the row in-flight, which bypasses the `InClientPassEvents` dedupe (that dedupe exists for COMPLETED history, not in-flight events). Joiner sees the event from t=0; endpoint converges (story flags already in blob; replay re-runs the visuals/sequence). |
+| replay-safe rows (obelisk, treehouse_*, ...; `piramid` FLIPPED to lane-owned 2026-07-04 — host-random path, see docs/events/piramid.md) | REPLAY locally at join — with an **active-override**: the snapshot marks the row in-flight, which bypasses the `InClientPassEvents` dedupe (that dedupe exists for COMPLETED history, not in-flight events). Joiner sees the event from t=0; endpoint converges (story flags already in blob; replay re-runs the visuals/sequence). |
 | lane-owned rows (wisps, ventCrawler, props, weather...) | NOTHING at event level — the owning lane's join snapshot delivers current state. Each lane's join answer is audited in the contract table (3.4). |
 | host-local rows (agrav, pranks RNG...) | skip, as today. |
 | unknown class (not in the map) | log LOUD + skip (same default-no-replay discipline). |
@@ -101,7 +101,12 @@ world_actor=WorldActorSpawn ToSlot [V]; props=prop_snapshot+sweep [V]; weather/t
 balance=ToSlot replays [V]; item_activate+voice=ReplayPeerStatesToSlot [V];
 event_cue=**NONE (gap; Phase 2: host enumerates live cue PSCs at join edge, sends
 EventCue ToSlot)**; keypad/doors/lights=trigger states ride saveTriggers in the blob [V];
-kerfur=reconcile lane [V]; atv=lane [V].
+kerfur=reconcile lane [V]; atv=lane [V];
+piramid=WA connect snapshot delivers the in-flight pyramid at its current transform +
+npc snapshot the remaining wisps; the joiner's mirror BeginPlay restores registry parity
+(setEvent). A join DURING a gather misses only that gather's choreography (PyramidGather
+is edge-relayed, not snapshotted) until Phase 1 EventSnapshot carries gathering/wispTarget
+— bounded to ~10 s of beams [AS-BUILT 2026-07-04, docs/events/piramid.md].
 
 ### 3.5 Phases
 

@@ -76,6 +76,7 @@
 #include "coop/creatures/npc_sync.h"
 #include "coop/creatures/npc_world_enum.h"  // K-0: RegisterExistingWorldNpcs (moved out of npc_sync)
 #include "coop/creatures/world_actor_sync.h"  // v80 (B3b): non-Character event-actor transform mirror (sibling of npc_sync)
+#include "coop/creatures/piramid_sync.h"      // v97: piramid event choreography lane (mirror brain suppression + PyramidGather)
 #include "coop/player/players_registry.h"
 #include "coop/props/prop_lifecycle.h"
 #include "coop/props/prop_snapshot.h"
@@ -96,6 +97,7 @@ void Install(coop::net::Session& session) {
     coop::prop_lifecycle::Install(&session);
     coop::npc_sync::Install(&session);
     coop::world_actor_sync::Install(&session);  // v80 (B3b): non-Character event-actor mirror (2nd BeginDeferred interceptor, disjoint allowlist)
+    coop::piramid_sync::Install(&session);      // v97: piramid event choreography lane (hooks arm lazily on the first piramid element)
     coop::item_activate::Install(&session);  // Phase 5F flashlight
     coop::player_damage::Install(&session);  // vitals Inc3-WIRE damage relay (send + owner-apply)
     coop::weather_sync::Install(&session);   // Phase 5W weather
@@ -298,6 +300,7 @@ DisconnectStats DisconnectAll() {
     stats.snapPending = coop::prop_snapshot::OnDisconnect();
     coop::npc_sync::OnDisconnect();
     coop::world_actor_sync::OnDisconnect();    // v80 (B3b): drain WorldActor mirrors (K2 client ones) + clear host reverse-map
+    coop::piramid_sync::OnDisconnect();        // v97: drop pending gather + gather-edge map + restored-tick set (hooks stay latched)
     coop::npc_adoption::OnSessionEnd();        // v75: drop pending deferred adoptions + reset latches
     coop::kerfur_prop_adoption::OnSessionEnd(); // K-6: drop pending prop-form kerfur adoptions
     coop::host_spawn_watcher::OnDisconnect();  // M2: drop the ambient-prop death-watch list
@@ -384,6 +387,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:npc_client"}; coop::npc_mirror::TickClientNpcs(); }  // v37 CLIENT: apply batch + drive mirror interp (client-only, no-op on host)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:worldactor_host"}; coop::world_actor_sync::TickPoseStream(); }       // v80 HOST: read event WorldActors -> publish WorldActorPose batch (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:worldactor_client"}; coop::world_actor_sync::TickClientWorldActors(); } // v80 CLIENT: apply batch + drive WorldActor mirror interp (client-only, no-op on host)
+    { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:piramid"}; coop::piramid_sync::Tick(); }             // v97: pre-arm probe (250 ms gate) / host gather-edge sweep (1 s) / client mirror restore + pending gather replay
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:trash_clump_pose"}; coop::trash_clump_pose_stream::TickApplyAndDrive(session); } // v85 CLIENT: apply host-auth carry/flight pose batch + per-eid interp (client-only, no-op on host)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::host_spawn_watcher::TickWatchedProps(&session); }  // M2: ambient-prop (pinecone) SetLifeSpan-expiry / consumption despawn -> PropDestroy(eid)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_convert::Tick(); }  // v67: drain deferred kerfur conversion requests/converges (cheap no-op when empty)

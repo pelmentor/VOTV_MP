@@ -127,6 +127,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // asserts shots 1 -> 0 through the native overlap dispatch (coop/dev/event_force).
     SpawnIf("VOTVCOOP_RUN_EVENTFORCE_TEST", "event force-NOW smoke", &EventForceTestThread, role);
 
+    // Piramid mirror-lane e2e: host ForceNow()s the piramid event (native spawner chain -> WA
+    // mirror + npc wisps), asserts the v97 lane arms, then baits a REAL gather by re-pinning
+    // the wisps around the walking pyramid; VERDICT = the PyramidGather relay firing.
+    SpawnIf("VOTVCOOP_RUN_PIRAMIDFORCE_TEST", "piramid mirror-lane e2e", &PiramidForceTestThread, role);
+
     // Wisp mirror-lane e2e: host ForceNow()s the wisps swarm (EX_CallMath spawns -> Func-thunk
     // enroll -> client mirrors), then forces midday so the PE-invisible self-despawns exercise
     // the pose-walk dead-retire broadcast. Assert via log diff.

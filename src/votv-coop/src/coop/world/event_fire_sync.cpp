@@ -96,11 +96,7 @@ const char* const kReplayRows[] = {
     // story / save flips (level-placed triggerBase; no lane) -- the campfire target:
     "treehouse_0", "treehouse_1", "treehouse_2", "treehouse_3", "treehouse_4", "treehouse_5",
     "break_RomeoSierra", "break_Victor", "break_Victor2",
-    // 'piramid' verdict is KNOWN WRONG (2026-07-04 RE: host-random path -> replay arms the
-    // client's own TB box = divergent client-local pyramid). It moves to kNoReplayRows when
-    // the pyramid mirror lane ships -- flipping early would leave the joiner with NOTHING.
-    // Full design: docs/events/piramid.md.
-    "obelisk", "piramid",
+    "obelisk",
     // forceObjects appends (saveSlot array the client's own dish scan reads; no lane):
     "looker_0-1", "looker_1-1", "looker_2-1", "looker_3-1", "looker_4-1",
     "arirSignal", "arirSpk", "picSignal", "peace",
@@ -125,6 +121,13 @@ const NoReplayRow kNoReplayRows[] = {
     // npc_world_enum) -- STILL no-replay: the lane carries the spawns; a replay would arm the
     // client's own trigger_wispSwarm and double-spawn client-local creatures on top of mirrors:
     { "wisps", "npc lane (EX-catch; event-swarm wisp_C mirrored)" },
+    // 2026-07-04 verdict FLIP (sat in kReplayRows, KNOWN WRONG): the pyramid's path is
+    // HOST-RANDOM (wander + wisp-chase timers), so the replay armed the client's own TB box
+    // and a client walk-in spawned a DIVERGENT client-local pyramid + 4 unmirrored wisps.
+    // The arrival now arrives by MIRROR: world_actor pose stream (piramid2_C allowlisted) +
+    // npc-lane wisps + coop/creatures/piramid_sync (brain suppression + PyramidGather relay).
+    // docs/events/piramid.md.
+    { "piramid", "piramid mirror lane (WA pose + piramid_sync brain/gather)" },
     // arirShip: the TBox arm's overlap spawns arirShip_C + alarmLamp_C (+ possible ariral NPC
     // leaves) -- replaying the arm would spawn them CLIENT-LOCAL (RE 2026-06-13 #65 GAP-spawn;
     // audit M3). Host-only until the ship gets a lane:

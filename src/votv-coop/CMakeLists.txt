@@ -288,6 +288,7 @@ add_library(votv-coop SHARED
     src/coop/creatures/npc_pose_host.cpp
     src/coop/creatures/npc_sync.cpp
     src/coop/creatures/npc_world_enum.cpp
+    src/coop/creatures/piramid_sync.cpp
     src/coop/creatures/world_actor_sync.cpp
     src/coop/props/prop_echo_suppress.cpp
     src/coop/props/pile_spawn_bind.cpp
@@ -427,6 +428,7 @@ add_library(votv-coop SHARED
     src/harness/autotest_fog_probe.cpp
     src/harness/autotest_eventfire.cpp
     src/harness/autotest_eventforce.cpp
+    src/harness/autotest_piramidforce.cpp
     src/harness/autotest_wisplane.cpp
     src/harness/autotest_kwisp_probe.cpp
     src/harness/autotest_pauseguard.cpp

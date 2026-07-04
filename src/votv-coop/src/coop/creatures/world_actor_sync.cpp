@@ -393,11 +393,24 @@ void TickPoseStream() {
     static std::vector<coop::net::WorldActorPoseSnapshot> batch;
     batch.clear();
 
+    // Pose-walk dead-retire (2026-07-04, the piramid lifecycle gap): a WA's event-end destroy
+    // is often a SELF K2_DestroyActor (EX/native self-call the PRE observer never sees -- the
+    // npc_sync.cpp:841 class; piramid2_C's checkIfReached END branch is one). A BOUND actor
+    // that reads dead here is terminal (GC'd/recycled) -- close the lifecycle exactly as the
+    // PRE would have: reverse-map erase + RetireMirror + WorldActorDestroy broadcast. Unbound
+    // (actor==null, pre-POST window) elements are NOT dead -- skip them as before.
+    struct DeadWa { void* actor; coop::element::ElementId eid; };
+    std::vector<DeadWa> dead;
+
     int truncated = 0;
     for (coop::element::WorldActor* el : elems) {
         if (!el) continue;
         void* actor = el->GetActor();
-        if (!actor || !R::IsLiveByIndex(actor, el->GetInternalIdx())) continue;  // unbound / GC'd
+        if (!actor) continue;                                    // unbound (pre-POST) -- not dead
+        if (!R::IsLiveByIndex(actor, el->GetInternalIdx())) {    // bound + gone = self-destroyed
+            dead.push_back({actor, el->GetId()});
+            continue;
+        }
         if (static_cast<int>(batch.size()) >= coop::net::kMaxWorldActorBatchEntries) { ++truncated; continue; }
         coop::net::WorldActorPoseSnapshot snap{};
         snap.elementId = static_cast<uint32_t>(el->GetId());
@@ -408,6 +421,20 @@ void TickPoseStream() {
         snap.yaw   = ue_wrap::NormalizeAxis(rot.Yaw);
         snap.roll  = ue_wrap::NormalizeAxis(rot.Roll);
         batch.push_back(snap);
+    }
+    for (const DeadWa& d : dead) {
+        {
+            std::lock_guard<std::mutex> lk(g_actorToWaIdMutex);
+            g_actorToWaId.erase(d.actor);
+        }
+        coop::element::RetireMirror(d.eid);
+        UE_LOGI("world-actor[host dead-retire]: eid=%u actor no longer live (PE-invisible "
+                "self-destroy) -- released + broadcasting destroy", static_cast<uint32_t>(d.eid));
+        coop::net::EntityDestroyPayload dp{};
+        dp.elementId = static_cast<uint32_t>(d.eid);
+        if (!s->SendReliable(coop::net::ReliableKind::WorldActorDestroy, &dp, sizeof(dp)))
+            UE_LOGW("world-actor[host dead-retire]: SendReliable(WorldActorDestroy) failed for eid=%u",
+                    static_cast<uint32_t>(d.eid));
     }
     if (truncated > 0) {
         static bool s_warned = false;
@@ -589,6 +616,61 @@ void OnWorldActorSpawn(const coop::net::EntitySpawnPayload& payload) {
     E::SetActorTickEnabled(spawned, false);
     UE_LOGI("world-actor[client OnSpawn]: materialized mirror eid=%u class='%ls' actor=%p loc=(%.0f,%.0f,%.0f)",
             payload.elementId, classW.c_str(), spawned, payload.locX, payload.locY, payload.locZ);
+}
+
+unsigned int HostEnrollExSpawn(void* actor) {
+    auto* s = LoadSession();
+    if (!s || !s->connected() || s->role() != coop::net::Role::Host) return 0;
+    if (!g_installed.load(std::memory_order_acquire) ||
+        g_disabledThisProcess.load(std::memory_order_acquire)) return 0;
+    if (!actor) return 0;
+    void* cls = R::ClassOf(actor);
+    if (!cls || !IsAllowlistedClass(cls)) return 0;
+    {
+        // Dedup vs the interceptor+POST path: a PE-dispatched spawn was already bound there.
+        std::lock_guard<std::mutex> lk(g_actorToWaIdMutex);
+        auto it = g_actorToWaId.find(actor);
+        if (it != g_actorToWaId.end()) return static_cast<unsigned int>(it->second);
+    }
+    const std::wstring clsW = R::ToString(R::NameOf(cls));
+    auto wa = std::make_unique<coop::element::WorldActor>();
+    std::string typeName8;
+    for (size_t i = 0; i < clsW.size() && i < 63; ++i) typeName8.push_back(static_cast<char>(clsW[i]));
+    wa->SetTypeName(std::move(typeName8));
+    const coop::element::ElementId eid = WaMirrors().AllocAndInstall(std::move(wa), /*isHost=*/true);
+    if (eid == coop::element::kInvalidId) {
+        UE_LOGW("world-actor[host ex-enroll]: AllocAndInstall kInvalidId for '%ls' -- skipped",
+                clsW.c_str());
+        return 0;
+    }
+    coop::element::WorldActor* el = WaMirrors().Get(eid);
+    if (!el) {
+        UE_LOGW("world-actor[host ex-enroll]: eid=%u vanished post-alloc (disconnect race?)", eid);
+        return 0;
+    }
+    el->SetActor(actor, R::InternalIndexOf(actor));
+    {
+        std::lock_guard<std::mutex> lk(g_actorToWaIdMutex);
+        g_actorToWaId[actor] = eid;
+    }
+    coop::net::EntitySpawnPayload p{};
+    p.elementId = static_cast<uint32_t>(eid);
+    p.savePersisted = 0;  // event WAs are never save objects
+    p.className.len = 0;
+    for (size_t i = 0; i < clsW.size() && i < 63; ++i)
+        p.className.data[p.className.len++] = static_cast<char>(clsW[i]);
+    const auto loc = E::GetActorLocation(actor);   // post-Finish (the drain runs next pump tick)
+    const auto rot = E::GetActorRotation(actor);
+    p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
+    p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
+    if (s->SendReliable(coop::net::ReliableKind::WorldActorSpawn, &p, sizeof(p))) {
+        UE_LOGI("world-actor[host ex-enroll]: '%ls' eid=%u at (%.0f,%.0f,%.0f) (EX_CallMath "
+                "BeginDeferred, source-gated catch)", clsW.c_str(), eid, loc.X, loc.Y, loc.Z);
+    } else {
+        UE_LOGW("world-actor[host ex-enroll]: SendReliable(WorldActorSpawn) failed for eid=%u "
+                "(element kept; the connect snapshot can still deliver it)", eid);
+    }
+    return static_cast<unsigned int>(eid);
 }
 
 void OnWorldActorDestroy(const coop::net::EntityDestroyPayload& payload) {

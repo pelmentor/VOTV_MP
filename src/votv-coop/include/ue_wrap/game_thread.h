@@ -109,7 +109,12 @@ unsigned long long TasksRun();
 using UFunctionInterceptor = bool(*)(void* self, void* params);
 // 16 -> 24 (Fork C, 2026-06-10): the client census stood at 15/16 before the
 // 3 ambient-spawner suppressors (-1 for the deleted dirthole row) = 17 live.
-inline constexpr int kMaxInterceptors = 24;
+// 24 -> 40 (piramid lane, 2026-07-04): the census stood at 23/24 -- the lane's
+// three brain interceptors hit table-FULL on a live run (interceptors 1/0/0 +
+// rollback). Capacity is registration-time only: the per-dispatch walk is
+// count-bounded by g_interceptorActive behind the Bloom reject, so headroom
+// costs memory, not hot-path time.
+inline constexpr int kMaxInterceptors = 40;
 
 // Register a PRE-dispatch interceptor for `targetUFunction`. Returns false if
 // the table is full or arguments are null. Multiple distinct interceptors may

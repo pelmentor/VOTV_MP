@@ -64,7 +64,7 @@ and the wiki taxonomy (Story Mode / Ariral-reputation / signal-triggered / rando
 
 | Event (row / class) | Doc | Granular pass |
 |---|---|---|
-| piramid (`piramid2_C`) — devs'-gauntlet acceptance case | [piramid.md](piramid.md) | DESIGN done 2026-07-04 (verdict flip + mirror lane); build next |
+| piramid (`piramid2_C`) — devs'-gauntlet acceptance case | [piramid.md](piramid.md) | AS-BUILT 2026-07-04 late (v97 lane; autonomous e2e PASS: mirror + brain suppression + gather replay dist=9495 + dead-retire END); hands-on visual pass pending |
 | obelisk (`obelisk_C`) — Phase 0 registry-probe exemplar | (todo) | BEGIN/END proven live; doc pending |
 | wisps (`wisp_C` swarm) + killerwisp — creature lanes shipped 07-03 | (todo) | AS-BUILT in code; doc = record the verdicts |
 | starRain (`skyFallingEvent`) — event_cue lane | (todo) | known late-join gap (COOP_EVENT_JOIN.md) |

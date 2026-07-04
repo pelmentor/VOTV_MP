@@ -19,6 +19,7 @@
 #include "coop/net/session.h"
 #include "coop/creatures/kerfur_entity.h"  // K-3: reserve the stable KerfurId when a kerfur NPC is registered
 #include "coop/creatures/npc_sync.h"
+#include "coop/creatures/world_actor_sync.h"  // HostEnrollExSpawn -- the WA branch of the EX-catch drain
 #include "ue_wrap/engine.h"   // GetActorLocation / GetActorRotation
 #include "ue_wrap/kerfur.h"   // HasSaveKey -- the ConnectEdge savePersisted gate
 #include "ue_wrap/log.h"
@@ -123,7 +124,23 @@ coop::element::ElementId EnrollUntrackedNpcActor(void* obj, const std::wstring& 
 // class here once their target class joins kNpcAllowlist.
 constexpr const wchar_t* kExSpawnSourceClasses[] = {
     L"trigger_wispSwarm_C",   // the `wisps` event swarm -> up to 32x wisp_C over ~8-32 s
+    L"piramidSpawner_C",      // the `piramid` event chain -> 4x killerwisp_C (npc lane) +
+                              // 1x piramid2_C (WorldActor lane) -- runTrigger's BeginDeferred
+                              // is EX_CallMath (proven 2026-07-04: zero interceptor catches on
+                              // a live force run while the registry probe saw the BeginPlay)
 };
+
+// A source's output may be a WorldActor-lane class (piramid2_C): same catch seam, drained to
+// world_actor_sync::HostEnrollExSpawn instead of the Npc enroll. Same NameEquals walk
+// world_actor_sync itself uses (CRT-alloc-free; each compare renders the FName through the
+// engine scratch) -- sits strictly BEHIND the source-class match, ambient spawns never reach it.
+bool IsWaAllowlistedClass(void* cls) {
+    if (!cls) return false;
+    const auto& nm = R::NameOf(cls);
+    for (size_t i = 0; i < P::name::kWorldActorAllowlistSize; ++i)
+        if (R::NameEquals(nm, P::name::kWorldActorAllowlist[i])) return true;
+    return false;
+}
 
 // Queue entries carry the internal index CAPTURED AT CATCH TIME so the drain validates with
 // IsLiveByIndex -- a raw pointer cached across a tick boundary is the documented AV/recycle
@@ -143,7 +160,10 @@ void OnBeginDeferredExSpawn(void* srcObj, void* spawned) {
     if (!spawned || !srcObj) return;
     auto* s = coop::npc_sync::GetSession();
     if (!s || s->role() != coop::net::Role::Host || !s->connected()) return;
-    if (!coop::npc_sync::IsInstalled() || coop::npc_sync::IsHostNpcSyncDisabled()) return;
+    // IsInstalled is the "lifecycle armed" proxy for BOTH lanes (they Install together at
+    // StartCoopSession). The npc-specific IsHostNpcSyncDisabled gate moved to the drain's NPC
+    // branch (2026-07-04) so a degraded npc lifecycle can't silently drop WorldActor catches.
+    if (!coop::npc_sync::IsInstalled()) return;
     void* srcCls = R::ClassOf(srcObj);
     if (!srcCls) return;
     bool sourceMatch = false;
@@ -152,7 +172,8 @@ void OnBeginDeferredExSpawn(void* srcObj, void* spawned) {
     }
     if (!sourceMatch) return;
     void* cls = R::ClassOf(spawned);
-    if (!cls || !coop::npc_sync::IsAllowlistedClass(cls)) return;
+    if (!cls) return;
+    if (!coop::npc_sync::IsAllowlistedClass(cls) && !IsWaAllowlistedClass(cls)) return;
     const int32_t idx = R::InternalIndexOf(spawned);
     std::lock_guard<std::mutex> lk(g_pendingMx);
     if (g_pendingExSpawns.size() >= kMaxPendingExSpawns) return;  // drain stalled? never grow unbounded
@@ -167,7 +188,8 @@ void InstallExSpawnCatch(void* beginDeferredFn) {
     // on the same UFunction (trash_collect's ambient-prop observer) -- both callbacks fire.
     if (ue_wrap::ufunction_hook::InstallPostHook(beginDeferredFn, &OnBeginDeferredExSpawn)) {
         UE_LOGI("npc-sync[ex-spawn]: Func-thunk catch installed on BeginDeferred (source-gated: "
-                "trigger_wispSwarm_C -> wisp_C; EX_CallMath spawns now enroll)");
+                "trigger_wispSwarm_C -> wisp_C, piramidSpawner_C -> killerwisp_C + piramid2_C; "
+                "EX_CallMath spawns now enroll)");
     } else {
         UE_LOGW("npc-sync[ex-spawn]: InstallPostHook FAILED -- EX_CallMath creature spawns will "
                 "NOT mirror this session (event-swarm wisps host-only)");
@@ -189,7 +211,17 @@ void DrainPendingExSpawns() {
         // instead of validating a different object at the same address (reflection.h pattern).
         if (!obj || !R::IsLiveByIndex(obj, e.internalIdx)) continue;  // died before Finish / recycled
         void* cls = R::ClassOf(obj);
-        if (!cls || !coop::npc_sync::IsAllowlistedClass(cls)) continue;
+        if (!cls) continue;
+        if (!coop::npc_sync::IsAllowlistedClass(cls)) {
+            // WorldActor-lane output (piramid2_C): hand to world_actor_sync's own enroll (it
+            // re-gates on its allowlist/lifecycle + dedups via its reverse map + broadcasts).
+            if (IsWaAllowlistedClass(cls))
+                coop::world_actor_sync::HostEnrollExSpawn(obj);
+            continue;
+        }
+        // npc-specific lifecycle gate (moved out of the catch 2026-07-04): without a working
+        // destroy observer an Npc Element would leak -- skip the enroll, not the WA branch above.
+        if (coop::npc_sync::IsHostNpcSyncDisabled()) continue;
         // Dedup vs the interceptor+POST path: a PE-dispatched spawn that ALSO matched a source
         // class was already allocated by the PRE + bound by the POST (both ran before this drain).
         if (coop::npc_sync::GetNpcIdForActor(obj) != coop::element::kInvalidId) continue;

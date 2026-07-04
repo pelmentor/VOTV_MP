@@ -190,7 +190,9 @@ inline constexpr const wchar_t* kWorldActorAllowlist[] = {
     L"superEgger_C",               // super egger
     L"igetis_C",                   // igetis
     L"firetank_C",                 // firetank (APawn -- transform-only mirror is layout-agnostic)
-    L"piramidSubpawn_C",           // pyramid sub-pawn (APawn)
+    L"piramidSubpawn_C",           // pyramid sub-pawn (APawn; the SANDBOX piramidTest_C child, not the event)
+    L"piramid2_C",                 // walking pyramid EVENT actor (plain AActor, host-random path; mirror
+                                   // brain suppression + gather relay = coop/creatures/piramid_sync, v97)
 };
 inline constexpr size_t kWorldActorAllowlistSize =
     sizeof(kWorldActorAllowlist) / sizeof(kWorldActorAllowlist[0]);

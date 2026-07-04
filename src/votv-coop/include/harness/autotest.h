@@ -299,4 +299,14 @@ DWORD WINAPI KwispProbeThread(LPVOID arg);
 void RunAutonomousPauseGuardTest();
 DWORD WINAPI PauseGuardTestThread(LPVOID arg);
 
+// Piramid mirror-lane e2e smoke (2026-07-04, harness/autotest_piramidforce.cpp). HOST-ONLY:
+// ForceNow("piramid") runs the REAL native chain (TB overlap -> spawner runTrigger -> 4x
+// killerwisp_C + piramid2_C scale 2); asserts the v97 lane arms (DebugHooksArmed), then
+// re-pins the wisps onto a 150 m ring around the pyramid every 5 s until its OWN brain
+// acquires + arrives + gathers -> DebugHostRelayCount >= 1 = VERDICT PASS. Client side
+// asserted by log diff (mirror materialize + brain-arm + "replay OK"). Gated by env
+// VOTVCOOP_RUN_PIRAMIDFORCE_TEST=1.
+void RunAutonomousPiramidForceTest();
+DWORD WINAPI PiramidForceTestThread(LPVOID arg);
+
 }  // namespace harness::autotest

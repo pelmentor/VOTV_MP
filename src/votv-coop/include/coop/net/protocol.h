@@ -694,7 +694,11 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 96;  // v96: TimeSyncPayload carries the NAMED clock triple
+inline constexpr uint16_t kProtocolVersion = 97;  // v97: PyramidGather=85 -- the piramid mirror lane
+                                                  //      (host gather-commit relay + 'piramid' verdict
+                                                  //      flip to no-replay + piramid2_C pose mirror;
+                                                  //      docs/events/piramid.md).
+                                                  // v96: TimeSyncPayload carries the NAMED clock triple
                                                   //      (timeZ hour/minute/day) -- the client's clock
                                                   //      display + day number were frozen (TimeScale=0
                                                   //      kept its minute pulse dead and the old 12 B
@@ -1882,6 +1886,14 @@ enum class ReliableKind : uint8_t {
                        //     DESIGN: the only native special is 'ariralPrank' (a host-local RNG
                        //     prank roll -- replaying it would roll a DIFFERENT prank per peer).
                        //     Host-only origin (senderPeerSlot must be 0); host receiving one drops.
+    PyramidGather = 85, // 2026-07-04 (v97): HOST->ALL pyramid gather COMMIT (piramid mirror lane,
+                       //     docs/events/piramid.md). The host pyramid's checkIfReached arrived at a
+                       //     killerwisp and latched `gathering` (POST-observer edge); the client stages
+                       //     wispTarget+isWalking on ITS mirrors and re-dispatches checkIfReached so the
+                       //     game's OWN bytecode plays the whole choreography (montage/beams/timelines/
+                       //     wisp freeze). Payload: PyramidGatherPayload (8 B) = [u32 pyramidEid (WA
+                       //     lane id)][u32 wispEid (npc lane id)]. Host-only origin; host receiving
+                       //     one drops (loopback). Not relayable, not pre-world-sendable.
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -3208,6 +3220,19 @@ struct WispTearPayload {
 static_assert(sizeof(WispTearPayload) == 8, "WispTearPayload must be exactly 8 bytes (v72)");
 static_assert(sizeof(WispTearPayload) <= 256 - 20 - 8,
               "WispTearPayload must fit in one reliable datagram");
+
+// PyramidGather (85) -- v97 piramid mirror lane: the host pyramid committed a wisp gather
+// (checkIfReached arrived -> gathering latched). Both ids are the carrying lanes' own
+// identities: the pyramid is a WorldActor element (world_actor_sync), the wisp an Npc
+// element (npc lane). Receiver: coop/creatures/piramid_sync (client replays the native
+// branch on its mirrors once their interp converges inside the arrive radius).
+struct PyramidGatherPayload {
+    uint32_t pyramidEid;  // host-range WorldActor element id of the piramid2_C
+    uint32_t wispEid;     // host-range Npc element id of the gathered killerwisp_C
+};
+static_assert(sizeof(PyramidGatherPayload) == 8, "PyramidGatherPayload must be exactly 8 bytes (v97)");
+static_assert(sizeof(PyramidGatherPayload) <= 256 - 20 - 8,
+              "PyramidGatherPayload must fit in one reliable datagram");
 
 // BalanceSync (23) / BalanceDelta (24) -- shared host-authoritative Points balance
 // (2026-06-04, v30). One int32: the absolute TOTAL (BalanceSync, host->client mirror)

@@ -85,7 +85,17 @@ header -- pure move, `77f56f9e`; move-fidelity audit 0 findings; smoke PASS
 0 ERR/WARN, nulls 0/0, gate episodes 0-1 ms. SAME session, the event_active
 seam then PROVEN live on this code: eventforce run 21:38 -> BEGIN obelisk_C
 n=1 within 1 s, BEGIN trigger_alarm_C n=2, END elapsed=65s, eventforce
-VERDICT PASS + client REPLAY intact)**.
+VERDICT PASS + client REPLAY intact)** →
+**`829A3681BA8ACDA0` (2026-07-04 ~23:15: PIRAMID MIRROR LANE, wire v96 -> v97
+-- coop/creatures/piramid_sync + PyramidGather=85 + piramid2_C on the WA
+allowlist + 'piramid' verdict FLIP to no-replay + piramidSpawner_C EX-catch
+(both runTrigger outputs proven PE-invisible) + WA pose-walk dead-retire
+(latent mirror leak closed for all 17 WA classes) + kMaxInterceptors 24->40
+(table was 23/24). Autonomous e2e PASS 23:19 via piramidforce probe: host
+ex-enroll -> registry BEGIN -> ~2 km march pose-streamed -> gather relay ->
+client replay OK dist=9495 attempts=1 -> wisp consumed via npc lane -> END
+self-destroy dead-retired -> client mirror K2'd -> registry END elapsed=211s;
+0 ERROR both peers, spawn-nulls 0/0, s_asdasd restored byte-identical)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -93,7 +103,24 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-04 ~21:50 (DLL `38E3C707C1862931` deployed 4/4 hash-verified — ТЕКУЩИЙ)
+## 2026-07-04 ~23:15 (DLL `829A3681BA8ACDA0` deployed 4/4 hash-verified, wire v97 — ТЕКУЩИЙ)
+
+### 0r. ПИРАМИДА — визуальный проход (devs'-gauntlet acceptance; автономика уже доказала поток)
+Автономный e2e УЖЕ прошёл (см. цепочку DLL выше): mirror + подавление мозга + gather-replay
++ смерть-ретайр — всё по логам. Твой проход решает ВИЗУАЛ (то, что автономика не видит):
+1. Хост: F1 → EVENTS → piramid → NOW! (или дождись день 30/31 по сюжету). Пирамида
+   спавнится у спавнера (район Signal Lab) и шагает к центру карты.
+2. Оба экрана: ОДНА и та же пирамида, тот же путь, ноги шагают процедурно у клиента,
+   звуки шагов/пинг на месте. Клиентский лог: `world-actor[client OnSpawn]: materialized
+   mirror ... piramid2_C` + `piramid-brain[client]: ... tick restored`.
+3. Gather: когда пирамида доходит до киллервиспа — у ОБОИХ montage + лучи + всасывание
+   виспа. Клиентский лог: `piramid-gather[client]: replay OK`.
+4. Конец: пирамида уходит (SW угол) и исчезает у обоих; хостовый лог
+   `world-actor[host dead-retire]` + `event_active: END class=piramid2_C`.
+5. Отдельно (когда-нибудь): КЛИЕНТ стоит в Signal Lab на заармленной хостом коробке —
+   проверить, что оверлап хоста принимает марионетку (пункт 3.1 в docs/events/piramid.md).
+
+## 2026-07-04 ~21:50 (DLL `38E3C707C1862931` — superseded by `829A3681BA8ACDA0`)
 
 ### 0q. event_active Phase 0 — SEAM УЖЕ ДОКАЗАН автономно; твой прогон опционален
 Хостовый read-only зонд родного реестра активных событий (activeEvents_senders).

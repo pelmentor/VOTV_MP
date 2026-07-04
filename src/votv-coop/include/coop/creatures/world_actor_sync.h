@@ -51,8 +51,11 @@ bool IsInstalled();
 void OnDisconnect();
 
 // HOST: read each live allowlisted WA's transform each tick + publish ONE WorldActorPose batch for the
-// net thread to fan out (so client mirrors MOVE). No-op on a client / a solo peer. Game thread (driven
-// from subsystems::TickGameplay beside npc_sync::TickPoseStream).
+// net thread to fan out (so client mirrors MOVE). Also the pose-walk DEAD-RETIRE seam (2026-07-04): a
+// BOUND actor that reads dead closes its lifecycle here (retire + WorldActorDestroy broadcast) because
+// event-end SELF K2_DestroyActor calls are PE-invisible to the destroy PRE observer (the piramid END).
+// No-op on a client / a solo peer. Game thread (driven from subsystems::TickGameplay beside
+// npc_sync::TickPoseStream).
 void TickPoseStream();
 
 // CLIENT: drain the latest WorldActorPose batch -> open an interp window per WA (SetTargetPose), then
@@ -69,5 +72,14 @@ void OnWorldActorSpawn(const coop::net::EntitySpawnPayload& payload);
 
 // CLIENT receiver: tear down the mirror for a host WorldActorDestroy. Game thread.
 void OnWorldActorDestroy(const coop::net::EntityDestroyPayload& payload);
+
+// HOST off-interceptor enroll for an ALREADY-SPAWNED allowlisted WA the PE interceptor could
+// not see (an EX_CallMath BeginDeferred -- e.g. piramidSpawner_C's runTrigger outputs, caught
+// by npc_world_enum's source-gated Func-thunk and drained here next pump tick, post-Finish so
+// the transform is real). Reaches the same end state as interceptor+POST: WorldActor Element +
+// actor bind + reverse-map + WorldActorSpawn broadcast. Dedups against the interceptor path via
+// the reverse map. Returns the element id, or 0 if not enrolled (gates/allowlist/alloc). Game
+// thread (UFunction-free, but the reverse map + element store expect the pump context).
+unsigned int HostEnrollExSpawn(void* actor);
 
 }  // namespace coop::world_actor_sync

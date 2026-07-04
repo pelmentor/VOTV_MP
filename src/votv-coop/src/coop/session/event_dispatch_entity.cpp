@@ -15,6 +15,7 @@
 #include "coop/props/save_identity_bind.h"  // b3 OWNER: UpdateChipSavePosAndGetOld (retrack identity key on PropSnapPos)
 #include "coop/player/players_registry.h"
 #include "coop/creatures/world_actor_sync.h"  // v80 (B3b): non-Character event-actor mirror receivers
+#include "coop/creatures/piramid_sync.h"      // v97: piramid mirror lane (PyramidGather receiver)
 #include "coop/props/prop_stick_sync.h"
 #include "coop/player/remote_player.h"
 #include "coop/props/remote_prop.h"
@@ -529,6 +530,27 @@ bool HandleEntityEvent(net::Session& session,
         net::EntityDestroyPayload pWaDCopy = pWaD;
         ue_wrap::game_thread::Post([pWaDCopy] {
             ::coop::world_actor_sync::OnWorldActorDestroy(pWaDCopy);
+        });
+        break;
+    }
+    case net::ReliableKind::PyramidGather: {
+        // v97 (piramid mirror lane): host pyramid committed a wisp gather -- the client
+        // replays the native branch on its WA/Npc mirrors (coop/creatures/piramid_sync).
+        // Host-authoritative (only the host runs the pyramid brain).
+        if (msg.payloadLen < sizeof(net::PyramidGatherPayload)) {
+            UE_LOGW("event_feed: PyramidGather payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::PyramidGatherPayload));
+            break;
+        }
+        if (msg.senderPeerSlot != 0) {
+            UE_LOGW("event_feed: PyramidGather from non-host senderPeerSlot=%d -- dropping (host-only)",
+                    msg.senderPeerSlot);
+            break;
+        }
+        net::PyramidGatherPayload pGather{};
+        std::memcpy(&pGather, msg.payload, sizeof(pGather));
+        ue_wrap::game_thread::Post([pGather] {
+            ::coop::piramid_sync::OnPyramidGather(pGather);
         });
         break;
     }

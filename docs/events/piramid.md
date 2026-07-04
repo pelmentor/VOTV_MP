@@ -1,4 +1,4 @@
-# piramid — the walking three-leg pyramid (Rozital tripod)   (STATUS: DESIGN 2026-07-04)
+# piramid — the walking three-leg pyramid (Rozital tripod)   (STATUS: AS-BUILT 2026-07-04 late, autonomous e2e PASS; hands-on visual pass pending)
 
 The devs'-gauntlet acceptance case (docs/DEVS_GAUNTLET.md; docs/COOP_EVENT_JOIN.md Phase 1
 names "pyramid mid-join" as the acceptance test). Ground truth:
@@ -56,7 +56,43 @@ wiki sweep (voicesofthevoid.wiki.gg /Events/Story_Mode + eternitydev.wiki.gg /Py
 | story flag progressAdvancement('piramid') | (b) host save | rides passEvents/save blob as today |
 | radar dot / Halloween skin | (a) derived from actor presence + gamemode | free on the mirror |
 
-## 3. Coop design (the pyramid mirror lane)
+## 3. Coop design (the pyramid mirror lane) — AS-BUILT (v97, 2026-07-04 late)
+
+Built in `coop/creatures/piramid_sync.{h,cpp}` + extensions to `world_actor_sync`,
+`npc_world_enum`, `event_fire_sync`; wire v97 `ReliableKind::PyramidGather = 85`
+(8 B: pyramidEid u32 + wispEid u32). Four discoveries changed the design during the
+live-run loop — each proven by a failing autonomous run, then fixed and re-proven:
+
+- **The spawner is EX_CallMath-invisible** [V: live force run 22:49 — pyramid BeginPlay hit
+  the registry probe while BOTH PE interceptors (npc + WA) caught zero of runTrigger's 5
+  spawns]. Neither the killerwisps NOR the pyramid ever reached the BeginDeferred
+  interceptors. Fix: `piramidSpawner_C` joined `npc_world_enum`'s source-gated Func-thunk
+  EX-catch (the wisp-swarm seam — ONE owner for the EX-spawn axis); its drain gained a
+  WorldActor branch feeding the new `world_actor_sync::HostEnrollExSpawn()` (same end state
+  as interceptor+POST: element + bind + reverse-map + WorldActorSpawn broadcast).
+- **The END self-destroy is PE-invisible too** (SELF `K2_DestroyActor` — the npc_sync:841
+  class), so the WA destroy PRE observer never fires for it. Fix (generic, in the axis
+  owner): pose-walk DEAD-RETIRE in `world_actor_sync::TickPoseStream` — a BOUND actor that
+  reads dead retires + broadcasts WorldActorDestroy. This closed a LATENT lifecycle leak for
+  ALL 17 allowlisted WA classes, not just the pyramid. [V: host dead-retire line + client
+  mirror K2 + registry END elapsed=211s, run 23:19]
+- **Mirror brain suppression, as built**: PRE-cancel exactly the three STATE-WRITING timer
+  handlers (`seeWisps`/`checkIfReached`/`randLoc` — every `walkTo` caller). `ReceiveTick`
+  stays ALIVE (deliberate divergence from the earlier tick-off sketch: the gather-beam
+  per-tick params, head look-at and hover-Z live there and are pure derivations of mirrored
+  state; march/turn are structurally zero — isWalking/multiplyWalk can never latch with the
+  walkTo callers cancelled). `changeLook` + the 30 s ping stay alive (per-viewer cosmetics
+  per section 5). The lane re-enables the mirror's actor tick (world_actor parks generic
+  mirrors tick-off) and unstages any pre-arm brain writes. Hook table: kMaxInterceptors
+  24 -> 40 (census stood 23/24; the 3 brain slots hit table-FULL on a live run).
+- **Gather replay pre-gate must sit ABOVE the native arrive radius**: both actors FREEZE at
+  the host commit, so the mirrors converge to the host's frozen distance — <= 10000 by
+  construction but often only just (proven: replay OK at dist=9495 attempts=1 after a 9000
+  pre-gate starved to deadline). As built: pre-gate 10500, native re-check is the arbiter,
+  branch-not-taken unstages + retries until a 5 s deadline (a missed gather degrades to the
+  npc-lane wisp destroy — beams only).
+
+Original design points (all shipped as described unless noted above):
 
 1. **Dupe-matrix flip**: move `piramid` from `kReplayRows` to `kNoReplayRows`
    ("pyramid mirror lane") in event_fire_sync.cpp. TODAY'S BUG (RE finding, flagged gap):
@@ -102,9 +138,19 @@ wiki sweep (voicesofthevoid.wiki.gg /Events/Story_Mode + eternitydev.wiki.gg /Py
 
 ## 5. Verification
 
-- Phase 0 registry probe sees the event: PROVEN pattern (obelisk BEGIN/END 2026-07-04);
-  pyramid itself pending its first live run.
-- Lane acceptance = the devs'-gauntlet test: host runs the event (dev-force
-  `TB_event_piramid` via event_force), client sees the same pyramid walking the same path,
-  same gathers; then the mid-join variant (client joins while it walks). Autonomy can
-  assert pose-stream flow + gather relay counts; the visual identity needs the hands-on.
+- **Autonomous e2e PASS [V: 2026-07-04 23:19 run, host+client logs]** via
+  `autotest_piramidforce` (env `VOTVCOOP_RUN_PIRAMIDFORCE_TEST=1`, mp.py smoke --duration
+  330; night sun forced so the bait wisps survive; wisps re-pinned onto a 150 m ring around
+  the walking pyramid every 5 s): host ex-enroll eid=3223 -> registry `BEGIN piramid2_C n=1`
+  -> client mirror materialized at the exact host transform -> `piramid-brain[client]`
+  armed + tick restored -> pyramid marched ~2 km (pose stream live, repin trail) -> host
+  `piramid-gather` relay -> client `replay OK (dist=9495 attempts=1)` -> consumed wisp died
+  via npc lane -> host END self-destroy caught by dead-retire -> client mirror K2'd ->
+  registry `END elapsed=211s`. 0 ERROR both peers; save restored byte-identical.
+- Registry probe on the pyramid: PROVEN (BEGIN/END both live runs).
+- **Still pending (hands-on)**: the devs'-gauntlet VISUAL pass — same pyramid, same walk,
+  same gather beams/montage on both screens; the mid-join variant (client joins while it
+  walks — WA connect snapshot delivers the transform; a join DURING a gather misses only
+  that gather's beams until Phase 1 EventSnapshot carries gathering/wispTarget). And the
+  native (non-forced) trigger: a client puppet standing in the host's armed Signal Lab box
+  — verify the TB overlap filter accepts the puppet (section 3 point 1 fallback if not).
