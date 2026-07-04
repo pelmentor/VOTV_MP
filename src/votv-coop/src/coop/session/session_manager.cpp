@@ -544,13 +544,17 @@ uint16_t HostListenPort() {
 }
 
 void EndHostedLobby() {
-    Announcer().Stop();  // POST /v1/leave + stop the heartbeat thread (kills the listing)
+    // Clear the host-side lobby state BEFORE the blocking delist: Announcer().Stop()
+    // blocks (heartbeat join up to ~8s + /leave POST up to 5s), and a re-host landing
+    // inside that window writes FRESH pending/own-lobby state -- a post-Stop() clear
+    // would silently wipe the new host request (audit on c8aec14c, item 2).
     {
         std::lock_guard<std::mutex> lk(g_pendHostMu);
         g_hasPendingHost = false;
     }
     SetOwnLobbyId(std::string());  // no longer hosting -> clear the own-lobby self-join guard
     g_listedState.store(true, std::memory_order_relaxed);  // back to the no-lobby default
+    Announcer().Stop();  // POST /v1/leave + stop the heartbeat thread (kills the listing)
     UE_LOGI("session_manager: EndHostedLobby -- lobby retired (/leave + heartbeat stopped)");
 }
 

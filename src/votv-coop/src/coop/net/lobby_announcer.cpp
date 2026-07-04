@@ -148,19 +148,19 @@ void LobbyAnnouncer::StopHeartbeatLocked() {
 
 void LobbyAnnouncer::Stop() {
     bool was;
+    std::string url, sid, tok;
     {
         std::lock_guard<std::mutex> tl(threadMu_);
         was = active_.exchange(false);
         StopHeartbeatLocked();
-    }
-    if (!was) return;  // nothing was announced -> no /leave to send
-
-    std::string url, sid, tok;
-    {
+        // Copy + clear the creds INSIDE threadMu_: Host() writes them under threadMu_
+        // too, so a concurrent re-announce is fully serialized against this Stop() --
+        // its fresh sessionId can never be consumed by THIS call's /leave below.
         std::lock_guard<std::mutex> lk(mu_);
         url = masterUrl_; sid = sessionId_; tok = token_;
         sessionId_.clear(); token_.clear(); lobbyId_.clear();
     }
+    if (!was) return;  // nothing was announced -> no /leave to send
     if (!url.empty() && !sid.empty()) {
         J::Json b;
         b["sessionId"] = sid;
