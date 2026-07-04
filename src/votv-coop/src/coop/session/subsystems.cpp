@@ -82,6 +82,7 @@
 #include "coop/props/remote_prop.h"
 #include "coop/props/remote_prop_spawn.h"
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
+#include "coop/world/event_active_sync.h"  // join-during-event Phase 0: native activeEvents registry probe (docs/COOP_EVENT_JOIN.md)
 #include "coop/world/weather_sync.h"
 
 #include "ue_wrap/log.h"
@@ -109,6 +110,7 @@ void Install(coop::net::Session& session) {
     coop::firefly_sync::Install(&session);   // v51 peer-symmetric ambient firefly mirror (each peer captures+shares its own)
     coop::event_cue_sync::Install(&session); // v79 HOST-AUTH cosmetic emitter-cue mirror (B1: starfall etc. -- host detects PSC, client replays)
     coop::event_fire_sync::Install(&session); // v95 HOST-AUTH scheduled-event replay (passEvents growth poll -> EventFire; client suppress + policy replay)
+    coop::event_active_sync::Install(&session); // join-during-event Phase 0 (probe): host 1 Hz activeEvents_senders membership diff -> BEGIN/END edge log
     coop::inventory_pickup_sync::Install(&session);  // v58 inventory-collect blip (PlaySound2D observer)
     coop::chat_sync::Install(&session);      // v60 T-chat (the ui/chat_input send path)
     coop::local_body::Install(&session);     // v93 skins: local first-person body + SkinChange announce
@@ -239,6 +241,9 @@ void ConnectReplayForSlot(int slot) {
     }
     // T2-4: catch the new client up to EXISTING peers' current item state.
     coop::item_activate::ReplayPeerStatesToSlot(slot);
+    // join-during-event Phase 0 (probe): log the would-be EventSnapshot for this joiner
+    // (in-flight event classes + elapsed). Log only -- Phase 1 puts it on the wire.
+    coop::event_active_sync::LogJoinSnapshotForSlot(slot);
 }
 
 void ClientConnectEdge(coop::net::Session& session) {
@@ -314,6 +319,7 @@ DisconnectStats DisconnectAll() {
     coop::firefly_sync::OnDisconnect();
     coop::event_cue_sync::OnDisconnect();    // v79 clear the cosmetic-cue poll snapshot
     coop::event_fire_sync::OnDisconnect();   // v95 restore the client scheduler (allEvents.Num) + drop poll baseline/queues
+    coop::event_active_sync::OnDisconnect(); // join-during-event Phase 0: drop tracked membership + cached gamemode
     coop::inventory_pickup_sync::OnDisconnect();
     coop::chat_sync::OnDisconnect();
     coop::turbine_sync::OnDisconnect();
@@ -363,6 +369,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:turbine"}; coop::turbine_sync::Tick(); }        // v61 wind turbines: host ~1 Hz driver-float poll / client deferred-apply retry
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_cue"}; coop::event_cue_sync::Tick(); }      // v79 cosmetic event cues (B1): host ~1 Hz new-PSC poll -> EventCue broadcast (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_fire"}; coop::event_fire_sync::Tick(); }     // v95 scheduled events: host 1 Hz passEvents growth poll -> EventFire / client allEvents suppress + replay drain
+    { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_active"}; coop::event_active_sync::Tick(); }  // join-during-event Phase 0: host 1 Hz activeEvents_senders diff -> BEGIN/END edge log (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:device_occupancy"}; coop::device_occupancy::Tick(); }    // v63 device occupancy: activeInterface edge poll + pending claim retry
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:console_state"}; coop::console_state_sync::Tick(); }  // v64 signal-catcher: host sky poll / client mirror sweep / desk + dish owner streams
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:signal_catch"}; coop::signal_catch_sync::Tick(); }   // v70: catch/cleared detectors (1 Hz) + the joiner's pending download adopt

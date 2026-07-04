@@ -70,7 +70,15 @@ worst-burst ~6 ms/s core; flag = game_thread.cpp 1065/800, standing pe_detour
 extraction restated); autonomous smoke PASS: spawn-nulls 0/0 vs 871+92+puppet,
 [ERROR] 0/0 vs 967, 73 keyed mirrors spawned, keypad 14/14 no regression,
 gate episodes 0-1 ms (57 client / 16 host), no 5s hold-warns, RSS flat ~3GB,
-s_asdasd restored byte-identical; wire unchanged v96)**.
+s_asdasd restored byte-identical; wire unchanged v96)** →
+**`F9591CF919CDF0FD` (2026-07-04 ~21:20: + event_active_sync Phase 0 -- the
+join-during-event READ-ONLY probe per docs/COOP_EVENT_JOIN.md 3.5: host 1 Hz
+activeEvents_senders membership diff -> `event_active: BEGIN/END class=...`
+edge log + join-edge would-be-EventSnapshot log in ConnectReplayForSlot; no
+wire, wire stays v96; perf audit 0 CRITICAL, correctness audit 0 findings;
+smoke PASS x2: resolved offsets 0xE68/0xE70, primed n=0, join-edge "0 in
+flight" for slot 1, 0 ERR/WARN both peers, spawn-nulls 0/0, one-time resolve
+tick 4.2 ms then silent, RSS flat ~3GB, s_asdasd restored)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -78,7 +86,20 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-04 ~20:45 (DLL `A9109CB3AA370629` deployed 4/4 hash-verified — ТЕКУЩИЙ)
+## 2026-07-04 ~21:20 (DLL `F9591CF919CDF0FD` deployed 4/4 hash-verified — ТЕКУЩИЙ)
+
+### 0q. event_active Phase 0 — probe на живом событии (join-during-event, шаг 1)
+Хостовый read-only зонд родного реестра активных событий (activeEvents_senders).
+Твой тест — во время любой сессии запусти событие (F1 → EVENTS → NOW!, например
+obelisk или piramid): (1) хостовый лог должен показать `event_active: BEGIN
+class=<класс события> n=1` в момент старта активной фазы и `END ... elapsed=...s`
+по её концу; (2) если клиент ДЖОЙНИТСЯ, пока событие в полёте, — хостовый лог на
+джойне: `event_active: join-edge slot=N WOULD snapshot class=... elapsed=...s`.
+Это Phase 0 (только лог, провода нет): строки доказывают seam для Phase 1
+(EventSnapshot на джойнера). Ничего визуального у клиента НЕ изменится — это
+ожидаемо; сравнение картинки хост-vs-клиент здесь не критерий.
+
+## 2026-07-04 ~20:45 (DLL `A9109CB3AA370629` — superseded by `F9591CF919CDF0FD`; сценарий 0p актуален)
 
 ### 0p. Join-window SPAWN-NULL burst — ROOT-FIXED (pump drain-defer)
 Корень (IDA): наш pump исполнял отложенные задачи на ЛЮБОМ ProcessEvent — в т.ч.

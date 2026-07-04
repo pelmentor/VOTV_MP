@@ -1,7 +1,8 @@
-# COOP_EVENT_JOIN — the join-during-event contract (DESIGN 2026-07-04)
+# COOP_EVENT_JOIN — the join-during-event contract (Phase 0 AS-BUILT 2026-07-04)
 
-**Status: DESIGN** (bytecode ground truth verified — see
-`research/findings/votv-active-events-registry-RE-2026-07-04.md`; no code shipped yet).
+**Status: Phase 0 AS-BUILT** (`coop/world/event_active_sync.{h,cpp}` — the read-only registry
+probe of section 3.5; Phases 1-3 remain DESIGN). Bytecode ground truth —
+`research/findings/votv-active-events-registry-RE-2026-07-04.md`.
 This is the answer to the devs' gauntlet hard case (`docs/DEVS_GAUNTLET.md`): a player
 joins while the host is mid-event (pyramid et al.) and must converge to the same world.
 
@@ -104,9 +105,12 @@ kerfur=reconcile lane [V]; atv=lane [V].
 
 ### 3.5 Phases
 
-- **Phase 0 (probe, read-only):** host poll + edge log of the registry
-  (`event_active: BEGIN/END class=... n=...`), plus join-edge log of what WOULD be
-  snapshotted. Proves the seam on real events before any wire. (probe-don't-guess)
+- **Phase 0 (probe, read-only): AS-BUILT 2026-07-04** — `coop/world/event_active_sync.{h,cpp}`:
+  host 1 Hz `activeEvents_senders` membership diff -> edge log
+  (`event_active: BEGIN/END class=... n=... elapsed=...`), plus the join-edge would-be-snapshot
+  log in `subsystems::ConnectReplayForSlot`. Proves the seam on real events before any wire.
+  (probe-don't-guess) Seam proof pending a real event during a session (dev `event_force` or a
+  scheduled fire).
 - **Phase 1:** EventSnapshot wire + joiner replay with active-override for replay-safe
   rows. Pyramid mid-join = the acceptance test.
 - **Phase 2:** event_cue join snapshot (closes the starRain gap); class->row map filled

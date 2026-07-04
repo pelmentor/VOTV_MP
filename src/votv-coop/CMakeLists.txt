@@ -267,6 +267,7 @@ add_library(votv-coop SHARED
     src/coop/world/firefly_sync.cpp
     src/coop/world/event_cue_sync.cpp
     src/coop/world/event_fire_sync.cpp
+    src/coop/world/event_active_sync.cpp
     src/coop/interactables/window_sync.cpp
     src/coop/interactables/grime_sync.cpp
     src/coop/session/player_handshake.cpp
