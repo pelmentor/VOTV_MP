@@ -8,8 +8,10 @@ probe) → `7BCE41C4B6DC9C99` (2026-07-04 night: + KILLERWISP v2 choreography/ag
 coop NO-PAUSE fix — sections 0a/0b below; wire unchanged v96) →
 `D43455FC4787FFE4` (2026-07-04 day: + the RE-HOST CRASH root fix — section 0c below;
 wire unchanged v96) → `AE547EFE0ED156E7` (2026-07-04 eve: + GHOST-LOBBY delist 0d +
-CLIENT NATIVE SAVE CYCLE OFF 0e; wire unchanged v96) → **`08CC1DFAA4B0DF2E`
-(2026-07-04 late eve: + SAVE-VERSION stamp 0f + WIND PROBE 0g; wire unchanged v96)**. Late-eve autonomy
+CLIENT NATIVE SAVE CYCLE OFF 0e; wire unchanged v96) → `08CC1DFAA4B0DF2E`
+(2026-07-04 late eve: + SAVE-VERSION stamp 0f + WIND PROBE 0g; wire unchanged v96) →
+**`8A771BBCD61A073A` (2026-07-04 ~15:30: + QUIT-TO-MENU CRASH+DOUBLE-MENU root fix 0h/0i
++ CHAT/ROBOTO upgrade 0j; wire unchanged v96)**. Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
@@ -74,6 +76,35 @@ intensity ← spring ← windTarget, который мы стримим кажд
 запись синка; fired=suppressed=0 на клиенте = диспатч реролла обходит ProcessEvent;
 всё равно = расходится что-то вне ветра (например листья autumnLeafSpawner — известный
 per-peer RNG, не покрыт сознательно).
+
+## 2026-07-04 ~15:30 (DLL `8A771BBCD61A073A` deployed 4/4 hash-verified)
+
+### 0h. CLIENT CRASH после ESC->menu — root-fixed (твой 14:45 репорт)
+Твой краш (`Failed to find function setRainProperties in ArrowComponent ...MirrorAxis`):
+выход в меню через РОДНОЕ меню игры при живой сессии шёл через ветку balloon-guard,
+которая НЕ делала teardown подсистем (а flee вдобавок гасит и дисконнект-эдж, который
+сделал бы его сам) — кэши погоды/времени/неба переживали смерть мира, и отложенное
+применение погоды попадало в ПЕРЕИСПОЛЬЗОВАННЫЙ слот старого daynightCycle → BP-тело
+исполнялось на чужом self → движковый фатал по имени setRainProperties. Fix: этот путь
+теперь делает ПОЛНЫЙ teardown (puppet destroy + per-slot + DisconnectAll — общий хелпер
+с death-путём) ДО flee. TEST: клиент в сессии → ESC → Menu → чистый выход в меню, без
+краша; в логе `net: gameplay->MENU ... ending the session` + НЕТ фатала.
+
+### 0i. Двойной выход в меню у хоста — root-fixed (тот же бранч)
+Наш flee диспатчил transition("/Game/menu") ПОВЕРХ уже летящего родного перехода —
+меню грузилось дважды. Теперь travel=false на этом пути (сессия останавливается,
+bypass взводится, второго transition НЕТ). TEST: хост в сессии → ESC → Menu → меню
+открывается ОДИН раз (лог: `native menu travel already in flight; no second transition`).
+
+### 0j. ЧАТ: Roboto везде + кириллица + анимация + фишки (твои запросы по chat-imgui-samp)
+Roboto Regular 16px = шрифт ВСЕГО оверлея (браузер/скорборд/меню/консоль), Bold 18px =
+чат; шрифты ВШИТЫ В DLL (никаких файлов рядом; .pak не нужен). Чат теперь UTF-8:
+**русский в чате и в никах наконец рендерится** (раньше '?'). Плюс: fade-IN у строк
+(220мс) + прежний fade-out; цветной ник по слоту игрока (8 цветов); 4-сторонний контур
+вместо тени; перенос длинных строк; история отправленных Up/Down в поле чата; в консоли
+фокус при открытии + история команд; Enter = сабмит в поле имени нового сейва и в
+Direct connect. TEST: напиши в чат по-русски с обоих пиров; посмотри цвет ников; Up в
+поле чата возвращает прошлое сообщение; весь UI стал Roboto.
 
 ## 2026-07-04 DAY ADDITION (DLL `D43455FC4787FFE4`)
 
