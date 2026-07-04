@@ -27,7 +27,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 | Held items (Aprop_C in hand) | grabbed | `EnsureHeldItemBroadcast` new-held edge (self-heal for untracked) + the held-pose stream | the item's Key/eid | trash_collect_sync, local_streams |
 | NPCs / Characters | BeginDeferred (VISIBLE) | host `BeginDeferred` interceptor + POST; save-loaded via `RegisterExistingWorldNpcs` walk | host eid (no BP key) | npc_sync, npc_mirror, npc_world_enum, npc_adoption |
 | wisp_C (wispSwarm event) | BeginDeferred **as `EX_CallMath`** from trigger_wispSwarm's ubergraph (INVISIBLE to PE) | **`ufunction_hook` Func-thunk, SOURCE-GATED** (FFrame::Object class == trigger_wispSwarm_C) → queue → pose-tick drain enroll; **ambient ticker wisp_C stays per-peer** (skipped by gate + world-enum); PE-invisible self-despawn caught by the **pose-walk dead-retire** | host eid (no BP key) | npc_world_enum (EX-catch + enroll), npc_sync (SyncDestroyedNpcByEid), npc_pose_drive + ue_wrap/wisp (landing edge) |
-| WorldActors (event actors) | BeginDeferred (VISIBLE) | 2nd `BeginDeferred` interceptor (disjoint, NAME-matched allowlist) | host eid | world_actor_sync |
+| WorldActors (event actors) | BeginDeferred (VISIBLE for most; `piramidSpawner_C` = EX_CallMath INVISIBLE) | 2nd `BeginDeferred` interceptor (disjoint, NAME-matched allowlist) + EX Func-thunk drain -> `HostEnrollExSpawn`; destroy = PRE observer + pose-walk dead-retire (SELF-destroys invisible) | host eid | world_actor_sync, npc_world_enum (EX catch), piramid_sync (choreography) |
 | Kerfur (prop⇄NPC) | conversion verbs (EX_CallMath, INVISIBLE) | **conversion death-watch POLL** + KerfurConvert broadcast | host **KerfurId** (spans both forms) + the per-form eid | kerfur_entity, kerfur_convert, kerfur_command, kerfur_prop_adoption |
 
 ## Per-family detail
@@ -360,9 +360,19 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   no-ops on "already not-live"). **[V smoke: 32/32 dead-retired at +6 s after forced midday, 32/32 client teardowns]**
 
 ### WorldActors (event actors)
-- A **second** `BeginDeferred` interceptor with a **disjoint, NAME-matched** allowlist (16 leaf classes;
+- A **second** `BeginDeferred` interceptor with a **disjoint, NAME-matched** allowlist (17 leaf classes;
   name-match because event classes load lazily). FULL-rotation pose (`WorldActorPose`). Otherwise the NPC
   shape. **[V]**
+- **2026-07-04 (piramid lane): two seams the interceptor shape alone missed, both closed generically:**
+  (1) an EX_CallMath spawner (`piramidSpawner_C.runTrigger` — ALL its BeginDeferreds invisible to PE)
+  is caught by `npc_world_enum`'s source-gated Func-thunk, whose drain feeds
+  `world_actor_sync::HostEnrollExSpawn` (same end state as interceptor+POST; reverse-map dedup).
+  (2) event-end SELF `K2_DestroyActor` never hits the destroy PRE observer → pose-walk **dead-retire**
+  in `TickPoseStream` (bound-but-dead ⇒ retire + WorldActorDestroy broadcast) — this closed a latent
+  mirror LEAK for every WA class, not just the pyramid. **[V: piramid e2e 2026-07-04 23:19]**
+- `piramid2_C` additionally gets a choreography lane (`coop/creatures/piramid_sync`: client brain
+  suppression + PyramidGather replay) — docs/events/piramid.md. **[AS-BUILT, e2e proven; visual hands-on
+  pending (runbook 0r)]**
 
 ### Kerfur (the hardest — prop form ⇄ NPC form)
 - The game gives a kerfur NO stable id (random key per peer per load). We keep ONE host-only **KerfurId (K)**

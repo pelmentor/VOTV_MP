@@ -165,7 +165,8 @@ design sketch after bytecode verification (better seams found; do not re-derive)
 - **Client replay** = reflected `runEvent(name, None)` / `runSpecialEvent(name)` gated by the
   PER-ROW policy table in the .cpp (the dupe matrix from votv-event-system-RE-2026-06-13.md §10):
   replay ONLY level/save/cosmetic flips no lane carries (treehouse_0..5 — the campfire, breaks,
-  obelisk/piramid, forceObjects signal rows, solar/call0, scare arms, arirGraff_*); lane-covered
+  obelisk, forceObjects signal rows, solar/call0, scare arms, arirGraff_*; `piramid` FLIPPED
+  to lane-owned 2026-07-04 — piramid mirror lane, docs/events/piramid.md); lane-covered
   rows (prop/npc/atv/sleep/wisp/event_cue/device) log + skip. `ariralPrank` never crosses the wire
   (host-local RNG). One-shot rows dedupe vs the client's own passEvents + a session replayed-set;
   specials are repeatable. Join window: replays queue until the eventer resolves (cap 64, loud).

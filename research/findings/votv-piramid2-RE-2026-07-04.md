@@ -1,5 +1,13 @@
 # piramid2_C (walking pyramid event actor) + piramidSpawner_C — static bytecode RE
 
+> **2026-07-04 LATE (same day): the mirror lane SHIPPED (`7b78b29a`, wire v97) — every
+> "current mod coverage" / "gap" claim below (sections 0, 5, 7) describes the PRE-LANE state
+> and is now historical.** As-built truth: docs/events/piramid.md (piramid2_C allowlisted,
+> 'piramid' no-replay, piramidSpawner_C EX-caught, brain suppression + PyramidGather,
+> WA dead-retire). One RE correction from the live runs: runTrigger's BeginDeferreds are
+> EX_CallMath (PE-INVISIBLE) — section 5's "the existing B3b spawn-catch seam applies" was
+> WRONG for this spawner. The bytecode facts (sections 1-4, 6) remain the durable ground truth.
+
 Date: 2026-07-04. Sources: kismet-analyzer `to-json` of
 `research/pak_re/extracted/VotV/Content/objects/piramid2.uasset` (fresh decode →
 `research/bp_reflection/piramid2.json`, 113 exports; ubergraph CFG dump kept at
