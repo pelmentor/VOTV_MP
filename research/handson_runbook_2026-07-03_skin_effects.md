@@ -6,26 +6,40 @@ both peers MUST be on this DLL to connect). Supersede chain: `1CDD6079A5241162`
 (**+ the WISP MIRROR LANE** — see its section below) → `08B357DDE6F6ACE4` (+the killerwisp
 probe) → `7BCE41C4B6DC9C99` (2026-07-04 night: + KILLERWISP v2 choreography/aggro + the
 coop NO-PAUSE fix — sections 0a/0b below; wire unchanged v96) →
-**`D43455FC4787FFE4` (2026-07-04 day: + the RE-HOST CRASH root fix — section 0c below;
-wire unchanged v96)**. Late-eve autonomy
+`D43455FC4787FFE4` (2026-07-04 day: + the RE-HOST CRASH root fix — section 0c below;
+wire unchanged v96) → **`AE547EFE0ED156E7` (2026-07-04 eve: + GHOST-LOBBY delist 0d +
+CLIENT NATIVE SAVE CYCLE OFF 0e; wire unchanged v96)**. Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-04 EVE (your live-test reports; commit `c8aec14c` — NOT YET DEPLOYED, game was running)
+## 2026-07-04 EVE (your live-test reports; DLL `AE547EFE0ED156E7` deployed 4/4 hash-verified)
 
-### 0d. GHOST LOBBY after host death — root-fixed, awaiting deploy
+### 0d. GHOST LOBBY after host death — root-fixed (`c8aec14c` + race close `f5a02741`)
 Your report: host died to the killerwisp, all fled to the menu — the server STAYED listed.
 Root: the lobby heartbeat thread was only stopped on boot-failure paths; the host-session
 running->stopped edge (death OR quit-to-menu) never sent /v1/leave, so the master kept the
 dead lobby alive forever. Fix (one owner): EndHostedLobby (delist + heartbeat stop + host
 state clear) now fires at the host-session-ended edge, same place the menu-flee is posted.
-DEPLOY: blocked at 21:xx (votv-coop.dll in use — game running). **Закрой игру и скажи —
-задеплою; либо сам прогони tools/deploy-all.ps1.** TEST after deploy: host, умри/выйди в
-меню → на втором пире обнови браузер серверов — строка должна ИСЧЕЗНУТЬ (host log:
+Audited (1 agent): 1 race found (fast re-host mid-delist wiped the new host request) —
+closed in `f5a02741`. TEST: host, умри/выйди в меню → на втором пире обнови браузер
+серверов — строка должна ИСЧЕЗНУТЬ (host log:
 `session_manager: EndHostedLobby -- lobby retired`).
+
+### 0e. CLIENT NATIVE SAVE CYCLE OFF (`99eb4566`) — your mandate «выключить полностью»
+Until now the client's native save cycle still RAN every autosave interval (full world
+gather) and only the disk write was blocked. Now the cycle is off at the game's own gate:
+we hold gamemode.disableSave=true on the client — saveSlot_C::save checks it at its HEAD
+[verified in bytecode] before the gather and the write funnel; every trigger (autosave/
+sleep/menu/quicksave) funnels through there; nothing in the game's bytecode ever writes
+the flag back. The SaveGameToSlot disk hook stays as the belt for the two ungated paths
+(savePlayerOnly + direct trigger writes). TEST (client): play past an autosave interval —
+NO «SAVED» toast on the client, client log has ONE
+`save_block: client native save cycle OFF -- disableSave=true` line per world, and NO new
+`save_block: BLOCKED client world-save` lines during normal play (a BLOCKED line now =
+a gate-leak report, tell me). Host saves normally — host log unchanged.
 
 ### Your 4 other findings (recorded OPEN, next threads)
 1. Wind + dust desync (client has wind/пылинки, host nothing) — directionalwind sync exists;
