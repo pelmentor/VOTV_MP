@@ -7,8 +7,9 @@ both peers MUST be on this DLL to connect). Supersede chain: `1CDD6079A5241162`
 probe) → `7BCE41C4B6DC9C99` (2026-07-04 night: + KILLERWISP v2 choreography/aggro + the
 coop NO-PAUSE fix — sections 0a/0b below; wire unchanged v96) →
 `D43455FC4787FFE4` (2026-07-04 day: + the RE-HOST CRASH root fix — section 0c below;
-wire unchanged v96) → **`AE547EFE0ED156E7` (2026-07-04 eve: + GHOST-LOBBY delist 0d +
-CLIENT NATIVE SAVE CYCLE OFF 0e; wire unchanged v96)**. Late-eve autonomy
+wire unchanged v96) → `AE547EFE0ED156E7` (2026-07-04 eve: + GHOST-LOBBY delist 0d +
+CLIENT NATIVE SAVE CYCLE OFF 0e; wire unchanged v96) → **`08CC1DFAA4B0DF2E`
+(2026-07-04 late eve: + SAVE-VERSION stamp 0f + WIND PROBE 0g; wire unchanged v96)**. Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
@@ -42,11 +43,37 @@ NO «SAVED» toast on the client, client log has ONE
 a gate-leak report, tell me). Host saves normally — host log unchanged.
 
 ### Your 4 other findings (recorded OPEN, next threads)
-1. Wind + dust desync (client has wind/пылинки, host nothing) — directionalwind sync exists;
-   probe which peer diverged first. 2. Luggage->inventory->drop-all: dropped items never
-   appear on the client (inventory-drop spawn path uncaught). 3. Kwisp client death too FAST
-   vs native pacing. 4. Kwisp beam-"РУКИ" not mirrored on watching peers (kill syncs, beam
-   VFX doesn't). Partial 0b verdict recorded: kill chain confirmed live BOTH directions.
+1. Wind + dust desync — probe SHIPPED, see 0g below. 2. Luggage->inventory->drop-all:
+   dropped items never appear on the client (inventory-drop spawn path uncaught). 3. Kwisp
+   client death too FAST vs native pacing. 4. Kwisp beam-"РУКИ" not mirrored on watching
+   peers (kill syncs, beam VFX doesn't). Partial 0b verdict recorded: kill chain confirmed
+   live BOTH directions.
+
+## 2026-07-04 LATE EVE (DLL `08CC1DFAA4B0DF2E` deployed 4/4 hash-verified)
+
+### 0f. MP save shows «unk!» version — root-fixed (`c81f1c2d`), 1-minute test
+Your report: сейв из Multiplayer -> New Game & Host (s_aboba2) показывает красное «unk!»
+вместо «0.9.0». Root: наш create писал на диск ГОЛЫЙ CDO-дефолтный saveSlot_C; нативный
+create виджета штампует tempSave.version = lib_C::gameVersion() [verified: ui_saveSlots
+button_create bytecode] — пустая Version и красит «unk!» и фейлит version-check при
+launch. Fix: зовём тот же gameVersion и переносим движковый FString в поле Version перед
+записью. Audited (1 agent): все PASS, 0 CRITICAL. TEST: Multiplayer -> New Game & Host
+с новым именем → в списке сейвов у нового слота **зелёная «0.9.0»**, не «unk!»
+(лог: `save_browser: CreateNamedSave -- stamped Version '0.9.0'`). Старые unk!-сейвы
+не перештамповываются (создание-время фикс); скажи если надо мигрировать существующие.
+
+### 0g. WIND/DUST desync — PROBE armed (`6398ff53`), capture on next sighting
+Статически v50-синк ветра верен end-to-end (пере-верифицировано из свежего байткода:
+вся видимая часть — пылинки eff_wind, звук, качание листвы — производная intensity;
+intensity ← spring ← windTarget, который мы стримим каждые ~2.5 с; клиентский RNG-реролл
+подавлен). Живое расхождение механика не объясняет → на обоих пирах взведена проба:
+`weather_probe=1` УЖЕ прописан в ini всех 3 инсталлов; в логах ~1 Гц строки
+`[probe wind] role=... target=(...) |target|=... roll fired=N suppressed=M`.
+КОГДА снова увидишь «у одного ветер/пыль, у другого нет» — просто скажи мне (примерно
+во сколько); я сравню HOST vs CLIENT строки. Чтение: |target| разошёлся = не долетает
+запись синка; fired=suppressed=0 на клиенте = диспатч реролла обходит ProcessEvent;
+всё равно = расходится что-то вне ветра (например листья autumnLeafSpawner — известный
+per-peer RNG, не покрыт сознательно).
 
 ## 2026-07-04 DAY ADDITION (DLL `D43455FC4787FFE4`)
 
