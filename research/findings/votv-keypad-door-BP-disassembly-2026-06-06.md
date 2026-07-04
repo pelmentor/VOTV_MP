@@ -23,6 +23,13 @@ declared, every jump target lands on a statement boundary) — so the below is d
   pick the interaction-prompt text ("Enter"/"Cancel"/"Use keycard"). **`isAcc==0` is the normal
   resting state and says nothing about lock/accept.** (This is why the user saw a GREEN keypad
   with `isAcc==0` — green has nothing to do with isAcc.) → Mirroring isAcc/isDeny is meaningless.
+  **2026-07-04 update (`f8185847`): never MIRRORED, but now READ locally** as the PRESS
+  discriminator (`PL::IsPressHover`, keypad_sync empty-buffer Deny classification): an `active`
+  1→0 flip observed while the local crosshair sits on a submit button = a deliberate cancel
+  press. Flag LIFETIME nuance (CFG lookAt @976/@1243): the LetBools are unconditional PER CALL,
+  but `lookAt` only runs while the crosshair is ON the keypad — so the flags STICK at their last
+  value once the crosshair leaves the keypad entirely, and clear only when it moves to a
+  non-button part of the same keypad.
 - **The green/red VISUAL is the `ParticleSystem3` component**, not isAcc. `powerChanged(active_light)`
   = `ParticleSystem3.SetVisibility(active_light)` (power gates whether the light shows). `upd`
   selects the particle TEMPLATE via a Select keyed on **`isReset` + `self.active`** (the

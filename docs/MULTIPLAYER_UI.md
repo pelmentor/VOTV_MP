@@ -37,6 +37,11 @@ plus a user size pref (`ui.scale`, default 1.25x, F1 slider 0.75–1.75x)
 multiplied into the resolution factor. The T-chat input bar matches the
 chat column width; T-chat is available for the whole HOST session (a
 zero-client lobby included), wire send best-effort.
+**Nameplate occlusion (AS-BUILT 2026-07-04 `f8185847`, verdict = runbook 0n-c):**
+a peer behind world geometry (walls/closed doors/props — pawns never block)
+keeps a readable plate but the nick renders GRAY + the whole plate dims 25%
+(minecraft nametag shape; hurt-flash red keeps priority). Line trace via
+`ue_wrap/trace.cpp` per visible plate on the game thread.
 This doc is kept for the **design rationale** (why runtime UMG, not
 BPModLoader/paks); the code is the truth for the as-built UI.
 

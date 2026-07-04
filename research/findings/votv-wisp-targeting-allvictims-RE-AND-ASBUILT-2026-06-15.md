@@ -79,9 +79,11 @@ Audited SAFE (recycling/idempotency/thread/perf/eid). wisp_attack_sync.cpp 289 L
 ---
 
 ## 3. DEFERRED follow-ons -- reconciled 2026-07-04 (v2 `769d02f7`)
-1. **canReach LOS -- SHIPPED in v2.** `ue_wrap::wisp::CanReach` (wisp.cpp: LineTraceSingleForObjects
+1. **canReach LOS -- SHIPPED in v2.** `ue_wrap::wisp::CanReach` (LineTraceSingleForObjects
    on the {WorldStatic,WorldDynamic} obj_statDyn set via the KSL CDO; param names SDK-verified
-   vs Engine.hpp:13152) is ANDed into the closing ARM edge AND re-verified at the fire
+   vs Engine.hpp:13152; 2026-07-04 `f8185847` the trace primitive moved to
+   `ue_wrap/trace.cpp::LineBlockedStatDyn` -- CanReach now calls it, semantics unchanged,
+   second consumer = nameplate occlusion) is ANDed into the closing ARM edge AND re-verified at the fire
    (wisp_attack_sync.cpp) -- a blocked hover times out WITHOUT killing through the wall and
    re-arms when visible. Also used by the aggro selector's candidate eligibility.
 2. **WispTear NPC-victim tear ANIMATION + host-victim tear-mirror -- STILL OPEN** (verified
