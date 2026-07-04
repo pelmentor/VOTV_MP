@@ -14,7 +14,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"
 
@@ -72,13 +72,14 @@ uint64_t Fnv1a(const std::wstring& s, uint64_t h) {
 // signal for cross-peer key identity (~392 placed piles expected).
 void RebuildIndex() {
     size_t before = g_index.size();
-    // L5: scan only the range NextRange gives -- the array TAIL (new piles) every call, a FULL re-scan
-    // every ~60s (fullEvery=30 at the 2s throttle). trashBitsPile_C APPENDS on spawn so the tail-scan
-    // catches the common case immediately; the 60s full safety is the slot-reuse backstop (a depleted pile
-    // self-destructs + a spawner re-spawns -> a freed slot may be reused below the tail). 60s (not the 5min
-    // default) because this class churns at runtime, so a tighter backstop bounds the counter-sync delay.
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan, /*fullEvery*/ 30);
+    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // host world reload (prune-to-0, recycled slots below the cursor). settleScans=2 (not the
+    // static-channel 15): this class CHURNS at runtime (depleted pile self-destructs + spawner
+    // re-spawns) and every churn re-arms the full walk -- 15 would keep a collecting session in
+    // permanent full-walk mode (the L5 hitch). 2 full walks heal a reload/churned slot immediately;
+    // the 60s backstop (fullEvery=30 at the 2s throttle, unchanged) covers any straggler.
+    static coop::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
+    const auto r = sScan.Begin();
     for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
@@ -100,6 +101,7 @@ void RebuildIndex() {
         if (!R::IsLiveByIndex(it->second.actor, it->second.idx)) it = g_index.erase(it);
         else ++it;
     }
+    sScan.End(g_index.size());  // feed the settle gate (any count change re-arms full walks)
     if (g_index.size() != before) {
         // XOR-fold of per-key FNV hashes: ORDER-INDEPENDENT, so identical key sets
         // hash identically across peers regardless of map iteration order.

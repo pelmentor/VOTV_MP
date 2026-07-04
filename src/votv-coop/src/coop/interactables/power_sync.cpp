@@ -18,7 +18,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/power_control.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
@@ -78,12 +78,10 @@ void* ResolveFast(const std::wstring& key) {
 // (cross-peer Key stability signal) only on change.
 size_t RebuildIndex() {
     if (!PC::EnsureResolved()) return 0;
-    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL
-    // re-scan every ~5min (the slot-reuse backstop). A power panel is a level-loaded ApowerControl_C,
-    // so the tail-scan catches it at load; static actors rarely reuse slots, so the rare full safety
-    // covers any drift.
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan);
+    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // host world reload (prune-to-0, recycled slots below the cursor).
+    static coop::scan::SettledObjectScan sScan;
+    const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(4);  // there are typically 1-2 panels in a base
     for (int32_t i = r.begin; i < r.end; ++i) {
@@ -111,6 +109,7 @@ size_t RebuildIndex() {
         for (auto& kv : g_index) keysHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
         total = g_index.size();
     }
+    sScan.End(total);  // feed the settle gate (any count change re-arms full walks)
     if (total != g_lastLogCount || keysHash != g_lastLogHash) {
         g_lastLogCount = total;
         g_lastLogHash = keysHash;

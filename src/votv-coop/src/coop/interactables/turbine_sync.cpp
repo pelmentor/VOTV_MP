@@ -9,7 +9,7 @@
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/windturbine.h"
 
@@ -112,14 +112,12 @@ bool PayloadFinite(const coop::net::TurbineStatePayload& p) {
 }
 
 // Rebuild the posKey->actor index (~13 static actors; the set virtually never changes).
-// L5: scan only the range NextRange gives -- the array TAIL (new turbines) every call, a FULL
-// re-scan every ~5min (the slot-reuse backstop). A turbine is a level-loaded windturbine_C, so the
-// tail-scan catches it at stream-in; static actors rarely reuse slots, so the rare full safety
-// covers any drift. WT::IsTurbine is the same cheap class-descendant filter the old
-// FindObjectsByClass(L"windturbine_C") applied, now run per-object on the tail range.
+// Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+// host world reload (prune-to-0, recycled slots below the cursor). WT::IsTurbine is the same
+// cheap class-descendant filter the old FindObjectsByClass applied, per-object on the range.
 void RebuildIndex() {
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan);
+    static coop::scan::SettledObjectScan sScan;
+    const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);
@@ -139,6 +137,7 @@ void RebuildIndex() {
         }
         total = g_index.size();
     }
+    sScan.End(total);  // feed the settle gate (any count change re-arms full walks)
     if (total != g_lastLogCount) {
         g_lastLogCount = total;
         UE_LOGI("turbine: index rebuilt -- %zu turbine(s)", total);

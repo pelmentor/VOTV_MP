@@ -20,7 +20,7 @@
 #include "ue_wrap/engine.h"          // ReadMainPlayerGrabState (grabber authority) + Get/SetActorRootPhysicsVelocity (release)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"           // FVector, FRotator, NormalizeAxis
 
@@ -259,12 +259,12 @@ size_t RebuildIndex() {
     // a few seconds slow to mint its UCS key still lands in the save-set before the first joiner.)
     const bool capturing = isHost && (!s || !s->connected());
 
-    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL re-scan
-    // every ~5min (the slot-reuse backstop). A purchased ATV APPENDS, so the tail-scan catches it; the
-    // rare full safety covers any drift. The capturing baseline + purchase-detect orderings are preserved
-    // below (see the commit section): the first call scans [0, N) so the initial save-set is fully captured.
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan);
+    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // host world reload (prune-to-0, recycled slots below the cursor; the host log's "atv: indexed
+    // 0 ATV(s)" at 18:41:10 is this). The capturing baseline + purchase-detect orderings are preserved
+    // below: the not-settled phase scans [0, N) so the initial save-set is fully captured.
+    static coop::scan::SettledObjectScan sScan;
+    const auto r = sScan.Begin();
 
     struct Found { std::wstring wireKey; void* obj; int32_t idx; std::wstring realKey; };
     std::vector<Found> found;
@@ -328,6 +328,7 @@ size_t RebuildIndex() {
         e.actor = f.obj;
         e.idx   = f.idx;
     }
+    sScan.End(g_atvs.size());  // feed the settle gate (any count change re-arms full walks)
     // Recompute the keys-hash over the WHOLE index (cheap, O(index)) -- on a tail scan `found` is only the
     // new arrivals, so hashing just `found` would lose the persistent keys + thrash the dedup log.
     uint64_t keysHash = 0;

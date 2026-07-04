@@ -52,6 +52,19 @@ construction). VERIFIED 874/874, two independent per-family k=0, no desync. NOT 
 collision/occlusion/jUuC visual). The 1B "gather-ordinal == objectsData order" assumption was FALSIFIED and
 replaced by Path A; the GLOBAL-ordinal bind was then FALSIFIED and replaced by Build 3 per-family. See §6.**
 
+**GAMEMODE-SOURCE GATE (AS-BUILT 2026-07-04, the 18:41 wrong-type-morph root):** the cursor was consumed by
+EVERY client chipPile spawn passing the BeginDeferred thunk -- including our own wire-driven convert-LAND
+nativizations and mirror spawns -- so one interleaved non-load spawn shifted every subsequent ordinal bind
+(client pile #k bound to host eid #k+n = mass identity misalignment; user hands-on 18:45: client-grabbed
+piles morphed to the WRONG chipType consistently on both peers; that session's log: boundLive=541/870 +
+overflow-beyond-870). Fix (`trash_collect_sync.cpp` OnBeginDeferredSpawnObserve): only a spawn whose thunk
+srcObj (FFrame::Object) IS `mainGamemode_C` consumes the cursor -- loadObjects/loadPrimitives run in the
+gamemode's own frames (276 BeginDeferred sites in the gamemode BP); nothing else is a save-load spawn.
+Smoke evidence (autonomous, 2026-07-04 ~19:25): cursor binds and the quiescence position re-binds produced
+IDENTICAL native<->eid pairs (two independent oracles agree); pos+chipType probes armed at both grab seams
+(client E-PRESS / host EXEC) for the hands-on verdict (runbook 0o-b). Known cosmetic: the bind summary
+tallies both passes (1740/870 double-count).
+
 > Filename keeps the user-chosen `COOP_STABLE_ID_SIDECAR` slug, but the
 > **RECOMMENDED** design is the **in-memory index->eid map** (zero disk
 > surface). The on-disk "side-car" is documented as a FALLBACK only — needed

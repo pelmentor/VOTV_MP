@@ -76,7 +76,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/passwordlock.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
@@ -174,12 +174,11 @@ void* ResolveFast(const std::wstring& key) {
 // (cross-peer Key stability signal) only on change.
 size_t RebuildIndex() {
     if (!PL::EnsureResolved()) return 0;
-    // L5: scan only the range NextRange gives -- the array TAIL (new objects) every call, a FULL
-    // re-scan every ~5min (the slot-reuse backstop). A keypad is a level-loaded ApasswordLock_C, so
-    // the tail-scan catches it at load; static actors rarely reuse slots, so the rare full safety
-    // covers any drift.
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan);
+    // Stream-settle scan (see coop/scan/settled_object_scan.h): full-walk while the count changes,
+    // tail-scan once settled. The raw tail-scan this replaces died at the 18:41 host world reload
+    // (prune-to-0, new actors in recycled slots below the cursor -> keypad 0-sync all session).
+    static coop::scan::SettledObjectScan sScan;
+    const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(32);
     for (int32_t i = r.begin; i < r.end; ++i) {
@@ -207,6 +206,7 @@ size_t RebuildIndex() {
         for (auto& kv : g_index) keysHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
         total = g_index.size();
     }
+    sScan.End(total);  // feed the settle gate (any count change re-arms full walks)
     if (total != g_lastLogCount || keysHash != g_lastLogHash) {
         g_lastLogCount = total;
         g_lastLogHash = keysHash;

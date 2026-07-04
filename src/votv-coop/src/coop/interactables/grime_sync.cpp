@@ -27,7 +27,7 @@
 #include "ue_wrap/grime.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/incremental_object_scan.h"  // L5: scan only NEW objects (no 237k walk)
+#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <algorithm>
@@ -163,12 +163,14 @@ size_t RebuildIndex() {
     // recomputes; dead actors drop). GT-only (RebuildIndex is game-thread-serial). [Ideal per the
     // audit is a direct RootComponent->location field read with no UFunction at all -- queued.]
     static std::unordered_map<void*, std::wstring> s_posKeyByActor;
-    // L5: scan only the range NextRange gives -- the array TAIL (new decals) every call, a FULL re-scan
-    // every ~5min (the slot-reuse backstop). A grime decal is a level-loaded Agrime_C, so the tail-scan
-    // catches it at stream-in; the rare full safety covers any slot-reuse drift. The PosKey cache below
-    // is maintained incrementally (new actors compute + cache; the full scan rebuilds it from scratch).
-    static coop::scan::IncrementalObjectScan sScan;
-    const auto r = coop::scan::NextRange(sScan);
+    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // host world reload (prune-to-0, recycled slots below the cursor). settleScans=2 (not 15):
+    // grime CHURNS whenever the player washes (decal deaths re-arm the gate), so 15 would pin a
+    // cleaning session in 2s-cadence full walks (perf-audit 2026-07-04 Q2); new decals APPEND (tail
+    // catches them), recycled-slot arrivals heal within the 60s backstop. The PosKey cache below is
+    // maintained incrementally (new actors compute + cache; a full scan rebuilds it from scratch).
+    static coop::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
+    const auto r = sScan.Begin();
     std::unordered_map<void*, std::wstring> nextCache;  // populated only on a full scan
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(64);
@@ -176,8 +178,7 @@ size_t RebuildIndex() {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
         if (!G::IsGrime(obj)) continue;  // cheap class-descendant filter (no alloc)
-        const std::wstring nm = R::ToString(R::NameOf(obj));
-        if (nm.rfind(L"Default__", 0) == 0) continue;  // skip CDO
+        if (R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;  // skip CDO (alloc-free; audit W-e)
         if (!R::IsLive(obj)) continue;
         auto cit = s_posKeyByActor.find(obj);
         std::wstring key = (cit != s_posKeyByActor.end()) ? cit->second : PosKey(obj);
@@ -201,6 +202,7 @@ size_t RebuildIndex() {
         for (auto& kv : g_byKey) posHash ^= FnvKey(kv.first);  // recompute over the index (cheap, O(index))
         total = g_byKey.size();
     }
+    sScan.End(total);  // feed the settle gate (any count change re-arms full walks)
     if (total != g_lastLogCount || posHash != g_lastLogHash) {
         g_lastLogCount = total;
         g_lastLogHash = posHash;

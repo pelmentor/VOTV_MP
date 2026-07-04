@@ -23,7 +23,7 @@
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"  // WireKeyFromString / StringFromWireKey / FnvKey (shared)
 #include "coop/player/players_registry.h"   // coop::players::kMaxPeers
-#include "coop/scan/incremental_object_scan.h"  // L5 fix: tail-scan instead of full GUObjectArray walk
+#include "coop/scan/settled_object_scan.h"  // the stream-settle scan discipline (L5 fix + the 18:41 reload cure)
 
 #include "ue_wrap/door.h"            // TickSmartApply (HostAuth Tick finishes mid-animate doors)
 #include "ue_wrap/log.h"
@@ -52,20 +52,8 @@ using coop::net::StringFromWireKey;
 using coop::net::FnvKey;
 
 inline constexpr auto kRetryRebuildThrottle = std::chrono::seconds(2);
-// L5 fix (2026-06-23): scans of UNCHANGED live count required before a channel switches from the
-// (correct-but-heavy) FULL walk to the cheap tail-scan. At a 2s throttle, 15 = ~30s of a steady count =
-// the world has finished streaming this channel's level actors in. Generous on purpose: settling too early
-// is the take-1 regression (door 57->19 -- late-streamed doors land below the tail and a tail-scan misses).
-inline constexpr int kStreamSettleScans = 15;
-// L5 take-3 (2026-06-23, fork B): post-settle full-rescan BACKSTOP period, in caller throttle-ticks.
-// Doors stream FINITELY at world-load (code+log proven: all 57 present within ~6s of world-ready while the
-// player is stationary -> NOT proximity; the count goes dead-flat for 2 min after -> finite-at-load) BUT the
-// timing is NON-DETERMINISTIC + GAPPY: take-2 saw door settle at 50, then 7 more arrive >30s later. A fixed
-// settle window is structurally a GUESS against an unbounded gap; a FREQUENT full-rescan backstop is robust --
-// a gap-streamed (or slot-reused) actor is recovered within one period. take-2 used NextRange's 150 default
-// (~5 min): a 2.5-min run never fired it, so door stuck at 50. 30 ticks @2s throttle = 60s -> fires >=2x in a
-// >3-min run and recovers the 7-door tail. Staggered per channel (see ctor) so the 6 channels never coincide.
-inline constexpr int kBackstopFullEvery = 30;  // 2s throttle x 30 = 60s
+// Settle/backstop tuning (15 scans / 30-tick backstop) + its door-57 history moved to
+// coop/scan/settled_object_scan.h with the extracted scan discipline.
 inline constexpr auto kPendingTTL = std::chrono::seconds(25);
 // After the host commands a door close, isOpened flips ~0.5s later (the door animates).
 // The poll skips the door for this bridge window so the mid-animation transient isn't
@@ -106,18 +94,9 @@ public:
     // re-drives the state each tick, so a symmetric poll oscillates). MTA single-syncer.
     enum class Mode { Symmetric, HostAuth };
 
-    explicit Channel(const Adapter& a, Mode mode = Mode::Symmetric) : a_(a), mode_(mode) {
-        // L5 take-3 (2026-06-23): stagger the post-settle 60s full-rescan backstop across Channel instances so
-        // the 6 interactable channels never full-walk the GUObjectArray on the SAME throttle tick (that would
-        // be a combined 6x~28ms spike). Phase each by a stride COPRIME to the backstop window (7 vs 30 ->
-        // offsets 0,7,14,21,28,5,... all distinct) so at most ONE channel backstops in any given tick.
-        // staggerOffset_ is a MEMBER (not just the ctor seed) because the streaming-phase code re-seeds
-        // scan_.sinceFull to it at every full walk -- otherwise the streaming phase wipes the stagger to 0 and
-        // re-correlates the channels' backstops (the latent take-2 bug: take-2 set sinceFull=0 during stream).
-        static int sStaggerSeq = 0;
-        staggerOffset_ = (sStaggerSeq++ * 7) % kBackstopFullEvery;
-        scan_.sinceFull = staggerOffset_;
-    }
+    // Scan discipline (stream-settle + staggered backstop) is owned by SettledObjectScan --
+    // see coop/scan/settled_object_scan.h for the L5 take-3 rationale it was extracted from.
+    explicit Channel(const Adapter& a, Mode mode = Mode::Symmetric) : a_(a), mode_(mode) {}
 
     void SetSession(coop::net::Session* s) { session_.store(s, std::memory_order_release); }
     coop::net::Session* GetSession() const { return session_.load(std::memory_order_acquire); }
@@ -490,30 +469,13 @@ public:
     // swinger/container channel whose child-actor Keys may be per-peer GUIDs).
     size_t RebuildIndex() {
         if (!a_.EnsureResolved()) return 0;
-        // L5 fix (2026-06-23, take 2): kill the per-2s full ~237k GUObjectArray walk (the proven steady-
-        // state hitch root: 6 channels x full walk @2s; finding votv-L5-fps-hitch-interactable-fullwalk-
-        // RE-2026-06-23.md) WITHOUT losing actors. take-1 (pure tail-scan) REGRESSED detection (door
-        // 57->19): level interactables STREAM IN progressively at/after join ("26 at connect -> 57 later")
-        // and land in GC-recycled slots BELOW the tail during the load churn, so a tail-scan misses them.
-        // CORRECT gate: keep FULL-walking WHILE this channel's live count is still changing (the world is
-        // still streaming its instances -- a full walk cannot miss a recycled-slot actor), and switch to
-        // the cheap TAIL-scan ONLY once the count is stable for kStreamSettleScans (~world done streaming).
-        // The load-phase full walks are transient + acceptable (load is already heavy); the persistent
-        // STEADY-STATE hitch is what this removes. A later count change (a door GC'd / a region streams)
-        // re-arms the full walk. Under the tail-scan: REMOVAL is pruned each tick (cached idx +
-        // IsLiveByIndex, the ResolveFast/reaper pattern), state is read every tick by PollAndBroadcast, and
-        // the ~5min NextRange backstop (staggered per channel) is the slot-reuse safety net.
-        coop::scan::ScanRange range;
-        const bool settled = (streamStableScans_ >= kStreamSettleScans);
-        if (!settled) {
-            range = coop::scan::ScanRange{0, R::NumObjects(), true};  // still streaming -> FULL walk (no miss)
-            scan_.scannedTo = range.end;                              // park the tail cursor at the live end so the
-            scan_.sinceFull = staggerOffset_;                        // first post-settle tail-scan starts clean AND
-                                                                      // the 60s backstop counter resumes STAGGERED
-                                                                      // (not 0 -> not re-correlated across channels)
-        } else {
-            range = coop::scan::NextRange(scan_, kBackstopFullEvery); // settled -> tail-scan + 60s FULL backstop
-        }
+        // L5 fix (2026-06-23, take 2 + take 3): the stream-settle scan discipline -- full-walk while the
+        // live count changes, cheap tail-scan once settled, staggered 60s full backstop. The rationale +
+        // history (door 57->19 take-1 regression, the 18:41 world-reload prune-to-0 root) live with the
+        // extracted implementation: coop/scan/settled_object_scan.h. Under the tail-scan: REMOVAL is
+        // pruned each tick (cached idx + IsLiveByIndex), state is read every tick by PollAndBroadcast.
+        const bool settled = scan_.settled();
+        const coop::scan::ScanRange range = scan_.Begin();
         std::vector<std::pair<std::wstring, Ref>> found;
         found.reserve(64);
         for (int32_t i = range.begin; i < range.end; ++i) {
@@ -542,17 +504,7 @@ public:
             for (auto& kv : byKey_) keysHash ^= FnvKey(kv.first);  // hash over the FULL current set (cross-peer signal)
             liveCount = byKey_.size();
         }
-        // Stream-settle gate: count the consecutive scans whose live count did NOT change. While it is
-        // still changing (streaming in), the block above stays in FULL-walk mode (no miss); once stable for
-        // kStreamSettleScans (~30s), switch to tail-scan. lastLogCount_ holds the PREVIOUS count here (it is
-        // updated below), so this compare is the unchanged test. A drop/grow re-arms the full walk.
-        if (liveCount > 0 && liveCount == lastLogCount_) {
-            if (streamStableScans_ < kStreamSettleScans) ++streamStableScans_;  // populated + unchanged
-        } else if (liveCount != lastLogCount_) {
-            streamStableScans_ = 0;  // count moved -> still streaming, re-arm the full walk
-        }
-        // (liveCount == 0: never settles -> an empty channel keeps the old full-walk, no worse than before;
-        //  a populated one only settles once it has streamed in AND held steady, so pre-load 0 cannot settle.)
+        scan_.End(liveCount);  // feed the settle gate (any count change re-arms full walks)
         // Log the (count, keysHash) only when it CHANGES -- throttled retry-tick
         // rebuilds otherwise spam the same line. The hash is the cross-peer Key-
         // stability signal (compare host vs client).
@@ -636,9 +588,7 @@ private:
 
     std::mutex indexMutex_;
     std::unordered_map<std::wstring, Ref> byKey_;
-    coop::scan::IncrementalObjectScan scan_;  // L5 fix: tail-scan cursor (per-channel; staggered in the ctor)
-    int streamStableScans_ = 0;               // L5 fix: consecutive unchanged-count scans (full-walk until >= kStreamSettleScans)
-    int staggerOffset_ = 0;                   // L5 take-3: per-channel backstop phase (coprime stride; re-seeded each stream-phase full walk so the stagger survives streaming)
+    coop::scan::SettledObjectScan scan_;  // the stream-settle scan discipline (auto-staggered per instance)
 
     std::mutex stateMutex_;
     std::unordered_map<std::wstring, bool> lastKnown_;

@@ -102,9 +102,35 @@ void OnBeginDeferredSpawnObserve(void* srcObj, void* newActor) {
         const bool probeOn = coop::dev::spawn_order_probe::IsEnabled();
         const bool bindOn = coop::save_identity_bind::IsEnabled();
         if (probeOn || bindOn) {
-            int fam = -1;  // 0 = chipPile, 1 = kerfurOff, -1 = not a keyless family
-            if (ue_wrap::prop::IsChipPile(newActor)) fam = 0;
-            else if (void* c = R::ClassOf(newActor); c && coop::kerfur_entity::IsKerfurPropClass(c)) fam = 1;
+            // [18:45 wrong-type root fix 2026-07-04] A SAVE-LOAD spawn is a spawn from the GAMEMODE's
+            // own frame: loadObjects/loadPrimitives run in mainGamemode's BP functions, so the thunk's
+            // srcObj (FFrame::Object) is the gamemode instance (276 BeginDeferred call sites in the
+            // gamemode BP). WITHOUT this gate, EVERY client chipPile spawn while connected consumed the
+            // keyless ordinal cursor -- including our own wire-driven convert-LAND nativizations and
+            // mirror spawns -- shifting every subsequent bind by one (client pile #k bound to host
+            // eid #k+n): the mass identity misalignment behind the 18:45 wrong-type morphs. The k-th
+            // GAMEMODE-sourced keyless spawn == primitivesData[k] by construction; nothing else is.
+            // Class resolve is latched; a MISS is retried at most every 2s (perf-audit W-d: FindClass
+            // is a full GUObjectArray walk -- an unthrottled null-retry would run it PER SPAWN while
+            // mainGamemode_C is not yet loaded). Until it resolves, spawns are treated as non-load
+            // (no cursor consumption) -- correct: a save-load spawn cannot precede its own gamemode.
+            static void* sGmCls = nullptr;
+            if (!sGmCls) {
+                static std::chrono::steady_clock::time_point sNextGmClsTry{};
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= sNextGmClsTry) {
+                    sNextGmClsTry = now + std::chrono::seconds(2);
+                    sGmCls = R::FindClass(L"mainGamemode_C");
+                }
+            }
+            void* srcCls = srcObj ? R::ClassOf(srcObj) : nullptr;
+            const bool fromGamemode =
+                srcCls && sGmCls && R::IsDescendantOfAny(srcCls, &sGmCls, 1);
+            int fam = -1;  // 0 = chipPile, 1 = kerfurOff, -1 = not a keyless family / not a load spawn
+            if (fromGamemode) {
+                if (ue_wrap::prop::IsChipPile(newActor)) fam = 0;
+                else if (void* c = R::ClassOf(newActor); c && coop::kerfur_entity::IsKerfurPropClass(c)) fam = 1;
+            }
             if (fam >= 0) {
                 if (probeOn)
                     coop::dev::spawn_order_probe::NoteKeylessSpawn(
@@ -492,9 +518,15 @@ static bool OnPileUseIntercept(void* self, void* /*params*/) {
                         // on the puppet; observers via ResolveAndStartDrive).
                         coop::prop_sound::PlayUseClick(aimedNative);
                         coop::prop_sound::PlayGrabSound(aimedNative);
-                        UE_LOGI("[GRAB-INTENT] CLIENT E-PRESS on BOUND native pile eid=%u (lookAtActor, occlusion-correct) "
-                                "-> native use CANCELLED (no grab, no use_deny) + requesting grab from host",
-                                static_cast<unsigned>(beid));
+                        // [PILE-TYPE probe 2026-07-04] pos+chipType of the pile the CLIENT is aiming at --
+                        // the host's "[GRAB-INTENT] EXEC ... at(...) chipType=" for the same eid must match;
+                        // a mismatch names the ordinal identity misalignment (the 18:45 wrong-type morph).
+                        const ue_wrap::FVector cloc = ue_wrap::engine::GetActorLocation(aimedNative);
+                        UE_LOGI("[GRAB-INTENT] CLIENT E-PRESS on BOUND native pile eid=%u at(%.1f,%.1f,%.1f) "
+                                "chipType=%u (lookAtActor, occlusion-correct) -> native use CANCELLED "
+                                "(no grab, no use_deny) + requesting grab from host",
+                                static_cast<unsigned>(beid), cloc.X, cloc.Y, cloc.Z,
+                                static_cast<unsigned>(ue_wrap::prop::GetChipType(aimedNative)));
                         coop::trash_channel::SendGrabIntent(*s, static_cast<uint32_t>(beid));
                         g_cancelPairedUseRelease = true;  // pair: the _42 release of this cancelled press dies too
                         return true;  // handled: cancel the native InpActEvt_use dispatch entirely

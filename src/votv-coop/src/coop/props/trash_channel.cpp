@@ -399,7 +399,16 @@ void OnGrabIntent(coop::net::Session& s, uint32_t eid, uint8_t senderSlot) {
     // pile->playerGrabbed(Player=puppet); HitResult left zeroed (not a gate). The pile self-destructs in the
     // call (K2_DestroyActor(self)) -- do NOT deref `pile` afterwards. playerGrabbed sets the puppet's
     // grabbing_actor SYNCHRONOUSLY (pickupObject has no tick gate, RE-confirmed), so we read it on return.
-    UE_LOGI("[GRAB-INTENT] EXEC puppet=%p pile=%p eid=%u slot=%u", puppet, pile, eid, senderSlot);
+    // [PILE-TYPE probe 2026-07-04] pos+chipType of the HOST's resolved actor for this eid. Compare
+    // against the requester's "CLIENT E-PRESS ... at(...) chipType=" line for the same eid: positions
+    // differing = the ordinal identity misalignment (client aimed at a DIFFERENT pile than the host
+    // resolves -> the wrong-type clump/morph the 18:45 hands-on saw). Read-only, per-grab cadence.
+    {
+        const ue_wrap::FVector hloc = ue_wrap::engine::GetActorLocation(pile);
+        UE_LOGI("[GRAB-INTENT] EXEC puppet=%p pile=%p eid=%u slot=%u at(%.1f,%.1f,%.1f) chipType=%u",
+                puppet, pile, eid, senderSlot, hloc.X, hloc.Y, hloc.Z,
+                static_cast<unsigned>(ue_wrap::prop::GetChipType(pile)));
+    }
     void* pileCls = R::ClassOf(pile);
     void* grabFn  = pileCls ? R::FindFunction(pileCls, L"playerGrabbed") : nullptr;
     if (!grabFn) {

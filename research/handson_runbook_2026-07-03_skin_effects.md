@@ -23,16 +23,65 @@ per audit F1/F2, overflow drops logged]; wire unchanged v96) →
 `0E52826C38A4F42E` (2026-07-04 ~17:20: + PUPPET-Z ANCHORED-ZERO [the 16:48
 twitch/sunk root -- the spawn chain-measure race deleted, RULE 2] + host lobby
 T-chat + input bar = chat column + Roboto default 0m; wire unchanged v96) →
-**`460E5BE600E2EEAA` (2026-07-04 ~18:45: + the 17:10 HOST-DEATH diagnosis/fixes
+`460E5BE600E2EEAA` (2026-07-04 ~18:45: + the 17:10 HOST-DEATH diagnosis/fixes
 [SO no longer absorbed + PE depth probe + mem heartbeat] 0n-a + KEYPAD red-button
 press replication 0n-b + NAMEPLATE occlusion gray 0n-c; both audits 0 CRITICAL,
-finding-5 ctor hardening folded in same build; wire unchanged v96)**.
+finding-5 ctor hardening folded in same build; wire unchanged v96) →
+`E3EEAEFF25DB7802` (2026-07-04 ~19:20: the 18:41-test fixes, superseded same hour) →
+**`6EE1A44107003C9F` (2026-07-04 ~19:35: the 18:41-test fixes + perf-audit tuning --
+(1) SETTLED-SCAN: stream-settle discipline extracted to coop/scan/
+settled_object_scan.h + adopted by ALL eight GUObjectArray index consumers
+[keypad/power/window/grime/turbine/atv/trash_pile + interactable_channel], the root
+of "keypad 0-sync after host session-start world reload" (tail-scan pruned-to-0,
+recycled slots below cursor); churny classes settle fast (trash_pile/grime/window
+settleScans=2), zero NEVER settles (deliberate -- see the header's 18:41 note);
+(2) PILE ordinal-bind GATE: only GAMEMODE-sourced BeginDeferred spawns consume the
+save-identity cursor (wire-driven convert-LAND nativizations were shifting every
+subsequent bind = the 18:45 wrong-type morphs) + pos+chipType probes at the grab
+seams (E-PRESS client / EXEC host) + throttled gamemode-class resolve; wire
+unchanged v96; perf audit 0 CRITICAL [3 of 5 WARNs taken, zero-settle + backstop-150
+REJECTED with rationale], correctness audit 0 findings; autonomous smoke x2: host
+keypad=14 FULL-scan post-session-start + connect-snapshot "sent 14 (of 14 indexed)"
+[18:44 was 0-of-0], bind cursor+position oracles agree, mem flat ~3GB. NEW OPEN
+FINDING from the smokes: a JOIN-WINDOW SPAWN-NULL BURST on the client -- the host's
+PropSpawn/proxy burst landing during the client's world load gets engine
+BeginDeferred=null (smoke-2: 871 engine + 92 remote_prop nulls at 19:37:58-19:38:00;
+piles self-heal via the native bind, but up to ~92 keyed-prop mirrors are LOST for
+the session -- ghost-sync props; June archives + 07-03 real-save client show 0 =
+newly visible). Root class = [[feedback-snapshot-before-state-ready]]: wire spawns
+must DEFER to world-ready, not fire-and-fail; owner remote_prop/mirror_defer; NEXT
+session thread)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
+
+## 2026-07-04 ~19:35 (DLL `6EE1A44107003C9F` deployed 4/4 hash-verified)
+
+### 0o-a. Твой 18:41 «keypad вообще без синка» — ROOT-FIXED (settled-scan)
+Корень: на старте сессии хост ПЕРЕЗАГРУЖАЕТ мир; периодический tail-scan вычистил
+умершие кейпады старого мира (14 -> 0), а новые легли в переиспользованные слоты
+GUObjectArray НИЖЕ курсора — tail их не видел до конца сессии (то же убило
+power/window/grime/atv: у ВСЕХ ноль в 18:41:10, при живых door/light/container).
+Фикс: settle-дисциплина (full-walk пока счётчик меняется) теперь у ВСЕХ восьми
+индексов. Автономный смок уже показал: после session-start keypad=14 «full scan»
++ connect-snapshot «sent 14 (of 14 indexed)». Твой тест: тот же сценарий, что в
+18:41 (загрузиться в меню/соло -> захостить -> клиент жмёт кейпад) — LED/буфер
+должны зеркалиться в обе стороны. Если нет — хвост обоих логов с `keypad:`.
+
+### 0o-b. Твой 18:45 «pile морфится не в тот тип» — ГЕЙТ + ПРОБЫ
+Найден статический корень: клиентский ordinal-бинд (k-й keyless спавн <-> k-я
+запись карты) съедался НАШИМИ ЖЕ спавнами (конверт-ленды/нативизации проходили
+тот же BeginDeferred-шов) — один лишний спавн сдвигает ВСЕ последующие бинды =
+массовая путаница идентичности = чужой тип у грабнутого пайла. Фикс: курсор
+потребляют только спавны ИЗ ФРЕЙМА ГЕЙМОДА (loadObjects/loadPrimitives). Плюс
+пробы: клиент логирует `E-PRESS ... at(x,y,z) chipType=N`, хост — `EXEC ...
+at(x,y,z) chipType=N` для того же eid. Твой тест: пограби 3-5 РАЗНОТИПНЫХ пайлов
+клиентом — тип клампа/лендинга должен совпадать с тем, что лежал. Если снова не
+тот тип — пришли обе строки (E-PRESS + EXEC) для одного eid: несовпадение
+позиций назовёт остаточный корень точно.
 
 ## 2026-07-04 ~18:45 (DLL `460E5BE600E2EEAA` deployed 4/4 hash-verified)
 

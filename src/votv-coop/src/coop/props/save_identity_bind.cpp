@@ -188,6 +188,8 @@ void BindLocalNativeToHostEid_(void* native, coop::element::ElementId E, MAP::Fa
     if (caseII) ++g_caseII; else ++g_caseI;
 
     // Log: every kerfurOff (only 4 -- the jUuC target case), every (ii) race, and the first 5 piles.
+    // (No pos/chipType probe HERE: the cursor bind runs at the PRE-FinishSpawning seam -- position and
+    // chipType are not initialized yet; the grab-edge E-PRESS/EXEC probes are the misalignment oracle.)
     if (caseII || family == MAP::Family::KerfurOff || k < 5) {
         UE_LOGI("save_identity_bind: BOUND k=%zu %s native=%p -> host eid=%u [%s]%s", k, FamName(family),
                 native, static_cast<unsigned>(E),
