@@ -55,12 +55,15 @@ nearest.** AIPerception delegates are stubs that never write Target (red herring
   **`R::IsLive(victim)` is REQUIRED** -- the BP does not null Target the frame its target dies, so
   the deref in InGrabRange (GetActorLocation) / the enroll (InternalIndexOf) would UAF without it
   (the HIGH bug the audit caught + fixed).
-- **PUPPET victim:** trigger = `inRange` (NOT the host-proximity `grab` flag). On the rising edge ->
-  existing `RelayGrab` (WispGrab->victim slot = the puppet's client ragdoll-dies via
-  wisp_tear_mirror::OnWispGrab; WispTear->all = tear montage on the wisp mirror; host wisp despawns
-  +3.5s to break the re-grab loop; `g_relayed` latch = one relay per wisp). If the BP ALSO
-  false-grabbed the host (`st.grab`): `CallReleasePlayer` + the AddPlayerDamage PRE-cancel +
-  per-tick HP-pin protect the host (gated on `(grab||tryGrab) && isPuppet`).
+- **PUPPET victim (v1 shape; the TRIGGER + the abort timing are SUPERSEDED by v2 -- sec 6):**
+  v1 fired RelayGrab on the `inRange` (550u, distance-only) rising edge; v2 (`769d02f7`) arms a
+  CLOSING window at 550u+LOS and fires at 200u contact / 2.5 s LOS-gated timeout. The relay
+  itself is unchanged (WispGrab->victim slot = the client's ragdoll death via
+  wisp_tear_mirror::OnWispGrab; WispTear->all = tear montage; host wisp despawns +3.5s;
+  `g_relayed` latch). Host false-grab protection: AddPlayerDamage PRE-cancel + per-tick HP pin
+  (v1) + v2's rising-edge `CallReleasePlayer` gated `!playerDamaged` + the `canRagdoll=false`
+  belt (a post-d1 releasePlayer would LETHALLY ragdoll the host; the drop notify kills
+  unconditionally -- an HP pin cannot stop a ragdoll-death, the BP's own gate can).
 - **NPC victim:** `g_npcKillWatch` (key=victim eid; {actor, idx, deadline}). Enroll when a wisp is
   `inRange` of a tracked NPC. `DischargeNpcKillWatch` each Tick: `GetNpcIdForActor(actor)!=eid` ->
   drop (recycling/already-drained guard); else `IsLiveByIndex` -> keep (or drop at the 6s
@@ -75,30 +78,41 @@ Audited SAFE (recycling/idempotency/thread/perf/eid). wisp_attack_sync.cpp 289 L
 
 ---
 
-## 3. DEFERRED follow-ons (next session, after hands-on)
-1. **canReach LOS (MED divergence):** the v1 puppet trigger is distance-only -- it drops the BP's
-   `canReach` LineTrace LOS, so a thin-wall grab-through is possible. Faithful fix = a
-   `ue_wrap::wisp::CanReach(wisp,target)` LineTraceSingleForObjects (1b shape: Sphere->target,
-   obj_statDyn channels, "reachable"==not blocked) ANDed into `inRange`. Strict improvement over
-   not-attacking, so shipped distance-only first.
-2. **WispTear NPC-victim tear ANIMATION + host-victim tear-mirror:** the kerfur DEATH (despawn)
-   mirrors now; the wisp's tear MONTAGE on an NPC kill (and on a host kill) is cosmetic-deferred.
-   Needs `WispTearPayload` v78: widen 8->12B (`uint8 victimKind {Player=0,Npc=1}` + 3 pad +
-   `uint32 victimRef` = slot-or-eid); branch `wisp_tear_mirror::OnWispTear` on victimKind
-   (Player -> PlayTearOnWisp + socket-hold puppet; Npc -> PlayTearOnWisp only). The
-   [[feedback-reliablekind-router-checklist]] reduces to a payload-size bump (WispTear already
-   exists; event_feed size-check auto-tracks; relay whitelist unchanged -- host-only).
-3. **MTA precedent for a future general "nearest of all players" AI helper:** `CPedSync::Find
-   PlayerCloseToPed` (reference/mtasa-blue/Server/.../CPedSync.cpp:188) + health->death propagation.
+## 3. DEFERRED follow-ons -- reconciled 2026-07-04 (v2 `769d02f7`)
+1. **canReach LOS -- SHIPPED in v2.** `ue_wrap::wisp::CanReach` (wisp.cpp: LineTraceSingleForObjects
+   on the {WorldStatic,WorldDynamic} obj_statDyn set via the KSL CDO; param names SDK-verified
+   vs Engine.hpp:13152) is ANDed into the closing ARM edge AND re-verified at the fire
+   (wisp_attack_sync.cpp) -- a blocked hover times out WITHOUT killing through the wall and
+   re-arms when visible. Also used by the aggro selector's candidate eligibility.
+2. **WispTear NPC-victim tear ANIMATION + host-victim tear-mirror -- STILL OPEN** (verified
+   2026-07-04: `WispTearPayload` still 8 B at protocol.h:3204-3207). The PLAYER-victim
+   socket-hold half of the old plan shipped WITHOUT the widen (victimSlot already rides
+   WispTear; wisp_grab_hold::EngagePuppet). What remains needing the 8->12 victimKind widen:
+   the tear montage on an NPC kill + the host-victim tear mirror (cosmetic).
+3. **MTA "nearest player" helper -- SUPERSEDED by the v2 aggro selector**, which is
+   deliberately NOT nearest: uniform RANDOM + stickiness among eligible players (user
+   2026-07-03: the BP's nearest-pick made the host the perpetual victim). The MTA cite stays
+   the shape precedent for host-authoritative victim selection.
 
 ## 4. HANDS-ON (user, next session)
 - Peer ALONE near a wisp (host far) -> the wisp grabs+kills the peer (peer ragdoll-dies). Host log:
   `wisp_attack: RELAYED grab`. **[V matching real log 2026-07-03: autotest_kwisp_probe --
   SpawnKillerWispOnClient with the host teleported 8000u away: Target=PUPPET acquired, RELAYED
-  grab fired, client `WispGrab accepted ... ragdoll DEATH fired ok=1`, 0 errors.]**
+  grab fired, client `WispGrab accepted ... ragdoll DEATH fired ok=1`, 0 errors.]** (Pre-dates
+  the v2 choreography -- the v2 items below re-test this scenario WITH the visuals.)
+- v2 (2026-07-04, pending): BOTH players near the wisp -> it picks a victim at RANDOM (host log
+  `wisp_aggro: wisp eid=N picked victim slot=S (2 eligible...)`), swoops (`CLOSING` ->
+  `CONTACT`), and if the victim is the CLIENT: the victim sees itself grabbed + lifted riding
+  the wisp (camera decoupled, own body visible), every other screen shows the puppet held at
+  the wisp's socket rising ~5 m over 3.5 s + the tear montage, then the ragdoll death. Repeat
+  spawns should spread kills across both players.
+- v2 (pending): host stands in 550u while the wisp's victim is the CLIENT -> the host is NOT
+  killed and NOT ragdolled (rising-edge release + canRagdoll belt); host log shows
+  `canRagdoll=false forced` then `restored`.
 - Wisp kills a kerfur -> the kerfur despawns on BOTH peers (no ghost). Host log:
   `wisp_attack: NPC victim eid=N died (wisp kill...) -- mirrored EntityDestroy`. [still pending]
-- Dev button "Spawn killerWisp" (F1 > Game > Entities) drops one near you.
+- Dev button "Spawn killerWisp" (F1 > Game > Entities) drops one near you (nearest = YOU --
+  use "Spawn killerwisp on client" to bait the puppet).
 
 ## 5. 2026-07-03 LATE-EVE UPDATE -- user repro + probe + the movement fact + v2 plan
 
@@ -113,17 +127,46 @@ choreography. So "flew to the host" = the SELECTION picked the host (nearest-pic
 in radius, or an unconfirmed perception-path bias), NOT a movement hard-bind.
 
 **Probe verdict (autotest_kwisp_probe, `cd5947af`)**: with the host OUT of radius the whole June
-chain works -- acquisition -> relay -> client death ok=1. The REAL gaps, in order:
-1. **Peer kill CHOREOGRAPHY** (the user's report): a puppet victim gets a flat 3.5 s death --
-   no socket lift, no fatality experienced, the wisp mimes the tear alone. v2: victim client
-   attaches its OWN player to its LOCAL wisp mirror's `playerGrab` socket + fatality montage
-   (mirror exists -- killerwisp is npc-allowlisted); host + third peers socket-hold the victim
-   PUPPET via a carry-style pose override; release on the death/despawn edge.
-2. **AGGRO selection** (host-preference with both in radius): take aggro ownership into the coop
-   layer (one owner) -- a host-side selector in wisp_attack_sync::Tick, candidates = host + live
-   puppets in 5000u (+canReach LOS parity, closing sec 2 item 1), policy = UNIFORM RANDOM among
-   eligible + STICKINESS (hold victim while valid/in-range; re-roll on death/escape/out-of-range),
-   writes `Target` raw (no setter exists; the BP writes it inline -- same write class as wisp_C
-   `landed`), re-asserted per tick over the BP re-scan.
-Sec 2 item 2 (WispTearPayload 8->12 victimKind widen) remains OPEN (protocol.h:3204 still 8 B,
-checked 2026-07-03). Detail + status: memory [[project-killerwisp-vs-peers-open-2026-07-03]].
+chain works -- acquisition -> relay -> client death ok=1. The two real gaps (choreography +
+aggro selection) were then BUILT as v2 -- sec 6.
+
+## 6. v2 AS-BUILT (`769d02f7`, 2026-07-04 night; DLL `7BCE41C4B6DC9C99` 4/4; NO wire change)
+
+- **AGGRO SELECTOR** (wisp_attack_sync.cpp): host-authoritative Target owner while >=1 player
+  (host pawn / live puppet) is within the native 5000u + CanReach-visible. Policy = UNIFORM
+  RANDOM + STICKINESS (re-roll on death/leave/>5500 hysteresis); raw `Target` write re-asserted
+  per tick (no setter -- the BP's own inline write class). Hands-off during a native host kill
+  (pick==host or no pick, with tryGrab/grab/killed up); STAYS ON through a false-grab (the BP
+  arms on host PROXIMITY, not Target). No eligible player -> the native scan owns (kerfur/
+  fossilhound hunting preserved; documented divergence: players preferred over a nearer kerfur).
+- **TWO-STAGE CLOSE**: 550u+LOS arms a Closing window; the relay fires at 200u contact or the
+  2.5 s hover timeout, LOS re-verified at fire (never through a wall; re-arms when visible).
+- **GRAB CHOREOGRAPHY** (NEW coop/creatures/wisp_grab_hold.{h,cpp}, every peer): the victim
+  client replays the native Capture player template (bytecode-exact, killerwisp.json @12313
+  region: CMC SetMovementMode(MOVE_None) -> K2_AttachToComponent(wisp.Mesh,'playerGrab') [snap,
+  not the native KeepWorld -- our Capture-equivalent fires at <=200u, not MoveTo contact] ->
+  mainPlayer.Mesh visible -> held=1 -> bUseControllerRotationYaw=0 -> lag.bUsePawnControlRotation
+  =0) against its LOCAL wisp mirror; detach + restore right before the scheduled ragdoll death
+  (native releasePlayer order). Host + third peers snap the victim PUPPET to the wisp's
+  'playerGrab' socket per tick AFTER the puppet pose apply (the net_pump call-site ordering IS
+  the mechanism -- an attach would fight RemotePlayer::Tick every frame). The host LIFTS the
+  real wisp 150 cm/s across the grab window; the pose stream carries the native signature rise
+  to every screen. Holds self-release on liveness (the +3.5 s despawn is the canonical edge).
+- **AUDIT FIXES** (2 agents, folded pre-commit): `IsKillerWisp` candidate-class SELF-RESOLVE --
+  the entire lane (v1 included!) only resolved when the dev probe's unguarded ReadState ran
+  ([[lesson-gated-probe-verify-the-gate]]); the false-grab abort moved to the native grab's
+  RISING edge gated `!playerDamaged` (a post-d1 releasePlayer = ragdollMode(...,playerDamaged) =
+  LETHAL to the host); NEW `canRagdoll=false` belt across the false-grab window
+  (engine_mainplayer::SetMainPlayerCanRagdoll, canRagdoll@0xD10) -- the montage drop notify's
+  unconditional ragdollMode(true,false,true) cannot be stopped by an HP pin, only by the BP's
+  own pre-condition gate; restored on the falling edge / OnDisconnect.
+- **VERIFY STATE (honest)**: build + deploy hash 4/4; generic LAN smoke PASS x2 (stability/RSS
+  only); **the choreography E2E PROBE RUN IS STILL PENDING** -- three night attempts died to
+  environment (parallel audit-agent machine load x2; a poisoned s_1234, see
+  [[lesson-s1234-host-slot-stateful-coop-backup]]; a cold FRESH-join outliving the probe window,
+  now widened to ~4.4 min). Hands-on (sec 4) remains the visual verdict.
+
+Sec 3 item 2 (WispTearPayload 8->12 victimKind widen for the NPC/host-victim tear cosmetics)
+remains OPEN (protocol.h:3204 still 8 B, re-checked 2026-07-04). Detail + status: memory
+[[project-killerwisp-vs-peers-open-2026-07-03]] + [[project-pause-guard-2026-07-04]] (same
+commit: the coop no-pause invariant).

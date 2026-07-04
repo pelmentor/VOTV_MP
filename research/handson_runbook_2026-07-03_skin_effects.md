@@ -1,15 +1,46 @@
 # Hands-on runbook 2026-07-03 — skin take-3 + join-line + TIME instant + NORMALS + EVENTS-NOW
 
-**Deployed: DLL `08B357DDE6F6ACE4` on all 4 installs** (hash-verified; protocol **v96** —
-both peers MUST be on this DLL to connect). Supersede chain tonight: `1CDD6079A5241162`
+**Deployed: DLL `7BCE41C4B6DC9C99` on all 4 installs** (hash-verified; protocol **v96** —
+both peers MUST be on this DLL to connect). Supersede chain: `1CDD6079A5241162`
 (your hands-on build) → `121C31D2BEFE85B4` (+eventforce autotest) → `59D77AFC4329DB78`
 (**+ the WISP MIRROR LANE** — see its section below) → `08B357DDE6F6ACE4` (+the killerwisp
-probe; env-gated autotests only between the last two, wire unchanged). Late-eve autonomy
+probe) → **`7BCE41C4B6DC9C99` (2026-07-04 night: + KILLERWISP v2 choreography/aggro + the
+coop NO-PAUSE fix — sections 0a/0b below; wire unchanged v96)**. Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
-alive; the gap = missing peer kill choreography). What autonomy CANNOT see: everything
-visual — your hands-on below still decides those.
+alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
+everything visual — your hands-on below still decides those.
+
+## 2026-07-04 NIGHT ADDITIONS (commit `769d02f7`, DLL `7BCE41C4B6DC9C99`)
+
+### 0a. COOP NO-PAUSE (your report: клиенты замирают на ESC) — 5-second test
+Root fix (state-level, one owner): while connected, a paused world is un-paused every
+gameplay tick via the game's own SetGamePaused(false) — the ESC pause is EX_CallMath
+(PE-invisible), so the STATE is enforced, not the call sites; the console `pause` command
+(a GameplayStatics-bypassing path) is caught by the same poll. ESC menu stays fully usable;
+solo pause untouched; a solo host (no clients) can still pause.
+TEST: host+client session → on the CLIENT press ESC → мир за меню продолжает тикать (на
+экране хоста паппет клиента живой, время идёт); ESC-меню кликабельно как обычно. Then the
+same with ESC on the HOST. Client log: `pause_guard: world pause detected in a coop session
+-- un-pausing`. Status: build+deploy verified; autonomous e2e queued
+(VOTVCOOP_RUN_PAUSE_TEST) — YOUR ESC IS the verdict.
+
+### 0b. KILLERWISP v2 — full kill choreography + fair aggro (probe e2e still queued)
+What changed: aggro = uniform RANDOM among players in 5000u+LOS with stickiness (no more
+host-preference); the wisp swoops to CONTACT before the kill fires (no more 5-m "grab");
+the VICTIM gets the native experience (grabbed onto the wisp's socket, movement cut, camera
+decoupled, own body visible, lifted ~5 m over 3.5 s, tear montage, death); every OTHER
+screen shows the victim's puppet held at the socket riding the lift + the tear. Host safety
+during a false-grab hardened (canRagdoll belt — the wisp can no longer ragdoll-kill the
+host when its real victim is a client).
+TEST (night not required): F1 > Game > Entities > "Spawn killerwisp on client" — as the
+client, expect the full grab/lift/death; as the host watching, the puppet rides the wisp.
+Then both stand together + plain "Spawn killerWisp" a few times — kills should spread
+randomly between you two. Host log: `wisp_aggro: picked victim slot=`, `CLOSING`, `CONTACT`,
+`RELAYED grab`; client log: `wisp_hold[self]: grabbed by wispEid=`. Status: built + 2 agent
+audits folded + generic smoke PASS x2; the choreography e2e probe run is QUEUED (env flakes
+ate three attempts — the s_1234 poisoning lesson); your hands-on is the visual verdict.
 
 ## EVENING ADDITIONS (after your two reports)
 
@@ -160,12 +191,9 @@ TEST (needs NIGHT): host F1 > Events > wisps -> NOW! -> BOTH peers should see th
 glowing swarm land in the forest ring (~0.5-0.75 km out) and wander; jump the clock to day
 -> they fade out on both. KNOWN fidelity edge: the mirror's fade-in fires when the streamed
 pose reads grounded -- if a wisp descends "not falling" (CMC mode) the fade could fire mid-air.
-KNOWN OPEN (your report) -- killerwisp vs peers, PROBED same night: the June chain is ALIVE
-(probe: wisp acquired the puppet, relayed, the client ragdoll-DIED ok=1) -- so the real gap is
-the EXPERIENCE you named: no grab/lift/socket choreography for a peer victim (you just drop
-dead ~3.5 s later; the wisp mimes the tear alone) = the special kill sequence exists only for
-player 0. v2 design recorded: victim-side attach to the local wisp MIRROR's playerGrab socket
-+ fatality montage; host-side puppet socket-hold via a carry-style pose override. Not built yet.
+KILLERWISP vs peers: the probe proved the June chain ALIVE (acquired, relayed, client died
+ok=1); the missing kill choreography + aggro fairness were then BUILT as v2 (`769d02f7`) --
+see section 0b at the TOP of this runbook for the test.
 
 ## EVENT TRIGGERING + MIRROR (your report) -- what changed + what I need from you
 

@@ -126,7 +126,7 @@ Per-player or broadcast; not world entities.
 | `item_activate.cpp`, `flashlight_click_sound.cpp`, `prop_sound.cpp` | Held-item effects (flashlight etc.) | ItemActivate `[V]` |
 | `chat_sync.cpp`, `chat_feed.cpp` | Text chat + the on-screen feed | ChatMessage `[V]` |
 | `email_sync.cpp` | In-game email / saved signals | EmailAppend/Delete `[V]` |
-| `player_damage.cpp`, `wisp_tear_mirror.cpp`, `wisp_attack_sync.cpp` | Combat: relayed damage + killer-wisp fatality | PlayerDamage/WispGrab/WispTear `[V]` |
+| `player_damage.cpp`, `wisp_tear_mirror.cpp`, `wisp_attack_sync.cpp`, `wisp_grab_hold.cpp` | Combat: relayed damage + killer-wisp fatality. v2 `769d02f7` (2026-07-04): host-authoritative AGGRO SELECTOR (uniform random + stickiness + canReach LOS over host+puppets in 5000u; raw Target re-assert per tick), two-stage close (arm 550u+LOS, relay at 200u contact / 2.5 s LOS-gated timeout), grab CHOREOGRAPHY on every peer (victim replays the native Capture template on its LOCAL mirror; host+third peers snap the victim puppet to the 'playerGrab' socket AFTER pose apply — net_pump ordering; host lifts the wisp 150 cm/s for the window), canRagdoll=false belt over the false-grab window. NO wire change. `[AS-BUILT; generic smoke PASS x2; e2e probe + hands-on pending]` | PlayerDamage/WispGrab/WispTear `[V v1; v2 pending]` |
 | (voice) `VoiceState` is dispatched in L2's state family; voice audio rides its own Opus path. `[?]` | Voice chat | VoiceState `[?]` |
 
 ## L5 — Host control / moderation / dev (not gameplay sync)
@@ -135,6 +135,7 @@ Per-player or broadcast; not world entities.
 | `moderation.cpp`, `ban_list.cpp`, `roster.cpp` | Kick/ban, peer admin. `[?]` |
 | `save_guard.cpp`, `save_block.cpp`, `save_button_disable.cpp`, `save_indicator_suppress.cpp` | Client save suppression (host-authoritative world). `[?]` |
 | `shutdown.cpp`, `ambient_spawner_suppress.cpp`, `garbage_sync.cpp` | Lifecycle/teardown + targeted client-side crash fixes (e.g. garbage_sync = the open-container pickup AV fix). `[V]` |
+| `pause_guard.cpp` | Coop NO-PAUSE invariant (2026-07-04 `769d02f7`): while connected, a paused world (client/host ESC, console `pause`) is un-paused every gameplay tick via GameplayStatics::SetGamePaused(false) — STATE-level, one owner; the ESC pause is EX_CallMath = PE-invisible so call-site interception is impossible. ESC menu stays usable; solo pause untouched. `[AS-BUILT; e2e autotest VOTVCOOP_RUN_PAUSE_TEST queued; hands-on ESC = verdict]` |
 | `multiplayer_menu.cpp`, `ini_config.cpp`, `grab_observer.cpp` | Menu UI, config, the grab input observer. `[V]` |
 
 ---
