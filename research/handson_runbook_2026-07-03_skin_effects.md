@@ -14,6 +14,26 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
+## 2026-07-04 EVE (your live-test reports; commit `c8aec14c` — NOT YET DEPLOYED, game was running)
+
+### 0d. GHOST LOBBY after host death — root-fixed, awaiting deploy
+Your report: host died to the killerwisp, all fled to the menu — the server STAYED listed.
+Root: the lobby heartbeat thread was only stopped on boot-failure paths; the host-session
+running->stopped edge (death OR quit-to-menu) never sent /v1/leave, so the master kept the
+dead lobby alive forever. Fix (one owner): EndHostedLobby (delist + heartbeat stop + host
+state clear) now fires at the host-session-ended edge, same place the menu-flee is posted.
+DEPLOY: blocked at 21:xx (votv-coop.dll in use — game running). **Закрой игру и скажи —
+задеплою; либо сам прогони tools/deploy-all.ps1.** TEST after deploy: host, умри/выйди в
+меню → на втором пире обнови браузер серверов — строка должна ИСЧЕЗНУТЬ (host log:
+`session_manager: EndHostedLobby -- lobby retired`).
+
+### Your 4 other findings (recorded OPEN, next threads)
+1. Wind + dust desync (client has wind/пылинки, host nothing) — directionalwind sync exists;
+   probe which peer diverged first. 2. Luggage->inventory->drop-all: dropped items never
+   appear on the client (inventory-drop spawn path uncaught). 3. Kwisp client death too FAST
+   vs native pacing. 4. Kwisp beam-"РУКИ" not mirrored on watching peers (kill syncs, beam
+   VFX doesn't). Partial 0b verdict recorded: kill chain confirmed live BOTH directions.
+
 ## 2026-07-04 DAY ADDITION (DLL `D43455FC4787FFE4`)
 
 ### 0c. RE-HOST CRASH root-fixed (your 11:11 crash report) — 2-minute test
