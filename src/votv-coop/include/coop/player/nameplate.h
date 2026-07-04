@@ -30,6 +30,8 @@ struct Plate {
     float alpha = 0.f;       // distance fade 0..1 (0 => skip)
     float scale = 1.f;       // distance SIZE scale: 1 = base size up close, shrinks ~1/dist far away
     bool  onScreen = false;  // projected in FRONT of the camera AND within fade range
+    bool  occluded = false;  // world geometry between the camera and the head -> the plate
+                             // renders GRAY (minecraft nametag shape; user 2026-07-04)
     bool  flash = false;     // hurt-flash red (read from RemotePlayer::IsHurtFlashing)
     int   healthPct = 100;   // 0..100 streamed-vitals health (display-only)
     int   ping = -1;         // RTT ms (-1 = unmeasured -> no suffix; 0 = sub-ms LAN -> "<1ms")

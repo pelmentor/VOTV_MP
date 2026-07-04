@@ -11,15 +11,19 @@
 //   - DIGIT BUFFER (inPassword): bidirectional INPUT mirror. A client typing replays onto the host's
 //     keypad, running the HOST's own native validator (a correct code unlocks the shared door
 //     host-authoritatively; a wrong 5-digit code auto-submits + denies on the host's own validator).
-//   - active / door POWER + LED: HOST-AUTHORITATIVE. The host NEVER takes its keypad power / door lock
-//     from a CLIENT packet (ApplyState's active/door write is client-only; ApplyIncoming drops a
-//     client's DENY before open(false) on the host). A client's cancel / wrong short code / a
-//     save-transfer transient carrying active=0 can no longer de-power the host's door. Clients mirror
-//     the host's authoritative active. (Known edge: a client's deliberate cancel still reddens its OWN
-//     LED + may briefly diverge until the host's next authoritative broadcast / the connect-snapshot;
-//     the SP-faithful re-lock is now host-driven. A full single-syncer refactor -- client sends input
-//     requests, host is the sole KeypadState producer -- would close that edge; deferred as it is the
-//     reported bug's secondary symptom, not its cause.)
+//   - active / door POWER + LED: HOST-AUTHORITATIVE for STATE packets, INPUT-REPLAYED for press
+//     EVENTS (2026-07-04, the "client's red button always rewrote back to green" fix). The split:
+//       * a plain KeypadState (ev=None) NEVER drives the host's power (ApplyState's active/door
+//         write is client-only) -- that closes the 2026-06-17 "keypads dead from the host's view"
+//         root (a save-transfer transient carrying active=0 de-powering the host's door).
+//       * a stamped Accept/Deny EVENT is a deliberate PRESS -- an INPUT, exactly like the digits --
+//         and the host REPLAYS it natively (CallOpen), running its own chain (LED, sound, pair +
+//         gated-door setActive propagation). SP-native: pressing the red button locks the door for
+//         everyone, wrong-code deny re-locks, from the host's own authoritative chain, which its
+//         poll then rebroadcasts. The prior blanket "host drops a client's Deny" was scoped too
+//         wide (it also ate the deliberate cancel -> the host's poll kept overwriting the client
+//         back to green, the 17:08 fight in the 2026-07-04 log); RULE 1: the root was transients
+//         driving power, not presses, so only transients stay blocked.
 //
 // v59 SUBMIT MIRROR (2026-06-11, replaces the deleted HostAcceptPoll): the BP auto-submits
 // at Len>=5 (uber @2398), so long codes validate NATIVELY on every peer from the digit
@@ -262,7 +266,8 @@ void ApplyState(void* actor, const std::wstring& key, const State& want, unsigne
         // de-power the host's door, making the host's own E-press fail = the reported "some keypads
         // are dead from the host's perspective." Only a CLIENT mirrors the host's authoritative active
         // (+ door). The host's keypad power changes solely from its OWN native open() -- driven by the
-        // replayed digit input running the host's validator -- and the gamemode power system; the host
+        // replayed digit input running the host's validator, or by a replayed press EVENT
+        // (ApplyIncoming's CallOpen; 2026-07-04) -- and the gamemode power system; the host
         // then broadcasts that authoritative result. The digit BUFFER reconcile above stays
         // bidirectional (the input mirror), so a client typing the correct code still unlocks the
         // shared door via the host's own validation.
@@ -360,10 +365,32 @@ void PollAndBroadcast() {
         // outside g_mutex by design (engine access never under our lock).
         coop::net::KeypadEvent ev = coop::net::KeypadEvent::None;
         const bool shortCode = !last.buffer.empty() && last.buffer.size() < 5;
-        if (classify && shortCode && !PL::IsResetMode(r.second.actor)) {
-            if (!last.active && cur.active) {
-                ev = coop::net::KeypadEvent::Accept;
-            } else if (cur.buffer.empty() && !cur.active) {
+        if (classify && !PL::IsResetMode(r.second.actor)) {
+            if (shortCode) {
+                if (!last.active && cur.active) {
+                    ev = coop::net::KeypadEvent::Accept;
+                } else if (cur.buffer.empty() && !cur.active) {
+                    ev = coop::net::KeypadEvent::Deny;
+                }
+            } else if (last.buffer.empty() && cur.buffer.empty() &&
+                       last.active && !cur.active && PL::IsPressHover(r.second.actor)) {
+                // EMPTY-BUFFER cancel press (2026-07-04): the red button with nothing typed
+                // runs open(false) natively here -- active 1->0 is the ONLY delta, so the
+                // shortCode arms above can never see it (the 17:08 "client's red press
+                // rewrote back to green" gap). The press discriminator is the lookAt HOVER:
+                // active flipped off while the local crosshair sits on a submit button =
+                // a deliberate press (the BP's own press routing keys on the same flags:
+                // uber @3691 IFNOT(isDeny) -> open(false)). Flag lifetime (bytecode-verified,
+                // passwordLock_cfg lookAt @976/@1243: unconditional LetBool per CALL, but
+                // lookAt only runs while the crosshair is ON this keypad): the flags STICK
+                // after the crosshair leaves the keypad entirely -- which is exactly right
+                // for open()'s latent ~0.3s state landing (press-then-look-away still
+                // classifies); they clear only when the crosshair moves to a non-button part
+                // of the SAME keypad (a narrow miss window -- falls back to the convergent
+                // plain-state packet, next press classifies). The inverse edge (an ambient
+                // power-loss flip while a stale hover flag is stuck true) mis-stamps a Deny;
+                // the host then replays open(false) on an already-inactive keypad -- a deny
+                // beep, state converges. Both residuals are benign-convergent by design.
                 ev = coop::net::KeypadEvent::Deny;
             }
         }
@@ -399,21 +426,19 @@ void ApplyIncoming(void* actor, const std::wstring& key, const State& want,
         return;
     }
     const bool accept = (ev == coop::net::KeypadEvent::Accept);
-    // HOST AUTHORITY: a CLIENT's DENY (a wrong short code or the explicit cancel) must NOT run
-    // open(false) on the host -- open(false) sets active=false and propagates it to the gated door,
-    // de-powering the host's door (the "dead keypad from the host's view" bug). The host applies only a
-    // client's ACCEPT (a legitimate shared unlock: the client entered the correct code on the shared
-    // keypad, which powers the door for everyone). A Deny on the host instead falls through to a
-    // buffer-only reconcile (ApplyState, whose active/door write is host-skipped) so the host's keypad
-    // power stays its own. A CLIENT still replays BOTH events (it mirrors the host's authoritative
-    // accept/deny result). The host's own keypad presses + the gamemode remain its only power source.
-    {
-        auto* s = g_session.load(std::memory_order_acquire);
-        if (s && s->role() == coop::net::Role::Host && !accept) {
-            ApplyState(actor, key, want, fromSlot);
-            return;
-        }
-    }
+    // EVERY peer -- host included -- replays a stamped Accept/Deny natively (2026-07-04).
+    // An event IS a deliberate press on the sender: an input, exactly like the digit replay,
+    // so the host runs its own open(Active) chain -- MTA input-replication, SP-native (a
+    // client's red button locks the shared door; a wrong-code deny re-locks it). The OTHER
+    // clients converge from the host RELAY of the original event packet (KeypadState is in
+    // IsClientRelayableReliableKind), each replaying the same chain -- NOT from a host poll
+    // rebroadcast: the endpoint prime below means a chain landing exactly on its endpoint
+    // sends nothing (by design, the echo-break). The 2026-06-17 "keypads dead from the host's view" root
+    // -- a save-transfer TRANSIENT carrying active=0 -- stays closed where it belongs:
+    // transients are ev=None state packets, and ApplyState's active/door write is still
+    // host-skipped. The old blanket host-drop of Deny here over-suppressed: it also ate the
+    // deliberate cancel, so the host's poll kept rewriting the client back to green (the
+    // 17:08 fight in the 2026-07-04 log).
     if (!PL::CallOpen(actor, accept)) {
         // Degraded fallback (Open UFunction unresolved): mirror the END state directly so
         // the LED/door at least converge -- the plain state apply.

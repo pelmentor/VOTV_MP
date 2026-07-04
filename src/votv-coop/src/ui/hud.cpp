@@ -50,11 +50,16 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     else if (p.ping == 0) std::snprintf(line, sizeof(line), "%s (<1ms)", p.nick);  // sub-ms LAN
     else                  std::snprintf(line, sizeof(line), "%s", p.nick);          // -1 = unmeasured
 
-    const float a = std::clamp(p.alpha, 0.f, 1.f);
+    // Occlusion (minecraft nametag shape, user 2026-07-04): a peer behind world
+    // geometry keeps a readable plate, but GRAY nick + a uniform dim over the whole
+    // unit (bar, badge, outline ride the same `a`) so "behind something" reads at a
+    // glance. Hurt-flash red keeps priority -- a hurt peer stays visible either way.
+    const float a = std::clamp(p.alpha, 0.f, 1.f) * (p.occluded ? 0.75f : 1.f);
     const ImU32 white   = IM_COL32(255, 255, 255, static_cast<int>(a * 245.f));
+    const ImU32 gray    = IM_COL32(158, 158, 164, static_cast<int>(a * 245.f));
     const ImU32 red     = IM_COL32(255, 48, 48, static_cast<int>(a * 255.f));
     const ImU32 outline = IM_COL32(0, 0, 0, static_cast<int>(a * 215.f));
-    const ImU32 textCol = p.flash ? red : white;
+    const ImU32 textCol = p.flash ? red : (p.occluded ? gray : white);
 
     // Distance SIZE scale: the whole plate (text + bar + box + gaps) scales as ONE unit
     // so a far peer's label stays proportional to their shrunken on-screen body. p.scale

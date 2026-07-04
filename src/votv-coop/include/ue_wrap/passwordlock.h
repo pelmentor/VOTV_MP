@@ -86,6 +86,15 @@ void* GatedDoor(void* lock);
 // password instead of opening the door, so the accept-open must be skipped for it. Game thread.
 bool IsResetMode(void* lock);
 
+// True iff the LOCAL crosshair is hovering the accept or deny button of this keypad
+// (isAcc @0x037C / isDeny @0x037D -- the lookAt-driven HOVER flags, set per frame from
+// what the crosshair points at; BP disassembly 2026-06-06). NOT state, NEVER mirrored
+// (the old "PURPLE" bug) -- read locally as the PRESS discriminator: an `active` flip
+// observed by the poll while the player's crosshair sits on a submit button is a
+// deliberate accept/cancel press (the button identity is what lookAt set), not an
+// ambient power/apply transition. Game thread.
+bool IsPressHover(void* lock);
+
 // --- Receiver apply primitives (game thread) -------------------------------------
 // Replay one typed digit (0..9): dispatches inputNumber(digit), which APPENDS to
 // inPassword the native way (display + beep). This is how the receiver mirrors typing

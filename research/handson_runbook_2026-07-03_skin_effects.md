@@ -20,15 +20,63 @@ rasterizer 0k; audits 0 CRITICAL, 3 WARN closed same build; wire unchanged v96) 
 `68DE991B1FABCB74` (2026-07-04 late PM #2: + UI size pref 1.25x default + F1 slider
 + nameplate distance 1.5x + chat-resurrect probe 0l [detector entry-keyed+tail-gated
 per audit F1/F2, overflow drops logged]; wire unchanged v96) →
-**`0E52826C38A4F42E` (2026-07-04 ~17:20: + PUPPET-Z ANCHORED-ZERO [the 16:48
+`0E52826C38A4F42E` (2026-07-04 ~17:20: + PUPPET-Z ANCHORED-ZERO [the 16:48
 twitch/sunk root -- the spawn chain-measure race deleted, RULE 2] + host lobby
-T-chat + input bar = chat column + Roboto default 0m; wire unchanged v96)**.
+T-chat + input bar = chat column + Roboto default 0m; wire unchanged v96) →
+**`460E5BE600E2EEAA` (2026-07-04 ~18:45: + the 17:10 HOST-DEATH diagnosis/fixes
+[SO no longer absorbed + PE depth probe + mem heartbeat] 0n-a + KEYPAD red-button
+press replication 0n-b + NAMEPLATE occlusion gray 0n-c; both audits 0 CRITICAL,
+finding-5 ctor hardening folded in same build; wire unchanged v96)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
 'obelisk'` same second); wisp lane e2e x2 (32/32 all four legs); killerwisp probe (chain
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
+
+## 2026-07-04 ~18:45 (DLL `460E5BE600E2EEAA` deployed 4/4 hash-verified)
+
+### 0n-a. Твой 17:10 «хост жрал память и его убило» — диагноз + фиксы/пробы
+Что нашлось в логе+WER: в 17:09:46 хост поймал **stack overflow (0xC00000FD) ВНУТРИ
+скрипт-VM** на `ReceiveDestroyed` — вложенная BP destroy-цепочка (актор в своём Destroyed
+уничтожает следующий, тот следующий, ...) съела стек; наш SEH-щит «поглотил» это и
+продолжил — через секунду (17:09:47, WER) процесс добило вторым AV на уже мёртвом стеке.
+Личность цепочки лог НЕ назвал (наши destroy-пути все логируются — тишина = инициатор не
+наш логируемый код). Память в логе не видна вообще (0 наблюдаемости). Фиксы per rule 1 +
+probe-don't-guess:
+1. **Stack overflow больше НЕ поглощается** — процесс падает в WER ровно в апексе рекурсии,
+   и дамп (Панель управления WER / ProgramData\Microsoft\Windows\WER) назовёт всю цепочку.
+2. **PE depth-probe**: при глубине вложенных диспатчей 128/256/512/... в лог пишется
+   `game_thread: PE recursion depth=N -- function=... class=...` — повторяющаяся пара
+   function/class в этих строках = участники цикла. Цена: инкремент thread-local на диспатч.
+3. **Память в лог**: раз в ~30 с `mem: ws=XMB private=YMB peak-ws=ZMB` — в следующий раз
+   увидим, росла ли она минутами (утечка) или это был всплеск самой рекурсии.
+ТЕСТ: играй как обычно. Если хост снова умрёт — мне нужны от тебя: время + хвост
+votv-coop.log (там будут `PE recursion depth` строки с именами) + `mem:` строки до смерти.
+Этого хватит на именной root-fix.
+
+### 0n-b. KEYPAD: красная кнопка клиента (17:07) — root-fixed
+Твой репорт: клиент жмёт красную кнопку — состояние всегда перезаписывается на зелёный.
+Root: наша же host-authority защита 2026-06-17 была слишком широкой — хост не принимал от
+клиента НИКАКОЙ `active`, а красная кнопка с пустым буфером даже не классифицировалась как
+событие (гейт требовал напечатанных цифр). Лог 17:08:42: `applied active=0 (from slot 1)`
+→ тут же `sent active=1` — бой на перезапись. Фикс (MTA input-replication, как цифры):
+нажатие красной/зелёной кнопки теперь распознаётся по нативным hover-флагам (isDeny/isAcc —
+прицел на кнопке в момент флипа) и уезжает на хост СОБЫТИЕМ; хост реплеит его нативным
+open(false/true) — свет/звук/замок двери от его собственной цепочки — и рассылает результат.
+Транзиенты (save-transfer active=0, ev=None) как раньше НЕ трогают питание хоста — корень
+06-17 закрыт где был. ТЕСТ: клиент у кейпада жмёт красную (буфер пуст) → LED красный у
+ОБОИХ, дверь заперта, зелёный больше не возвращается; хост-лог:
+`keypad: native Open(0) replayed ... (from slot 1)`. Обратно: правильный код/зелёная —
+как раньше. Неправильный короткий код на зелёном кейпаде теперь тоже перезапирает дверь у
+всех (это нативное SP-поведение).
+
+### 0n-c. NAMEPLATE occlusion — серый ник за препятствием (minecraft-style)
+Ник видно сквозь стены как раньше (оверлей), но если между камерой и головой пира есть
+геометрия/закрытая дверь/проп — ник СЕРЫЙ и вся плашка чуть притушена; вышел из-за угла —
+снова белый. Тела игроков сами не блокируют (трейс по WorldStatic+WorldDynamic, pawn — нет).
+Hurt-flash (красный) имеет приоритет над серым. ТЕСТ: смотри на пира через стену/дверь →
+серый; в прямой видимости → белый; ранение за стеной → красный.
 
 ## 2026-07-04 EVE (your live-test reports; DLL `AE547EFE0ED156E7` deployed 4/4 hash-verified)
 

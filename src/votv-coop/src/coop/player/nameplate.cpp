@@ -9,6 +9,7 @@
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
+#include "ue_wrap/trace.h"   // LineBlockedStatDyn -- the occlusion (gray plate) check
 #include "ue_wrap/types.h"
 
 #include <algorithm>
@@ -101,6 +102,7 @@ void Update() {
                                         // (menu-window balloon fix; the TTL bounds the rest)
     void* pc = nullptr;                 // local PlayerController -- resolved lazily (only if a puppet exists)
     ue_wrap::FVector viewer{};
+    ue_wrap::FVector camera{};          // view camera world point -- the occlusion-trace origin
 
     // Iterate ALL peer slots (0..kMaxPeers-1), not 1.. -- the slot a peer's puppet
     // sits in is the PEER's slot, and which slot is "remote" depends on who WE are:
@@ -122,6 +124,12 @@ void Update() {
             pc = E::GetController(lp);
             if (!pc) break;
             viewer = E::GetActorLocation(lp);
+            // The occlusion trace starts at the actual VIEW camera (correct in freecam /
+            // vehicle cams too); the actor's eye height is the fallback if no camera
+            // manager is live yet (a zeroed read this early is the menu/possess window).
+            camera = E::GetCameraLocation();
+            if (camera.X == 0.f && camera.Y == 0.f && camera.Z == 0.f)
+                camera = ue_wrap::FVector{viewer.X, viewer.Y, viewer.Z + 60.f};
         }
 
         const ue_wrap::FVector head = p->GetHeadPosition();
@@ -134,6 +142,14 @@ void Update() {
         pl.alpha = DistanceAlpha(dist);
         pl.scale = DistanceScale(dist);
         pl.onScreen = inFront && pl.alpha > 0.02f;
+        // Occlusion (minecraft nametag shape, user 2026-07-04): world geometry between
+        // the camera and the head grays the plate. The {WorldStatic, WorldDynamic} set
+        // means level geometry / closed doors / props block; pawns are NEITHER type, so
+        // the local body and the puppet itself never self-block. Unresolved (-1) -> not
+        // occluded (a missing primitive must never gray every plate). Traced only while
+        // the plate is actually drawable -- 0..3 one-line traces per tick.
+        pl.occluded = pl.onScreen &&
+                      ue_wrap::trace::LineBlockedStatDyn(lp, camera, head) == 1;
         pl.x = screen.X;
         pl.y = screen.Y;
         pl.flash = p->IsHurtFlashing();

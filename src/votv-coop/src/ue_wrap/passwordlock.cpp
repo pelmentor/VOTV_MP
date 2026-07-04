@@ -30,6 +30,8 @@ int32_t g_inPwOff    = -1;       // ApasswordLock_C::inPassword (0x0380, FString
 int32_t g_doorOff    = -1;       // ApasswordLock_C::door (Adoor_C*) (0x0338) -- the gated door
 int32_t g_isResetOff = -1;       // ApasswordLock_C::isReset    (0x0360, bool) -- set-new-code mode
 int32_t g_activeOff  = -1;       // ApasswordLock_C::active     (0x0330, bool) -- LED selector + door power
+int32_t g_isAccOff   = -1;       // ApasswordLock_C::isAcc      (0x037C, bool) -- crosshair-over-key_acc HOVER
+int32_t g_isDenyOff  = -1;       // ApasswordLock_C::isDeny     (0x037D, bool) -- crosshair-over-key_deny HOVER
 void*   g_inputNumFn = nullptr;  // ApasswordLock_C::inputNumber(int32 Num)
 void*   g_updFn      = nullptr;  // ApasswordLock_C::upd()  (best-effort refresh; may be null)
 void*   g_openFn     = nullptr;  // ApasswordLock_C::Open(bool Active) -- the native submit chain
@@ -40,6 +42,8 @@ constexpr int32_t kInPwOffFallback    = 0x0380;
 constexpr int32_t kDoorOffFallback    = 0x0338;
 constexpr int32_t kIsResetOffFallback = 0x0360;
 constexpr int32_t kActiveOffFallback  = 0x0330;
+constexpr int32_t kIsAccOffFallback   = 0x037C;
+constexpr int32_t kIsDenyOffFallback  = 0x037D;
 
 int32_t ResolveOff(void* cls, const wchar_t* name, int32_t fallback) {
     int32_t off = R::FindPropertyOffset(cls, name);
@@ -78,6 +82,8 @@ bool EnsureResolved() {
     const int32_t doorOff    = ResolveOff(lockCls, L"door",       kDoorOffFallback);
     const int32_t isResetOff = ResolveOff(lockCls, L"isReset",    kIsResetOffFallback);
     const int32_t activeOff  = ResolveOff(lockCls, L"active",     kActiveOffFallback);
+    const int32_t isAccOff   = ResolveOff(lockCls, L"isAcc",      kIsAccOffFallback);
+    const int32_t isDenyOff  = ResolveOff(lockCls, L"isDeny",     kIsDenyOffFallback);
 
     void* inputNumFn = R::FindFunction(lockCls, L"inputNumber");
     if (!inputNumFn) {
@@ -97,13 +103,17 @@ bool EnsureResolved() {
     g_doorOff    = doorOff;
     g_isResetOff = isResetOff;
     g_activeOff  = activeOff;
+    g_isAccOff   = isAccOff;
+    g_isDenyOff  = isDenyOff;
     g_inputNumFn = inputNumFn;
     g_updFn      = updFn;
     g_openFn     = openFn;
     g_resolved.store(true, std::memory_order_release);
     UE_LOGI("passwordlock: resolved passwordLock_C=%p Key@0x%04X inPassword@0x%04X "
-            "door@0x%04X isReset@0x%04X active@0x%04X inputNumber=%p upd=%p open=%p",
-            lockCls, keyOff, inPwOff, doorOff, isResetOff, activeOff, inputNumFn, updFn, openFn);
+            "door@0x%04X isReset@0x%04X active@0x%04X isAcc@0x%04X isDeny@0x%04X "
+            "inputNumber=%p upd=%p open=%p",
+            lockCls, keyOff, inPwOff, doorOff, isResetOff, activeOff, isAccOff, isDenyOff,
+            inputNumFn, updFn, openFn);
     return true;
 }
 
@@ -139,6 +149,14 @@ void* GatedDoor(void* lock) {
 bool IsResetMode(void* lock) {
     if (!lock || !g_resolved.load(std::memory_order_acquire) || g_isResetOff < 0) return false;
     return *reinterpret_cast<const bool*>(reinterpret_cast<const char*>(lock) + g_isResetOff);
+}
+
+bool IsPressHover(void* lock) {
+    if (!lock || !g_resolved.load(std::memory_order_acquire)) return false;
+    const char* base = reinterpret_cast<const char*>(lock);
+    const bool acc  = g_isAccOff  >= 0 && *reinterpret_cast<const bool*>(base + g_isAccOff);
+    const bool deny = g_isDenyOff >= 0 && *reinterpret_cast<const bool*>(base + g_isDenyOff);
+    return acc || deny;
 }
 
 bool CallInputNumber(void* lock, int32_t digit) {

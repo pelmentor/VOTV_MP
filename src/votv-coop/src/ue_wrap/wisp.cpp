@@ -14,6 +14,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 #include "ue_wrap/sdk_profile.h"
+#include "ue_wrap/trace.h"       // LineBlockedStatDyn (the canReach parity trace)
 #include "ue_wrap/types.h"       // FVector (InGrabRange distance)
 
 #include <atomic>
@@ -190,47 +191,15 @@ bool WriteTarget(void* wisp, void* pawnOrNull) {
     return true;
 }
 
-namespace {
-// canReach parity trace (resolved once; the KismetSystemLibrary CDO + UFunction are
-// process-stable native objects -- never GC'd, latch-safe like kerfur.cpp's KSL latch).
-void* g_kslCdo   = nullptr;  // Default__KismetSystemLibrary (the static-call dispatch object)
-void* g_traceFn  = nullptr;  // LineTraceSingleForObjects
-// The native canReach's object set: lib_obj.obj_statDyn = {WorldStatic, WorldDynamic}
-// (EObjectTypeQuery1=0, 2=1; TEnumAsByte = 1 byte each). Static storage: the engine only
-// READS an in-param TArray (const ref), it never reallocs/frees it.
-uint8_t g_traceObjTypes[2] = {0, 1};
-#pragma pack(push, 4)
-struct TArrayControl { void* data; int32_t num; int32_t max; };
-#pragma pack(pop)
-}  // namespace
-
 bool CanReach(void* wisp, void* target) {
     if (!wisp || !target) return false;
-    if (!g_traceFn || !g_kslCdo) {
-        if (!g_kslCdo) g_kslCdo = R::FindClassDefaultObject(L"KismetSystemLibrary");
-        if (!g_traceFn) {
-            if (void* kc = R::FindClass(L"KismetSystemLibrary"))
-                g_traceFn = R::FindFunction(kc, L"LineTraceSingleForObjects");
-        }
-        if (!g_traceFn || !g_kslCdo) return false;  // unresolvable -> blocked (native default)
-    }
+    // canReach parity: the native gate traces lib_obj.obj_statDyn = {WorldStatic,
+    // WorldDynamic} -- exactly trace::LineBlockedStatDyn's set (the primitive was
+    // extracted from here 2026-07-04 when nameplate occlusion became the second
+    // consumer). Unresolvable (-1) -> blocked, the native default.
     const ue_wrap::FVector start = ue_wrap::engine::GetActorLocation(wisp);
     const ue_wrap::FVector end   = ue_wrap::engine::GetActorLocation(target);
-    ParamFrame f(g_traceFn);
-    if (!f.valid()) return false;
-    f.Set<void*>(L"WorldContextObject", wisp);
-    f.Set<ue_wrap::FVector>(L"Start", start);
-    f.Set<ue_wrap::FVector>(L"End", end);
-    TArrayControl objTypes{g_traceObjTypes, 2, 2};
-    f.SetRaw(L"ObjectTypes", &objTypes, sizeof(objTypes));
-    f.Set<bool>(L"bTraceComplex", false);
-    // ActorsToIgnore stays the zero-initialized empty TArray (frame is zeroed);
-    // DrawDebugType 0 = None; OutHit is an in-frame zeroed FHitResult (POD members
-    // only -- FName/floats/weak ptrs -- so no destructor concerns on our frame).
-    f.Set<bool>(L"bIgnoreSelf", true);
-    if (!ue_wrap::Call(g_kslCdo, f)) return false;
-    const bool hit = f.Get<bool>(L"ReturnValue");
-    return !hit;  // native canReach: reachable == the trace did NOT hit
+    return ue_wrap::trace::LineBlockedStatDyn(wisp, start, end) == 0;
 }
 
 bool GrabSocketWorldLocation(void* wisp, ue_wrap::FVector& out) {

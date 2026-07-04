@@ -63,6 +63,8 @@
 #include "ue_wrap/reflected_offset.h"
 
 #include <windows.h>
+#define PSAPI_VERSION 2      // K32GetProcessMemoryInfo from kernel32 -- no psapi.lib link
+#include <psapi.h>           // GetProcessMemoryInfo (the 30 s mem heartbeat)
 
 #include <algorithm>
 #include <array>
@@ -682,6 +684,20 @@ void RunPlayLoop(bool idleInGameplay) {
                         static_cast<unsigned long long>(g_session.packetsSent()),
                         static_cast<unsigned long long>(g_session.packetsRecv()),
                         coop::net_pump::Puppet(1).valid() ? 1 : 0);
+                // Memory heartbeat (2026-07-04, the 17:10 "host ate RAM then died" report):
+                // the log had ZERO memory observability, so "was it climbing for minutes or
+                // spiking at death?" is unanswerable. 30 s cadence names the shape next time.
+                static int memTick = 0;
+                if (++memTick % 15 == 0) {  // every 15th 2s-stats = ~30 s
+                    PROCESS_MEMORY_COUNTERS_EX pmc{};
+                    if (::GetProcessMemoryInfo(::GetCurrentProcess(),
+                            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc))) {
+                        UE_LOGI("mem: ws=%lluMB private=%lluMB peak-ws=%lluMB",
+                                static_cast<unsigned long long>(pmc.WorkingSetSize >> 20),
+                                static_cast<unsigned long long>(pmc.PrivateUsage >> 20),
+                                static_cast<unsigned long long>(pmc.PeakWorkingSetSize >> 20));
+                    }
+                }
                 if (void* lp = coop::players::Registry::Get().Local()) {
                     const auto loc = ue_wrap::engine::GetActorLocation(lp);
                     const auto rot = ue_wrap::engine::GetActorRotation(lp);

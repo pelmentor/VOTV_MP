@@ -223,6 +223,16 @@ thread_local TaskFaultInfo t_lastTaskFault{};
 // SEH filter -- runs in the faulting context (registers still valid) BEFORE the
 // unwind, so it must only stash, never allocate. Returns EXCEPTION_EXECUTE_HANDLER.
 int TaskFaultFilter(EXCEPTION_POINTERS* ep) {
+    // STATUS_STACK_OVERFLOW is NOT absorbable -- pass it on (2026-07-04 17:09 host
+    // death). Once the stack guard page has fired it is GONE for this thread;
+    // "absorb and continue" runs the rest of the frame on an exhausted stack with
+    // half-unwound engine state, and the process dies ~1 s later on an unrelated-
+    // looking secondary AV (17:09:46 SO absorbed at ReceiveDestroyed -> 17:09:47
+    // WER c0000005 in FindFunctionChecked, dump useless). CONTINUE_SEARCH instead
+    // lets the OS/WER take it AT THE TRUE APEX, where the minidump's call stack
+    // names the whole recursive BP cascade -- the diagnostic the absorb destroyed.
+    if (ep->ExceptionRecord->ExceptionCode == static_cast<DWORD>(EXCEPTION_STACK_OVERFLOW))
+        return EXCEPTION_CONTINUE_SEARCH;
     t_lastTaskFault.code       = ep->ExceptionRecord->ExceptionCode;
     t_lastTaskFault.faultingIP = ep->ExceptionRecord->ExceptionAddress;
     t_lastTaskFault.accessAddr =
@@ -600,6 +610,45 @@ void Pump() {
     }
 }
 
+// ---- PE re-entrancy depth probe (2026-07-04, the 17:09 host death) ----------
+// The host died on a script-VM stack overflow: a BP destroy cascade dispatched
+// ReceiveDestroyed nested inside ReceiveDestroyed until ProcessScriptFunction's
+// per-level alloca exhausted the stack. The log named NOTHING about the chain
+// (only the absorbed-SO line, one frame). This probe measures the recursion
+// live ([[feedback-probe-dont-guess-rule]]): a thread_local depth counter,
+// ++/-- per dispatch (TEB-relative, ~free); on each doubling threshold crossing
+// (128, 256, 512, ...) it logs the function + self class at that depth -- in a
+// tight cascade those ARE the cycle members -- so the NEXT runaway names itself
+// in the log long before the stack dies, and the WER dump (the SO now passes
+// through, see TaskFaultFilter) gets a named lead-in.
+constexpr int kPeDepthWarnStart = 128;  // engine-normal nesting is O(10); 128 = pathological
+thread_local int t_peDepth = 0;
+thread_local int t_peDepthNextWarn = kPeDepthWarnStart;
+
+// The counter scope is TRIVIAL (an int ++/--, cannot fault) and the logging lives in a
+// separate function called AFTER construction completes -- if the warn path ever AVs
+// (absorbed by RunDetourSEH), the already-constructed scope's destructor still runs on
+// the /EHa unwind, so the depth can never drift upward (audit 2026-07-04 finding 5).
+struct PeDepthScope {
+    PeDepthScope() { ++t_peDepth; }
+    ~PeDepthScope() {
+        if (--t_peDepth == 0) t_peDepthNextWarn = kPeDepthWarnStart;  // episode over -> re-arm
+    }
+};
+
+void MaybeWarnPeDepth(void* self, void* function) {
+    if (t_peDepth < t_peDepthNextWarn) return;
+    t_peDepthNextWarn *= 2;  // raised BEFORE the (allocating) log -- a fault here cannot warn-loop
+    const std::wstring fn = function ? reflection::ToString(reflection::NameOf(function)) : L"<null>";
+    void* cls = self ? reflection::ClassOf(self) : nullptr;
+    const std::wstring cn = cls ? reflection::ToString(reflection::NameOf(cls)) : L"<null>";
+    UE_LOGW("game_thread: PE recursion depth=%d -- function='%ls' self=%p class='%ls' "
+            "(a dispatch cascade this deep precedes a script-VM stack overflow -- the "
+            "2026-07-04 17:09 host death; the repeating function/class here names the cycle)",
+            t_peDepth, fn.c_str(), self, cn.c_str());
+}
+// ---- end PE re-entrancy depth probe -----------------------------------------
+
 // Inner detour body. Contains all the C++ destructor unwinds (lock_guard,
 // std::wstring, etc.) -- MSVC disallows mixing SEH __try/__except with C++
 // unwind in the same function. Called via SEH-only outer ProcessEventDetour
@@ -607,6 +656,8 @@ void Pump() {
 // tasks, FireNameDiagnostics, ToString allocations, etc.) is caught + logged
 // instead of crashing the engine.
 void __fastcall ProcessEventDetourImpl(void* self, void* function, void* params) {
+    const PeDepthScope depthScope;      // trivial ++ (constructed BEFORE the fallible warn)
+    MaybeWarnPeDepth(self, function);
     // Record the game thread id the first time we run here. CAS so that if two
     // threads race the very first dispatch, exactly one wins (a plain load+store
     // could let a worker thread overwrite the real game thread id).

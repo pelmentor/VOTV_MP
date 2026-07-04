@@ -207,6 +207,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/sleep.cpp
     src/ue_wrap/email.cpp
     src/ue_wrap/passwordlock.cpp
+    src/ue_wrap/trace.cpp
     src/ue_wrap/wisp.cpp
     src/ue_wrap/swinger.cpp
     src/ue_wrap/engine_pawn.cpp
