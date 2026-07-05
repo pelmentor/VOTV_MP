@@ -50,11 +50,12 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
     else if (p.ping == 0) std::snprintf(line, sizeof(line), "%s (<1ms)", p.nick);  // sub-ms LAN
     else                  std::snprintf(line, sizeof(line), "%s", p.nick);          // -1 = unmeasured
 
-    // Occlusion (minecraft nametag shape, user 2026-07-04): a peer behind world
-    // geometry keeps a readable plate, but GRAY nick + a uniform dim over the whole
-    // unit (bar, badge, outline ride the same `a`) so "behind something" reads at a
-    // glance. Hurt-flash red keeps priority -- a hurt peer stays visible either way.
-    const float a = std::clamp(p.alpha, 0.f, 1.f) * (p.occluded ? 0.75f : 1.f);
+    // Occlusion (minecraft nametag shape; user 2026-07-05 refining 07-04): a peer
+    // behind world geometry keeps a readable plate, but the WHOLE unit -- nick AND
+    // health bar (badge/outline ride the same `a`) -- goes GRAY + half-transparent
+    // (x0.5) so "behind something" reads at a glance and nothing vanishes outright.
+    // Hurt-flash red keeps priority -- a hurt peer stays visible either way.
+    const float a = std::clamp(p.alpha, 0.f, 1.f) * (p.occluded ? 0.5f : 1.f);
     const ImU32 white   = IM_COL32(255, 255, 255, static_cast<int>(a * 245.f));
     const ImU32 gray    = IM_COL32(158, 158, 164, static_cast<int>(a * 245.f));
     const ImU32 red     = IM_COL32(255, 48, 48, static_cast<int>(a * 255.f));
@@ -93,10 +94,12 @@ void DrawNameplate(ImDrawList* dl, const coop::nameplate::Plate& p) {
 
     TextOutlined(dl, font, px, textPos, textCol, outline, line);
 
-    // Health bar (dark red).
+    // Health bar (dark red; GRAY while occluded -- same treatment as the nick).
     const float frac = std::clamp(p.healthPct / 100.f, 0.f, 1.f);
     dl->AddRectFilled(bp, ImVec2(bp.x + barW, bp.y + barH), IM_COL32(0, 0, 0, static_cast<int>(a * 160.f)));
-    const ImU32 fillCol = p.flash ? red : IM_COL32(190, 30, 30, static_cast<int>(a * 235.f));
+    const ImU32 fillCol = p.flash    ? red
+                        : p.occluded ? gray
+                                     : IM_COL32(190, 30, 30, static_cast<int>(a * 235.f));
     dl->AddRectFilled(bp, ImVec2(bp.x + barW * frac, bp.y + barH), fillCol);
     dl->AddRect(bp, ImVec2(bp.x + barW, bp.y + barH), IM_COL32(0, 0, 0, static_cast<int>(a * 200.f)));
 
