@@ -30,6 +30,7 @@
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/props/snapshot_census.h"  // Phase 0: parse the completeness census tail on SnapshotComplete
 #include "coop/session/save_transfer.h"
+#include "coop/session/seen_players.h"
 #include "coop/dev/restore_vitals.h"
 #include "coop/dev/teleport_client.h"
 #include "ue_wrap/game_thread.h"
@@ -64,6 +65,7 @@ void OnSessionStart() {
     // edge-detector input.
     g_lastConnectedBySlot.fill(false);
     coop::player_handshake::Reset();
+    coop::seen_players::OnSessionStart();  // clear stale online marks (same discipline)
     coop::chat_feed::Reset();  // drop any prior session's lingering event lines
 }
 
@@ -99,6 +101,7 @@ void Update(net::Session& session, void* localPlayer) {
             coop::chat_feed::Push(
                 coop::player_handshake::NicknameForSlot(slot) + L" left the game");
             coop::player_handshake::OnSlotDisconnected(slot);
+            coop::seen_players::OnSlotDisconnected(slot);  // stamp last-seen (host registry)
             // HostAuth doors: release any door this departing peer was holding open (a door
             // still held by another peer stays open; one whose last holder just left closes).
             coop::interactable_sync::OnPeerLeft(slot);

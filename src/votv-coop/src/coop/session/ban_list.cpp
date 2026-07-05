@@ -6,6 +6,8 @@
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +22,7 @@ namespace {
 
 struct Record {
     std::string nick;
+    std::string reason;
     long long   bannedUnix = 0;
 };
 
@@ -59,10 +62,19 @@ void WriteFileLocked() {
         UE_LOGW("ban_list: cannot open '%ls' for write -- ban not persisted", path.c_str());
         return;
     }
-    f << "# VOTV coop banlist -- one ban per line: ip|nick|unixtime\n";
+    f << "# VOTV coop banlist -- one ban per line: ip|nick|unixtime|reason\n";
     for (const auto& [ip, rec] : g_bans) {
-        f << ip << '|' << rec.nick << '|' << rec.bannedUnix << '\n';
+        f << ip << '|' << rec.nick << '|' << rec.bannedUnix << '|' << rec.reason << '\n';
     }
+}
+
+// Field sanitizer for the pipe-separated format: separators/line breaks must
+// never appear inside a stored field (reason is admin-typed free text).
+std::string CleanField(const char* s) {
+    std::string out = s ? s : "";
+    for (char& c : out)
+        if (c == '|' || c == '\n' || c == '\r') c = '_';
+    return out;
 }
 
 }  // namespace
@@ -85,22 +97,26 @@ void Load() {
     std::string line;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
-        // Parse "ip|nick|unixtime". Be lenient: nick may be empty; a missing
-        // time field defaults to 0. Only the IP (field 0) is required.
+        // Parse "ip|nick|unixtime|reason". Be lenient: nick/reason may be empty
+        // (pre-reason files have 3 fields); a missing time defaults to 0. Only
+        // the IP (field 0) is required.
         const size_t p1 = line.find('|');
         const std::string ip = line.substr(0, p1);
         if (ip.empty()) continue;
-        std::string nick;
+        std::string nick, reason;
         long long when = 0;
         if (p1 != std::string::npos) {
             const size_t p2 = line.find('|', p1 + 1);
             nick = line.substr(p1 + 1, (p2 == std::string::npos) ? std::string::npos : p2 - (p1 + 1));
             if (p2 != std::string::npos) {
-                const std::string t = line.substr(p2 + 1);
+                const size_t p3 = line.find('|', p2 + 1);
+                const std::string t = line.substr(
+                    p2 + 1, (p3 == std::string::npos) ? std::string::npos : p3 - (p2 + 1));
                 if (!t.empty()) { try { when = std::stoll(t); } catch (...) { when = 0; } }
+                if (p3 != std::string::npos) reason = line.substr(p3 + 1);
             }
         }
-        g_bans[ip] = Record{ nick, when };
+        g_bans[ip] = Record{ nick, reason, when };
     }
     UE_LOGI("ban_list: loaded %zu banned IP(s) from %ls", g_bans.size(), path.c_str());
 }
@@ -111,18 +127,49 @@ bool IsBanned(const char* ip) {
     return g_bans.find(ip) != g_bans.end();
 }
 
-void Add(const char* ip, const char* nick) {
+void Add(const char* ip, const char* nick, const char* reason) {
     if (!ip || !ip[0]) {
         UE_LOGW("ban_list: Add called with empty IP -- ignored");
         return;
     }
     std::lock_guard<std::mutex> lk(g_mutex);
     Record rec;
-    rec.nick = nick ? nick : "";
+    rec.nick = CleanField(nick);
+    rec.reason = CleanField(reason);
     rec.bannedUnix = static_cast<long long>(::time(nullptr));
     g_bans[ip] = rec;
     WriteFileLocked();
-    UE_LOGI("ban_list: banned IP %s (nick='%s') -- %zu total", ip, rec.nick.c_str(), g_bans.size());
+    UE_LOGI("ban_list: banned IP %s (nick='%s' reason='%s') -- %zu total",
+            ip, rec.nick.c_str(), rec.reason.c_str(), g_bans.size());
+}
+
+bool Remove(const char* ip) {
+    if (!ip || !ip[0]) return false;
+    std::lock_guard<std::mutex> lk(g_mutex);
+    const auto it = g_bans.find(ip);
+    if (it == g_bans.end()) return false;
+    UE_LOGI("ban_list: unbanned IP %s (nick='%s') -- %zu remain",
+            ip, it->second.nick.c_str(), g_bans.size() - 1);
+    g_bans.erase(it);
+    WriteFileLocked();
+    return true;
+}
+
+void GetSnapshot(std::vector<Entry>& out) {
+    out.clear();
+    std::lock_guard<std::mutex> lk(g_mutex);
+    out.reserve(g_bans.size());
+    for (const auto& [ip, rec] : g_bans) {
+        Entry e;
+        std::snprintf(e.ip, sizeof(e.ip), "%s", ip.c_str());
+        std::snprintf(e.nick, sizeof(e.nick), "%s", rec.nick.c_str());
+        std::snprintf(e.reason, sizeof(e.reason), "%s", rec.reason.c_str());
+        e.bannedUnix = rec.bannedUnix;
+        out.push_back(e);
+    }
+    std::sort(out.begin(), out.end(), [](const Entry& a, const Entry& b) {
+        return a.bannedUnix > b.bannedUnix;  // most recent ban first
+    });
 }
 
 int Count() {

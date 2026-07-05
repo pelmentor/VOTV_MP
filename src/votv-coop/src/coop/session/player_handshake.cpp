@@ -2,6 +2,8 @@
 
 #include "coop/session/player_handshake.h"
 
+#include "coop/session/seen_players.h"
+
 #include "coop/element/player.h"
 #include "coop/element/registry.h"
 #include "coop/net/session.h"
@@ -469,6 +471,11 @@ bool HandleJoinMessage(net::Session& session,
         senderElementId != coop::element::kInvalidId) {
         BroadcastPlayerJoinedFromHost(session, senderSlot, senderElementId, nick);
     }
+    // Seen-players registry (F1 Administration): record this peer's durable
+    // identity (guid + nick + IP + last-seen) on the host. After the guid/nick
+    // stores above so TouchOnJoin reads the just-landed values.
+    if (session.role() == net::Role::Host)
+        coop::seen_players::TouchOnJoin(session, senderSlot);
     return true;
 }
 

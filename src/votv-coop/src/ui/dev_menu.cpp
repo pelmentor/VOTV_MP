@@ -20,6 +20,8 @@
 #include "coop/session/ini_config.h"
 #include "harness/config.h"
 #include "ui/fonts.h"
+#include "coop/player/roster.h"  // LocalIsHost -- the Administration role gate
+#include "ui/admin_panel.h"
 #include "ui/net_stats_panel.h"
 #include "ui/scale.h"
 #include "ui/skins_panel.h"
@@ -38,10 +40,12 @@ using ui::scale::S;
 
 // One control in the content pane. `render` draws its own ImGui widget(s) so an
 // item can be a button, a checkbox reflecting live state, a slider, etc. `dev`
-// hides it unless the dev switch is on.
+// hides it unless the dev switch is on; `host` hides it unless the local peer
+// is the HOST of a live coop session (a ROLE gate, not a dev gate -- the
+// Administration category; user 2026-07-05).
 struct Item { void (*render)(); bool dev; };
-struct Sub  { const char* name; std::vector<Item> items; bool dev; };
-struct Cat  { const char* name; std::vector<Sub> subs;  bool dev; };
+struct Sub  { const char* name; std::vector<Item> items; bool dev; bool host = false; };
+struct Cat  { const char* name; std::vector<Sub> subs;  bool dev; bool host = false; };
 
 // ---- feature controls (each calls a plain function its module exposes) -------
 
@@ -367,6 +371,9 @@ void RenderFontPref() {
     ImGui::TextDisabled("Everything scales with the screen automatically; this is your extra zoom.");
 }
 
+// F1 > Administration > Players (host-role-gated; ui/admin_panel owns the pane).
+void RenderAdminPlayers() { ui::admin_panel::Render(); }
+
 // ---- the strict nested taxonomy (refined as features land) -------------------
 // Player > Movement/Vitals/HUD ; Game > Weather/Entities/Events ; Network >
 // Stats/Session ; Cosmetics > Skins (the v93 model browser -- the one non-dev
@@ -391,6 +398,10 @@ const std::vector<Cat>& Tree() {
             { "Stats",    { { &RenderNetStats, false } }, false },
             { "Session",  {}, true },
         }, false },
+        { "Administration", {
+            // HOST-role-gated (not dev): online/offline/banned player admin.
+            { "Players", { { &RenderAdminPlayers, false } }, false, true },
+        }, false, true },
         { "Cosmetics", {
             { "Skins",     { { &RenderSkins, false } }, false },
             { "Nameplate", { { &RenderNameplatePref, false } }, false },
@@ -426,7 +437,15 @@ bool DevMode() {
 
 void Render() {
     const bool devMode = DevMode();
+    const bool isHost  = coop::roster::LocalIsHost();  // lock-free, render-thread safe
     const auto& tree = Tree();
+
+    // A host-gated selection must not linger after the role drops (session stop /
+    // becoming a client): reset the pane back to the picker.
+    if (!isHost && g_selCat && (g_selCat->host || (g_selSub && g_selSub->host))) {
+        g_selCat = nullptr;
+        g_selSub = nullptr;
+    }
 
     // Wider default + a MIN-size constraint so the content panel never gets cramped (user: elements
     // didn't fit, had to widen every time). The min applies even when imgui.ini saved a narrow size,
@@ -446,6 +465,7 @@ void Render() {
     bool firstCat = true;
     for (const auto& cat : tree) {
         if (cat.dev && !devMode) continue;
+        if (cat.host && !isHost) continue;
         if (!firstCat) ImGui::Spacing();
         firstCat = false;
         ImGui::PushStyleColor(ImGuiCol_Header,        ImVec4(0.18f, 0.20f, 0.25f, 1.00f));
@@ -460,6 +480,7 @@ void Render() {
         ImGui::Indent(S(14.0f));
         for (const auto& sub : cat.subs) {
             if (sub.dev && !devMode) continue;
+            if (sub.host && !isHost) continue;
             const bool selected = (g_selSub == &sub);
             if (ImGui::Selectable(sub.name, selected)) { g_selCat = &cat; g_selSub = &sub; }
         }

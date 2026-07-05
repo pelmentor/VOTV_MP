@@ -23,6 +23,7 @@
 #include "coop/player/item_activate.h"
 #include "coop/player/players_registry.h"
 #include "coop/session/ban_list.h"
+#include "coop/session/seen_players.h"
 #include "coop/session/moderation.h"
 #include "coop/session/ini_config.h"
 #include "coop/session/player_handshake.h"  // SetLocalGuid (v73 per-player inventory identity)
@@ -431,6 +432,9 @@ bool StartCoopSession(const coop::net::Config& netCfg) {
         // Snapshot the canonical save BEFORE coop injects state (host-only; clients are
         // save-blocked). Synchronous on this bringup thread -> completes before Start.
         coop::save_guard::BackupSaveOnSessionStart();
+        // Seen-players registry (F1 Administration): any-topology host bookkeeping
+        // (on P2P the IP field may stay empty -- the offline-ban path surfaces that).
+        coop::seen_players::Load();
         // LanDirect ONLY: the IP-keyed ban filter FAIL-CLOSES on P2P (empty remote addr
         // at the Connecting edge; a peer's public IP is the wrong key anyway). P2P bans
         // are identity-based (Stage 6).

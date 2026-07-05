@@ -40,9 +40,22 @@ void KickSlot(int peerSlot);
 
 // Permanently ban the client at peerSlot by IP, then kick it. Host-only. The
 // ban survives host restarts (coop::ban_list persists to disk) and rejects that
-// IP on future connects (via the accept filter). Safe to call from the render
+// IP on future connects (via the accept filter). `reason` is stored on the ban
+// record for the admin's reference (null/empty ok). Safe to call from the
+// render thread.
+void BanSlot(int peerSlot, const char* reason);
+
+// Permanently ban an OFFLINE player by its seen-players GUID (the F1
+// Administration panel's Offline-section ban). Resolves the player's last known
+// IP + nick from coop::seen_players; warns and does nothing if the record has
+// no IP (nothing to enforce against). Host-only. Safe to call from the render
 // thread.
-void BanSlot(int peerSlot);
+void BanOffline(const char* guid, const char* reason);
+
+// Remove an IP ban (the F1 Administration panel's Unban button). Thin
+// pass-through to coop::ban_list::Remove -- runs inline (ban_list is
+// thread-safe); the panel is host-gated upstream. Any thread.
+void Unban(const char* ip);
 
 // Teleport the client at peerSlot to the host's current pose (the dev-gated
 // action -- the scoreboard only offers it under [dev] devkeys). Host-only.

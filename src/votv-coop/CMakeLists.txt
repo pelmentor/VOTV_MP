@@ -405,6 +405,7 @@ add_library(votv-coop SHARED
     src/ui/imgui_overlay.cpp
     src/ui/dev_menu.cpp
     src/ui/skins_panel.cpp
+    src/ui/admin_panel.cpp
     src/ui/scoreboard.cpp
     src/ui/server_browser.cpp
     src/ui/host_save_picker.cpp
@@ -420,6 +421,7 @@ add_library(votv-coop SHARED
     src/coop/player/roster.cpp
     src/coop/session/ban_list.cpp
     src/coop/session/moderation.cpp
+    src/coop/session/seen_players.cpp
     src/harness/harness.cpp
     src/harness/harness_diag.cpp
     src/harness/autotest.cpp

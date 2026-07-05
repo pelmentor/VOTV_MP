@@ -270,7 +270,7 @@ void Render() {
             ImGui::TextDisabled("Disconnected now and blocked by IP on reconnect.");
             ImGui::Spacing();
             if (ImGui::Button("Ban", ImVec2(S(110.f), 0))) {
-                coop::moderation::BanSlot(g_banConfirmSlot);
+                coop::moderation::BanSlot(g_banConfirmSlot, "banned by host");
                 g_banConfirmSlot = -1;
                 ImGui::CloseCurrentPopup();
             }

@@ -3,6 +3,7 @@
 #include "coop/session/moderation.h"
 
 #include "coop/session/ban_list.h"
+#include "coop/session/seen_players.h"
 #include "coop/dev/teleport_client.h"
 #include "coop/net/session.h"
 #include "coop/session/player_handshake.h"
@@ -67,9 +68,9 @@ void KickSlot(int peerSlot) {
     });
 }
 
-void BanSlot(int peerSlot) {
+void BanSlot(int peerSlot, const char* reason) {
     if (!ValidClientSlot(peerSlot)) return;
-    GT::Post([peerSlot] {
+    GT::Post([peerSlot, reason = std::string(reason ? reason : "")] {
         auto* s = HostSession("ban");
         if (!s) return;
         // Capture the IP + nick BEFORE the kick -- Kick() zeroes the slot, after
@@ -80,7 +81,7 @@ void BanSlot(int peerSlot) {
         NarrowNick(coop::player_handshake::NicknameForSlot(peerSlot), nick);
 
         if (haveIp && ip[0]) {
-            coop::ban_list::Add(ip, nick);
+            coop::ban_list::Add(ip, nick, reason.c_str());
         } else {
             // No resolvable IP (already disconnected, or GNS has no remote addr):
             // still kick, but we can't persist a ban. Surface it rather than
@@ -93,6 +94,34 @@ void BanSlot(int peerSlot) {
         else
             UE_LOGI("moderation: banned + kicked slot %d (ip=%s)", peerSlot, ip[0] ? ip : "?");
     });
+}
+
+void BanOffline(const char* guid, const char* reason) {
+    if (!guid || !guid[0]) return;
+    GT::Post([guid = std::string(guid), reason = std::string(reason ? reason : "")] {
+        auto* s = HostSession("offline ban");
+        if (!s) return;
+        coop::seen_players::Entry e;
+        if (!coop::seen_players::FindByGuid(guid.c_str(), e)) {
+            UE_LOGW("moderation: offline ban -- unknown GUID %s", guid.c_str());
+            return;
+        }
+        if (!e.ip[0]) {
+            // A record without an IP has nothing the accept filter can enforce
+            // against. Surface it rather than writing a no-op ban row.
+            UE_LOGW("moderation: offline ban '%s' -- record has no stored IP, cannot ban",
+                    e.nick);
+            return;
+        }
+        coop::ban_list::Add(e.ip, e.nick, reason.c_str());
+        UE_LOGI("moderation: offline-banned '%s' (ip=%s)", e.nick, e.ip);
+    });
+}
+
+void Unban(const char* ip) {
+    if (!ip || !ip[0]) return;
+    if (!coop::ban_list::Remove(ip))
+        UE_LOGW("moderation: unban %s -- was not banned", ip);
 }
 
 void TeleportSlotToMe(int peerSlot) {

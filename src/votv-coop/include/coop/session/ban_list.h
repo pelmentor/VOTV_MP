@@ -10,7 +10,7 @@
 // admin's reference (display / file readability), not for matching.
 //
 // Persistence: a plain line-based text file (one ban per line:
-//   ip|nick|unixtime
+//   ip|nick|unixtime|reason
 // ) named votv-coop-banlist.txt, written NEXT TO THE MOD BINARY (the
 // Binaries\Win64 dir that holds votv-coop.dll / votv-coop.ini / votv-coop.log,
 // resolved via our own module handle). Each game copy keeps its own banlist;
@@ -27,7 +27,18 @@
 
 #pragma once
 
+#include <vector>
+
 namespace coop::ban_list {
+
+// Plain-data record for UI consumption (the F1 Administration panel's Banned
+// section renders copies on the render thread).
+struct Entry {
+    char      ip[64]     = {};
+    char      nick[24]   = {};
+    char      reason[96] = {};
+    long long bannedUnix = 0;
+};
 
 // Host: load the on-disk banlist into memory. Idempotent (re-Load replaces the
 // in-memory set). Safe to call when the file doesn't exist yet (empty banlist).
@@ -40,9 +51,18 @@ void Load();
 bool IsBanned(const char* ip);
 
 // Game thread: ban an IP permanently (adds to the in-memory set AND rewrites the
-// file). `nick` is stored for readability only. No-op on empty/null ip. Adding
-// an already-banned IP just refreshes its record (idempotent).
-void Add(const char* ip, const char* nick);
+// file). `nick` and `reason` are stored for the admin's reference (Banned-section
+// rows). No-op on empty/null ip. Adding an already-banned IP just refreshes its
+// record (idempotent).
+void Add(const char* ip, const char* nick, const char* reason);
+
+// Unban an IP (removes from the in-memory set AND rewrites the file). Returns
+// false if the IP wasn't banned. Any thread (internal mutex) -- the F1 panel's
+// Unban button calls it directly off the render thread.
+bool Remove(const char* ip);
+
+// Copy all ban records, most recent first. Any thread.
+void GetSnapshot(std::vector<Entry>& out);
 
 // Diagnostics: current number of banned IPs.
 int Count();

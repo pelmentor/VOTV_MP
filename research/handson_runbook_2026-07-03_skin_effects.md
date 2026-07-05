@@ -230,7 +230,31 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~19:30 (DLL `956716AAD2F7C9E0` — ТЕКУЩИЙ, wire v101 не менялся)
+## 2026-07-05 ~14:50 (DLL `04C5993A9D5BC09F` — ТЕКУЩИЙ; wire v101 не менялся)
+
+### 0w-ADMIN. F1 > Administration > Players (host-only) + окклюзия ник+полоска
+Два пункта одной сессии (04C5993A9D5BC09F, смоук 60s PASS x2, реестр записал клиента
+в votv-coop-players.txt в первом же прогоне):
+
+a) ОККЛЮЗИЯ (`4011fc73`): встань так, чтобы клиент зашёл за стену/дверь — теперь СЕРЫМИ
+   и полупрозрачными (x0.5) становятся ОБА элемента: ник И полоска здоровья (раньше
+   серел только ник, и всё было слишком видимым). Ничего не исчезает полностью;
+   hurt-flash красный всё ещё перебивает серость.
+
+b) АДМИНКА: на ХОСТЕ открой F1 — новая категория Administration > Players (клиент её
+   видеть НЕ должен — проверь на клиенте тоже). Три секции:
+   - Online: подключённые клиенты (ник/линк/пинг) + кнопки Teleport / Kick / Ban...
+   - Offline (seen before): все, кто когда-либо заходил (ник + last seen) + Ban...
+     (кнопка недоступна для P2P-записей без IP — тултип объяснит).
+   - Banned: ip/дата/причина + Unban.
+   Ban... открывает модалку с полем ПРИЧИНЫ (пишется в votv-coop-banlist.txt, видна
+   в Banned-секции). ПРОГОН (~3 мин): забань клиента с причиной -> он вылетел, строка
+   в Banned с твоей причиной; его реконнект отбит; Unban -> реконнект проходит;
+   перезапусти сессию -> Offline помнит его ник+время.
+   Лог-ассерты: `seen_players: slot 1 registered (nick=... ip=...)`,
+   `ban_list: banned IP ... (nick=... reason=...)`, `ban_list: unbanned IP ...`.
+
+## 2026-07-05 ~19:30 (DLL `956716AAD2F7C9E0` — superseded by `04C5993A9D5BC09F`; wire v101 не менялся)
 
 ### 0v-FREECAM-FREEZE. Персонаж больше не бегает, пока ты летаешь freecam'ом
 Твой пункт 12h: при входе в dev freecam (HOME / F1) те же клавиши (WASD/Space/Ctrl)
