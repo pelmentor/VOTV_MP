@@ -12,10 +12,20 @@
 
 #include "coop/net/protocol.h"  // PacketHeader / EntityPoseBatchHeader / WorldActorPoseSnapshot / kMaxWorldActorBatchEntries
 
+#include "ue_wrap/log.h"  // [WA-TRACE] wire-hop tracing (2026-07-05 0s-frozen-pyramid hunt)
+
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <vector>
+
+namespace {
+long long TraceNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
 
 namespace coop::net {
 
@@ -44,6 +54,18 @@ int Session::SerializeLocalWorldActorBatch(uint8_t* buf) {
     if (!hasLocalWorldActorBatch_ || localWorldActorBatch_.empty()) return 0;
     size_t n = localWorldActorBatch_.size();
     if (n > static_cast<size_t>(kMaxWorldActorBatchEntries)) n = kMaxWorldActorBatchEntries;  // cap (TickPoseStream already caps)
+    // [WA-TRACE host-serialize] 1 Hz: what the net thread actually fans out this second. If
+    // host-read moves but this is frozen, the game->net batch handoff is the break.
+    {
+        static long long s_lastMs = 0;  // net-thread only (single NetThread) -- no race
+        const long long nowMs = TraceNowMs();
+        if (nowMs - s_lastMs >= 1000) {
+            s_lastMs = nowMs;
+            const auto& f = localWorldActorBatch_[0];
+            UE_LOGI("[WA-TRACE host-serialize] n=%zu first: eid=%u (%.0f,%.0f,%.0f)",
+                    n, f.elementId, f.x, f.y, f.z);
+        }
+    }
     EntityPoseBatchHeader bh{};
     bh.count = static_cast<uint8_t>(n);
     std::memcpy(buf + sizeof(PacketHeader), &bh, sizeof(bh));
@@ -70,8 +92,24 @@ void Session::StoreRemoteWorldActorBatch(const void* data, int len, uint32_t seq
         std::memcpy(batch.data(),
                     static_cast<const uint8_t*>(data) + sizeof(PacketHeader) + sizeof(EntityPoseBatchHeader),
                     static_cast<size_t>(count) * sizeof(WorldActorPoseSnapshot));
+    // [WA-TRACE client-store] 1 Hz: what actually arrived over the wire this second (+ how many
+    // datagrams the stale-seq guard dropped). If host-serialize moves but this is frozen/absent,
+    // the wire hop is the break; if stale-drops dominate, the seq guard is eating the stream.
+    static long long s_lastMs = 0;   // net-thread only -- no race
+    static unsigned s_staleDrops = 0;
     std::lock_guard<std::mutex> lk(remoteMutex_);
-    if (hasRemoteWorldActorBatch_ && static_cast<int32_t>(seq - lastRemoteWorldActorSeq_) <= 0) return;  // stale
+    if (hasRemoteWorldActorBatch_ && static_cast<int32_t>(seq - lastRemoteWorldActorSeq_) <= 0) {
+        ++s_staleDrops;
+        return;  // stale
+    }
+    const long long nowMs = TraceNowMs();
+    if (nowMs - s_lastMs >= 1000 && count > 0) {
+        s_lastMs = nowMs;
+        const auto& f = batch[0];
+        UE_LOGI("[WA-TRACE client-store] n=%d seq=%u first: eid=%u (%.0f,%.0f,%.0f) staleDrops=%u",
+                count, seq, f.elementId, f.x, f.y, f.z, s_staleDrops);
+        s_staleDrops = 0;
+    }
     remoteWorldActorBatch_ = std::move(batch);
     lastRemoteWorldActorSeq_ = seq;
     hasRemoteWorldActorBatch_ = true;

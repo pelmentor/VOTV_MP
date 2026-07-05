@@ -36,6 +36,7 @@
 #include "ue_wrap/types.h"
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -448,6 +449,21 @@ void TickPoseStream() {
             UE_LOGW("world-actor[host dead-retire]: SendReliable(WorldActorDestroy) failed for eid=%u",
                     static_cast<uint32_t>(d.eid));
     }
+    // [WA-TRACE host-read] 1 Hz while anything streams: the EXACT coords this tick read off each
+    // live WA actor (= what the net thread will serialize). The freeze-hunt discriminator: if these
+    // coords move while the client's applied pose doesn't, the break is downstream (wire/apply/drive);
+    // if they are frozen at spawn, the host read itself is the break (2026-07-05 0s-frozen-pyramid).
+    if (!batch.empty()) {
+        static long long s_lastReadTraceMs = 0;
+        const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowMs - s_lastReadTraceMs >= 1000) {
+            s_lastReadTraceMs = nowMs;
+            for (const auto& snap : batch)
+                UE_LOGI("[WA-TRACE host-read] eid=%u loc=(%.0f,%.0f,%.0f) yaw=%.1f (n=%zu connected=%d)",
+                        snap.elementId, snap.x, snap.y, snap.z, snap.yaw, batch.size(), connected ? 1 : 0);
+        }
+    }
     if (!connected) return;  // publish is peer-dependent
     if (truncated > 0) {
         static bool s_warned = false;
@@ -729,13 +745,34 @@ void TickClientWorldActors() {
     //    the trust boundary (a NaN must not reach SetActorLocation/SetActorRotation).
     std::vector<coop::net::WorldActorPoseSnapshot> batch;
     if (s->TakeRemoteWorldActorBatch(batch)) {
+        // [WA-TRACE client-apply] 1 Hz per-entry OUTCOME trace (2026-07-05 0s-frozen-pyramid hunt).
+        // Every skip branch below was SILENT -- a wrong eid / not-a-mirror / range-clamped entry
+        // freezes the mirror with zero evidence. The old "first batch" INFO only proved ARRIVAL.
+        static long long s_lastApplyTraceMs = 0;
+        const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool trace = !batch.empty() && (nowMs - s_lastApplyTraceMs >= 1000);
+        if (trace) s_lastApplyTraceMs = nowMs;
         for (const auto& snap : batch) {
             if (!std::isfinite(snap.x) || !std::isfinite(snap.y) || !std::isfinite(snap.z) ||
-                !std::isfinite(snap.pitch) || !std::isfinite(snap.yaw) || !std::isfinite(snap.roll)) continue;
-            if (std::fabs(snap.x) > 1.0e6f || std::fabs(snap.y) > 1.0e6f || std::fabs(snap.z) > 1.0e6f) continue;
+                !std::isfinite(snap.pitch) || !std::isfinite(snap.yaw) || !std::isfinite(snap.roll)) {
+                if (trace) UE_LOGW("[WA-TRACE client-apply] eid=%u SKIP non-finite pose", snap.elementId);
+                continue;
+            }
+            if (std::fabs(snap.x) > 1.0e6f || std::fabs(snap.y) > 1.0e6f || std::fabs(snap.z) > 1.0e6f) {
+                if (trace) UE_LOGW("[WA-TRACE client-apply] eid=%u SKIP out-of-range (%.0f,%.0f,%.0f)",
+                                   snap.elementId, snap.x, snap.y, snap.z);
+                continue;
+            }
             coop::element::WorldActor* el = WaMirrors().Get(snap.elementId);
-            if (!el || !el->IsMirror()) continue;  // not materialized yet (connect gap) / defensive
+            if (!el || !el->IsMirror()) {  // not materialized yet (connect gap) / defensive
+                if (trace) UE_LOGW("[WA-TRACE client-apply] eid=%u SKIP %s", snap.elementId,
+                                   el ? "element-not-mirror" : "no-element");
+                continue;
+            }
             el->SetTargetPose(snap);
+            if (trace) UE_LOGI("[WA-TRACE client-apply] eid=%u wire=(%.0f,%.0f,%.0f) yaw=%.1f -> SetTargetPose",
+                               snap.elementId, snap.x, snap.y, snap.z, snap.yaw);
         }
         static bool s_loggedFirst = false;
         if (!batch.empty() && !s_loggedFirst) { s_loggedFirst = true;

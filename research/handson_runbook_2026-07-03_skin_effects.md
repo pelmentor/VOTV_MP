@@ -142,7 +142,21 @@ invisible to a later joiner + dupe-on-grab) -> host branch now hosting-gated;
 AND the latent 07-03 race it exposed: the per-tick npc dead-retire raced the
 5 Hz conversion poll and erased the kerfur death evidence even CONNECTED ->
 kerfur-family deaths returned to the poll (one owner per death edge). Kerfur
-toggle deserves a re-check in the next hands-on too)**.
+toggle deserves a re-check in the next hands-on too)** →
+**`1747556099B48E79` (2026-07-05 ~13:00, wire v98 unchanged — ТЕКУЩИЙ: [WA-TRACE]
+step/state telemetry across the WHOLE WorldActor pose chain, born from the
+0s re-test verdict «клиент видит пирамиду, но она замёрзла на спавне за красными
+барьерами». Static analysis cleared every link (send loop, serialize, store,
+take, apply, drive, engine write, restored-BP-tick X/Y) — AND exposed that BOTH
+prior proofs were blind: the «first batch» client log only proves ARRIVAL (the
+apply loop skipped entries SILENTLY), and the 07-04 piramid e2e was geometry-blind
+(wisps re-pinned 150 m around the HOST pyramid which marches only ~50 m to arrive
+→ `replay OK dist=9495 attempts=1` is equally consistent with a FROZEN client
+mirror). So: per [[feedback-probe-dont-guess-rule]], 1 Hz traces at all 5 hops —
+host-read (TickPoseStream), host-serialize (net thread), client-store (net thread,
++staleDrops), client-apply (per-entry OUTCOME incl. the formerly-silent skips),
+client-drive (pre/cur/tgt/post + K2_SetActorLocation/Rotation RETURN values,
+formerly discarded). The next 0s run pinpoints the frozen hop by log diff)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -150,7 +164,40 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~11:30 (DLL `2BD2D893CDE3CA13` — ТЕКУЩИЙ, wire v98)
+## 2026-07-05 ~13:00 (DLL `1747556099B48E79` — ТЕКУЩИЙ, wire v98)
+
+### 0s-TRACE. ПИРАМИДА ЗАМЁРЗЛА У КЛИЕНТА — трассировка каждого шага (твой запрос «lets log each step, each state»)
+Твой вердикт 0s-FIX: пирамида у клиента ПОЯВИЛАСЬ (fix трекинга сработал), но
+замёрзла на спавне за красными барьерами и не соответствует хосту. Статический
+разбор оправдал каждое звено цепи — значит, меряем. В DLL добавлены 1 Гц
+`[WA-TRACE]` строки на всех 5 хопах WA-pose потока (постоянная телеметрия: активна
+только пока живёт ивент-актёр).
+
+ПРОГОН (2 минуты, тот же сценарий — mid-join НЕ обязателен, можно джойн до ивента):
+1. Хост + клиент в сессии → F1 → EVENTS → piramid → NOW!
+2. Дай пирамиде пошагать 60-90 секунд на хосте. Смотреть на экраны не обязательно —
+   решают логи. Выйди из сессии, скажи мне «готово».
+
+ЧТО СКАЖУТ ЛОГИ (каждая строка 1 Гц, eid пирамиды один и тот же):
+- ХОСТ `[WA-TRACE host-read] eid=N loc=(...)` — координаты, снятые с живого актёра.
+  ЗАМЁРЗЛИ на споне → сломано чтение хоста (актёр ходит не root'ом) — дальше можно не смотреть.
+- ХОСТ `[WA-TRACE host-serialize] n=1 first: eid=N (...)` — что реально уходит в сеть.
+  host-read едет, serialize замёрз → сломан game→net хэндофф.
+- КЛИЕНТ `[WA-TRACE client-store] n=1 seq=... (...) staleDrops=K` — что пришло по проводу.
+  Нет строк / staleDrops растёт лавиной → провод/seq-гард.
+- КЛИЕНТ `[WA-TRACE client-apply] eid=N wire=(...) -> SetTargetPose` — или ГРОМКИЙ SKIP
+  с причиной (no-element / element-not-mirror / out-of-range) — раньше эти скипы были немыми.
+- КЛИЕНТ `[WA-TRACE client-drive] eid=N pre=(...) cur=(...) tgt=(...) post=(...)
+  window=W applyLoc=L applyRot=R`:
+  - `applyLoc=0` → K2_SetActorLocation ОТКАЗЫВАЕТ (раньше возврат выбрасывался) — корень найден;
+  - `tgt` едет, `post` едет, а `pre` каждый раз отскакивает к спавну → BP-тик пирамиды
+    перезаписывает наш драйв (проигранная борьба за кадр);
+  - `GUARD-FAIL ... liveByIdx=0` → mirror-элемент потерял актора;
+  - `tgt` сам замёрз → смотри хопы выше.
+Плюс known-gap, найденный этим же разбором: спавн-транформ клиентского mirror'а не несёт
+SCALE (пирамида на хосте scale 2, у клиента 1 — вдвое меньше). Чиню после разморозки.
+
+## 2026-07-05 ~11:30 (DLL `2BD2D893CDE3CA13` — superseded by `1747556099B48E79`; 0s-FIX отработан: спавн-доставка ПОДТВЕРЖДЕНА твоим прогоном 10:48-10:51, замёрзший pose — раздел 0s-TRACE выше)
 
 ### 0s-FIX. ПИРАМИДА MID-JOIN — root-fix твоего репорта («у клиента ничего нету»)
 ROOT CAUSE: трекинг ивент-актёров на хосте отсекался на `connected()` — пирамида

@@ -14,6 +14,7 @@
 
 #include "coop/net/protocol.h"
 #include "ue_wrap/engine.h"
+#include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
 #include <chrono>
@@ -101,11 +102,38 @@ void WorldActor::AdvanceInterp() {
 }
 
 void WorldActor::Tick() {
+    // [WA-TRACE client-drive] 1 Hz per-mirror step/state trace (2026-07-05 0s-frozen-pyramid hunt).
+    // `pre` = the engine location that SURVIVED the last frame (a restored BP tick that fights the
+    // drive shows up as pre snapping back while cur/tgt advance); `post` = right after our write.
+    const uint64_t nowMs = NowMs();
+    const bool trace = (nowMs - dbgLastLogMs_ >= 1000);
     void* actor = GetActor();
-    if (!actor || !R::IsLiveByIndex(actor, GetInternalIdx())) return;  // unbound / GC'd mirror
-    if (!hasPose_) return;  // no pose yet -- leave the mirror at its spawn transform
+    if (!actor || !R::IsLiveByIndex(actor, GetInternalIdx())) {
+        if (trace) { dbgLastLogMs_ = nowMs;
+            UE_LOGW("[WA-TRACE client-drive] eid=%u GUARD-FAIL actor=%p idx=%d liveByIdx=0 -- drive dead",
+                    static_cast<uint32_t>(GetId()), actor, GetInternalIdx()); }
+        return;  // unbound / GC'd mirror
+    }
+    if (!hasPose_) {
+        if (trace) { dbgLastLogMs_ = nowMs;
+            const auto pre = E::GetActorLocation(actor);
+            UE_LOGI("[WA-TRACE client-drive] eid=%u NO-POSE-YET engine=(%.0f,%.0f,%.0f)",
+                    static_cast<uint32_t>(GetId()), pre.X, pre.Y, pre.Z); }
+        return;  // no pose yet -- leave the mirror at its spawn transform
+    }
+    ue_wrap::FVector pre{};
+    if (trace) pre = E::GetActorLocation(actor);
     AdvanceInterp();
     if (dirty_) { ApplyToEngine(); dirty_ = false; }
+    if (trace) {
+        dbgLastLogMs_ = nowMs;
+        const auto post = E::GetActorLocation(actor);
+        UE_LOGI("[WA-TRACE client-drive] eid=%u pre=(%.0f,%.0f,%.0f) cur=(%.0f,%.0f,%.0f) "
+                "tgt=(%.0f,%.0f,%.0f) post=(%.0f,%.0f,%.0f) window=%d applyLoc=%d applyRot=%d",
+                static_cast<uint32_t>(GetId()), pre.X, pre.Y, pre.Z, curPos_.X, curPos_.Y, curPos_.Z,
+                targetPos_.X, targetPos_.Y, targetPos_.Z, post.X, post.Y, post.Z,
+                window_.IsOpen() ? 1 : 0, lastApplyLocOk_ ? 1 : 0, lastApplyRotOk_ ? 1 : 0);
+    }
 }
 
 void WorldActor::ApplyToEngine() {
@@ -113,8 +141,10 @@ void WorldActor::ApplyToEngine() {
     if (!actor) return;
     // Transform-only drive with FULL rotation (a UFO/ship banks + rolls). No CMC (not an ACharacter)
     // and no mesh-offset reconstruction -- the mirror is the same class spawned at the same pivot.
-    E::SetActorLocation(actor, curPos_);
-    E::SetActorRotation(actor, ue_wrap::FRotator{curPitch_, curYaw_, curRoll_});
+    // Returns captured for [WA-TRACE client-drive]: K2_SetActorLocation/Rotation report failure via
+    // ReturnValue and the drive must not stay blind to a silently-refused write.
+    lastApplyLocOk_ = E::SetActorLocation(actor, curPos_);
+    lastApplyRotOk_ = E::SetActorRotation(actor, ue_wrap::FRotator{curPitch_, curYaw_, curRoll_});
 }
 
 }  // namespace coop::element

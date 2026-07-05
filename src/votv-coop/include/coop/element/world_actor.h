@@ -72,6 +72,13 @@ private:
     coop::LerpWindow window_;          // shared interp timing (same one RemotePlayer / Npc own)
     bool             hasPose_ = false; // first packet snaps
     bool             dirty_   = true;  // unapplied change to push to the engine
+
+    // [WA-TRACE client-drive] state (2026-07-05 0s-frozen-pyramid hunt): 1 Hz per-mirror step/state
+    // log + the engine-write RESULTS (K2_SetActorLocation/Rotation CAN fail silently -- e.g. a
+    // static-mobility root -- and the old ApplyToEngine discarded both returns).
+    uint64_t dbgLastLogMs_   = 0;
+    bool     lastApplyLocOk_ = true;
+    bool     lastApplyRotOk_ = true;
 };
 
 }  // namespace coop::element
