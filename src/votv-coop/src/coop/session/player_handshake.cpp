@@ -2,6 +2,8 @@
 
 #include "coop/session/player_handshake.h"
 
+#include "player_handshake_detail.h"  // co-located private header (src tree, not include/)
+
 #include "coop/session/seen_players.h"
 
 #include "coop/element/player.h"
@@ -51,8 +53,12 @@ std::array<std::string, net::kMaxPeers> g_guidBySlot{};
 // re-skinned the moment the name lands (StoreSkinForSlot).
 std::array<std::string, net::kMaxPeers> g_skinBySlot{};
 
+}  // namespace
+
 // Store + live-apply: if the described slot's puppet is already spawned, re-skin
 // it NOW (mid-session SkinChange, or a Join that raced the first pose).
+// External linkage (player_handshake_detail.h): HandleSkinChange lives in
+// player_handshake_prefs.cpp; the side-table stays owned HERE.
 void StoreSkinForSlot(int slot, std::string name) {
     if (slot < 0 || slot >= net::kMaxPeers) return;
     if (g_skinBySlot[slot] == name) return;
@@ -60,6 +66,26 @@ void StoreSkinForSlot(int slot, std::string name) {
     if (RemotePlayer* p = coop::players::Registry::Get().Puppet(static_cast<uint8_t>(slot)))
         p->ApplySkin(g_skinBySlot[slot]);
 }
+
+// Parse one [u8 len][ASCII] field. Returns bytes consumed (0 = malformed/absent);
+// `out` untouched unless a well-formed non-empty field validated as a skin name.
+// External linkage (player_handshake_detail.h): shared with HandleSkinChange.
+size_t ParseSkinField(const uint8_t* p, size_t remaining, std::string* out) {
+    if (remaining < 1) return 0;
+    const int len = p[0];
+    if (1 + len > static_cast<int>(remaining)) return 0;
+    if (len > 0) {
+        std::string name(reinterpret_cast<const char*>(p + 1), static_cast<size_t>(len));
+        // Boundary rule: the name becomes a LoadObject package path component.
+        if (coop::skins::IsValidSkinName(name))
+            *out = std::move(name);
+        else
+            UE_LOGW("handshake: peer sent an invalid skin name (%d bytes) -- ignored", len);
+    }
+    return 1 + static_cast<size_t>(len);
+}
+
+namespace {
 
 // v94 display-prefs flags byte (appended to Join + PlayerJoined after the skin
 // field). Bit layout is the wire contract -- extend with new bits, never re-order.
@@ -99,23 +125,6 @@ size_t ParseNickColorField(const uint8_t* p, size_t remaining, int slot) {
     coop::nick_color::StoreForSlot(
         slot, p[0] != 0 ? coop::nick_color::Pack(p[1], p[2], p[3]) : 0u);
     return 4;
-}
-
-// Parse one [u8 len][ASCII] field. Returns bytes consumed (0 = malformed/absent);
-// `out` untouched unless a well-formed non-empty field validated as a skin name.
-size_t ParseSkinField(const uint8_t* p, size_t remaining, std::string* out) {
-    if (remaining < 1) return 0;
-    const int len = p[0];
-    if (1 + len > static_cast<int>(remaining)) return 0;
-    if (len > 0) {
-        std::string name(reinterpret_cast<const char*>(p + 1), static_cast<size_t>(len));
-        // Boundary rule: the name becomes a LoadObject package path component.
-        if (coop::skins::IsValidSkinName(name))
-            *out = std::move(name);
-        else
-            UE_LOGW("handshake: peer sent an invalid skin name (%d bytes) -- ignored", len);
-    }
-    return 1 + static_cast<size_t>(len);
 }
 
 std::vector<uint8_t> ToUtf8(const std::wstring& w) {
@@ -806,238 +815,9 @@ bool HandleAssignPeerSlot(net::Session& session,
     return true;
 }
 
-namespace {
-
-// [u8 slot][u8 len][name ASCII] -- the SkinChange wire form (also what the host
-// rebroadcasts verbatim).
-std::vector<uint8_t> BuildSkinChangePayload(uint8_t slot, const std::string& name) {
-    std::vector<uint8_t> out;
-    const uint8_t len = static_cast<uint8_t>(name.size() > 48 ? 48 : name.size());
-    out.reserve(2 + len);
-    out.push_back(slot);
-    out.push_back(len);
-    out.insert(out.end(), name.begin(), name.begin() + len);
-    return out;
-}
-
-}  // namespace
-
-void AnnounceLocalSkin(net::Session& session, const std::string& name) {
-    UE_ASSERT_GAME_THREAD("AnnounceLocalSkin");
-    if (!coop::skins::IsValidSkinName(name)) return;
-    const uint8_t selfSlot = coop::players::Registry::Get().LocalPeerId();
-    if (selfSlot >= net::kMaxPeers) return;  // not in a session yet -- the Join will carry it
-    const std::vector<uint8_t> p = BuildSkinChangePayload(selfSlot, name);
-    if (session.role() == net::Role::Host) {
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::SkinChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-    } else {
-        session.SendReliableToSlot(0, net::ReliableKind::SkinChange,
-                                   p.data(), static_cast<int>(p.size()));
-    }
-    UE_LOGI("player_handshake: announced local skin '%s' (slot %u)", name.c_str(),
-            static_cast<unsigned>(selfSlot));
-}
-
-bool HandleSkinChange(net::Session& session,
-                      const net::Session::ReliableMessage& msg) {
-    UE_ASSERT_GAME_THREAD("g_skinBySlot (HandleSkinChange)");
-    if (msg.payloadLen < 2) {
-        UE_LOGW("player_handshake: SkinChange payload %zu B too short -- dropping",
-                static_cast<size_t>(msg.payloadLen));
-        return true;
-    }
-    const uint8_t describedSlot = msg.payload[0];
-    std::string name;
-    if (ParseSkinField(msg.payload + 1, static_cast<size_t>(msg.payloadLen) - 1, &name) == 0 ||
-        name.empty()) {
-        UE_LOGW("player_handshake: SkinChange malformed/invalid name from slot %d -- dropping",
-                msg.senderPeerSlot);
-        return true;
-    }
-    if (describedSlot >= net::kMaxPeers) return true;
-
-    if (session.role() == net::Role::Host) {
-        // Forgery guard: a client may only change ITS OWN skin.
-        if (msg.senderPeerSlot != describedSlot || describedSlot == 0) {
-            UE_LOGW("player_handshake: SkinChange slot=%u from senderSlot=%d -- forged, dropping",
-                    static_cast<unsigned>(describedSlot), msg.senderPeerSlot);
-            return true;
-        }
-        StoreSkinForSlot(describedSlot, name);
-        coop::chat_feed::Push(NicknameForSlot(describedSlot) + L" changed skin to " +
-                              std::wstring(name.begin(), name.end()));
-        // Rebroadcast to every other ready client (originator excluded).
-        const std::vector<uint8_t> p = BuildSkinChangePayload(describedSlot, name);
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (x == describedSlot) continue;
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::SkinChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-        return true;
-    }
-
-    // Client: only the host relays skin state.
-    if (msg.senderPeerSlot != 0) {
-        UE_LOGW("player_handshake: SkinChange from non-host senderPeerSlot=%d -- dropping",
-                msg.senderPeerSlot);
-        return true;
-    }
-    if (describedSlot == coop::players::Registry::Get().LocalPeerId()) return true;  // our own echo
-    StoreSkinForSlot(describedSlot, name);
-    coop::chat_feed::Push(NicknameForSlot(describedSlot) + L" changed skin to " +
-                          std::wstring(name.begin(), name.end()));
-    return true;
-}
-
-namespace {
-
-// [u8 slot][u8 visible] -- the NameplateChange wire form (host rebroadcasts verbatim).
-std::vector<uint8_t> BuildNameplateChangePayload(uint8_t slot, bool visible) {
-    return { slot, static_cast<uint8_t>(visible ? 1 : 0) };
-}
-
-}  // namespace
-
-void AnnounceLocalNameplate(net::Session& session, bool visible) {
-    UE_ASSERT_GAME_THREAD("AnnounceLocalNameplate");
-    const uint8_t selfSlot = coop::players::Registry::Get().LocalPeerId();
-    if (selfSlot >= net::kMaxPeers) return;  // not in a session yet -- the Join will carry it
-    const std::vector<uint8_t> p = BuildNameplateChangePayload(selfSlot, visible);
-    if (session.role() == net::Role::Host) {
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::NameplateChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-    } else {
-        session.SendReliableToSlot(0, net::ReliableKind::NameplateChange,
-                                   p.data(), static_cast<int>(p.size()));
-    }
-    UE_LOGI("player_handshake: announced local nameplate %s (slot %u)",
-            visible ? "VISIBLE" : "HIDDEN", static_cast<unsigned>(selfSlot));
-}
-
-bool HandleNameplateChange(net::Session& session,
-                           const net::Session::ReliableMessage& msg) {
-    UE_ASSERT_GAME_THREAD("HandleNameplateChange");
-    if (msg.payloadLen < 2) {
-        UE_LOGW("player_handshake: NameplateChange payload %zu B too short -- dropping",
-                static_cast<size_t>(msg.payloadLen));
-        return true;
-    }
-    const uint8_t describedSlot = msg.payload[0];
-    const bool visible = msg.payload[1] != 0;
-    if (describedSlot >= net::kMaxPeers) return true;
-
-    if (session.role() == net::Role::Host) {
-        // Forgery guard: a client may only toggle ITS OWN plate.
-        if (msg.senderPeerSlot != describedSlot || describedSlot == 0) {
-            UE_LOGW("player_handshake: NameplateChange slot=%u from senderSlot=%d -- forged, dropping",
-                    static_cast<unsigned>(describedSlot), msg.senderPeerSlot);
-            return true;
-        }
-        coop::nameplate::StoreVisibleForSlot(describedSlot, visible);
-        // Rebroadcast to every other ready client (originator excluded).
-        const std::vector<uint8_t> p = BuildNameplateChangePayload(describedSlot, visible);
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (x == describedSlot) continue;
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::NameplateChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-        return true;
-    }
-
-    // Client: only the host relays plate prefs.
-    if (msg.senderPeerSlot != 0) {
-        UE_LOGW("player_handshake: NameplateChange from non-host senderPeerSlot=%d -- dropping",
-                msg.senderPeerSlot);
-        return true;
-    }
-    if (describedSlot == coop::players::Registry::Get().LocalPeerId()) return true;  // our own echo
-    coop::nameplate::StoreVisibleForSlot(describedSlot, visible);
-    return true;
-}
-
-namespace {
-
-// [u8 slot][u8 has][u8 r][u8 g][u8 b] -- the NickColorChange wire form (host
-// rebroadcasts verbatim).
-std::vector<uint8_t> BuildNickColorChangePayload(uint8_t slot, uint32_t packed) {
-    return { slot, static_cast<uint8_t>(coop::nick_color::IsCustom(packed) ? 1 : 0),
-             coop::nick_color::R(packed), coop::nick_color::G(packed),
-             coop::nick_color::B(packed) };
-}
-
-}  // namespace
-
-void AnnounceLocalNickColor(net::Session& session, uint32_t packed) {
-    UE_ASSERT_GAME_THREAD("AnnounceLocalNickColor");
-    const uint8_t selfSlot = coop::players::Registry::Get().LocalPeerId();
-    if (selfSlot >= net::kMaxPeers) return;  // not in a session yet -- the Join will carry it
-    const std::vector<uint8_t> p = BuildNickColorChangePayload(selfSlot, packed);
-    if (session.role() == net::Role::Host) {
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::NickColorChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-    } else {
-        session.SendReliableToSlot(0, net::ReliableKind::NickColorChange,
-                                   p.data(), static_cast<int>(p.size()));
-    }
-    UE_LOGI("player_handshake: announced local nick color %s (slot %u)",
-            coop::nick_color::IsCustom(packed) ? "CUSTOM" : "DEFAULT",
-            static_cast<unsigned>(selfSlot));
-}
-
-bool HandleNickColorChange(net::Session& session,
-                           const net::Session::ReliableMessage& msg) {
-    UE_ASSERT_GAME_THREAD("HandleNickColorChange");
-    if (msg.payloadLen < 5) {
-        UE_LOGW("player_handshake: NickColorChange payload %zu B too short -- dropping",
-                static_cast<size_t>(msg.payloadLen));
-        return true;
-    }
-    const uint8_t describedSlot = msg.payload[0];
-    const uint32_t packed = msg.payload[1] != 0
-        ? coop::nick_color::Pack(msg.payload[2], msg.payload[3], msg.payload[4])
-        : 0u;
-    if (describedSlot >= net::kMaxPeers) return true;
-
-    if (session.role() == net::Role::Host) {
-        // Forgery guard: a client may only color ITS OWN nick.
-        if (msg.senderPeerSlot != describedSlot || describedSlot == 0) {
-            UE_LOGW("player_handshake: NickColorChange slot=%u from senderSlot=%d -- forged, dropping",
-                    static_cast<unsigned>(describedSlot), msg.senderPeerSlot);
-            return true;
-        }
-        coop::nick_color::StoreForSlot(describedSlot, packed);
-        // Rebroadcast to every other ready client (originator excluded).
-        const std::vector<uint8_t> p = BuildNickColorChangePayload(describedSlot, packed);
-        for (int x = 1; x < net::kMaxPeers; ++x) {
-            if (x == describedSlot) continue;
-            if (!session.IsSlotReady(x)) continue;
-            session.SendReliableToSlot(x, net::ReliableKind::NickColorChange,
-                                       p.data(), static_cast<int>(p.size()));
-        }
-        return true;
-    }
-
-    // Client: only the host relays color prefs.
-    if (msg.senderPeerSlot != 0) {
-        UE_LOGW("player_handshake: NickColorChange from non-host senderPeerSlot=%d -- dropping",
-                msg.senderPeerSlot);
-        return true;
-    }
-    if (describedSlot == coop::players::Registry::Get().LocalPeerId()) return true;  // our own echo
-    coop::nick_color::StoreForSlot(describedSlot, packed);
-    return true;
-}
+// The live display-pref change family (SkinChange / NameplateChange /
+// NickColorChange announce + handle) lives in player_handshake_prefs.cpp
+// (extracted 2026-07-05, modular file-size rule). Shared internals:
+// player_handshake_detail.h.
 
 }  // namespace coop::player_handshake
