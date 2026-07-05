@@ -275,6 +275,14 @@ DWORD WINAPI EventFireTestThread(LPVOID arg);
 void RunAutonomousEventForceTest();
 DWORD WINAPI EventForceTestThread(LPVOID arg);
 
+// starRain cue-force driver (2026-07-05, harness/autotest_cueforce.cpp). HOST-ONLY: fires
+// runEvent('starRain') via HostFire as soon as the eventer resolves -- deliberately PRE-client,
+// so the orchestration can launch a client mid-shower and prove the event_cue join re-send
+// (QueueConnectBroadcastForSlot) delivers exactly one 'replayed' on the joiner. Gated by env
+// VOTVCOOP_RUN_CUEFORCE_TEST=1.
+void RunAutonomousCueForceTest();
+DWORD WINAPI CueForceTestThread(LPVOID arg);
+
 // Wisp mirror-lane e2e smoke (2026-07-03, harness/autotest_wisplane.cpp). HOST-ONLY: ForceNow
 // the wisps event (swarm spawns ~32x wisp_C via EX_CallMath -> the Func-thunk catch must enroll +
 // mirror each), then forces midday sun so the landed wisps self-destroy PE-invisibly -> the

@@ -21,11 +21,13 @@
 // No suppression (clients never fire), no relay (host-only origin), no echo (the host never
 // receives its own send, so it never double-spawns the emitter it already has).
 //
-// NO connect-snapshot by design (like firefly): a cue PSC already live when a client joins is in
-// g_lastCuePscs (already-broadcast), so a client that joins MID-shower sees it only from the next
-// NEW cue onward -- the in-progress emitter is not re-sent. Transient cosmetics accept this; if
-// mid-event parity ever matters, add a QueueConnectBroadcastForSlot that re-sends each live cue
-// PSC's {cueId,pos} via SendReliableToSlot (the turbine_sync connect-snapshot shape).
+// Connect snapshot (join-during-event Phase 2, docs/COOP_EVENT_JOIN.md 3.4): at a joiner's
+// world-ready edge the host re-sends each LIVE ALREADY-BROADCAST cue PSC's {cueId,pos} ToSlot
+// (the turbine_sync connect-snapshot shape) -- a mid-shower joiner replays the emitter fresh
+// (emitter PHASE is not synced; the joiner sees the remaining shower from t=0 -- accepted for
+// transient cosmetics). Only cues in g_lastCuePscs are re-sent: a cue newer than the last ~1 s
+// poll is delivered by the next Tick broadcast instead (the slot's send gate is open by then);
+// re-sending it here too would double the emitter on the joiner.
 //
 // The cue REGISTRY (in the .cpp) maps an emitter template -> cueId (+ an optional fixed spawn
 // location for cues the BP hardcodes, like starRain). starRain is cue #0; Eye Moon / Pink Beam /
@@ -42,12 +44,19 @@ namespace coop::event_cue_sync {
 // called every NetPumpTick from subsystems::Install. Detection lives in Tick(), not here.
 void Install(coop::net::Session* session);
 
-// HOST: the ~2 Hz authoritative detection poll (new cue PSC -> broadcast). No-op on a client / a
-// solo peer. Game thread (driven from subsystems::TickGameplay, beside the other host pollers).
+// HOST: the ~1 Hz authoritative detection poll (new cue PSC -> broadcast; kPollIntervalMs).
+// No-op on a client / a solo peer. Game thread (driven from subsystems::TickGameplay, beside
+// the other host pollers).
 void Tick();
 
 // CLIENT: replay a cue's emitter at the host's broadcast position. Game thread.
 void OnReliable(const coop::net::EventCuePayload& payload);
+
+// HOST: join-during-event Phase 2 -- re-send every live, already-broadcast cue PSC's {cueId,pos}
+// to a joiner at its world-ready edge (subsystems::ConnectReplayForSlot). One bounded PSC walk
+// (join edge is rare); cues NOT yet in the poll snapshot are skipped -- the next Tick broadcast
+// owns those (see the header note). No-op on a client / when no cue template resolved. Game thread.
+void QueueConnectBroadcastForSlot(int peerSlot);
 
 // Teardown: clear the poll snapshot + drop the session pointer.
 void OnDisconnect();

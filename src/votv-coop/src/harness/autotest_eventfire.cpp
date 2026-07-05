@@ -30,7 +30,10 @@ namespace {
 
 namespace efs = coop::event_fire_sync;
 
-// HostFire returns false until the eventer/verbs resolve (world still loading) -- bounded retry.
+// NOTE (corrected 2026-07-05): HostFire returns false ONLY on the client-role refusal -- the
+// fire itself resolves inside its posted game-thread task and logs its own outcome, so this
+// loop never actually retries a still-loading world. Kept as a role-refusal guard; the real
+// PASS evidence is the "dispatched" line in the host log (the smoke's log-diff step reads it).
 bool FireWithRetry(efs::FireKind kind, const wchar_t* name, const char* label) {
     for (int i = 0; i < 120; ++i) {  // <= 60 s
         if (efs::HostFire(kind, name, L"None")) {

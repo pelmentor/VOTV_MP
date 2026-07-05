@@ -2,7 +2,8 @@
 
 **Status: Phase 1 AS-BUILT, autonomous e2e PASS 2026-07-05 00:06** (wire v98,
 `ReliableKind::EventSnapshot` + the active-override replay + the piramid lane's gather
-re-send; Phase 0's probe seam now feeds the wire). Phases 2-3 remain DESIGN. Bytecode
+re-send; Phase 0's probe seam now feeds the wire). Phase 2a (cue join re-send) AS-BUILT
+2026-07-05, e2e PASS; Phase 2b (census fill) open-incremental; Phase 3 DESIGN. Bytecode
 ground truth — `research/findings/votv-active-events-registry-RE-2026-07-04.md`.
 This is the answer to the devs' gauntlet hard case (`docs/DEVS_GAUNTLET.md`): a player
 joins while the host is mid-event (pyramid et al.) and must converge to the same world.
@@ -42,14 +43,14 @@ A client joining while the host is mid-pyramid today gets:
 | NPC lane | live creature mirrors DO arrive (EntitySpawn ToSlot at join) -> creature-phase events (wisps, ventCrawler...) partially converge | covered by lane |
 | Prop lane | prop snapshot + membership sweep -> event-thrown props converge | covered by lane |
 | Weather/time/sky/balance | join-edge ToSlot replays exist | covered by lane |
-| event_cue lane (starRain) | cue fired once at event start; NO join snapshot -> joiner mid-starRain sees no rain | gap (small) |
+| event_cue lane (starRain) | cue fired once at event start; v98+ join re-send delivers live already-broadcast cues at world-ready | closed (Phase 2, e2e 2026-07-05 09:36) |
 | No-lane transients (arirShip flight, droppers, piramid2 sequence...) | nothing | gap |
 
 Net: **the joiner stands in a calm base world while the host watches the pyramid land.**
 "People saw completely different events or nothing at all" — the devs' exact words; this
 is the mechanism. (v98 closed the first two gap rows AND the killing blow: EventSnapshot
 delivers the in-flight set at world-ready, and its active-override bypasses the
-passEvents dedupe. The event_cue row stays open until Phase 2.)
+passEvents dedupe. The event_cue row closed 2026-07-05 with the Phase 2 join re-send.)
 
 ## 3. The design
 
@@ -112,8 +113,16 @@ RULE going forward: **every lane must state its late-join answer**; a new lane P
 its row here. Current rows (code-verified 2026-07-04): npc=EntitySpawn ToSlot [V];
 world_actor=WorldActorSpawn ToSlot [V]; props=prop_snapshot+sweep [V]; weather/time/sky/
 balance=ToSlot replays [V]; item_activate+voice=ReplayPeerStatesToSlot [V];
-event_cue=**NONE (gap; Phase 2: host enumerates live cue PSCs at join edge, sends
-EventCue ToSlot)**; keypad/doors/lights=trigger states ride saveTriggers in the blob [V];
+event_cue=**join re-send AS-BUILT (Phase 2, 2026-07-05): `event_cue_sync::
+QueueConnectBroadcastForSlot` walks live PSCs at the join edge and re-sends each
+ALREADY-BROADCAST cue's {cueId,pos} ToSlot; a cue newer than the last ~1 s poll is left to
+the next Tick broadcast (the slot's gate is open post-world-ready) — re-sending it too
+would double the emitter. Emitter PHASE is not synced (joiner replays from t=0 — accepted
+for transient cosmetics). [V autonomous e2e 2026-07-05 09:36: starRain fired pre-client,
+host `connect-snapshot -- re-sent live 'starRain' (cue 0) to slot 1`, client exactly ONE
+`replayed 'starRain'`, 0 ERROR both]. NOTE (observed same run): the join-edge registry
+showed `0 in flight` — starRain's active phase in the registry does not span the shower,
+so the CUE lane, not EventSnapshot, is the load-bearing late-join carrier for it**; keypad/doors/lights=trigger states ride saveTriggers in the blob [V];
 kerfur=reconcile lane [V]; atv=lane [V];
 piramid=WA connect snapshot delivers the in-flight pyramid at its current transform +
 npc snapshot the remaining wisps; the joiner's mirror BeginPlay restores registry parity
@@ -148,9 +157,14 @@ native beam code None-checks) [AS-BUILT 2026-07-05, join-during-gather untested 
   bypass branch (that needs a scheduler fire mid-join or a hands-on; the branch is a
   two-boolean short-circuit, code-verified). Pyramid mid-join stays the HANDS-ON acceptance
   test (section 4).
-- **Phase 2:** event_cue join snapshot (closes the starRain gap); class->row map filled
-  for the full census (the ~95, most map to existing dupe-matrix rows — the receiver's
-  `NO class->row map entry` WARN lines name exactly the classes still missing).
+- **Phase 2a (cue join re-send): AS-BUILT 2026-07-05, autonomous e2e PASS 09:36** —
+  `event_cue_sync::QueueConnectBroadcastForSlot` (see the 3.4 event_cue row for the
+  as-built + evidence; driver `autotest_cueforce.cpp` fires starRain pre-client). No wire
+  change (reuses EventCue ToSlot — protocol stays v98).
+- **Phase 2b (census fill), open + incremental by design:** class->row map filled toward
+  the full census (the ~95, most map to existing dupe-matrix rows — the receiver's
+  `NO class->row map entry` WARN lines name exactly the classes still missing; each
+  granular per-event pass adds its registrant per docs/events/README.md).
 - **Phase 3 (only if hands-on shows it matters):** phase hints — elapsedSec-driven
   fast-forward for timeline-driven senders; per-event, evidence-first.
 

@@ -106,7 +106,18 @@ Autonomous MID-JOIN e2e PASS 00:06: obelisk FORCED with NO client -> client
 launched 27 s later -> host `join-edge slot=1 SNAPSHOT class=obelisk_C
 row=obelisk` -> client `REPLAY runEvent 'obelisk' (in-flight active-override)`
 dispatched + trigger_alarm_C unmapped-skip; 0 ERROR both peers, RSS ~3 GB flat,
-s_asdasd restored byte-identical; perf audit PASS all functions)**.
+s_asdasd restored byte-identical; perf audit PASS all functions)** →
+**`D593B401A1665F34` (2026-07-05 ~09:50, wire v98 unchanged — ТЕКУЩИЙ: EVENT-JOIN
+PHASE 2a, event_cue join re-send — a mid-shower joiner now gets live
+already-broadcast cosmetic cues (starRain) re-sent ToSlot at world-ready;
+newer-than-last-poll cues ride the next Tick broadcast instead (no double).
+Autonomous MID-SHOWER JOIN e2e PASS 09:36: starRain fired host-alone 09:36:05
+(`runEvent('starRain'...) dispatched`) -> client launched -> first connected poll
+broadcast (send-gate dropped it for the loading slot) -> 09:36:45 host
+`connect-snapshot -- re-sent live 'starRain' (cue 0) to slot 1` -> client EXACTLY
+ONE `event_cue: replayed 'starRain'`; 0 ERROR both, RSS ~2.9 GB, s_asdasd restored
+byte-identical; perf+correctness audits run, dev-driver honesty fix folded in —
+shipping paths identical to the e2e build FA6A7531DFAB27E6)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -114,7 +125,7 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~00:30 (DLL `E09121F58CE2A5C6` deployed 4/4 hash-verified, wire v98 — ТЕКУЩИЙ)
+## 2026-07-05 ~00:30 (DLL `E09121F58CE2A5C6` — superseded by `D593B401A1665F34`, wire v98; разделы ниже действительны)
 
 ### 0s. ВХОД ВО ВРЕМЯ СОБЫТИЯ (join-during-event) — приёмочный тест Phase 1
 Автономика уже доказала провод (см. цепочку DLL выше: обелиск, форс ДО подключения

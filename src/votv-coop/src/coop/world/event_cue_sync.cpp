@@ -205,6 +205,35 @@ void OnReliable(const coop::net::EventCuePayload& payload) {
             kCues[payload.cueId].name, payload.cueId, payload.x, payload.y, payload.z);
 }
 
+void QueueConnectBroadcastForSlot(int peerSlot) {
+    // HOST, join edge only (rare). One bounded PSC walk -- the same cost as one Tick poll.
+    if (!GT::IsGameThread()) return;
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != coop::net::Role::Host) return;
+    ResolveTemplates();
+    if (g_resolvedTemplates == 0) return;  // no cue asset loaded -> no live cue possible
+
+    for (void* psc : R::FindObjectsByClass(kPscClass)) {
+        const int cueId = CueIdForTemplate(ue_wrap::engine::GetParticleSystemTemplate(psc));
+        if (cueId < 0) continue;
+        // Only re-send cues the poll has ALREADY broadcast. A cue newer than the last poll is
+        // not in the snapshot yet; the next Tick broadcasts it to everyone INCLUDING this slot
+        // (its send gate is open now -- ConnectReplayForSlot runs post-world-ready), so sending
+        // it here too would spawn the emitter twice on the joiner.
+        if (!g_lastCuePscs.count(psc)) continue;
+        ue_wrap::FVector loc = kCues[cueId].loc;
+        if (!kCues[cueId].fixedLocation) {
+            loc = ue_wrap::engine::GetComponentRelativeLocation(psc);
+            if (!std::isfinite(loc.X) || !std::isfinite(loc.Y) || !std::isfinite(loc.Z)) continue;
+        }
+        coop::net::EventCuePayload p{ static_cast<uint32_t>(cueId), loc.X, loc.Y, loc.Z };
+        s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::EventCue, &p, sizeof(p));
+        UE_LOGI("event_cue: connect-snapshot -- re-sent live '%s' (cue %d) to slot %d",
+                kCues[cueId].name, cueId, peerSlot);
+    }
+    // The common case (no event running) stays silent -- the per-cue line above is the diagnostic.
+}
+
 void OnDisconnect() {
     g_lastCuePscs.clear();
     g_session.store(nullptr, std::memory_order_release);

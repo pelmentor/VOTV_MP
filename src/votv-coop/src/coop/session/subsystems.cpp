@@ -250,6 +250,9 @@ void ConnectReplayForSlot(int slot) {
     // commit ToSlot. AFTER world_actor_sync/npc_sync queued their snapshots above (the joiner's
     // mirrors must exist for the replay's eid lookups; its 5 s retry window absorbs drain skew).
     coop::piramid_sync::QueueConnectBroadcastForSlot(slot);
+    // event_cue late-join answer (join-during-event Phase 2): re-send live already-broadcast
+    // cosmetic cue emitters (starRain...) ToSlot -- a mid-shower joiner replays the emitter.
+    coop::event_cue_sync::QueueConnectBroadcastForSlot(slot);
 }
 
 void ClientConnectEdge(coop::net::Session& session) {

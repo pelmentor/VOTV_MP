@@ -127,6 +127,10 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // asserts shots 1 -> 0 through the native overlap dispatch (coop/dev/event_force).
     SpawnIf("VOTVCOOP_RUN_EVENTFORCE_TEST", "event force-NOW smoke", &EventForceTestThread, role);
 
+    // starRain cue-force driver: host fires 'starRain' PRE-client so the orchestration can
+    // join a client mid-shower and prove the event_cue join re-send (exactly one replay).
+    SpawnIf("VOTVCOOP_RUN_CUEFORCE_TEST", "starRain cue-force driver", &CueForceTestThread, role);
+
     // Piramid mirror-lane e2e: host ForceNow()s the piramid event (native spawner chain -> WA
     // mirror + npc wisps), asserts the v97 lane arms, then baits a REAL gather by re-pinning
     // the wisps around the walking pyramid; VERDICT = the PyramidGather relay firing.
