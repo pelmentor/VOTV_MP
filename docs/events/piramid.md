@@ -50,6 +50,7 @@ wiki sweep (voicesofthevoid.wiki.gg /Events/Story_Mode + eternitydev.wiki.gg /Py
 | legs / footstep sounds / stomp particles / step shakes | (a) derived from motion | AnimBP notifies fire on the mirror from the pose-driven motion — free |
 | terrain-hover Z | (a) derived | mirror runs the same trace... NO — mirror AI is suppressed (below); Z rides the pose stream verbatim |
 | gather (arm-extend + beams + wisp consume) | (b) host event | new relay: `PyramidGather{pyramidEid, wispEid}` -> mirror plays the `gather` montage; beams follow via notifies |
+| gathered wisp's RISE toward the arms (the "suck") + center shrink | (a) derived — the WISP's own tick under `gathered`: `Mesh->K2_SetWorldLocation(VLerp(start, (p_L+p_R)/2, piram2->suc))` — a MESH move, invisible to the root pose stream BY DESIGN | **`7ec1f666` (2026-07-05)**: the client gather replay re-enables the mirror wisp's actor tick (npc_mirror parks NPC mirrors tick-off — the rise code never ran; user live: beams stayed long, wisp grounded). Native rise replays from mirrored state; hunt AI unreachable under `gathered` [bytecode gate]. Hands-on pending |
 | consumed wisp's death | (b) host event | npc/kwisp lane destroy (authoritative) — the mirror's `del`-notify destroy is SUPPRESSED (would double-kill) |
 | the 4 spawned killerwisps | (b) host spawns | npc lane (killerwisp_C allowlisted — kwisp choreography lane) |
 | 30 s ping (sound+particle+shake) | (a) timer-driven cosmetic | mirror's own ping timer stays LIVE (pure cosmetic, no state writes) — per-viewer timing skew accepted |

@@ -230,7 +230,20 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~14:50 (DLL `04C5993A9D5BC09F` — ТЕКУЩИЙ; wire v101 не менялся)
+## 2026-07-05 ~15:20 (DLL `942A321CC78BA5C2` — ТЕКУЩИЙ; wire v101 не менялся)
+
+### 0x-PIRAMID-SUCK. Засасывание виспа теперь видно на клиенте (лучи укорачиваются)
+Твой репорт 15:05: «лучи всегда длинные, висп на земле остаётся». Корень: подъём — код в
+ТИКЕ самого виспа (меш-компонент, не рут: потоку позы невидим), а NPC-зеркала запаркованы
+tick-off → код подъёма на клиенте не исполнялся. FIX `7ec1f666`: gather-replay включает
+тик виспа-зеркала — натив сам поднимает его и ужимает center (лучи привязаны к center →
+укорачиваются). ПРОГОН: дождись gather на обоих экранах — висп ПОДНИМАЕТСЯ к лапам у
+клиента тоже, лучи сходятся/укорачиваются, шарик сжимается. Лог-ассерт (клиент):
+`piramid-gather[client]: replay OK ... wisp mirror tick ENABLED for the gathered rise`.
+Про «движения не точь-в-точь» — позиция по твоему прогону 15:01 идёт след-в-след
+(~1 пакет); жду твой ответ, КАКАЯ ось визуально не та (ноги/корпус/рывки/повороты/gather).
+
+## 2026-07-05 ~14:50 (DLL `04C5993A9D5BC09F` — superseded by `942A321CC78BA5C2`; wire v101 не менялся)
 
 ### 0w-ADMIN. F1 > Administration > Players (host-only) + окклюзия ник+полоска
 Два пункта одной сессии (04C5993A9D5BC09F, смоук 60s PASS x2, реестр записал клиента
