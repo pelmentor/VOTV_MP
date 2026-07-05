@@ -199,7 +199,11 @@ bool WorldActorSuppress_Interceptor(void* self, void* params) {
     (void)self;  // self = the UGameplayStatics CDO
     if (!params || g_spawnActorClassParamOff < 0) return false;
     auto* s = LoadSession();
-    if (!s || !s->connected()) return false;  // pre-connect: don't filter
+    // HOSTING-gated tracking (RULE 1 root fix 2026-07-05): the host branch runs with or
+    // without peers -- a WA spawned while the host is alone must be tracked so the join
+    // connect-snapshot can deliver it (the 0s pyramid failure). Only the broadcast inside
+    // is connected-gated. The client suppress branch still requires a live connection.
+    if (!s) return false;
 
     if (s->role() == coop::net::Role::Host) {
         if (g_disabledThisProcess.load(std::memory_order_acquire)) return false;
@@ -228,18 +232,19 @@ bool WorldActorSuppress_Interceptor(void* self, void* params) {
         }
         p.elementId = static_cast<uint32_t>(eid);
         t_pendingWa = {eid, params};  // for the matching POST (same thread, same call)
-        if (s->SendReliable(coop::net::ReliableKind::WorldActorSpawn, &p, sizeof(p))) {
-            UE_LOGI("world-actor[host]: broadcast WorldActorSpawn class='%ls' eid=%u loc=(%.0f,%.0f,%.0f) "
-                    "rot=(p=%.1f y=%.1f r=%.1f)", cls.c_str(), p.elementId, p.locX, p.locY, p.locZ,
-                    p.rotPitch, p.rotYaw, p.rotRoll);
-        } else {
+        UE_LOGI("world-actor[host]: tracked WorldActorSpawn class='%ls' eid=%u loc=(%.0f,%.0f,%.0f) "
+                "rot=(p=%.1f y=%.1f r=%.1f)", cls.c_str(), p.elementId, p.locX, p.locY, p.locZ,
+                p.rotPitch, p.rotYaw, p.rotRoll);
+        // Alone-host spawns are delivered by the join connect-snapshot instead.
+        if (s->connected() &&
+            !s->SendReliable(coop::net::ReliableKind::WorldActorSpawn, &p, sizeof(p))) {
             UE_LOGW("world-actor[host]: SendReliable(WorldActorSpawn) failed -- eid=%u not broadcast",
                     p.elementId);
         }
         return false;  // host spawns normally (pass-through)
     }
 
-    if (s->role() != coop::net::Role::Client) return false;
+    if (s->role() != coop::net::Role::Client || !s->connected()) return false;
     void* actorClass = *reinterpret_cast<void**>(
         reinterpret_cast<uint8_t*>(params) + g_spawnActorClassParamOff);
     if (!actorClass) return false;
@@ -385,8 +390,12 @@ void TickPoseStream() {
     // HOST-only: read each live WA's transform each tick + publish ONE WorldActorPose batch for the net
     // thread to fan out (so client mirrors MOVE). An EMPTY batch clears it (stop sending when WAs vanish).
     // Game thread (net-pump asserts GT) -> the scratch statics are single-threaded.
+    // LIFECYCLE runs while HOSTING (alone included); only the batch PUBLISH is peer-dependent
+    // (RULE 1 root fix 2026-07-05): a WA tracked while alone that self-destroys while alone
+    // must dead-retire then, or the join connect-snapshot would iterate a corpse element.
     auto* s = LoadSession();
-    if (!s || s->role() != coop::net::Role::Host || !s->connected()) return;
+    if (!s || s->role() != coop::net::Role::Host) return;
+    const bool connected = s->connected();
 
     static std::vector<coop::element::WorldActor*> elems;
     WaMirrors().Snapshot(elems);
@@ -411,6 +420,7 @@ void TickPoseStream() {
             dead.push_back({actor, el->GetId()});
             continue;
         }
+        if (!connected) continue;  // no peers: lifecycle-only pass, no batch to build
         if (static_cast<int>(batch.size()) >= coop::net::kMaxWorldActorBatchEntries) { ++truncated; continue; }
         coop::net::WorldActorPoseSnapshot snap{};
         snap.elementId = static_cast<uint32_t>(el->GetId());
@@ -429,13 +439,16 @@ void TickPoseStream() {
         }
         coop::element::RetireMirror(d.eid);
         UE_LOGI("world-actor[host dead-retire]: eid=%u actor no longer live (PE-invisible "
-                "self-destroy) -- released + broadcasting destroy", static_cast<uint32_t>(d.eid));
+                "self-destroy) -- released%s", static_cast<uint32_t>(d.eid),
+                connected ? " + broadcasting destroy" : " (alone: nothing to broadcast)");
+        if (!connected) continue;  // a joiner never learned this eid -- no destroy to send
         coop::net::EntityDestroyPayload dp{};
         dp.elementId = static_cast<uint32_t>(d.eid);
         if (!s->SendReliable(coop::net::ReliableKind::WorldActorDestroy, &dp, sizeof(dp)))
             UE_LOGW("world-actor[host dead-retire]: SendReliable(WorldActorDestroy) failed for eid=%u",
                     static_cast<uint32_t>(d.eid));
     }
+    if (!connected) return;  // publish is peer-dependent
     if (truncated > 0) {
         static bool s_warned = false;
         if (!s_warned) { s_warned = true;
@@ -619,8 +632,12 @@ void OnWorldActorSpawn(const coop::net::EntitySpawnPayload& payload) {
 }
 
 unsigned int HostEnrollExSpawn(void* actor) {
+    // HOSTING-gated, not connected-gated (RULE 1 root fix 2026-07-05): a WA spawned while
+    // the host is alone (the pre-first-join pyramid) must still be tracked -- the join
+    // connect-snapshot is what delivers it to a later joiner. Only the broadcast below is
+    // peer-dependent.
     auto* s = LoadSession();
-    if (!s || !s->connected() || s->role() != coop::net::Role::Host) return 0;
+    if (!s || s->role() != coop::net::Role::Host) return 0;
     if (!g_installed.load(std::memory_order_acquire) ||
         g_disabledThisProcess.load(std::memory_order_acquire)) return 0;
     if (!actor) return 0;
@@ -663,10 +680,12 @@ unsigned int HostEnrollExSpawn(void* actor) {
     const auto rot = E::GetActorRotation(actor);
     p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
     p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
-    if (s->SendReliable(coop::net::ReliableKind::WorldActorSpawn, &p, sizeof(p))) {
-        UE_LOGI("world-actor[host ex-enroll]: '%ls' eid=%u at (%.0f,%.0f,%.0f) (EX_CallMath "
-                "BeginDeferred, source-gated catch)", clsW.c_str(), eid, loc.X, loc.Y, loc.Z);
-    } else {
+    UE_LOGI("world-actor[host ex-enroll]: '%ls' eid=%u at (%.0f,%.0f,%.0f) (EX_CallMath "
+            "BeginDeferred, source-gated catch)", clsW.c_str(), eid, loc.X, loc.Y, loc.Z);
+    // Broadcast only with peers present -- an alone-host enroll is delivered by the join
+    // connect-snapshot instead (a peer-less SendReliable would just WARN-spam).
+    if (s->connected() &&
+        !s->SendReliable(coop::net::ReliableKind::WorldActorSpawn, &p, sizeof(p))) {
         UE_LOGW("world-actor[host ex-enroll]: SendReliable(WorldActorSpawn) failed for eid=%u "
                 "(element kept; the connect snapshot can still deliver it)", eid);
     }

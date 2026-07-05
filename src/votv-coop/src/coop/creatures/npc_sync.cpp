@@ -332,7 +332,12 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
     // Cheapest checks first.
     if (!params || g_npcSpawnActorClassParamOff < 0) return false;
     auto* s = LoadSession();
-    if (!s || !s->connected()) return false;  // pre-connect: don't filter
+    // HOSTING-gated tracking (RULE 1 root fix 2026-07-05, the 0s pyramid failure): the host
+    // branch tracks with or without peers -- an event creature spawned while the host is
+    // alone must be enrolled so the join connect-snapshot can deliver it. Only the
+    // EntitySpawn broadcast below is connected-gated; the client suppress branch still
+    // requires a live connection.
+    if (!s) return false;
 
     // Phase 5N1 Inc2: HOST-side broadcast path. When env var is set and
     // ActorClass is allowlisted, the host emits an EntitySpawn reliable
@@ -444,11 +449,11 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         // same UFunction call). Params pointer is the unique correlation
         // token -- POST checks equality to disambiguate nested non-NPC calls.
         t_pendingNpc = {eid, params};
-        if (s->SendEntitySpawn(p)) {
-            UE_LOGI("npc-sync[host]: broadcast EntitySpawn class='%ls' elementId=%u loc=(%.0f, %.0f, %.0f) rot=(p=%.1f y=%.1f r=%.1f)",
-                    cls.c_str(), p.elementId, p.locX, p.locY, p.locZ,
-                    p.rotPitch, p.rotYaw, p.rotRoll);
-        } else {
+        UE_LOGI("npc-sync[host]: tracked EntitySpawn class='%ls' elementId=%u loc=(%.0f, %.0f, %.0f) rot=(p=%.1f y=%.1f r=%.1f)",
+                cls.c_str(), p.elementId, p.locX, p.locY, p.locZ,
+                p.rotPitch, p.rotYaw, p.rotRoll);
+        // Alone-host spawns are delivered by the join connect-snapshot instead.
+        if (s->connected() && !s->SendEntitySpawn(p)) {
             UE_LOGW("npc-sync[host]: SendEntitySpawn failed (reliable channel busy?) -- NPC elementId=%u not broadcast",
                     p.elementId);
         }
@@ -457,8 +462,8 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         return false;
     }
 
-    // Host runs spawners normally; only CLIENT suppresses.
-    if (s->role() != coop::net::Role::Client) return false;
+    // Host runs spawners normally; only a CONNECTED client suppresses (pre-connect: don't filter).
+    if (s->role() != coop::net::Role::Client || !s->connected()) return false;
 
     // Read the ActorClass UClass* param from the FFrame buffer.
     void* actorClass = *reinterpret_cast<void**>(

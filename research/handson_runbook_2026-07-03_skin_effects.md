@@ -126,7 +126,23 @@ net_stats_panel top-right passive panel (rates now / session totals / pkt/s /
 peers+ping / 60 s sparkline) + F1 > Network > Stats toggle, OFF by default,
 persisted ui.netstats. Autonomous LAN smoke PASS 10:05 (host+client, 0 ERROR
 both, no RAM breach) with the panel force-enabled on both local rigs — visual
-verdict = runbook 0t)**.
+verdict = runbook 0t)** →
+**`2BD2D893CDE3CA13` (2026-07-05 ~11:30, wire v98 unchanged — ТЕКУЩИЙ: the 0s
+mid-join FAILURE root-fix (user live repro: joiner saw NO pyramid). Host-side
+enroll/tracking seams were connection-gated — actors spawned while the host was
+ALONE never entered WaMirrors/NpcMirrors, so the join snapshots re-sent nothing.
+Fixed the whole class per rule 1: EX-catch + both spawn interceptors + both
+pose-tick lifecycles (drain + dead-retire) now HOSTING-gated; only sends stay
+peer-gated. NOT smoke-tested (user at PC) — the user's re-test of the exact
+repro is the verification; expected log lines in section 0s-FIX)** →
+**`F66DAE4B7621F846` (2026-07-05 ~12:00, wire v98 — ТЕКУЩИЙ: + the audit-found
+sibling of the same class: kerfur_convert's conversion poll was fully
+connected-gated (a SOLO-host radial toggle never converged -> the kerfur
+invisible to a later joiner + dupe-on-grab) -> host branch now hosting-gated;
+AND the latent 07-03 race it exposed: the per-tick npc dead-retire raced the
+5 Hz conversion poll and erased the kerfur death evidence even CONNECTED ->
+kerfur-family deaths returned to the poll (one owner per death edge). Kerfur
+toggle deserves a re-check in the next hands-on too)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -134,7 +150,20 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~10:10 (DLL `BD2951BA2B83E68E` — ТЕКУЩИЙ, wire v98)
+## 2026-07-05 ~11:30 (DLL `2BD2D893CDE3CA13` — ТЕКУЩИЙ, wire v98)
+
+### 0s-FIX. ПИРАМИДА MID-JOIN — root-fix твоего репорта («у клиента ничего нету»)
+ROOT CAUSE: трекинг ивент-актёров на хосте отсекался на `connected()` — пирамида
+(и её killerwisp'ы), заспавнившиеся ПОКА ХОСТ ОДИН, никогда не попадали в
+WaMirrors/NpcMirrors → join-снапшоту было нечего слать. FIX (per rule 1, весь класс):
+трекинг/lifecycle теперь гейтится на «hosting» (сессия есть + роль Host), пиры не
+нужны; только SEND остался peer-зависимым; dead-retire тоже работает в одиночестве.
+ПОВТОРИ свой сценарий: хост один → пирамида пошла → клиент подключается.
+Ожидаемые строки: хост при спавне (ещё один): `world-actor[host ex-enroll]:
+'piramid2_C' eid=N` + 4x `npc-sync[ex-spawn]: enrolled 'killerwisp_C'`; хост при
+джойне: `world-actor: connect-snapshot -- sent N existing WA(s) to slot 1` (N>=1);
+клиент: `world-actor[client OnSpawn]: materialized mirror ... piramid2_C` + ВИЗУАЛ:
+пирамида идёт, экран трясётся от шагов, сифон при gather.
 
 ### 0t. NET-СТАТИСТИКА (новая фича по твоему запросу) — визуальный вердикт
 Оверлей сетевой статистики (host + клиенты, ВЫКЛ по умолчанию; на твоих локальных

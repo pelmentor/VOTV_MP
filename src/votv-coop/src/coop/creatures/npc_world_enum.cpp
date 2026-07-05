@@ -153,13 +153,20 @@ constexpr size_t kMaxPendingExSpawns = 256;           // sanity cap (a swarm is 
 // ufunction_hook post-native callback: fires for EVERY BeginDeferredActorSpawnFromClass
 // dispatch (PE-visible AND EX_CallMath), DEEP inside the engine spawn -- keep it cheap.
 // Cheapest-first gating (perf audit 2026-07-03): the ~ns atomic session/role/lifecycle gates
-// run BEFORE the source-class FName compare (~100-200 ns render) -- a client / unconnected
-// peer exits in nanoseconds for every ambient spawn in the game. Fires PRE-Finish, so it
-// only queues; the drain reads the real transform next pump tick.
+// run BEFORE the source-class FName compare (~100-200 ns render) -- a client exits in
+// nanoseconds for every ambient spawn in the game. Fires PRE-Finish, so it only queues;
+// the drain reads the real transform next pump tick.
+//
+// HOSTING-gated, NOT connected-gated (RULE 1 root fix 2026-07-05, the 0s hands-on failure):
+// an event that fires while the host is ALONE (pyramid walking before the first client
+// joins) must still ENROLL its actors -- identity/tracking is connection-independent; only
+// the SEND is peer-dependent, and the join connect-snapshot replays tracked state. The old
+// `!connected()` gate here silently dropped the piramid2_C + killerwisp catches, so the
+// joiner's WA/npc snapshots had NOTHING and the client saw an empty world mid-event.
 void OnBeginDeferredExSpawn(void* srcObj, void* spawned) {
     if (!spawned || !srcObj) return;
     auto* s = coop::npc_sync::GetSession();
-    if (!s || s->role() != coop::net::Role::Host || !s->connected()) return;
+    if (!s || s->role() != coop::net::Role::Host) return;
     // IsInstalled is the "lifecycle armed" proxy for BOTH lanes (they Install together at
     // StartCoopSession). The npc-specific IsHostNpcSyncDisabled gate moved to the drain's NPC
     // branch (2026-07-04) so a degraded npc lifecycle can't silently drop WorldActor catches.

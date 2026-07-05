@@ -100,8 +100,13 @@ void TickPoseStream() {
     // at the spawn pose). Always publishes (an EMPTY batch clears it -> stop sending when NPCs vanish).
     // dev-spawned NPCs bind in POST (verified 2026-06-07) so they stream like any real game NPC.
     // Game thread (the net-pump tick asserts GT) -> the scratch statics below are single-threaded.
+    // LIFECYCLE runs while HOSTING (alone included); only the batch PUBLISH is peer-dependent
+    // (RULE 1 root fix 2026-07-05, the 0s pyramid failure): the EX-catch drain must enroll
+    // event creatures spawned while the host is alone, and a tracked NPC that self-destroys
+    // while alone must dead-retire then -- the join connect-snapshot replays what remains.
     auto* s = GetSession();
-    if (!s || s->role() != coop::net::Role::Host || !s->connected()) return;
+    if (!s || s->role() != coop::net::Role::Host) return;
+    const bool connected = s->connected();
 
     // 2026-07-03 wisp lane: enroll EX_CallMath-caught spawns queued since the last tick (the
     // Func-thunk fires PRE-Finish; by this tick FinishSpawningActor ran -> real transform).
@@ -140,9 +145,20 @@ void TickPoseStream() {
             // K2_DestroyActor PRE cannot see (the wisp's EX_VirtualFunction self-destroy at
             // dawn/proximity). Without this the Element leaks and the client mirror ghosts
             // forever. Eid-keyed retire + EntityDestroy broadcast; deferred teardown.
-            coop::npc_sync::SyncDestroyedNpcByEid(el->GetId(), actor);
+            //
+            // EXCEPT kerfur-family: their PE-invisible death edge is OWNED by
+            // kerfur_convert's 5 Hz conversion poll ([[feedback-one-owner-order-axis]]) --
+            // it must see the mirror Element + its dead actor to distinguish a radial-menu
+            // CONVERSION (converge: release old form + silent-enroll the new form) from a
+            // plain death. This per-tick retire raced ahead of the 200 ms poll and erased
+            // the evidence (latent since the 2026-07-03 dead-retire; surfaced by the
+            // 2026-07-05 hosting-gate fix review). The poll's converge releases the
+            // Element either way, so kerfurs do not leak from this skip.
+            if (el->GetTypeName().find("kerfurOmega") == std::string::npos)
+                coop::npc_sync::SyncDestroyedNpcByEid(el->GetId(), actor);
             continue;
         }
+        if (!connected) continue;  // no peers: lifecycle-only pass, no batch to build
         if (static_cast<int>(batch.size()) >= coop::net::kMaxNpcBatchEntries) { ++truncated; continue; }
         coop::net::EntityPoseSnapshot snap{};
         snap.elementId = static_cast<uint32_t>(el->GetId());
@@ -190,6 +206,7 @@ void TickPoseStream() {
         }
         batch.push_back(snap);
     }
+    if (!connected) return;  // publish is peer-dependent
     if (truncated > 0) {
         static bool s_warnedTrunc = false;
         if (!s_warnedTrunc) { s_warnedTrunc = true;

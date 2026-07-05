@@ -110,8 +110,13 @@ events).
 ### 3.4 The per-lane late-join contract (the audit table this doc owns)
 
 RULE going forward: **every lane must state its late-join answer**; a new lane PR adds
-its row here. Current rows (code-verified 2026-07-04): npc=EntitySpawn ToSlot [V];
-world_actor=WorldActorSpawn ToSlot [V]; props=prop_snapshot+sweep [V]; weather/time/sky/
+its row here. **AND the tracking rule those answers stand on (2026-07-05, the 0s live
+failure): host-side ENROLL/TRACKING seams gate on HOSTING (session + Host role), never
+on `connected()` — an event actor spawned while the host is ALONE must still be tracked,
+or the connect-snapshot has nothing to re-send (the joiner's "empty world mid-event").
+Only SENDS are peer-gated. Was violated by the EX-catch + both spawn interceptors + both
+pose-tick lifecycles; fixed as a class.** Current rows (code-verified 2026-07-04):
+npc=EntitySpawn ToSlot [V]; world_actor=WorldActorSpawn ToSlot [V]; props=prop_snapshot+sweep [V]; weather/time/sky/
 balance=ToSlot replays [V]; item_activate+voice=ReplayPeerStatesToSlot [V];
 event_cue=**join re-send AS-BUILT (Phase 2, 2026-07-05): `event_cue_sync::
 QueueConnectBroadcastForSlot` walks live PSCs at the join edge and re-sends each

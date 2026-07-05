@@ -608,8 +608,14 @@ void CleanupParkedGhosts() {
 // prop = turn_on). Fires only for an eid we previously cached LIVE, so a stale /
 // never-live mirror never false-triggers.
 void PollKerfurConversions() {
+    // HOSTING-gated for the HOST (RULE 1 class fix 2026-07-05, the 0s failure family):
+    // a solo-host radial-menu conversion must still CONVERGE (old-form release + new-form
+    // silent enroll into the mirrors) or a later joiner's connect-snapshot has neither
+    // form -- the kerfur vanishes for the joiner and a grab of the untracked prop dupes.
+    // A CLIENT still requires a live connection (its branch REQUESTS the host).
     auto* s = LoadSession();
-    if (!s || !s->connected()) return;
+    if (!s) return;
+    if (s->role() != coop::net::Role::Host && !s->connected()) return;
     if (!g_kerfurNpcClass || !g_kerfurPropClass) return;  // classes not resolved yet
     const auto now = std::chrono::steady_clock::now();
     if (g_lastConvPoll.time_since_epoch().count() != 0 &&
