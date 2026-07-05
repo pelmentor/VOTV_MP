@@ -352,7 +352,10 @@ TL;DR + tier-list.
 - ☐ PR-FOUNDATION-3 — Manager pattern collapse (one canonical mirror
        table; `ScopedElementRef<T>` RAII handles). Do BEFORE NPC 5N
        expansion or Door/Vehicle/Switch.
-- ☐ PR-FOUNDATION-4 — Host policy layer (kick/ban/ratelimit).
+- ◐ PR-FOUNDATION-4 — Host policy layer. Kick/ban SHIPPED (moderation.cpp +
+       ban_list.cpp + the scoreboard actions; reasons + unban + the persistent
+       seen-players registry + the host-only F1 Administration UI landed
+       2026-07-05 `f66d2c7f`). Remaining: rate-limiting.
 - ☐ PR-FOUNDATION-5 — Per-peer observability HUD + structured event
        stream.
 

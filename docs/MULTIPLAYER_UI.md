@@ -37,11 +37,23 @@ plus a user size pref (`ui.scale`, default 1.25x, F1 slider 0.75–1.75x)
 multiplied into the resolution factor. The T-chat input bar matches the
 chat column width; T-chat is available for the whole HOST session (a
 zero-client lobby included), wire send best-effort.
-**Nameplate occlusion (AS-BUILT 2026-07-04 `f8185847`, verdict = runbook 0n-c):**
-a peer behind world geometry (walls/closed doors/props — pawns never block)
-keeps a readable plate but the nick renders GRAY + the whole plate dims 25%
-(minecraft nametag shape; hurt-flash red keeps priority). Line trace via
-`ue_wrap/trace.cpp` per visible plate on the game thread.
+**Nameplate occlusion (AS-BUILT 2026-07-04 `f8185847`; refined 2026-07-05
+`4011fc73`, verdict = runbook 0w-a):** a peer behind world geometry
+(walls/closed doors/props — pawns never block) keeps a readable plate but the
+WHOLE unit — nick AND health bar — renders GRAY + half-transparent (x0.5;
+user refinement: nothing vanishes, both elements react; hurt-flash red keeps
+priority on both). Line trace via `ue_wrap/trace.cpp` per visible plate on
+the game thread.
+**F1 > Administration > Players (AS-BUILT 2026-07-05 `f66d2c7f`, verdict =
+runbook 0w-b):** HOST-role-gated F1 category (dev_menu Cat/Sub `host` flag on
+`roster::LocalIsHost` — clients/solo never see it): Online (roster rows +
+Teleport/Kick/Ban), Offline (`coop/session/seen_players` — the persistent
+GUID-keyed seen-players registry, votv-coop-players.txt `guid|nick|lastSeen|ip`,
+written at the host Join seam + disconnect edge), Banned (ban_list rows now
+with REASON + Unban; file format `ip|nick|unixtime|reason`, lenient back-compat
+parse). Ban modal takes a reason; offline ban uses the last known IP (P2P
+records without one get a disabled button + tooltip). Smoke e2e: the registry
+recorded the joining client + file round-trip; audit PASS 0 CRITICAL.
 **Network stats overlay (AS-BUILT 2026-07-05, user ask; verdict = runbook 0t):**
 `ui/net_stats_panel.cpp` — a passive top-right panel for host AND clients, OFF
 by default (F1 > Network > Stats, persisted `ui.netstats`): live receive/send
