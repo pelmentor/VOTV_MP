@@ -5,6 +5,7 @@
 #include "coop/session/shutdown.h"
 #include "coop/session/ini_config.h"
 
+#include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
@@ -53,6 +54,76 @@ inline void* ReadPtr(void* base, size_t off) {
     return base ? *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(base) + off) : nullptr;
 }
 
+// ---- player-control freeze (user 2026-07-05): while freecam is on, WASD/Space/Ctrl fly
+// the CAMERA -- the same keys must not also walk/jump the PAWN blindly. The engine seam is
+// CharacterMovement's mode: DisableMovement (MOVE_None) stops locomotion AND jump physics
+// wholesale, while LOOK (control rotation) stays live -- the freecam aims with it. Modes
+// are setter-managed (transition side effects), so this goes through the reflected
+// DisableMovement/SetMovementMode UFunctions, never a raw field write. The prior mode
+// (+custom sub-mode) is captured at freeze and restored verbatim at unfreeze -- a zero-g /
+// swimming player must come back to THAT state, not a hardcoded Walking. ----------------
+void* g_cmcClass = nullptr;
+void* g_disableMovementFn = nullptr;
+void* g_setMovementModeFn = nullptr;
+int32_t g_offMovementMode = -1;    // CMC.MovementMode (EMovementMode byte)
+int32_t g_offCustomMode = -1;      // CMC.CustomMovementMode (byte)
+uint8_t g_frozenPrevMode = 0;      // captured at freeze
+uint8_t g_frozenPrevCustom = 0;
+bool g_controlFrozen = false;      // a freeze is outstanding (restore owed on Disable)
+
+bool ResolveFreezeFns() {
+    if (!g_cmcClass) g_cmcClass = R::FindClass(L"CharacterMovementComponent");
+    if (!g_cmcClass) return false;
+    if (!g_disableMovementFn) g_disableMovementFn = R::FindFunction(g_cmcClass, L"DisableMovement");
+    if (!g_setMovementModeFn) g_setMovementModeFn = R::FindFunction(g_cmcClass, L"SetMovementMode");
+    if (g_offMovementMode < 0) g_offMovementMode = R::FindPropertyOffset(g_cmcClass, L"MovementMode");
+    if (g_offCustomMode < 0) g_offCustomMode = R::FindPropertyOffset(g_cmcClass, L"CustomMovementMode");
+    return g_disableMovementFn && g_setMovementModeFn && g_offMovementMode >= 0 &&
+           g_offCustomMode >= 0;
+}
+
+void* PlayerCmc() {
+    return (g_player && R::IsLive(g_player))
+               ? ReadPtr(g_player, P::off::ACharacter_CharacterMovement)
+               : nullptr;
+}
+
+void FreezePlayerControl() {
+    if (!ResolveFreezeFns()) {
+        UE_LOGW("freecam: player-control freeze unavailable (CMC fns/offsets unresolved) -- "
+                "the pawn will still react to the fly keys");
+        return;
+    }
+    void* cmc = PlayerCmc();
+    if (!cmc) { UE_LOGW("freecam: no CharacterMovement on the local player -- freeze skipped"); return; }
+    g_frozenPrevMode = *(reinterpret_cast<uint8_t*>(cmc) + g_offMovementMode);
+    g_frozenPrevCustom = *(reinterpret_cast<uint8_t*>(cmc) + g_offCustomMode);
+    ue_wrap::ParamFrame f(g_disableMovementFn);
+    if (!f.valid()) return;
+    ue_wrap::Call(cmc, f);
+    g_controlFrozen = true;
+    UE_LOGI("freecam: player control FROZEN (MovementMode %u->None, custom=%u captured)",
+            g_frozenPrevMode, g_frozenPrevCustom);
+}
+
+void UnfreezePlayerControl() {
+    if (!g_controlFrozen) return;
+    g_controlFrozen = false;
+    void* cmc = PlayerCmc();
+    if (!cmc) {
+        // Level reload freed the pawn -- the fresh pawn's CMC boots unfrozen; nothing owed.
+        UE_LOGI("freecam: unfreeze skipped (player/CMC gone; a fresh pawn starts unfrozen)");
+        return;
+    }
+    ue_wrap::ParamFrame f(g_setMovementModeFn);
+    if (!f.valid()) return;
+    f.Set<uint8_t>(L"NewMovementMode", g_frozenPrevMode);
+    f.Set<uint8_t>(L"NewCustomMode", g_frozenPrevCustom);
+    ue_wrap::Call(cmc, f);
+    UE_LOGI("freecam: player control RESTORED (MovementMode -> %u, custom=%u)",
+            g_frozenPrevMode, g_frozenPrevCustom);
+}
+
 // Walk GUObjectArray for THE local mainPlayer_C -- the one possessed by a
 // Local-vs-puppet discriminator + caching now lives in coop::local_player
 // per RULE 1 (2026-05-26 unification). This module just calls Get().
@@ -96,6 +167,9 @@ void Enable() {
 
     E::SetViewTargetWithBlend(g_pc, g_camActor, 0.15f);
 
+    // The fly keys (WASD/Space/Ctrl) must not ALSO drive the pawn (user 2026-07-05).
+    FreezePlayerControl();
+
     g_camPos = loc;
     g_lastMs.store(::GetTickCount64());
     g_active.store(true);
@@ -104,6 +178,7 @@ void Enable() {
 
 void Disable() {
     g_active.store(false);
+    UnfreezePlayerControl();
     if (g_pc && g_player && R::IsLive(g_pc) && R::IsLive(g_player))
         E::SetViewTargetWithBlend(g_pc, g_player, 0.15f);
     if (g_camActor && R::IsLive(g_camActor)) E::DestroyActor(g_camActor);
@@ -139,6 +214,7 @@ void MovementTick() {
     // Bail without touching dead objects -- never SetActorLocation a freed actor.
     if (!R::IsLive(g_camActor) || !R::IsLive(g_pc)) {
         g_active.store(false);
+        UnfreezePlayerControl();  // restores if the pawn survived; no-ops on a freed pawn
         g_camActor = nullptr; g_pc = nullptr; g_player = nullptr;
         UE_LOGW("freecam: view target invalidated (level change?); auto-off");
         return;

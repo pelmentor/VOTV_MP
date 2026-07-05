@@ -209,7 +209,20 @@ arrival; the "unmapped trigger_alarm_C WARN" joiner hole closed via kLaneOwnedCl
 a wire state landing before the client's trigger resolves is QUEUED + Tick-drained,
 never dropped (the snapshot-before-state-ready class). + autotest_alarmforce (env
 VOTVCOOP_RUN_ALARMFORCE_TEST) e2e driver. v101 rejects v100 peers — ОБЕ копии обновлены
-deploy-all'ом, 4/4 hash-verified)**.
+deploy-all'ом, 4/4 hash-verified)** → superseded by `595897C89D88F5EC`.
+
+**`595897C89D88F5EC` (2026-07-05 ~13:45, wire v101 — alarmforce ON-hold 15→45 s, чтобы
+живой OFF ложился после world-ready клиента. НА ЭТОЙ DLL прошёл alarm e2e 13:50 PASS:
+mid-alarm JOIN доказан — гейтированный pre-world бродкаст корректно пропущен, connect-
+снапшот доставил active=1 на world-ready, клиент применил в ту же секунду; живой OFF
+применился в ту же секунду; smoke PASS, 0 ERROR оба пира)** → superseded by
+`956716AAD2F7C9E0`.
+
+**`956716AAD2F7C9E0` (2026-07-05 ~19:30, wire v101 не менялся — ТЕКУЩИЙ: FREECAM-FREEZE.
+Вход в dev freecam замораживает движение пешки (CMC DisableMovement=MOVE_None: ни ходьбы,
+ни прыжка от клавиш полёта; look живой — им целится freecam); прежний режим движения
+захватывается и восстанавливается на выходе verbatim (zero-g/плавание не стопчутся
+хардкодом). Раздел 0v ниже)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -217,7 +230,23 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~18:45 (DLL `32AC2EC6585809C4` — ТЕКУЩИЙ, wire v101)
+## 2026-07-05 ~19:30 (DLL `956716AAD2F7C9E0` — ТЕКУЩИЙ, wire v101 не менялся)
+
+### 0v-FREECAM-FREEZE. Персонаж больше не бегает, пока ты летаешь freecam'ом
+Твой пункт 12h: при входе в dev freecam (HOME / F1) те же клавиши (WASD/Space/Ctrl)
+летали камерой И гоняли персонажа вслепую. FIX: на входе движение пешки замораживается
+целиком (CharacterMovement -> MOVE_None: ни ходьбы, ни прыжка; ОБЗОР живой — им целится
+freecam), прежний режим движения запоминается и восстанавливается на выходе как был
+(zero-g/плавание вернутся своим режимом, не хардкодом Walking).
+
+ПРОГОН (~1 мин, хост): HOME -> WASD/Space полетай -> персонаж стоит на месте (проверь со
+второго пира: паппет не дёргается) -> MMB (перенести персонажа к камере — работает и в
+заморозке) -> HOME выход -> управление вернулось. Лог-ассерт: `freecam: player control
+FROZEN (MovementMode N->None...)` на входе, `RESTORED` на выходе.
+Caveat: замёрзший в воздухе персонаж висит до выхода из freecam (MOVE_None без гравитации)
+— поведение dev-инструмента, не бага.
+
+## 2026-07-05 ~18:45 (DLL `32AC2EC6585809C4` — superseded by `956716AAD2F7C9E0`; wire v101)
 
 ### 0u-ALARM. БАЗОВАЯ аварийная сирена (красные лампы + звук «как пожарная») — e2e PASS, руками проверь звук/лампы + клиентский Stop
 Автономный e2e 13:50 PASS: mid-alarm JOIN доказан (ON пришёл, пока клиент грузился —
@@ -242,7 +271,7 @@ everything visual — your hands-on below still decides those.
    `alarm_sync: connect-snapshot -- sent active=1 to slot 1`, клиент applied + звук.
 
 ### 0s-FACING2. HEADING ТЕПЕРЬ СТРИМИТСЯ С ХОСТА (истина вместо деривации)
-(вердикт всё ещё нужен; DLL сменилась на `32AC2EC6585809C4` — v101 содержит v100 как есть)
+(вердикт всё ещё нужен; текущая DLL `956716AAD2F7C9E0` — v101 содержит v100 как есть)
 Твой вердикт 0s-FACING: работает, но «сбивается иногда» и лёгкий рассинхрон направления.
 Причина принципиальная: натив доворачивает heading до 10 секунд ПОСЛЕ остановки (плавное
 гашение mov-таймлайна + RInterpTo к цели) — из дельт позиции это невидимо, плюс дельты сами
