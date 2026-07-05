@@ -694,7 +694,14 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 101; // v101: AlarmState=87 -- the base radar alarm as a
+inline constexpr uint16_t kProtocolVersion = 102; // v102: WorldActorPoseSnapshot +auxVec (32->44) --
+                                                  // the piramid HEAD/searchlight look target (relLook)
+                                                  // streams with the pose; the mirror's 1 Hz RANDOM
+                                                  // changeLook wander is suppressed and the native
+                                                  // lookat VInterpTo eases toward the host's target
+                                                  // (state mirrored, playout native; user live
+                                                  // 2026-07-05: heads/фонарь diverged when idle).
+                                                  // v101: AlarmState=87 -- the base radar alarm as a
                                                   // shared-world toggle lane (poll-based: runTrigger is
                                                   // EX_VirtualFunction-invisible; docs/events/alarm.md)
                                                   // + the late-join answer (mid-alarm joiner gets state).
@@ -2224,12 +2231,22 @@ struct WorldActorPoseSnapshot {
                                //      AFTER motion stops, which no delta can see). Classes whose
                                //      facing IS the actor rotation stream auxYaw == yaw (client
                                //      consumers are class-specific; the generic drive ignores it).
+    float    auxX, auxY, auxZ; // 12 -- v102: class-specific auxiliary TARGET vector. piramid2_C:
+                               //      `relLook` -- the head/searchlight's idle look target (RELATIVE
+                               //      frame), natively re-randomized at 1 Hz PER INSTANCE (the
+                               //      changeLook timer), so each peer's head wandered its own way
+                               //      (user live 2026-07-05: "фонарь и голова не на 100%"). The
+                               //      mirror's changeLook is suppressed and its native lookat
+                               //      VInterpTo eases toward THIS streamed value instead (target
+                               //      mirrored, easing native -- the wisp-CHASE branch already
+                               //      converges on its own: same mirrored wisp both ends). Other
+                               //      classes: zeros; the generic drive ignores it.
 };
-static_assert(sizeof(WorldActorPoseSnapshot) == 32, "WorldActorPoseSnapshot must be 32 bytes (v100: +auxYaw)");
+static_assert(sizeof(WorldActorPoseSnapshot) == 44, "WorldActorPoseSnapshot must be 44 bytes (v102: +auxVec)");
 
 // Max WorldActors per WorldActorPose datagram, MTU-capped: (1400 - PacketHeader(20) -
-// EntityPoseBatchHeader(4)) / 32 = 43. The realistic event WA count is a handful (a few UFOs at once),
-// so 31 (the NPC cap) is ample headroom while keeping the datagram (20 + 4 + 31*32 = 1016) well under MTU.
+// EntityPoseBatchHeader(4)) / 44 = 31. The realistic event WA count is a handful (a few UFOs at once),
+// so 31 (the NPC cap) keeps the datagram (20 + 4 + 31*44 = 1388) at the 1400 MTU budget exactly.
 // The batch reuses EntityPoseBatchHeader (a generic count+pad), NOT a byte-identical twin (RULE 2).
 inline constexpr int kMaxWorldActorBatchEntries = 31;
 inline constexpr int kWorldActorPoseDatagramMax =

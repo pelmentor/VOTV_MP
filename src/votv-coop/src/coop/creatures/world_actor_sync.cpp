@@ -446,6 +446,9 @@ void TickPoseStream() {
             float hy = 0.f;
             if (coop::piramid_sync::ReadHostHeadingYaw(actor, hy))
                 snap.auxYaw = ue_wrap::NormalizeAxis(hy);
+            // v102 head axis: the head/searchlight idle look target (relLook). Zeros when
+            // unresolved -- the client apply treats all-zero as "no value, keep current".
+            coop::piramid_sync::ReadHostRelLook(actor, snap.auxX, snap.auxY, snap.auxZ);
         }
         batch.push_back(snap);
     }
@@ -813,12 +816,17 @@ void TickClientWorldActors() {
     for (coop::element::WorldActor* el : elems) {
         if (!el || !el->IsMirror()) continue;
         el->Tick();
-        // v100 auxYaw consumer: the piramid's visible heading lives in its ArrowComponents, not
-        // the actor rotation the generic drive writes -- hand the interp'd value to the class lane.
+        // v100 auxYaw + v102 auxVec consumers: the piramid's visible heading lives in its
+        // ArrowComponents and its head look target in relLook -- neither is the actor
+        // transform the generic drive writes; hand the interp'd/latest values to the lane.
         if (el->HasPose() && el->GetTypeName() == "piramid2_C") {
             void* actor = el->GetActor();
-            if (actor && R::IsLiveByIndex(actor, el->GetInternalIdx()))
+            if (actor && R::IsLiveByIndex(actor, el->GetInternalIdx())) {
                 coop::piramid_sync::ApplyMirrorHeadingYaw(actor, el->CurrentAuxYaw());
+                float ax = 0.f, ay = 0.f, az = 0.f;
+                el->CurrentAuxVec(ax, ay, az);
+                coop::piramid_sync::ApplyMirrorRelLook(actor, ax, ay, az);
+            }
         }
     }
 }

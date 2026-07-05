@@ -10,13 +10,15 @@
 // was the first); a shared "brainy event actor" helper gets extracted when a third lane
 // proves the common shape ([[feedback-fix-then-generalize-mirror-identity]]).
 //
-//  - CLIENT brain suppression: PRE-cancel the mirror's three STATE-WRITING timer handlers
-//    (seeWisps / checkIfReached / randLoc -- every walkTo caller). ReceiveTick stays ALIVE
-//    (deliberate divergence from the design doc's tick-off sketch, per RE section 5: the
-//    per-tick gather-beam params, head look-at and hover-Z smoothing all live in the tick
-//    and are pure derivations of mirrored state; march/turn are structurally zero because
-//    isWalking/multiplyWalk can never latch once the walkTo callers are cancelled).
-//    changeLook + the 30 s ping stay alive too -- per-viewer cosmetics by RE verdict.
+//  - CLIENT brain suppression: PRE-cancel the mirror's FOUR STATE-WRITING timer handlers
+//    (seeWisps / checkIfReached / randLoc -- every walkTo caller -- plus changeLook, the
+//    1 Hz RANDOM head-wander re-roll; v102 reclassified it from "per-viewer cosmetic" to a
+//    streamed axis after the user saw the heads/searchlight diverge live 2026-07-05).
+//    ReceiveTick stays ALIVE (deliberate divergence from the design doc's tick-off sketch,
+//    per RE section 5: the per-tick gather-beam params, head look-at and hover-Z smoothing
+//    all live in the tick and are pure derivations of mirrored state; march/turn are
+//    structurally zero because isWalking/multiplyWalk can never latch once the walkTo
+//    callers are cancelled). The 30 s ping stays alive -- per-viewer cosmetic by RE verdict.
 //  - HOST gather detect: POST observer on checkIfReached (timer-fired -> ProcessEvent-
 //    VISIBLE) edge-detects `gathering` false->true and relays PyramidGather{pyramidEid,
 //    wispEid} (WorldActor eid + Npc eid -- the two lanes' own identities).
@@ -80,6 +82,19 @@ bool ReadHostHeadingYaw(void* actor, float& outYaw);
 // ArrowComponents -- the exact state the host's Turning step maintains. Called by
 // world_actor_sync's client drive after each pose apply for a piramid2_C mirror.
 void ApplyMirrorHeadingYaw(void* actor, float yaw);
+
+// HOST pose augmentation (v102 auxVec): read the actor's `relLook` -- the head/searchlight's
+// idle look TARGET (relative frame), natively re-rolled at 1 Hz by the RANDOM changeLook
+// timer. Returns false pre-arm / on an offset miss (caller streams zeros; client keeps its
+// last target).
+bool ReadHostRelLook(void* actor, float& outX, float& outY, float& outZ);
+
+// CLIENT head drive (the auxVec consumer): write the streamed relLook onto the pyramid
+// mirror; its ALIVE native tick then eases the lookat component toward it (VInterpTo speed
+// 1.0 -- the same playout the host runs). The mirror's own changeLook re-roll is PRE-
+// cancelled, so this is the only writer. relLook is a plain BP var (the native writer is a
+// simple assignment -- no setter side effects), so a raw write is the faithful mirror.
+void ApplyMirrorRelLook(void* actor, float x, float y, float z);
 
 // Probe/diagnostic accessors (autotest_piramidforce; thread-safe atomics).
 bool DebugHooksArmed();

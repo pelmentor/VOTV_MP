@@ -56,6 +56,10 @@ public:
     // Consumed by class lanes (piramid_sync writes it to the heading ArrowComponents); the
     // generic ApplyToEngine ignores it. Valid once a pose arrived (hasPose()).
     float CurrentAuxYaw() const { return curAuxYaw_; }
+    // v102: the latest class-specific auxiliary TARGET vector (WorldActorPoseSnapshot.auxX/Y/Z;
+    // piramid2_C = relLook, the head's look target). NOT interpolated -- it is a target the
+    // mirror's own native easing consumes, so the latest wire value IS the truth.
+    void CurrentAuxVec(float& x, float& y, float& z) const { x = auxX_; y = auxY_; z = auxZ_; }
     bool  HasPose() const { return hasPose_; }
 
 private:
@@ -78,6 +82,7 @@ private:
     float            curAuxYaw_    = 0.f;  // v100 class-specific heading (see CurrentAuxYaw)
     float            targetAuxYaw_ = 0.f;
     float            errorAuxYaw_  = 0.f;
+    float            auxX_ = 0.f, auxY_ = 0.f, auxZ_ = 0.f;  // v102 aux target vec (latest wire value)
     coop::LerpWindow window_;          // shared interp timing (same one RemotePlayer / Npc own)
     bool             hasPose_ = false; // first packet snaps
     bool             dirty_   = true;  // unapplied change to push to the engine

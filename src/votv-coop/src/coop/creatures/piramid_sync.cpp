@@ -68,6 +68,7 @@ std::atomic<bool> g_armedAtomic{false};
 void* g_fnSeeWisps = nullptr;
 void* g_fnCheckIfReached = nullptr;
 void* g_fnRandLoc = nullptr;
+void* g_fnChangeLook = nullptr;  // v102: the 1 Hz RANDOM head-wander re-roll (mirror-suppressed)
 int32_t g_offWispTarget = -1;
 int32_t g_isWalkingOff = -1;
 uint8_t g_isWalkingMask = 0;
@@ -83,6 +84,7 @@ uint8_t g_gatheringMask = 0;
 // so velocity direction == heading BY CONSTRUCTION. No wire change.
 int32_t g_offMovementVector = -1;
 int32_t g_offArrow = -1;
+int32_t g_offRelLook = -1;  // v102 head axis: `relLook` FVector (the lookat VInterpTo idle target)
 
 // TLS allow slot for the client gather replay: our own re-dispatch of checkIfReached must
 // pass the brain-suppress interceptor (the g_incoming* bypass shape, thread-local because
@@ -227,6 +229,7 @@ void TryArmHooks() {
     g_fnSeeWisps = R::FindFunction(cls, L"seeWisps");
     g_fnCheckIfReached = R::FindFunction(cls, L"checkIfReached");
     g_fnRandLoc = R::FindFunction(cls, L"randLoc");
+    g_fnChangeLook = R::FindFunction(cls, L"changeLook");
     g_offWispTarget = R::FindPropertyOffset(cls, L"wispTarget");
     // Facing axis (auxiliary -- a miss disables only the heading drive, not the lane): the two
     // heading ArrowComponents the host's Turning step rotates (RE @0x330/@0x338).
@@ -235,14 +238,21 @@ void TryArmHooks() {
     if (g_offMovementVector < 0)
         UE_LOGW("piramid-brain: movementVector offset unresolved -- client mirror facing will stay "
                 "at spawn heading (name drift?)");
+    // v102 head axis (auxiliary like the facing pair -- a miss disables only the head stream):
+    g_offRelLook = R::FindPropertyOffset(cls, L"relLook");
+    if (g_offRelLook < 0)
+        UE_LOGW("piramid-brain: relLook offset unresolved -- the mirror head keeps its own "
+                "wander (name drift?)");
     const bool boolsOk =
         R::FindBoolProperty(cls, L"isWalking", g_isWalkingOff, g_isWalkingMask) &&
         R::FindBoolProperty(cls, L"gathering", g_gatheringOff, g_gatheringMask);
-    if (!g_fnSeeWisps || !g_fnCheckIfReached || !g_fnRandLoc || g_offWispTarget < 0 || !boolsOk) {
+    if (!g_fnSeeWisps || !g_fnCheckIfReached || !g_fnRandLoc || !g_fnChangeLook ||
+        g_offWispTarget < 0 || !boolsOk) {
         g_armFailedLatched = true;
         UE_LOGE("piramid-brain: member resolve FAILED (seeWisps=%p checkIfReached=%p randLoc=%p "
-                "wispTarget=%d bools=%d) -- lane DISABLED for process (name drift?)",
-                g_fnSeeWisps, g_fnCheckIfReached, g_fnRandLoc, g_offWispTarget, boolsOk ? 1 : 0);
+                "changeLook=%p wispTarget=%d bools=%d) -- lane DISABLED for process (name drift?)",
+                g_fnSeeWisps, g_fnCheckIfReached, g_fnRandLoc, g_fnChangeLook, g_offWispTarget,
+                boolsOk ? 1 : 0);
         return;
     }
     // Register-all-or-disable: a partial set would half-suppress the mirror brain (worse than
@@ -250,21 +260,27 @@ void TryArmHooks() {
     const bool i1 = GT::RegisterInterceptor(g_fnSeeWisps, &BrainSuppress_Interceptor);
     const bool i2 = i1 && GT::RegisterInterceptor(g_fnCheckIfReached, &BrainSuppress_Interceptor);
     const bool i3 = i2 && GT::RegisterInterceptor(g_fnRandLoc, &BrainSuppress_Interceptor);
-    const bool o1 = i3 && GT::RegisterPostObserver(g_fnCheckIfReached, &CheckIfReached_POST);
+    // v102: changeLook joins the suppressed set -- its 1 Hz RANDOM relLook re-roll is the head
+    // divergence; the streamed auxVec (host relLook) is the one writer on a mirror.
+    const bool i4 = i3 && GT::RegisterInterceptor(g_fnChangeLook, &BrainSuppress_Interceptor);
+    const bool o1 = i4 && GT::RegisterPostObserver(g_fnCheckIfReached, &CheckIfReached_POST);
     if (!o1) {
         if (i1) GT::UnregisterInterceptor(g_fnSeeWisps, &BrainSuppress_Interceptor);
         if (i2) GT::UnregisterInterceptor(g_fnCheckIfReached, &BrainSuppress_Interceptor);
         if (i3) GT::UnregisterInterceptor(g_fnRandLoc, &BrainSuppress_Interceptor);
+        if (i4) GT::UnregisterInterceptor(g_fnChangeLook, &BrainSuppress_Interceptor);
         g_armFailedLatched = true;
-        UE_LOGE("piramid-brain: hook table FULL (interceptors %d/%d/%d, observer %d) -- lane "
-                "DISABLED for process + rolled back", i1, i2, i3, o1);
+        UE_LOGE("piramid-brain: hook table FULL (interceptors %d/%d/%d/%d, observer %d) -- lane "
+                "DISABLED for process + rolled back", i1, i2, i3, i4, o1);
         return;
     }
     g_armed = true;
     g_armedAtomic.store(true, std::memory_order_release);
-    UE_LOGI("piramid-brain: armed -- 3 brain interceptors (seeWisps/checkIfReached/randLoc) + "
-            "checkIfReached POST (gather edge); wispTarget@%d isWalking@%d/%02x gathering@%d/%02x",
-            g_offWispTarget, g_isWalkingOff, g_isWalkingMask, g_gatheringOff, g_gatheringMask);
+    UE_LOGI("piramid-brain: armed -- 4 brain interceptors (seeWisps/checkIfReached/randLoc/"
+            "changeLook) + checkIfReached POST (gather edge); wispTarget@%d isWalking@%d/%02x "
+            "gathering@%d/%02x relLook@%d",
+            g_offWispTarget, g_isWalkingOff, g_isWalkingMask, g_gatheringOff, g_gatheringMask,
+            g_offRelLook);
 }
 
 // ---- client mirror upkeep --------------------------------------------------------------------
@@ -431,6 +447,25 @@ void ApplyMirrorHeadingYaw(void* actor, float yaw) {
         void* ar = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(actor) + g_offArrow);
         if (ar) E::SetComponentWorldRotation(ar, rot);
     }
+}
+
+bool ReadHostRelLook(void* actor, float& outX, float& outY, float& outZ) {
+    if (!actor || !g_armedAtomic.load(std::memory_order_acquire) || g_offRelLook < 0)
+        return false;
+    const float* v = reinterpret_cast<const float*>(
+        reinterpret_cast<const uint8_t*>(actor) + g_offRelLook);
+    outX = v[0]; outY = v[1]; outZ = v[2];
+    return true;
+}
+
+void ApplyMirrorRelLook(void* actor, float x, float y, float z) {
+    if (!actor || !g_armedAtomic.load(std::memory_order_acquire) || g_offRelLook < 0)
+        return;
+    // All-zero = the host stream had no value (pre-arm / offset miss on the host side) --
+    // keep the mirror's current target rather than yanking the head to the origin.
+    if (x == 0.f && y == 0.f && z == 0.f) return;
+    float* v = reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(actor) + g_offRelLook);
+    v[0] = x; v[1] = y; v[2] = z;
 }
 
 void QueueConnectBroadcastForSlot(int slot) {
