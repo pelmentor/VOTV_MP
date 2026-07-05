@@ -343,8 +343,20 @@ void TryReplayPendingGather() {
         return;
     }
     g_replayCount.fetch_add(1, std::memory_order_relaxed);
-    UE_LOGI("piramid-gather[client]: replay OK -- native gather running on mirror "
-            "(pyramidEid=%u wispEid=%u dist=%.0f attempts=%d)",
+    // The SUCK is the WISP's own tick code: killerwisp.gather() (which the native branch we
+    // just re-dispatched called on THIS mirror wisp) latches gathered=true + MOVE_None and
+    // snapshots the mesh start point; the rise itself is the wisp ReceiveTick's gathered
+    // branch -- Mesh->K2_SetWorldLocation(VLerp(start, (piram2.p_L+p_R)/2, piram2.suc)) +
+    // the center shrink [killerwisp uber @445-451/@409-411]. npc_mirror parks every
+    // non-wisp_C NPC mirror tick-OFF, so without this the client wisp stays GROUNDED and
+    // the pyramid's beams (tied to its center) stay long (user live 2026-07-05). Re-enabling
+    // the actor tick here is safe: with gathered=true the hunt AI is unreachable (the uber's
+    // tryGrab|grab|killed|gathered gate), CMC is MOVE_None, and every reachable branch is a
+    // pure derivation of mirrored state -- the same principle as the pyramid mirror's own
+    // alive ReceiveTick. The wisp dies seconds later at the montage's del notify.
+    E::SetActorTickEnabled(wisp, true);
+    UE_LOGI("piramid-gather[client]: replay OK -- native gather running on mirror; wisp mirror "
+            "tick ENABLED for the gathered rise (pyramidEid=%u wispEid=%u dist=%.0f attempts=%d)",
             g_pending.pyramidEid, g_pending.wispEid, g_pending.lastDist, g_pending.attempts);
     g_pending.active = false;
 }
