@@ -171,7 +171,18 @@ snapshot; NPC: interceptor / ex-spawn / connect-snapshot), applied at both
 receivers' spawn transforms (WA OnWorldActorSpawn; NPC SpawnFreshNpcMirror, +3
 defaulted params — adopt paths bind existing actors, unit is correct there);
 SanitizeWireScaleAxis at the trust boundary (scale-0 wire = invisible actor).
-Enroll/materialize log lines now print scale=(...) — the re-run assert)**.
+Enroll/materialize log lines now print scale=(...) — the re-run assert)** →
+**`75BD579DC792E7F7` (2026-07-05 ~14:40, wire v99 — ТЕКУЩИЙ: the FACING fix.
+Scale verdict live-PASSED (user: «пирамида идёт и у клиента»), remaining defect =
+facing. Root per RE + the WA-TRACE yaw=0.0 evidence: the actor root NEVER yaws —
+the visible heading is the movementVector/Arrow ArrowComponents' world rotation
+(host Turning tick step RInterpTo's them; the AnimBP orients the body via its
+piramid2 back-ref), and the mirror's suppressed brain never turns them. Fix in
+piramid_sync (no wire change): client derives heading from streamed-position XY
+deltas — velocity direction == heading by construction of the native march —
+eases it at the native full-walk turn rate (1.0), holds it while standing (the
+native multiplyWalk>0 gate), and writes BOTH ArrowComponents' world rotation
+every tick. Aux-latched: an offset miss disables only the heading drive)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -179,7 +190,23 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~14:00 (DLL `012EBD5A0D31232A` — ТЕКУЩИЙ, wire v99)
+## 2026-07-05 ~14:40 (DLL `75BD579DC792E7F7` — ТЕКУЩИЙ, wire v99)
+
+### 0s-FACING. ПИРАМИДА СМОТРИТ НЕ ТУДА — heading-драйв зашит
+Твой вердикт 0s-SCALE: пирамида у клиента ИДЁТ (scale-фикс подтверждён), но смотрит не в
+сторону движения. Корень (RE + трасса yaw=0.0): root пирамиды никогда не вращается — видимый
+разворот тела = world-rotation компонентов movementVector/Arrow, которые у клиента никто не
+вертел (мозг подавлен). FIX: клиент выводит heading из дельт стримленной позиции (направление
+движения == heading по построению нативного марша) и каждый тик пишет его в оба компонента —
+ровно то состояние, что держит хостовый Turning-степ; стоя — держит последний heading (как
+натив). Провод не менялся (v99 тот же).
+
+ПРОГОН (те же 2 минуты): хост+клиент → F1 → EVENTS → piramid → NOW! → 60-90 с.
+Ожидание ВИЗУАЛ: пирамида у клиента смотрит ТУДА, КУДА ИДЁТ (в пределах пары секунд
+доворота после смены направления — нативная скорость поворота медленная, у хоста так же);
+при остановке (gather) — держит направление. Размер/позиция — как в 0s-SCALE.
+
+## 2026-07-05 ~14:00 (DLL `012EBD5A0D31232A` — superseded by `75BD579DC792E7F7`; SCALE подтверждён твоим прогоном — «пирамида идёт и у клиента»; facing — раздел 0s-FACING выше)
 
 ### 0s-SCALE. ПИРАМИДА «ДАЛЕКО И МАЛЕНЬКАЯ» — корень найден трассой, SCALE зашит в провод
 Твоя трасса 11:25 доказала: позиции ЖИВЫ (хост и клиент расходятся на ~100 юнитов —
