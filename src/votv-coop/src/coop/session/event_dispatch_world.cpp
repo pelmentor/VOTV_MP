@@ -9,6 +9,7 @@
 #include "coop/element/registry.h"
 
 #include "coop/comms/chat_sync.h"
+#include "coop/world/alarm_sync.h"
 #include "coop/world/event_active_sync.h"
 #include "coop/world/event_cue_sync.h"
 #include "coop/world/event_fire_sync.h"
@@ -146,6 +147,23 @@ bool HandleWorldEvent(net::Session& session,
         net::EventSnapshotPayload sp{};
         std::memcpy(&sp, msg.payload, sizeof(sp));
         coop::event_active_sync::OnReliable(sp);
+        break;
+    }
+    case net::ReliableKind::AlarmState: {
+        // v101: the base radar alarm shared-world toggle (docs/events/alarm.md). BOTH
+        // directions by design -- host->all is the canonical state, client->host is a local
+        // transition request (the client's own scan/stop-press); role validation lives in
+        // alarm_sync::OnReliable (a client drops non-host senders there). Not relayed by the
+        // transport: the host's reaction to a client's request is its own poll-driven
+        // broadcast, never a forward of the client packet.
+        if (msg.payloadLen < sizeof(net::AlarmStatePayload)) {
+            UE_LOGW("event_feed: AlarmState payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::AlarmStatePayload));
+            break;
+        }
+        net::AlarmStatePayload ap{};
+        std::memcpy(&ap, msg.payload, sizeof(ap));
+        coop::alarm_sync::OnReliable(ap, msg.senderPeerSlot);
         break;
     }
     case net::ReliableKind::InventoryPickup: {

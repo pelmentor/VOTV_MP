@@ -131,6 +131,11 @@ void SpawnEnvGatedTests(coop::net::Role role) {
     // join a client mid-shower and prove the event_cue join re-send (exactly one replay).
     SpawnIf("VOTVCOOP_RUN_CUEFORCE_TEST", "starRain cue-force driver", &CueForceTestThread, role);
 
+    // Base radar alarm lane e2e (v101): host DevForces runTrigger(1) -> wait -> (0); the
+    // alarm_sync poll must broadcast both edges and the client must log its own native
+    // replay applies (docs/events/alarm.md section 5).
+    SpawnIf("VOTVCOOP_RUN_ALARMFORCE_TEST", "alarm lane e2e driver", &AlarmForceTestThread, role);
+
     // Piramid mirror-lane e2e: host ForceNow()s the piramid event (native spawner chain -> WA
     // mirror + npc wisps), asserts the v97 lane arms, then baits a REAL gather by re-pinning
     // the wisps around the walking pyramid; VERDICT = the PyramidGather relay firing.

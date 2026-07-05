@@ -269,6 +269,7 @@ add_library(votv-coop SHARED
     src/coop/world/event_cue_sync.cpp
     src/coop/world/event_fire_sync.cpp
     src/coop/world/event_active_sync.cpp
+    src/coop/world/alarm_sync.cpp
     src/coop/interactables/window_sync.cpp
     src/coop/interactables/grime_sync.cpp
     src/coop/session/player_handshake.cpp
@@ -431,6 +432,7 @@ add_library(votv-coop SHARED
     src/harness/autotest_eventfire.cpp
     src/harness/autotest_eventforce.cpp
     src/harness/autotest_cueforce.cpp
+    src/harness/autotest_alarmforce.cpp
     src/harness/autotest_piramidforce.cpp
     src/harness/autotest_wisplane.cpp
     src/harness/autotest_kwisp_probe.cpp

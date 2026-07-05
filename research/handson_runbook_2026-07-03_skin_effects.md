@@ -195,7 +195,21 @@ every other class: == actor yaw), the WorldActor element interps auxYaw through
 the same LerpWindow as the other angles, and the client drive hands the interp'd
 value to piramid_sync::ApplyMirrorHeadingYaw (both ArrowComponents) right after
 each pose apply. The delta-derivation (DriveMirrorHeadings + MirrorHeading map)
-is GONE per RULE 2. WA-TRACE host-read/client-apply lines now print aux=)**.
+is GONE per RULE 2. WA-TRACE host-read/client-apply lines now print aux=)**
+→ superseded by `32AC2EC6585809C4`.
+
+**`32AC2EC6585809C4` (2026-07-05 ~18:45, wire v100→v101 — ТЕКУЩИЙ: the ALARM lane.
+trigger_alarm_C.active as a shared-world toggle (docs/events/alarm.md): 1 Hz active-bit
+poll BOTH peers (runTrigger is EX_VirtualFunction — PE-invisible, so no hook), host
+broadcasts transitions (AlarmState=87), client forwards LOCAL ones (its own radar scan /
+"b/Stop alarm" press), apply = reflected runTrigger = the full native fanout (klaxon +
+alarmLamp beacons + basement grate + ceiling solar flicker + setEvent registry).
+Join answer: unconditional connect snapshot — a mid-alarm joiner starts its klaxon on
+arrival; the "unmapped trigger_alarm_C WARN" joiner hole closed via kLaneOwnedClasses;
+a wire state landing before the client's trigger resolves is QUEUED + Tick-drained,
+never dropped (the snapshot-before-state-ready class). + autotest_alarmforce (env
+VOTVCOOP_RUN_ALARMFORCE_TEST) e2e driver. v101 rejects v100 peers — ОБЕ копии обновлены
+deploy-all'ом, 4/4 hash-verified)**.
 Late-eve autonomy
 ("Go next"): baseline smoke PASS; events feature verified e2e (`eventforce_test: VERDICT
 PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY runEvent
@@ -203,9 +217,27 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-05 ~15:20 (DLL `B079A094E0D6B865` — ТЕКУЩИЙ, wire v100)
+## 2026-07-05 ~18:45 (DLL `32AC2EC6585809C4` — ТЕКУЩИЙ, wire v101)
+
+### 0u-ALARM. Базовая сирена радара — новый лейн (жди e2e-отмашки или проверь руками)
+Сирена (klaxon + красные маячки + мигание потолочных ламп + решётка подвала) теперь
+шарится: у любого пира включилась — включится у всех; «b/Stop alarm» на радар-панели
+ЛЮБОГО пира глушит её всем. Джойнер во время активной сирены получает её при входе.
+
+РУЧНОЙ ПРОГОН (~3 мин, нужен установленный alarm-модуль в radar panel):
+1. Хост+клиент в мире. Дождись/спровоцируй сирену (важный объект на радаре) ИЛИ попроси
+   меня прогнать автономный e2e (VOTVCOOP_RUN_ALARMFORCE_TEST — он сам дергает нативный
+   runTrigger, путь тот же).
+2. Ожидание: сирена ЗВУЧИТ у обоих + маячки крутятся у обоих (~1 с рассинхрон края — ок);
+   «Stop alarm» на любом из двух — глохнет у обоих.
+3. Лог-ассерт: у передающего `alarm_sync: host broadcast active=1` (или
+   `client local transition active=1 -> host`), у принимающего
+   `alarm_sync: applied active=1 (native runTrigger replay)`; потом та же пара с 0.
+4. MID-JOIN: при живой сирене подключи клиента — хост
+   `alarm_sync: connect-snapshot -- sent active=1 to slot 1`, клиент applied + звук.
 
 ### 0s-FACING2. HEADING ТЕПЕРЬ СТРИМИТСЯ С ХОСТА (истина вместо деривации)
+(вердикт всё ещё нужен; DLL сменилась на `32AC2EC6585809C4` — v101 содержит v100 как есть)
 Твой вердикт 0s-FACING: работает, но «сбивается иногда» и лёгкий рассинхрон направления.
 Причина принципиальная: натив доворачивает heading до 10 секунд ПОСЛЕ остановки (плавное
 гашение mov-таймлайна + RInterpTo к цели) — из дельт позиции это невидимо, плюс дельты сами

@@ -283,6 +283,14 @@ DWORD WINAPI EventForceTestThread(LPVOID arg);
 void RunAutonomousCueForceTest();
 DWORD WINAPI CueForceTestThread(LPVOID arg);
 
+// Base radar alarm lane e2e driver (2026-07-05, harness/autotest_alarmforce.cpp). HOST-ONLY:
+// after a 55 s client settle, DevForce runTrigger(1) then (0) on the native trigger -- the
+// v101 alarm_sync poll must detect both edges and broadcast; the client-side assert is its
+// own per-axis-discriminating "applied active=N (native runTrigger replay)" lines. Gated by
+// env VOTVCOOP_RUN_ALARMFORCE_TEST=1.
+void RunAutonomousAlarmForceTest();
+DWORD WINAPI AlarmForceTestThread(LPVOID arg);
+
 // Wisp mirror-lane e2e smoke (2026-07-03, harness/autotest_wisplane.cpp). HOST-ONLY: ForceNow
 // the wisps event (swarm spawns ~32x wisp_C via EX_CallMath -> the Func-thunk catch must enroll +
 // mirror each), then forces midday sun so the landed wisps self-destroy PE-invisibly -> the

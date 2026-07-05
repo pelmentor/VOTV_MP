@@ -83,6 +83,7 @@
 #include "coop/props/remote_prop.h"
 #include "coop/props/remote_prop_spawn.h"
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
+#include "coop/world/alarm_sync.h"         // v101 base radar alarm shared-world toggle (docs/events/alarm.md)
 #include "coop/world/event_active_sync.h"  // join-during-event Phase 0: native activeEvents registry probe (docs/COOP_EVENT_JOIN.md)
 #include "coop/world/weather_sync.h"
 
@@ -113,6 +114,7 @@ void Install(coop::net::Session& session) {
     coop::event_cue_sync::Install(&session); // v79 HOST-AUTH cosmetic emitter-cue mirror (B1: starfall etc. -- host detects PSC, client replays)
     coop::event_fire_sync::Install(&session); // v95 HOST-AUTH scheduled-event replay (passEvents growth poll -> EventFire; client suppress + policy replay)
     coop::event_active_sync::Install(&session); // join-during-event Phase 0 (probe): host 1 Hz activeEvents_senders membership diff -> BEGIN/END edge log
+    coop::alarm_sync::Install(&session);     // v101 base radar alarm shared-world toggle (1 Hz active poll both roles; docs/events/alarm.md)
     coop::inventory_pickup_sync::Install(&session);  // v58 inventory-collect blip (PlaySound2D observer)
     coop::chat_sync::Install(&session);      // v60 T-chat (the ui/chat_input send path)
     coop::local_body::Install(&session);     // v93 skins: local first-person body + SkinChange announce
@@ -246,6 +248,9 @@ void ConnectReplayForSlot(int slot) {
     // join-during-event Phase 1 (v98): one EventSnapshot per in-flight registry entry -- the
     // joiner replays replay-safe rows with the active-override (COOP_EVENT_JOIN.md 3.2).
     coop::event_active_sync::SendJoinSnapshotForSlot(slot);
+    // alarm lane late-join answer (COOP_EVENT_JOIN.md 3.4): the CURRENT alarm state,
+    // unconditionally -- a mid-alarm joiner starts its klaxon on arrival (v101).
+    coop::alarm_sync::QueueConnectBroadcastForSlot(slot);
     // piramid lane late-join answer (COOP_EVENT_JOIN.md 3.4): re-send an in-flight gather
     // commit ToSlot. AFTER world_actor_sync/npc_sync queued their snapshots above (the joiner's
     // mirrors must exist for the replay's eid lookups; its 5 s retry window absorbs drain skew).
@@ -330,6 +335,7 @@ DisconnectStats DisconnectAll() {
     coop::event_cue_sync::OnDisconnect();    // v79 clear the cosmetic-cue poll snapshot
     coop::event_fire_sync::OnDisconnect();   // v95 restore the client scheduler (allEvents.Num) + drop poll baseline/queues
     coop::event_active_sync::OnDisconnect(); // join-during-event Phase 0: drop tracked membership + cached gamemode
+    coop::alarm_sync::OnDisconnect();        // v101 drop the cached trigger + poll baseline
     coop::inventory_pickup_sync::OnDisconnect();
     coop::chat_sync::OnDisconnect();
     coop::turbine_sync::OnDisconnect();
@@ -380,6 +386,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_cue"}; coop::event_cue_sync::Tick(); }      // v79 cosmetic event cues (B1): host ~1 Hz new-PSC poll -> EventCue broadcast (host-only, no-op on client)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_fire"}; coop::event_fire_sync::Tick(); }     // v95 scheduled events: host 1 Hz passEvents growth poll -> EventFire / client allEvents suppress + replay drain
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:event_active"}; coop::event_active_sync::Tick(); }  // join-during-event Phase 0: host 1 Hz activeEvents_senders diff -> BEGIN/END edge log (host-only, no-op on client)
+    { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:alarm"}; coop::alarm_sync::Tick(); }               // v101 base radar alarm: 1 Hz active-bit poll BOTH roles (host broadcasts transitions; client forwards local ones)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:device_occupancy"}; coop::device_occupancy::Tick(); }    // v63 device occupancy: activeInterface edge poll + pending claim retry
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:console_state"}; coop::console_state_sync::Tick(); }  // v64 signal-catcher: host sky poll / client mirror sweep / desk + dish owner streams
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:signal_catch"}; coop::signal_catch_sync::Tick(); }   // v70: catch/cleared detectors (1 Hz) + the joiner's pending download adopt

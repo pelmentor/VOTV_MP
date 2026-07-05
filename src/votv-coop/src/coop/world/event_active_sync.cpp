@@ -158,6 +158,19 @@ const char* RowForClass(const std::string& className) {
     return nullptr;
 }
 
+// Registrants whose state a dedicated LANE snapshots at the same join edge -- the EventSnapshot
+// for them would only ship an unmapped-row WARN to every joiner. Skipped with an INFO so the
+// WARN stays meaningful as the Phase-2b fill signal for genuinely uncovered classes.
+struct LaneOwned { const char* className; const char* lane; };
+const LaneOwned kLaneOwnedClasses[] = {
+    { "trigger_alarm_C", "alarm_sync" },  // v101 -- docs/events/alarm.md (state + join answer)
+};
+const char* LaneFor(const std::string& className) {
+    for (const auto& e : kLaneOwnedClasses)
+        if (className == e.className) return e.lane;
+    return nullptr;
+}
+
 std::string Narrow(const std::wstring& w) {
     std::string s;
     s.reserve(w.size());
@@ -246,6 +259,12 @@ void SendJoinSnapshotForSlot(int slot) {
     }
     const long long now = NowMs();
     for (const auto& [obj, e] : g_active) {
+        if (const char* lane = LaneFor(e.className)) {
+            UE_LOGI("event_active: join-edge slot=%d class=%s is LANE-OWNED (%s snapshots it) "
+                    "-- no EventSnapshot",
+                    slot, e.className.c_str(), lane);
+            continue;
+        }
         const char* row = RowForClass(e.className);
         const long long elapsed = (now - e.firstSeenMs) / 1000;
         coop::net::EventSnapshotPayload p{};  // zero-init -> both name[]s pre-NUL-bound

@@ -1,11 +1,12 @@
 # COOP_EVENT_JOIN — the join-during-event contract (Phase 1 AS-BUILT 2026-07-05)
 
 **Status: Phase 1 AS-BUILT, autonomous e2e PASS 2026-07-05 00:06** (EventSnapshot shipped
-at wire v98; the session wire is v100 as of 2026-07-05 — v99 +Scale3D and v100 +auxYaw
-changed OTHER payloads, this contract's are unchanged). Phase 2a (cue join re-send)
-AS-BUILT 2026-07-05, e2e PASS; Phase 2b (census fill) open-incremental — NEXT ROW =
-`trigger_alarm_C` (user 2026-07-05: alarm is an event needing the join answer; today an
-active alarm is INVISIBLE to a joiner — the known unmapped-WARN hole); Phase 3 DESIGN.
+at wire v98; the session wire is v101 as of 2026-07-05 — v99 +Scale3D / v100 +auxYaw /
+v101 +AlarmState changed or added OTHER payloads, this contract's are unchanged).
+Phase 2a (cue join re-send) AS-BUILT 2026-07-05, e2e PASS; Phase 2b (census fill)
+open-incremental — the `trigger_alarm_C` hole CLOSED 2026-07-05 at the LANE, not the map
+(v101 `alarm_sync` + the first kLaneOwnedClasses skip; docs/events/alarm.md, 3.4 alarm
+row); Phase 3 DESIGN.
 Bytecode ground truth — `research/findings/votv-active-events-registry-RE-2026-07-04.md`.
 This is the answer to the devs' gauntlet hard case (`docs/DEVS_GAUNTLET.md`): a player
 joins while the host is mid-event (pyramid et al.) and must converge to the same world.
@@ -138,7 +139,14 @@ re-sends an in-flight gather commit ToSlot at the join edge (reads CURRENT `gath
 `wispTarget` off the live pyramid — the lane-local answer, not an EventSnapshot field as
 this doc first sketched; a wisp already consumed = skip, the joiner misses only the beam
 tail; a wire wisp-destroy landing mid-replay-montage resolves to a pending-kill ref the
-native beam code None-checks) [AS-BUILT 2026-07-05, join-during-gather untested by hands-on].
+native beam code None-checks) [AS-BUILT 2026-07-05, join-during-gather untested by hands-on];
+alarm=**`alarm_sync::QueueConnectBroadcastForSlot` sends the CURRENT trigger_alarm_C.active
+unconditionally at the join edge (v101, docs/events/alarm.md); the joiner applies via a
+reflected runTrigger — full native fanout (klaxon+lamps+grate+setEvent), idempotent against
+a transferred save already carrying the state. trigger_alarm_C is also the first
+kLaneOwnedClasses entry: EventSnapshot SKIPS it with an INFO (the 07-05 "unmapped alarm
+logged LOUD" joiner hole closes at the lane, and the WARN stays meaningful for genuinely
+uncovered classes) [AS-BUILT 2026-07-05, e2e pending]**.
 
 ### 3.5 Phases
 

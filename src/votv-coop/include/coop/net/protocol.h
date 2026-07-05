@@ -694,7 +694,11 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 100; // v100: WorldActorPoseSnapshot +auxYaw (28->32) --
+inline constexpr uint16_t kProtocolVersion = 101; // v101: AlarmState=87 -- the base radar alarm as a
+                                                  // shared-world toggle lane (poll-based: runTrigger is
+                                                  // EX_VirtualFunction-invisible; docs/events/alarm.md)
+                                                  // + the late-join answer (mid-alarm joiner gets state).
+                                                  // v100: WorldActorPoseSnapshot +auxYaw (28->32) --
                                                   // the piramid's visible heading streams as part of
                                                   // its pose (delta-derivation live-refuted: native
                                                   // heading turns for up to 10 s after motion stops).
@@ -1928,6 +1932,17 @@ enum class ReliableKind : uint8_t {
                        //     world-ready edge, when the slot's send gate is already open; the
                        //     receiver-side eventer race is absorbed by event_fire_sync's pending
                        //     drain, same as EventFire.
+    AlarmState = 87,   // 2026-07-05 (v101): the base radar alarm active state -- a shared-world
+                       //     toggle (docs/events/alarm.md). BOTH directions: host->all on any
+                       //     observed transition of trigger_alarm_C.active (1 Hz poll -- runTrigger
+                       //     is EX_VirtualFunction, PE-INVISIBLE, so the lane polls the state field
+                       //     per the L2 device pattern) + host->joiner unconditionally at the
+                       //     world-ready edge (the late-join answer); client->host when the CLIENT's
+                       //     own radar scan / stop-press toggled its local trigger (host applies
+                       //     natively, its poll broadcasts the canonical fanout). Apply = reflected
+                       //     runTrigger(nullptr, active) -- the bytecode's own idempotency check
+                       //     (IntToBool(index)==active -> no-op) makes redundant applies free and
+                       //     breaks every echo loop. Payload: AlarmStatePayload (4 B).
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -2786,6 +2801,17 @@ struct EventSnapshotPayload {
 static_assert(sizeof(EventSnapshotPayload) == 98, "EventSnapshotPayload must be 98 bytes");
 static_assert(sizeof(EventSnapshotPayload) <= 256 - 20 - 8,
               "EventSnapshotPayload must fit in one reliable datagram");
+
+// v101: the base radar alarm active state (ReliableKind::AlarmState; docs/events/alarm.md).
+// Symmetric shared-world toggle: host->all on any observed trigger_alarm_C.active transition
+// (+ unconditionally to a joiner at the world-ready edge), client->host when the client's own
+// radar scan / stop-press toggled it locally. Receiver applies via a reflected runTrigger
+// (natively idempotent) -- see coop/world/alarm_sync.
+struct AlarmStatePayload {
+    uint8_t active;   // 1 -- 0/1, the desired trigger_alarm_C.active state
+    uint8_t pad[3];   // 3 -- zeroed
+};
+static_assert(sizeof(AlarmStatePayload) == 4, "AlarmStatePayload must be 4 bytes");
 
 // v64/v65: one chunk of a variable-length serialized blob. Shared by every
 // chunked-row kind (EmailAppend v64, SavedSignalAppend + CompData v65);
