@@ -1,9 +1,9 @@
 # COOP_EVENT_JOIN — the join-during-event contract (Phase 1 AS-BUILT 2026-07-05)
 
 **Status: Phase 1 AS-BUILT, autonomous e2e PASS 2026-07-05 00:06** (EventSnapshot shipped
-at wire v98; the session wire is v102 as of 2026-07-05 — v99 +Scale3D / v100 +auxYaw /
-v101 +AlarmState / v102 +auxVec changed or added OTHER payloads, this contract's are
-unchanged).
+at wire v98; the session wire is v104 as of 2026-07-05 late — v99 +Scale3D / v100 +auxYaw
+/ v101 +AlarmState / v102 +auxVec / v103 nick-color / v104 +auxTargetEid changed or added
+OTHER payloads, this contract's are unchanged).
 Phase 2a (cue join re-send) AS-BUILT 2026-07-05, e2e PASS; Phase 2b (census fill)
 open-incremental — the `trigger_alarm_C` hole CLOSED 2026-07-05 at the LANE, not the map
 (v101 `alarm_sync` + the first kLaneOwnedClasses skip; docs/events/alarm.md, 3.4 alarm
@@ -203,9 +203,12 @@ gaps OFF this bar one by one: missing spawn SCALE (v99 `419e3894` — mirror was
 + floating; walk then confirmed live), missing FACING (v100 auxYaw `75e5ab10`, user:
 «хороший результат»), the gather SUCK (`7ec1f666` — the wisp's rise is a MESH move in its
 own tick, which npc_mirror parked; user after a full event run: «засасывание зеркально
-100%» [V]), and the HEAD/searchlight wander (v102 auxVec `a255b70f` — relLook streamed,
-the mirror's 1 Hz RANDOM changeLook suppressed). Wire is now **v102**.
+100%» [V]), and the HEAD/searchlight wander in TWO rounds: v102 auxVec `a255b70f`
+(relLook streamed, the mirror's 1 Hz RANDOM changeLook suppressed — user: «маленько
+рассинхронится» remained) then v104 auxTargetEid `d0d3af1f` (the wispTarget IDENTITY
+streams per tick, so the mirror runs the native CHASE look-at branch during the
+walk-to-wisp phase — the residue's root). Wire is now **v104**.
 **The bar itself is still OPEN**: the TRUE mid-join run (client joins while the pyramid
 is already walking) has not happened since — that run, with correct
-size/motion/facing/head, is what closes Phase 1 verification (runbook 0y covers the head
-re-verdict; the mid-join scenario stays the acceptance case).
+size/motion/facing/head, is what closes Phase 1 verification (runbook 0y-v104 covers the
+head re-verdict; the mid-join scenario stays the acceptance case).
