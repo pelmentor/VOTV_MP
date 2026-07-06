@@ -40,5 +40,24 @@ Cross-cutting contracts stay where they are (link, don't restate):
 | Item (classes) | Doc | Pass |
 |---|---|---|
 | hook (`prop_hook_C` : prop_C → spawns `hook_C` : actor_save_C) | [hook.md](hook.md) | RE DONE 2026-07-06 (full static bytecode pass: prop_hook uber + hook uber + all named fns). Sync: DESIGN RATIFIED (phase-split authority, poll-diff transitions, `coop/items/` home — hook.md §3), NOT BUILT — build starts after 2-3 smart-item cases are doc'd (user 2026-07-06: collect cases first, then implement the pattern) |
-| rope (`rope_C`) — two-end sibling of the hook (PhysicsConstraint + ConstraintBroken handler, 4 fns) | (todo) | next candidate after hook ships |
+| nailgun (`prop_nailgun_C`/`prop_nail_C` : prop_C → `nailProjectile_C` : Actor → `nail_C` : actor_save_C) | [nailgun.md](nailgun.md) | RE DONE 2026-07-06. The pure commit-to-host case (no player-attached phase); attach fns are SELF-TRACING from transform = native host replay. Sync NOT BUILT |
+| wallbuilder (`prop_wallbuilder_C` : prop_C → `customWall_unfinished_C` : actor_save_C → `customWall_C`) + wallfixer | [wallbuilder.md](wallbuilder.md) | RE DONE 2026-07-06 (unfinished-wall uber = census only, read before building). Editing natively local (tick gated on local holder); commit = transform+shape+material. Sync NOT BUILT |
+| rope (`rope_C`) — two-end sibling of the hook (PhysicsConstraint + ConstraintBroken handler, 4 fns) | (todo) | after the first three ship |
 | variants census: `hook_Child`, `hook_flesh`, `prop_hook_erie` (assets exist in pak next to hook) | — | fold into hook.md when RE'd (likely `single=true` / cosmetic children) |
+
+## The pattern (3 cases in — the shared smart-item shape)
+
+All three deployed actors are **`actor_save_C`** children with **replay-friendly native
+entry points** (hook: attach_a/b `actorReplace...` params; nail: attach/nailNail
+self-trace from own transform; wall: spawn takes transform+2 ints). The split that
+repeats:
+
+1. **Owner-local, never synced**: previews, montages, inventory/ammo consumption,
+   anything gated on `getMainPlayer`/local holder (the game does this gating itself).
+2. **Commit intent → host** (small reliable message: transform + a couple of scalars):
+   any spawn/mutation of a persistent world actor. Host replays via the NATIVE fn.
+3. **Host → clients mirror** of the persistent actor (spawn + tiny state stream;
+   display-only — constraints/overlaps live host-side ONLY).
+4. **Late-join = host save**, free (actor_save_C persists natively).
+5. Hook's extra: a player-attached PHASE before commit (owner-simulated extension of
+   the player, like pose) — the only case needing a per-player stream.
