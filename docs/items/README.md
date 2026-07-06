@@ -45,7 +45,8 @@ Cross-cutting contracts stay where they are (link, don't restate):
 | rope (`prop_rope_C` : prop_C → **`rope_C` : hook_C**) | [rope.md](rope.md) | RE DONE 2026-07-06. rope_C IS a hook subclass (4-fn diff) — ships automatically with hook sync as a class ROW, no own lane |
 | grenade + pipebomb (`prop_grenade_C`/`prop_pipebomb_C` : prop_C → transient `explosion_C`) | [grenade.md](grenade.md) | RE DONE 2026-07-06. New axis: ARM = a mode on an existing host-owned prop (intent, not spawn) + one authoritative fuse clock + explosion replay event. explosion_C unread. Sync NOT BUILT |
 | fishing rod (`prop_fishingRod_C` : prop_C → transient `fishingRodString_C` : Actor) | [fishingrod.md](fishingrod.md) | RE DONE 2026-07-06. Hook's owner-phase twin (never anchors); new axis: loot RNG → host-rolled catch commit. String uber unread (roll site!). Sync NOT BUILT |
-| variants census: `hook_Child`, `hook_flesh`, `prop_hook_erie` (assets exist in pak next to hook) | — | fold into hook.md when RE'd (likely `single=true` / cosmetic children) |
+| physgun + gravity gun (`prop_physgun_C` : prop_C, `prop_physgun_soft_C` : physgun, `prop_gravgun_C` : prop_C) | [physgun.md](physgun.md) | RE DONE 2026-07-06. Physgun = grab/carry-at-range (rides the prop-lane rails: intents + host-side drive); freeze couples to hook's unfreeze; input-delegate self-binding must NEVER install on mirrors. gravgun = NO force code — a chrysalis that microwave-charges (250) into physgun_soft. Sync NOT BUILT |
+| variants census: `hook_Child`, `hook_flesh`, `prop_hook_erie`, `prop_physgun_s` (assets exist in pak) | — | fold into parent docs when RE'd |
 
 ## The pattern (6 cases in — the shared smart-item shape)
 
@@ -72,4 +73,10 @@ repeats:
    burst natively (impulse/damage host-side); clients get a cosmetic replay event.
 7. **Loot/RNG payouts** (fishing catch): host rolls (client RNG suppressed — same
    principle as events), client sends the trigger, prop lane delivers the result.
-8. **Subclasses are ROWS, not lanes** (rope_C : hook_C).
+8. **Subclasses are ROWS, not lanes** (rope_C : hook_C; physgun_soft : physgun).
+9. **Continuous manipulation of a host-owned body** (physgun drag, hook reel-on-prop,
+   ATV↔prop tow): the constraint/kinematic WRITES live host-side; the manipulating
+   player streams aim/intents up, the prop lane streams the resulting pose back.
+   User facts 2026-07-06: hook reel PULLS PROPS, and an anchored hook can tow a prop
+   behind the ATV with the hook in nobody's hand — host adoption must trigger the
+   moment EITHER end lands on a dynamic body, not only at release.

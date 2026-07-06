@@ -160,13 +160,24 @@ Ownership per lifecycle phase:
    persists in the host save natively (`getData` + attachKeys) and late-joiners get it
    from the save like any actor_save_C. Client's local instance is destroyed on commit
    (identity handoff, no dupe — the join-window/dup discipline applies).
-3. **Prop interactions must be host-side**: the unfreeze side effect and any constraint
-   end on a prop belong to the host instance. For a CLIENT climbing a hook planted in a
-   host prop: pull-on-player stays owner-local (harmless), but the reaction force on the
-   prop only exists where the authoritative constraint lives. V1 scope decision to make:
-   host re-plants a client's prop-anchored hook immediately (not just at release), OR
-   prop-anchored client hooks are transferred at attach_a time. Defer until the basic
-   geometry-anchored flow works.
+3. **Prop interactions must be host-side — and they are CORE, not edge** (user facts
+   2026-07-06, hands-on knowledge): (a) while player-hooked to a prop, REELING pulls
+   the PROP toward the player, not only the player toward the anchor — the reel is a
+   prop-physics mutation; (b) the canonical native use: hook one end to the ATV, the
+   other to a heavy prop, and the ATV TOWS the prop — in that state the hook is in
+   NOBODY's hand or inventory, it is pure world furniture linking two host-authoritative
+   dynamic bodies (the ATV rides atv_sync, the prop rides the prop lane). Both cases
+   mean the authoritative constraint MUST live on the host whenever EITHER end is a
+   dynamic body (prop/vehicle) — not just at attach_b release:
+   - attach_a into a prop → transfer/adopt host-side at THAT moment (isProp_A is the
+     trigger the bytecode already computes);
+   - player-hooked-to-prop reel: dist changes go up as intents; the host constraint
+     (B end = the player's puppet root, which the pose stream drives kinematically)
+     yanks the prop natively on the host; the owner's local pull-on-self physics stays
+     local (its result returns via the pose stream);
+   - ATV↔prop tow: both ends host-owned → fully native on host once the hook actor is
+     host-adopted; clients see ATV via atv_sync, prop via prop lane, hook mirror via
+     its display stream. Nothing extra to invent — the adoption timing is the design.
 
 **CRITICAL mirror rule**: a mirrored `hook_C` with a LIVE tick is catastrophic — its tick
 calls `getMainPlayer` and would (a) yank the VIEWER's own player toward someone else's
