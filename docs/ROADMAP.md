@@ -174,7 +174,11 @@ LAN (two-machine + same-box-two-instance both confirmed).
        SHIPPED** 2026-05-24 (PropGrab / PropPose-piggyback / PropRelease
        + throw impulse). See
        `research/findings/physics-object-pickup-coop-plan-2026-05-23.md`
-       and the Aprop lifecycle RE doc.
+       and the Aprop lifecycle RE doc. **HOTBAR hand item SHIPPED
+       2026-07-06 (v105 hand_item display axis** — player expression, out
+       of the prop pipeline; see COOP_SYNC_MAP; hands-on 0ab pending).
+       Smart-ITEM behavior sync (hook/nailgun/wallbuilder/...) = RE done,
+       docs/items/ pattern ratified, implementation queued.
 - ◐ 4.3 Entity manifest + per-entity state — IN PROGRESS, see live
        workstreams below.
 - ☐ 4.4 Cutscenes / scripted events — events RE done (~80 events,
