@@ -12,6 +12,7 @@
 #include "coop/world/email_sync.h"
 #include "coop/interactables/signal_catch_sync.h"
 #include "coop/interactables/signal_sync.h"
+#include "coop/player/hand_item.h"   // v105: hotbar hand-item display axis (connect replay)
 #include "coop/player/local_body.h"  // v93 skins: local first-person body owner
 #include "coop/player/nameplate.h"   // v94: plate-pref session wiring (Install)
 #include "coop/player/nick_color.h"  // v103 (12f): nick-color session wiring (Install)
@@ -247,6 +248,8 @@ void ConnectReplayForSlot(int slot) {
     }
     // T2-4: catch the new client up to EXISTING peers' current item state.
     coop::item_activate::ReplayPeerStatesToSlot(slot);
+    // v105: existing peers' hotbar HAND items -> joiner (display mirrors).
+    coop::hand_item::ReplayPeerStatesToSlot(slot);
     // join-during-event Phase 1 (v98): one EventSnapshot per in-flight registry entry -- the
     // joiner replays replay-safe rows with the active-override (COOP_EVENT_JOIN.md 3.2).
     coop::event_active_sync::SendJoinSnapshotForSlot(slot);

@@ -245,6 +245,7 @@ add_library(votv-coop SHARED
     src/coop/session/multiplayer_menu.cpp
     src/coop/player/nameplate.cpp
     src/coop/player/nick_color.cpp
+    src/coop/player/hand_item.cpp
     src/coop/comms/chat_feed.cpp
     src/coop/comms/chat_bubbles.cpp
     src/coop/session/event_feed.cpp

@@ -11,6 +11,7 @@
 #include "coop/net/session.h"
 #include "coop/player/local_body.h"
 #include "coop/player/nameplate.h"
+#include "coop/player/hand_item.h"  // v105: hand-item mirrors reset/slot-disconnect
 #include "coop/player/nick_color.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
@@ -248,6 +249,7 @@ void Reset() {
     for (auto& s : g_skinBySlot) s.clear();
     coop::nameplate::ResetSlots();  // v94: per-slot plate prefs back to visible
     coop::nick_color::ResetSlots();  // v103: per-slot nick colors back to default
+    coop::hand_item::Reset();        // v105: destroy hand-item display mirrors + states
     g_joinSentBySlot.fill(false);
     g_joinAnnouncedBySlot.fill(false);
 }
@@ -337,6 +339,7 @@ void OnSlotDisconnected(int slot) {
     coop::nameplate::OnSlotDisconnected(slot);  // v94: plate pref back to visible for a slot reuse
     coop::nick_color::OnSlotDisconnected(slot);  // v103: nick color back to default for a slot reuse
     coop::chat_bubbles::OnSlotDisconnected(slot);  // 12g: a reused slot must not inherit a bubble
+    coop::hand_item::OnSlotDisconnected(static_cast<uint8_t>(slot));  // v105: drop the hand mirror
 }
 
 const std::wstring& NicknameForSlot(int slot) {

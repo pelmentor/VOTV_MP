@@ -22,6 +22,7 @@
 #include "coop/session/subsystems.h"
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"  // K-6  // v75: OnSnapshotComplete (deferred-adoption ghost-sweep gate)
+#include "coop/player/hand_item.h"  // v105: hotbar hand-item display axis (HandItem router)
 #include "coop/player/player_damage.h"
 #include "coop/creatures/wisp_tear_mirror.h"  // v72 Killer Wisp: WispGrab/WispTear receivers
 #include "coop/session/player_handshake.h"
@@ -466,6 +467,12 @@ void Update(net::Session& session, void* localPlayer) {
             // v103 (12f): per-peer nick color pref -> coop::nick_color store (the
             // handler also does the host's rebroadcast).
             coop::player_handshake::HandleNickColorChange(session, msg);
+            break;
+        }
+        case net::ReliableKind::HandItem: {
+            // v105: the hotbar hand-item display state -> coop::hand_item store
+            // (the handler also does the host's rebroadcast; TickMirrors applies).
+            coop::hand_item::HandleHandItem(session, msg);
             break;
         }
         default: {

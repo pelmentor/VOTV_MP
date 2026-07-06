@@ -281,7 +281,15 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     // (our held copy is then key/fuzzy-matched + claimed -> the held-pose stream mirrors it, no dupe),
     // or the sweep destroys our copy if the host converted it away. HasLoadTailQuiesced flips true the
     // instant the sweep fires, so this gates ONLY the join window -- never steady-state gameplay.
-    if (!coop::join_membership_sweep::HasLoadTailQuiesced() &&
+    // CLIENT-ONLY (v105 root-fix companion, 2026-07-06): the divergence sweep is a CLIENT join
+    // mechanism -- on the HOST g_sweepFired never flips, so this gate held FOREVER and silenced
+    // every untracked keyed prop the host ever held (the never-mirrored-hotbar-hand log,
+    // 12:40:05 'grabbed PRE-QUIESCENCE' on a 40-minute-old host session). The host's world IS
+    // the reconciled authority by definition -- the un-adjudicated-local concept only exists on
+    // a joining client. Hand items themselves no longer reach here (coop/player/hand_item), but
+    // the express-if-unknown self-heal below must work for a host-grabbed world straggler.
+    if (s->role() == coop::net::Role::Client &&
+        !coop::join_membership_sweep::HasLoadTailQuiesced() &&
         coop::join_membership_sweep::IsInDivergenceUniverseUnclaimed(heldActor)) {
         UE_LOGI("trash_collect: held item %p cls='%ls' grabbed PRE-QUIESCENCE (join window not yet "
                 "reconciled) -- NOT expressing (host expresses its own / the sweep adjudicates ours; "

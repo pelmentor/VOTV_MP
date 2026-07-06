@@ -694,7 +694,19 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // host's own roll is restored to the -1 sentinel only DURING the accelerate phase --
 // a host nightmare wakes the house structurally: createDream wakeup()s before the
 // dream, the falling edge IS the early End). Module: coop/sleep_sync + ue_wrap/sleep.
-inline constexpr uint16_t kProtocolVersion = 104; // v104: WorldActorPoseSnapshot +auxTargetEid
+// v105 (2026-07-06): HAND-ITEM display axis (ReliableKind::HandItem = 89). The hotbar
+// hand item leaves the WORLD-prop pipeline entirely (RULE 2): updateHold respawns the
+// hand actor per quick-slot switch, so treating it as a world prop produced the
+// never-expressed host hand (PRE-QUIESCENCE gate never lifts on the host -> the client
+// dropped 60 Hz keyed poses, 'no local match' x1809, hands-on 2026-07-06 12:40) plus
+// physics-release litter on switch-away. Now: owner announces HandItem{class,name} on
+// change (reliable, ~1 msg per switch); peers keep a display-only mirror (physics off,
+// collision off, echo-suppressed) attached to the puppet; host stores per-slot states
+// + replays them in ConnectReplayForSlot. mainPlayer.holding_actor with an Aprop_C no
+// longer feeds the PropSpawn/PropPose path (the trash clump/pile carry -- the
+// non-Aprop_C holding_actor case -- stays on its lane untouched).
+inline constexpr uint16_t kProtocolVersion = 105; // v105: hand-item display axis (HandItem=89)
+// v104: WorldActorPoseSnapshot +auxTargetEid
                                                   // (44->48; batch cap 31->28) -- the piramid
                                                   // wispTarget IDENTITY streams with the pose, so
                                                   // the mirror's head/searchlight run the native
@@ -1984,6 +1996,19 @@ enum class ReliableKind : uint8_t {
                        //     a plain per-slot atomic store, engine-free pre-puppet (the
                        //     SkinChange load-window lesson). Slot resets to default on
                        //     disconnect (a slot reuse must not inherit the color).
+    HandItem = 89,     // 2026-07-06 (v105): the hotbar HAND-ITEM display state -- what a
+                       //     player's quick-slot hand currently shows. Payload:
+                       //     [u8 slot][u8 has][u8 clsLen][cls ascii][u8 nameLen][name ascii].
+                       //     Same trust shape as NickColorChange: CLIENT->HOST slot MUST
+                       //     equal senderPeerSlot (forgery guard), host stores
+                       //     (coop/player/hand_item) + REBROADCASTS originator-excluded;
+                       //     HOST->ALL with slot=0 for the host's own hand. Receivers keep a
+                       //     DISPLAY-ONLY mirror (physics/collision off, spawn/destroy echo
+                       //     suppressed) attached to the puppet root at the native hold
+                       //     offset -- the hand item is PLAYER EXPRESSION (MTA current-weapon
+                       //     shape), never a world entity. Connect replay: host re-sends all
+                       //     non-empty slots to a world-ready joiner. Empty-hand announces are
+                       //     debounced ~250 ms (updateHold's destroy+respawn null flicker).
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not

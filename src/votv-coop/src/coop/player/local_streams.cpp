@@ -12,6 +12,7 @@
 #include "coop/creatures/kerfur_entity.h"  // K-5: GetKerfurMirrorEidForActor (held-kerfur-prop eid fallback)
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
+#include "coop/player/hand_item.h"     // v105: the hotbar hand-item display axis (owner announce + mirrors)
 #include "coop/player/skin_effects.h"  // own-body step FX at the wire-pose stride
 #include "coop/props/trash_channel.h"   // docs/piles/08: CtxForEid -- the trash sync-time-context (carry stamp + trash-eid gate)
 #include "coop/props/prop_element_tracker.h"
@@ -239,6 +240,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
     // (Candidate A vs B); the [probe] below answers it from a real hands-on.
     ue_wrap::engine::MainPlayerGrabState gs{};
     void* heldActor = nullptr;
+    void* hotbarProp = nullptr;  // holding_actor when it is the HAND item (Aprop_C)
     if (ue_wrap::engine::ReadMainPlayerGrabState(local, gs)) {
         heldActor = gs.grabbingActor;
         // 2026-05-27: chipPile/clump pickup sets mainPlayer.holding_actor
@@ -246,11 +248,24 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         // PhysicsHandle). Fall back to holding_actor so the PropPose
         // stream covers them too -- gated by IsKeyedInteractable since
         // holding_actor can also point at non-prop carry targets.
-        if (!heldActor && gs.holdingActor && R::IsLive(gs.holdingActor) &&
+        // v105 (2026-07-06, RULE 2): an Aprop_C in holding_actor is the HOTBAR
+        // HAND ITEM -- player expression, NOT a world entity (updateHold
+        // respawns it per switch) -- and is routed to coop::hand_item instead
+        // of the world-prop pipeline (whose PRE-QUIESCENCE gate never lifts on
+        // the host: the never-mirrored-hand root, hands-on 12:40:05). Only the
+        // non-Aprop_C trash lineage (clump/pile morph carry) stays here.
+        if (gs.holdingActor && R::IsLive(gs.holdingActor) &&
             ue_wrap::prop::IsKeyedInteractable(gs.holdingActor)) {
-            heldActor = gs.holdingActor;
+            if (ue_wrap::prop::IsDescendantOfProp(gs.holdingActor))
+                hotbarProp = gs.holdingActor;
+            else if (!heldActor)
+                heldActor = gs.holdingActor;
         }
     }
+    // v105 hand-item axis: announce the hotbar hand on change + maintain the
+    // peers' display mirrors (both are cheap idle no-ops).
+    coop::hand_item::TickOwner(session, hotbarProp);
+    coop::hand_item::TickMirrors();
     // v76: the ATV is owned by coop::atv_sync (occupant-OR-grabber pose stream + AtvRelease), NOT the
     // held-prop pipeline -- exclude it so a grabbed ATV doesn't emit zero-key PropPose packets here
     // (it is not a keyed interactable: EnsureHeldItemBroadcast fails, so receivers would just drop
