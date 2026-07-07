@@ -179,6 +179,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/spawn_gate.cpp
     src/ue_wrap/ufunction_hook.cpp
     src/ue_wrap/engine.cpp
+    src/ue_wrap/engine_save.cpp
     src/ue_wrap/begin_equipment.cpp
     src/ue_wrap/save_capture.cpp
     src/ue_wrap/engine_audio.cpp

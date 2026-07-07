@@ -156,9 +156,18 @@ Each is a single-file extraction: pull a cohesive block into a new `.{h,cpp}` pa
 same folder, leave a call. Ordered by value (biggest catch-all first). Re-measure LOC before
 each (`wc -l`) — some may already be handled by Tier B.
 
+> **Live status:** **`engine_save.cpp` DONE** (commit pending). Extracted the save-load/GameMode/
+> campaign-cache/fresh-game/return-to-menu block (engine.cpp L168-621, 454 lines) into
+> `ue_wrap/engine_save.cpp` (484 LOC). Measured self-contained first (its file-private statics
+> don't leak out; it calls none of engine.cpp's other file-private helpers; its public fns are
+> declared in engine.h so callers are unaffected). **engine.cpp 1112 -> 657 LOC — now UNDER the
+> 800 soft cap**, so the further engine_world/engine_spawn splits are optional (cohesion, not
+> cap-driven). Byte-faithful move verified (deleted lines == moved lines, diff empty); built
+> Release clean; both TUs compile, dll links.
+
 | File | LOC | Extract | Into | Notes |
 |---|---|---|---|---|
-| `ue_wrap/engine.cpp` | 1112 | save-load/GameMode/main-menu block L168-617 (~330) | `engine_save.cpp` | biggest single concern, unrelated to actor primitives; engine.cpp is the residual catch-all (10 engine_*.cpp siblings already exist) |
+| `ue_wrap/engine.cpp` | 1112->657 | save/GameMode/menu block L168-621 (454) | `engine_save.cpp` (484) | **DONE** — engine.cpp now under the 800 cap |
 | `ue_wrap/engine.cpp` | " | world-context resolve/ensure/recovery L40-92,743,1087 | `engine_world.cpp` | + fold console+pause L94-166 if small |
 | `ue_wrap/engine.cpp` | " | SpawnActor + deferred-spawn + MakeTransform L623-834 | `engine_spawn.cpp` | leaves actor transform getters/setters as engine.cpp core |
 | `ue_wrap/engine.h` | 1032 | split into per-domain headers mirroring the .cpp set | (several) | every consumer currently drags the whole 1032-line header; do LAST, after the .cpp splits settle |
