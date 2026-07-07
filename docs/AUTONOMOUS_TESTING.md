@@ -90,7 +90,7 @@ the auto-memory `[[reference-pile-test-harness]]`.
   ```powershell
   pwsh tools/pile-test-assert.ps1                       # default host/client logs
   ```
-- **The scripted actor** = `src/votv-coop/src/harness/autotest_chippile.cpp`
+- **The scripted actor** = `src/votv-coop/src/harness/autotest/autotest_chippile.cpp`
   (env `VOTVCOOP_RUN_CHIPPILE_TEST=1`): a REAL host scenario — find a tracked
   chipPile, teleport to a standoff, GRAB via the production `InpActEvt_use` +
   `playerGrabbed`, 8 s moving carry, then a DIRECTIONAL throw

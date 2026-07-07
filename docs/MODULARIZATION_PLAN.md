@@ -114,7 +114,7 @@ the existing homes, MTA-check the shape, audit after.
 > `OnPileUseReleaseSuppress`/`OnFirePre` + the `_41`/`_38`/`_42`/`_58`/`_59` registration +
 > `g_cancelPairedUseRelease`) out of trash_collect_sync into `coop/props/trash_use_intercept.
 > {h,cpp}`. The 4 functions moved byte-identically; Install/OnDisconnect delegate (own session
-> cache — standard per-module pattern, NOT a shared global). **trash_collect_sync 810→552,
+> cache — standard per-module pattern, NOT a shared global). **trash_collect_sync 810→498,
 > trash_use_intercept ~370** (both under cap). Audit: 5/5 wiring points faithful. **Autonomous
 > LAN smoke PASS**: both peers connect, all interceptor seams install (2/2, 2/2) on host+client,
 > retained observers arm, grab test drives held-state pipeline, 0 err/warn from the area, clean
@@ -220,7 +220,7 @@ each (`wc -l`) — some may already be handled by Tier B.
 | `props/prop_element_tracker.cpp` | 1030 | `DebugCheckPropElementReap` self-test L926+ (~104) | a `_test`/dev TU | plus B2 moves reconcile IN — net LOC may rise; watch the cap |
 | `session/save_transfer.cpp` | 838 | pile/kerfur divergence L541-730 | -> B2 target | same move as B2 |
 | `session/player_handshake.cpp` | 828 | UTF-8 codec L132-181 + nick-color/skin wire pack-parse L90-131 | shared string util + `nick_color`/`nameplate` | codec is a generic dup (see D) |
-| `props/trash_collect_sync.cpp` | 810 | use-interceptor family L438-671 (~234) | `trash_use_intercept.{h,cpp}` | the ALREADY-QUEUED extraction; folds into B1 |
+| `props/trash_collect_sync.cpp` | 810→498 | use-interceptor family (~258) | `trash_use_intercept.{h,cpp}` (~370) | **DONE (B1a, smoke-verified `03d38d2b`)** — see the B1 section |
 | `world/weather_sync.cpp` | 1141 | cohesive — LOW priority | (sky/lightning are internal sub-concerns) | only split if it grows; no misplaced code |
 | `net/session.cpp` | 885 | `HandleMessage` switch L324-606 | per-message handlers | conceptually core routing — split only if it keeps growing |
 | `harness/harness.cpp` | 1204 | -> B5 (autotest move) + nick-color parse L759-780 -> `nick_color` | | most relief comes from B5 |
