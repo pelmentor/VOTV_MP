@@ -1,5 +1,12 @@
 # 09 -- window-GRABBED/moved pile dup (eid 5283, 17:23) -- ROOT RE
 
+> **2026-07-07 UPDATE (v106 `29dfd079`): the self-seed + pre-grab save-time-xform record + the grab
+> eid hand-off described below MOVED from the InpActEvt-PRE seam (`OnPileGrabPre` /
+> `NotePendingGrab`/`AdoptPendingGrabClump` -- RETIRED, RULE 2) to the BeginDeferred Func thunk's GRAB
+> direction (`NoteClumpBorn` birth certificate, trash_collect_sync/trash_channel): use-HOLD grabs
+> (`canBeUsedHold`) never dispatch a new InpActEvt, so the press seam structurally missed them. The
+> RE below stays valid as the root analysis; the code references are historical.**
+
 > **2026-07-01 UPDATE: this doc covers the SINGLE moved-pile dup. The MASS version (host clears a whole
 > cluster in-window → ~5 stale piles @old) is a distinct class — see [12-WINDOW-MASSMOVE-DUP-2026-07-01.md](12-WINDOW-MASSMOVE-DUP-2026-07-01.md).
 > Note: `SweepReconcileSaveTimeTwins` (referenced below) was REWRITTEN 2026-07-01 (`46e35edd`; per-eid

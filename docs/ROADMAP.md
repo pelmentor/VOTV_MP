@@ -177,9 +177,12 @@ LAN (two-machine + same-box-two-instance both confirmed).
        and the Aprop lifecycle RE doc. **HOTBAR hand item SHIPPED
        2026-07-06 (v105 hand_item display axis** — player expression, out
        of the prop pipeline; **+ v105b same day**: view-anchored mirror
-       (USER-APPROVED live), census hand-exclusion (dupe root), event-driven
-       immediate reconcile (R-pickup/drop instant), edge-instant stow;
-       see COOP_SYNC_MAP; hands-on 0ac re-run pending).
+       (USER-APPROVED live), census hand-exclusion (dupe root), edge-instant
+       stow; **+ v106 2026-07-07 (`29dfd079`)**: SEAM-DRIVEN world-prop
+       coherence (K2_DestroyActor Func seam + hand-edge express +
+       FinishSpawningActor Func drain — replaces the v105b forced reconcile,
+       RULE 2) + pile birth-certificate/carry-termination/ghost-retire;
+       see COOP_SYNC_MAP; live verify = runbook 0ad).
        Smart-ITEM behavior sync (hook/nailgun/wallbuilder/...) = RE done,
        docs/items/ pattern ratified, implementation queued.
 - ◐ 4.3 Entity manifest + per-entity state — IN PROGRESS, see live

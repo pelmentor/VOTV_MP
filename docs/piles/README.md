@@ -69,7 +69,8 @@
 > **ROOT RE'd (2026-06-24, hands-on 17:23) — pile GRABBED-AND-DROPPED/MOVED in the connect window
 > dups (DIFFERENT from L1; the 4TH mirror-identity instance).** Full RE in
 > [09-WINDOW-GRABBED-PILE-DUP-RE-2026-06-24.md](09-WINDOW-GRABBED-PILE-DUP-RE-2026-06-24.md). ROOT = the
-> **eid-0-at-grab gap**: the HOST grabbed an UNTRACKED pile -> `NotePendingGrab` skipped
+> **eid-0-at-grab gap**: the HOST grabbed an UNTRACKED pile -> the grab eid hand-off skipped (v106: the
+> hand-off + self-seed now live at the BeginDeferred thunk as `NoteClumpBorn`; was `NotePendingGrab`)
 > (`trash_collect_sync.cpp:408-411`) -> the clump rides eid-less -> on drop the re-pile mints a fresh
 > high eid (`[PILE] HOST RE-PILE(thunk) eid=5283`) and the periodic re-seed broadcasts it `hasMatchPos=0`
 > -> the client's save-loaded native@old never reconciles (its `TryDestroyTwin` matches @new, misses @old,

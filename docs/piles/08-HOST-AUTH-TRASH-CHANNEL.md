@@ -345,14 +345,26 @@ take-30] (re-pile + rotation correct at the land-settle COMMIT).
   takes a `ctx` param. **[V] KEPT — this part holds, unchanged by the disproof.**
 - **`coop/trash_channel.{cpp,h}`** (ctx generator + stale-packet guard + the per-eid rebind primitive):
   `OnHostConvert` (bump ctx + rebind E in place + broadcast PropConvert), `OnHostRelease` (bump on throw),
-  `NotePendingGrab` / `AdoptPendingGrabClump` (the grab eid hand-off), `CtxForEid` (carry stamp),
+  `NoteClumpBorn` / `TakeClumpBorn` / `AdoptBornClump` (the v106 grab eid hand-off), `CtxForEid` (carry stamp),
   `AdoptInboundConvertCtx` / `IsInboundStreamCtxFresh` (receiver drop-if-stale, wrap-aware int8, 0 =
   no-enforcement sentinel). **[V]**
-- **GRAB (pile→clump) — [V] VERIFIED:** `trash_collect_sync::OnPileGrabPre` (the `InpActEvt_use` PRE observer
-  — a REAL input event, ProcessEvent-VISIBLE, which is why it works) reads the aimed pile (alive at PRE) and,
-  on the host, records its eid via `trash_channel::NotePendingGrab`. `local_streams`' new-held edge adopts the
-  spawned clump onto that eid via `trash_channel::AdoptPendingGrabClump → OnHostConvert(kToClump)`. Identity
-  is the host eid end-to-end; NO proximity. (`[SYNC-MIRROR OK]` in the client log.)
+- **GRAB (pile→clump) — [AS-BUILT v106 `29dfd079` 2026-07-07, supersedes the InpActEvt-PRE hand-off]:**
+  the SAME BeginDeferred Func thunk that owns the re-pile now owns the grab: every clump is born from a
+  chipPile's `BeginDeferred(srcObj=pile, clump)` (bytecode: `toClump`@141 + uber@3493; the pile is ALIVE
+  at the POST) → the thunk records a **birth certificate** `NoteClumpBorn(clump, pile eid, chipType)`
+  (self-seeding an untracked pile + recording the PILE-09 pre-grab save-time xform right there — ONE
+  owner); `local_streams`' new-held edge consumes it (`TakeClumpBorn` → carrying? `OnHostRegrab` :
+  `AdoptBornClump → OnHostConvert(kToClump)`). WHY the old InpActEvt-PRE hand-off died (RULE 2, 2026-07-07
+  hands-on 10:19:03): a **use-HOLD grab (`canBeUsedHold`) repeats with NO new InpActEvt dispatch** → no
+  pending eid → the CLOSE-B "new clump while my carry is open = churn re-grab of MY last carry" heuristic
+  mis-bound a foreign clump to the wrong lane (eid 4809 deny-locked HELD forever). Identity is the host
+  eid end-to-end; NO proximity, NO input-seam dependency.
+- **CARRY TERMINATION — [AS-BUILT v106]:** every open carry lane is guaranteed to close (`TickCarry`):
+  a clump lying AT REST un-held ≥45 ticks closes the latch silently (the NATIVE re-pile gate
+  `IsValid(holdPlayer.grabbing_actor)` ABORTS a thrown clump's re-pile when the thrower's hand is busy
+  at land — the clump then lies as a clump forever, the SP end state; the lane must not stay HELD);
+  a dead-actor lane ≥30 ticks closes + broadcasts PropDestroy(eid). OPEN: a CLIENT grab of such a
+  resting clump (OnGrabIntent requires IsChipPile — deferred, documented).
 - **RE-PILE (clump→pile) — [AS-BUILT], the DETERMINISTIC `UFunction::Func` thunk converter (commit
   `d19ae4d4`):** a process-lifetime patch on `BeginDeferredActorSpawnFromClass`'s `Func` (`UFunction+0xD8`)
   installs a transparent forwarder (`ue_wrap/ufunction_hook`). On a host re-pile the clump's
