@@ -181,8 +181,12 @@ LAN (two-machine + same-box-two-instance both confirmed).
        stow; **+ v106 2026-07-07 (`29dfd079`)**: SEAM-DRIVEN world-prop
        coherence (K2_DestroyActor Func seam + hand-edge express +
        FinishSpawningActor Func drain — replaces the v105b forced reconcile,
-       RULE 2) + pile birth-certificate/carry-termination/ghost-retire;
-       see COOP_SYNC_MAP; live verify = runbook 0ad).
+       RULE 2) + pile birth-certificate/carry-termination; **+ v106b same
+       day (`4a280375`)**: MIGRATION-FIRST identity (a morph husk dies
+       eid-less) + BIRTH-ORPHAN express + wholesale GHOST-RETIRE (the
+       E-press per-ghost retire RETIRED, RULE 2). **VERIFIED hands-on
+       2026-07-07 (0ae): grab lane PASS + Q-menu spawns INSTANT on
+       clients.** See COOP_SYNC_MAP.)
        Smart-ITEM behavior sync (hook/nailgun/wallbuilder/...) = RE done,
        docs/items/ pattern ratified, implementation queued.
 - ◐ 4.3 Entity manifest + per-entity state — IN PROGRESS, see live

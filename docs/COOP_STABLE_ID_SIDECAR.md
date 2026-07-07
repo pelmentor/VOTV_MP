@@ -36,8 +36,15 @@ survive) + the two refuted approaches: `research/findings/coop-purge-timing-reco
 (never serialized) — savePos is now IMMUTABLE (it names where a purge re-create spawns; the earlier
 PropSnapPos retrack of savePos deadlocked re-binds = docs/piles/12 eid=4435), and `UpdateChipHostPos`
 (renamed from UpdateChipSavePosAndGetOld) writes the overlay; BindUnboundReCreates is two-phase (@host
-first, @save fallback).** NOTE: the §2/§4 sidecar layout below describes **v1** (9 B/entry); v2 adds the 3 savePos
-floats per the purge-race doc.
+first, @save fallback).** **2026-07-07 (v106b `4a280375`): BindUnboundReCreates gained the wholesale
+GHOST-RETIRE tail** — post-quiescence (client-only by construction), every live unbound native chipPile
+that NO map key claims (@save of any entry / @host of free-eid entries, 1cm) is provably identity-less
+(a bind-displaced leftover / native-chain product) and is retired IN ONE PASS (`UnmarkAndDestroy`,
+>50% valve over all live chip natives). Armed by `quiescence_drain::ArmGhostSweep` from the
+identity_create HOST RE-ASSERT displacement edge + a client E-press on an unbound pile; the v106
+one-ghost-per-E-press inline retire is RETIRED (RULE 2). User ask 2026-07-07: «привести мир клиента к
+миру хоста РАЗОМ, а не ждать нажатия E». NOTE: the §2/§4 sidecar layout below describes **v1**
+(9 B/entry); v2 adds the 3 savePos floats per the purge-race doc.
 Phase 0 PROVEN+PUSHED. Phase 2a sidecar transport VERIFIED (874 arrive intact). Phase 2b client bind +
 **Path A** (parse the live `saveSlot.objectsData`+`primitivesData` arrays) VERIFIED. **(X) NATIVE-AUTHORITATIVE
 BUILT+VERIFIED** (`f299229f`): keep the bound native AS the host-range mirror, per-eid SUPPRESS the proxy ->

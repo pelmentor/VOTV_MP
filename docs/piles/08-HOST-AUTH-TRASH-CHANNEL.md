@@ -348,17 +348,28 @@ take-30] (re-pile + rotation correct at the land-settle COMMIT).
   `NoteClumpBorn` / `TakeClumpBorn` / `AdoptBornClump` (the v106 grab eid hand-off), `CtxForEid` (carry stamp),
   `AdoptInboundConvertCtx` / `IsInboundStreamCtxFresh` (receiver drop-if-stale, wrap-aware int8, 0 =
   no-enforcement sentinel). **[V]**
-- **GRAB (pile→clump) — [AS-BUILT v106 `29dfd079` 2026-07-07, supersedes the InpActEvt-PRE hand-off]:**
+- **GRAB (pile→clump) — [VERIFIED hands-on 2026-07-07 0ae; v106 `29dfd079` + v106b `4a280375`,
+  supersedes the InpActEvt-PRE hand-off]:**
   the SAME BeginDeferred Func thunk that owns the re-pile now owns the grab: every clump is born from a
   chipPile's `BeginDeferred(srcObj=pile, clump)` (bytecode: `toClump`@141 + uber@3493; the pile is ALIVE
   at the POST) → the thunk records a **birth certificate** `NoteClumpBorn(clump, pile eid, chipType)`
   (self-seeding an untracked pile + recording the PILE-09 pre-grab save-time xform right there — ONE
-  owner); `local_streams`' new-held edge consumes it (`TakeClumpBorn` → carrying? `OnHostRegrab` :
-  `AdoptBornClump → OnHostConvert(kToClump)`). WHY the old InpActEvt-PRE hand-off died (RULE 2, 2026-07-07
-  hands-on 10:19:03): a **use-HOLD grab (`canBeUsedHold`) repeats with NO new InpActEvt dispatch** → no
-  pending eid → the CLOSE-B "new clump while my carry is open = churn re-grab of MY last carry" heuristic
-  mis-bound a foreign clump to the wrong lane (eid 4809 deny-locked HELD forever). Identity is the host
-  eid end-to-end; NO proximity, NO input-seam dependency.
+  owner) **and MIGRATES E onto the clump RIGHT THERE (v106b migration-first)** — the pile husk that
+  self-destructs microseconds later in the same `playerGrabbed` call dies EID-LESS, so the v106
+  K2_DestroyActor Func seam (which, widened, DOES see that husk death) naturally no-ops on it. Pre-v106b
+  the husk still owned E at death → the seam broadcast DESTROY(E) ahead of the ToClump AND
+  `UnmarkKnownKeyedProp` drained the element row (flushed AFTER the rebind) → every grab killed its own
+  entity (the 11:43 regression: client clump deleted, host kinematic clump frozen mid-air). The
+  certificate is consumed by `local_streams`' new-held edge (`TakeClumpBorn` → carrying? `OnHostRegrab` :
+  `AdoptBornClump → OnHostConvert(kToClump)`) or by `OnGrabIntent` (a puppet hand is that clump's
+  hand-edge); a certificate EXPIRING with a live, still-tracked, un-carried clump broadcasts the ToClump
+  itself (**BIRTH-ORPHAN express** — a denied/hands-full grab still converted the world; peers re-skin
+  to the resting clump instead of keeping a stale pile form). WHY the old InpActEvt-PRE hand-off died
+  (RULE 2, 2026-07-07 hands-on 10:19:03): a **use-HOLD grab (`canBeUsedHold`) repeats with NO new
+  InpActEvt dispatch** → no pending eid → the CLOSE-B heuristic mis-bound a foreign clump to the wrong
+  lane (eid 4809 deny-locked HELD forever). Identity is the host eid end-to-end; NO proximity, NO
+  input-seam dependency; **a morph husk NEVER owns E at death** (the invariant that keeps every destroy
+  handler morph-gate-free — OPUS_48_DISCIPLINE §9).
 - **CARRY TERMINATION — [AS-BUILT v106]:** every open carry lane is guaranteed to close (`TickCarry`):
   a clump lying AT REST un-held ≥45 ticks closes the latch silently (the NATIVE re-pile gate
   `IsValid(holdPlayer.grabbing_actor)` ABORTS a thrown clump's re-pile when the thrower's hand is busy
