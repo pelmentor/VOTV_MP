@@ -25,26 +25,27 @@
 
 namespace ue_wrap::spawn_menu {
 
-// Invoke the local mainPlayer's spawnmenu-PRESSED input UFunction, i.e. open the
-// prop-spawn menu exactly as pressing Q does in sandbox. Resolves + caches the
-// UFunction on first call. Returns false (and logs) if there is no local player
-// yet, or the UFunction can't be resolved. GAME THREAD ONLY (drives ProcessEvent
-// + UMG + input mode). Subject to the game's own guards: a no-op if another
-// interface is already open or the player is swimming (matching vanilla Q).
-bool Open();
+// Open the prop-spawn menu exactly as pressing Q does in sandbox, for the given local
+// mainPlayer_C pawn (`localPlayer` -- the caller injects it; this engine layer does not
+// resolve the local player, per principle 7). Resolves + caches the widget / UFunctions
+// on first call. Returns false (and logs) if `localPlayer` is null, or the widget can't
+// be resolved. GAME THREAD ONLY (drives ProcessEvent + UMG + input mode). Subject to the
+// game's own guards: a no-op if another interface is already open or the player is
+// swimming (matching vanilla Q).
+bool Open(void* localPlayer);
 
-// Close the spawn menu: the INVERSE of Open(). Restores SetInputMode_GameOnly +
-// hides the mouse cursor (the load-bearing un-stick -- Open() leaves the player in
-// GameAndUI/cursor mode, so without a close the player can no longer interact with
-// the world), then collapses the widget + runs its closed() teardown if present.
-// Reproduces vanilla's close block (ExecuteUbergraph_mainPlayer @11555) natively.
+// Close the spawn menu for `localPlayer`: the INVERSE of Open(). Restores
+// SetInputMode_GameOnly + hides the mouse cursor (the load-bearing un-stick -- Open()
+// leaves the player in GameAndUI/cursor mode, so without a close the player can no longer
+// interact with the world), then collapses the widget + runs its closed() teardown if
+// present. Reproduces vanilla's close block (ExecuteUbergraph_mainPlayer @11555) natively.
 // Idempotent + safe to call when already closed. GAME THREAD ONLY.
-bool Close();
+bool Close(void* localPlayer);
 
 // Toggle open<->closed from GROUND TRUTH (the widget's live Visibility byte), so the
 // Q key both opens AND dismisses the menu and a player can never be stranded in the
 // open state. Self-correcting if the game closed the menu via its own path. The dev
-// Q-key watcher calls this. GAME THREAD ONLY.
-bool Toggle();
+// Q-key watcher calls this and injects `localPlayer`. GAME THREAD ONLY.
+bool Toggle(void* localPlayer);
 
 }  // namespace ue_wrap::spawn_menu

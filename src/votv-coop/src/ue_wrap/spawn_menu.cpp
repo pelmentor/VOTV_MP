@@ -2,7 +2,6 @@
 
 #include "ue_wrap/spawn_menu.h"
 
-#include "coop/player/players_registry.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"      // GetController -- the local player's PlayerController for input mode
 #include "ue_wrap/log.h"
@@ -51,8 +50,7 @@ int ReadVis(void* widget) {
 
 }  // namespace
 
-bool Open() {
-    void* localPlayer = coop::players::Registry::Get().Local();
+bool Open(void* localPlayer) {
     if (!localPlayer) {
         UE_LOGW("spawn_menu::Open: no local mainPlayer_C (not in a world yet) -- not opened");
         return false;
@@ -151,9 +149,7 @@ bool Open() {
     return true;
 }
 
-bool Close() {
-    void* localPlayer = coop::players::Registry::Get().Local();
-
+bool Close(void* localPlayer) {
     // (1) THE LOAD-BEARING UN-STICK: restore SetInputMode_GameOnly + hide the cursor. Open() leaves
     // the player in GameAndUI/cursor mode (spawn_menu.cpp Open() @ SetInputMode_GameAndUIEx + cursor);
     // without this the world interaction/use trace stays dead. Do it FIRST and unconditionally (even
@@ -215,13 +211,13 @@ bool Close() {
     return true;
 }
 
-bool Toggle() {
+bool Toggle(void* localPlayer) {
     // Decide from GROUND TRUTH (the live Visibility byte), never a cached open-flag -- so a Q press
     // does the right thing even if the game closed the menu via its own path. FindSpawnMenuWidget()
     // also resolves g_spawnMenuCls so ReadVis can resolve its offset.
     void* widget = FindSpawnMenuWidget();
-    if (widget && ReadVis(widget) == 0) return Close();  // currently Visible -> dismiss
-    return Open();                                        // collapsed / not-yet-created -> open
+    if (widget && ReadVis(widget) == 0) return Close(localPlayer);  // currently Visible -> dismiss
+    return Open(localPlayer);                                       // collapsed / not-yet-created -> open
 }
 
 }  // namespace ue_wrap::spawn_menu

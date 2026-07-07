@@ -3,6 +3,7 @@
 #include "coop/dev/spawn_menu_unlock.h"
 
 #include "coop/dev/dev_gate.h"
+#include "coop/player/players_registry.h"   // resolve the local pawn to inject into the engine-layer spawn menu
 #include "coop/session/ini_config.h"
 #include "coop/session/shutdown.h"
 
@@ -57,7 +58,9 @@ DWORD WINAPI KeyWatcherThread(LPVOID) {
                     // Toggle, not Open: Q both opens AND dismisses the menu. Open() leaves the player
                     // in GameAndUI/cursor mode; with only an open path the player gets stranded and can
                     // no longer interact with the world (the 2026-06-16 "all peers can't interact" bug).
-                    GT::Post([] { ue_wrap::spawn_menu::Toggle(); });
+                    GT::Post([] {
+                        ue_wrap::spawn_menu::Toggle(coop::players::Registry::Get().Local());
+                    });
                 } else {
                     // The most common "nothing happens" cause: our window isn't foreground (the
                     // ImGui menu / another window has focus), so the press is intentionally ignored.
@@ -151,7 +154,7 @@ void OpenNow() {
                 "while connected as a client");
         return;
     }
-    GT::Post([] { ue_wrap::spawn_menu::Open(); });
+    GT::Post([] { ue_wrap::spawn_menu::Open(coop::players::Registry::Get().Local()); });
 }
 
 }  // namespace coop::dev::spawn_menu_unlock

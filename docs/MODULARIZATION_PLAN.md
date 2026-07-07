@@ -20,7 +20,14 @@ back-compat alias, no "kept for now". A move is a move.
 
 ## Tier A — true boundary violations (fix first; small, decisive)
 
-### A1. `ue_wrap/spawn_menu.cpp` reaches UP into `coop` [the one real layer breach]
+> **Live status** (updated as executed by the Opus 4.8 window):
+> - **A1 — DONE** (commit pending, built Release clean). DI applied: `spawn_menu::Open/Close/Toggle`
+>   now take `void* localPlayer`; the coop-side caller (`spawn_menu_unlock.cpp`) resolves
+>   `Registry::Get().Local()` on the game thread and injects it. `ue_wrap/spawn_menu.cpp` no
+>   longer includes any `coop/` header — verified coop-free. Behavior-preserving.
+> - A2 — pending · A3 — reclassified (see below, NOT a delete) · A4 — pending
+
+### A1. `ue_wrap/spawn_menu.cpp` reaches UP into `coop` [the one real layer breach] — DONE
 `src/votv-coop/src/ue_wrap/spawn_menu.cpp:5` includes `coop/player/players_registry.h`;
 lines 55 + 155 call `coop::players::Registry::Get().Local()`. This inverts principle 7
 (ue_wrap must never know coop). Verified 2026-07-07.
