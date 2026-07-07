@@ -1,0 +1,191 @@
+# Modularization / boundary-cleanup plan (per RULE 1 + folder-per-domain-concept)
+
+Written 2026-07-07 by the Fable-5 session at the user's request, right before the switch
+to Opus 4.8, from a three-agent read-only survey of `src/votv-coop` (LOC census + internal
+concern maps + boundary audit). This is a PLAN of PROPOSALS — every claim below was spot-
+checked in code the day it was written, but you (Opus) MUST re-verify each item against the
+current tree before executing it (labels are claims, code is truth — the documentize rule).
+
+**How to execute (OPUS_48_DISCIPLINE applies):** one concept per commit, build (Release) +
+audit each, no batching. Do the tiers in order — Tier A is correctness of the layering
+(cheap, high value), Tier B is the real per-RULE-1 architectural win (one owner per concept),
+Tier C is mechanical LOC relief. Do NOT start Tier B/C mid-arc if a gameplay task is open;
+this is refactor debt, safe to interleave between features. Nothing here changes wire format
+or behavior — if a step would, you mis-scoped it.
+
+RULE 2 reminder: when you extract, the old location's code GOES — no parallel copy, no
+back-compat alias, no "kept for now". A move is a move.
+
+---
+
+## Tier A — true boundary violations (fix first; small, decisive)
+
+### A1. `ue_wrap/spawn_menu.cpp` reaches UP into `coop` [the one real layer breach]
+`src/votv-coop/src/ue_wrap/spawn_menu.cpp:5` includes `coop/player/players_registry.h`;
+lines 55 + 155 call `coop::players::Registry::Get().Local()`. This inverts principle 7
+(ue_wrap must never know coop). Verified 2026-07-07.
+- **Root fix:** ue_wrap must not resolve the local player. Two clean options, pick per
+  what the two call sites actually need:
+  (a) **Dependency injection** — the two ue_wrap entry points take the local-player pawn
+      `void*` as a parameter; the coop-side caller (who already has the Registry) passes it.
+  (b) **Relocate** — a "spawn menu" (the Q-menu) is gameplay/UI, not a thin engine-class
+      wrapper. If the file is mostly coop policy wearing a ue_wrap coat, move it to
+      `coop/player/` (or `coop/interactables/`) and keep only the genuinely engine-primitive
+      parts (UMG widget calls) behind an `ue_wrap` API it calls DOWN into.
+  Prefer (a) if the file is truly engine-mechanism; prefer (b) if it's policy. Read the 227
+  lines first and decide from the ratio.
+
+### A2. Delete the dead duplicate include tree `include/votv-coop/`
+`include/votv-coop/coop/.gitkeep` + `include/votv-coop/ue_wrap/.gitkeep` — two empty
+placeholder dirs shadowing the real `include/coop` + `include/ue_wrap`. Nothing includes
+from `votv-coop/...` (grep = 0 hits). RULE 2 baggage. `git rm` both.
+
+### A3. Resolve the dead API header `include/coop/element/identity.h`
+103 LOC, self-described "the entity-identity authority facade", included by NO file
+(verified: only the file itself matches the grep). Either it documents the intended public
+face of `coop::element` and the callers SHOULD route through it (wire it), or it is a stale
+pre-refactor artifact (the `coop/sync`->`coop/element` dissolve left it orphaned). Decide
+from its content vs what `identity_create.cpp`/`identity_destroy.cpp` actually expose; if
+stale, delete it (RULE 2).
+
+### A4. Tighten `g_shuttingDown` global
+`include/coop/session/shutdown.h:48` exposes `extern std::atomic<bool> g_shuttingDown;` as a
+mutable global across the module boundary — yet line 51 already provides an `IsShuttingDown()`
+accessor. Make the atomic file-static in `shutdown.cpp`, add a `SetShuttingDown(bool)` setter,
+keep only the two accessor/mutator functions in the header. Low urgency, do it when you touch
+shutdown anyway.
+
+---
+
+## Tier B — the real RULE-1 win: dissolve three cross-cutting SMEARS into one owner each
+
+These are the ANTI-SMEAR rule applied at folder scale: a concern with ONE clear owner is
+currently spread across 3+ files. This is the work that actually makes the project "properly
+modular", not the LOC counting. Each is a multi-file arc — treat like a feature: design from
+the existing homes, MTA-check the shape, audit after.
+
+### B1. The "grab / held-item" concern is smeared across 3 files
+- `prop_lifecycle.cpp:379-510` — take-obj grab observers (`TakeObj_PRE/_POST`) + `InstallInventory`
+- `trash_collect_sync.cpp:94-437` — BeginDeferredSpawn observer + `EnsureHeldItemBroadcast`
+- `remote_prop.cpp:814-1071` — `OnConvert` (grab-driven form change)
+The includes already point at an existing intended home: **`coop/props/grab_observer`**.
+**Plan:** consolidate the grab/held-item observers + broadcast into `grab_observer.{h,cpp}`
+as the single owner (CAPTURE the grab edge in one place; other modules subscribe). This also
+absorbs the queued `trash_use_intercept` extraction (see C-note) — do B1 and that extraction
+become the same arc, not two.
+
+### B2. "Prop-position reconcile" (pile/kerfur divergence) squats in two files
+- `save_transfer.cpp:541-730` (~190 LOC) — pile/kerfur divergence flush riding save-transfer timing
+- `net_pump.cpp:402-738` (~330 LOC) — prop-reaper + world-change re-seed episode machine
+Both DELEGATE into `prop_element_tracker` (the real owner of eid<->actor transforms).
+**Plan:** move the divergence-flush + reaper/re-seed episode logic OUT of save_transfer and
+net_pump INTO `prop_element_tracker` (or a sibling `prop_reconcile.{h,cpp}` under `coop/props/`
+if that keeps the tracker under the soft cap). save_transfer/net_pump keep only the trigger
+call. This is also the single biggest LOC relief for net_pump (1183->~850) and save_transfer.
+
+### B3. "Conversion / adoption" squats across three files
+- `remote_prop.cpp:814-1071` — `OnConvert` apply
+- `kerfur_convert.cpp:398-737` (~340 LOC) — parked-ghost claim/adopt machinery
+- `remote_prop_spawn.cpp:~600-700` — kerfur fuzzy-match + rekey
+Existing homes referenced from net_pump: **`coop/creatures/npc_adoption`** +
+**`kerfur_prop_adoption`**.
+**Plan:** the deferred-adoption sub-system (parked-ghost claim, fuzzy-match rekey) consolidates
+into the adoption files; `OnConvert` apply either joins `kerfur_convert` (owns the protocol) or
+becomes `remote_prop_convert.cpp`. Design this one carefully — it's the most entangled; MTA has
+no direct analog, so cite the reasoning inline.
+
+### B4. Folder-per-concept: two "session" concepts named identically across two folders
+- `coop/net/` = the TRANSPORT/wire layer (`coop::net::Session` — GNS connections, net thread,
+  lanes, lobby, ICE, protocol.h). Concept: **wire transport**.
+- `coop/session/` = session LIFECYCLE (manager, handshake, join curtain, save guards, pause,
+  moderation, event dispatch). Concept: **session lifecycle**.
+Two files sit in the wrong folder by concept:
+  - `coop/session/blob_chunks.cpp` — self-described "chunked blob TRANSPORT over the reliable
+    lane" -> belongs in `coop/net/`.
+  - `coop/session/net_pump.cpp` — the per-tick net ORCHESTRATOR; it's the seam between transport
+    and gameplay. Judgment call: it drives puppets (gameplay) from net state, so it may
+    legitimately live in session/ as the lifecycle-driven pump — but its NAME says "net". Decide
+    the concept crisply (is it "the per-tick coop orchestrator"? then maybe rename, don't move).
+Do NOT rename the folders themselves (`net` = transport and `session` = lifecycle are both
+crisp concepts). Just relocate `blob_chunks` and settle net_pump's identity. Low risk.
+
+### B5. Harness mixes production boot-glue with ~2800 LOC of dev autotests
+`include/harness/harness.h:9` claims the subtree is "dev tooling, trivially separable" — but
+`harness.cpp` owns `g_session` (the production session) + wires every sync module
+(`StartCoopSession`, lines 392-459). Meanwhile `src/harness/autotest_*.cpp` (~16 files,
+autotest.cpp 953 + autotest_vitals.cpp 1013 + autotest_chippile.cpp 877 + ...) are pure dev
+test routines in the same folder.
+**Plan:** split the concept. Production boot/scenario glue (`Start`, `TimelineThread`,
+`RunPlayLoop`, the `Boot*`/`Drive*` orchestrators, `StartCoopSession`) is the real "harness".
+The `autotest_*` family is DEV TOOLING — move it to its own subtree (`src/harness/autotest/` or
+`src/dev/autotest/`) so the "trivially separable" claim becomes true. RULE 3 flavor: none of
+autotest ships, so making it a clean island is aligned. Big LOC move, zero behavior change —
+do it as a pure file-move commit (git mv + include-path fix), audit that the build still links.
+
+---
+
+## Tier C — mechanical >800-LOC extractions (soft-cap relief, low risk)
+
+Each is a single-file extraction: pull a cohesive block into a new `.{h,cpp}` pair under the
+same folder, leave a call. Ordered by value (biggest catch-all first). Re-measure LOC before
+each (`wc -l`) — some may already be handled by Tier B.
+
+| File | LOC | Extract | Into | Notes |
+|---|---|---|---|---|
+| `ue_wrap/engine.cpp` | 1112 | save-load/GameMode/main-menu block L168-617 (~330) | `engine_save.cpp` | biggest single concern, unrelated to actor primitives; engine.cpp is the residual catch-all (10 engine_*.cpp siblings already exist) |
+| `ue_wrap/engine.cpp` | " | world-context resolve/ensure/recovery L40-92,743,1087 | `engine_world.cpp` | + fold console+pause L94-166 if small |
+| `ue_wrap/engine.cpp` | " | SpawnActor + deferred-spawn + MakeTransform L623-834 | `engine_spawn.cpp` | leaves actor transform getters/setters as engine.cpp core |
+| `ue_wrap/engine.h` | 1032 | split into per-domain headers mirroring the .cpp set | (several) | every consumer currently drags the whole 1032-line header; do LAST, after the .cpp splits settle |
+| `props/remote_prop.cpp` | 1174 | `OnConvert` L814-1071 (~258) | `remote_prop_convert.cpp` | or fold into B3 |
+| `props/remote_prop_spawn.cpp` | 972 | `OnSpawn` is a 740-line monolith — split by PHASE | (in-file or siblings) | phases: unkeyed-drop / trash-proxy / exact-key converge / kerfur fuzzy-rekey / deferred finish. Kerfur rekey -> B3 |
+| `creatures/npc_sync.cpp` | 964 | `NpcSuppress_Interceptor` L330-524 (~195) + `Install` L595-809 | `npc_sync_install.cpp` | cohesive file otherwise; interceptor is the fat block |
+| `props/prop_element_tracker.cpp` | 1030 | `DebugCheckPropElementReap` self-test L926+ (~104) | a `_test`/dev TU | plus B2 moves reconcile IN — net LOC may rise; watch the cap |
+| `session/save_transfer.cpp` | 838 | pile/kerfur divergence L541-730 | -> B2 target | same move as B2 |
+| `session/player_handshake.cpp` | 828 | UTF-8 codec L132-181 + nick-color/skin wire pack-parse L90-131 | shared string util + `nick_color`/`nameplate` | codec is a generic dup (see D) |
+| `props/trash_collect_sync.cpp` | 810 | use-interceptor family L438-671 (~234) | `trash_use_intercept.{h,cpp}` | the ALREADY-QUEUED extraction; folds into B1 |
+| `world/weather_sync.cpp` | 1141 | cohesive — LOW priority | (sky/lightning are internal sub-concerns) | only split if it grows; no misplaced code |
+| `net/session.cpp` | 885 | `HandleMessage` switch L324-606 | per-message handlers | conceptually core routing — split only if it keeps growing |
+| `harness/harness.cpp` | 1204 | -> B5 (autotest move) + nick-color parse L759-780 -> `nick_color` | | most relief comes from B5 |
+
+---
+
+## Tier D — duplicated helpers (collapse to one owner)
+
+The survey found genuine copy-paste with no shared home. Each is a small, safe dedup.
+
+- **String narrow/widen: ~10 independent copies.** `NarrowAscii` in identity_create.cpp:50,
+  order_sync.cpp:84, kerfur_entity.cpp:71, trash_channel.cpp:113; `ToUtf8` in
+  player_handshake.cpp:132 + chat_feed.cpp:57; `Widen` in http_client.cpp:29 + client_model.cpp:31;
+  plus `Narrow`/`NarrowName`/`WidenAscii` variants. **Fix:** one `coop/util/string_conv.{h,cpp}`
+  (or an `ue_wrap` string util — it's engine-agnostic, pick one home) with `NarrowAscii`/`Widen`/
+  `ToUtf8`/`FromUtf8`; delete all copies (RULE 2). This is the highest-count duplication.
+- **Local-player-pawn lookup: ~9 inline sites** of `R::FindObjectByClass(P::name::MainPlayerClass)`
+  (engine.cpp:379,508; autotest.cpp:97,620; autotest_saveui.cpp:143; join_membership_sweep.cpp:624;
+  remote_player.cpp:67) plus two differently-named local wrappers (`LocalPlayerPawn`,`LocalPawn`).
+  **Fix:** one `ue_wrap::engine::GetLocalPlayerPawn()`; replace all sites. (Also unblocks A1's
+  injection option — the coop caller can use the Registry, ue_wrap uses this.)
+- **Resolve-once-then-latch + throttled-scan idiom:** hand-rolled in ~a dozen ue_wrap TUs
+  (daynightcycle, drone, wisp, save_browser, trace, prop, console_desk, engine...), with comments
+  cross-referencing each other as a copied "shape". **Fix (optional, higher effort):** a shared
+  `ue_wrap::ResolveLatch` / `ThrottledScan` helper. Lower priority — it's an idiom, not a bug;
+  only worth it if you're already touching several of these.
+
+---
+
+## Sequencing recommendation for Opus
+
+1. **A2, A3, A4** first — trivial deletions/tightening, one commit, proves the build loop.
+2. **A1** — the one real breach; small, decisive; pairs naturally with the D "GetLocalPlayerPawn" dedup.
+3. **D string-conv dedup** — safe, high-count, mechanical; good confidence-builder.
+4. **B5 (autotest island move)** — pure git-mv, big LOC win, zero behavior risk.
+5. **C engine.cpp splits** — mechanical, well-bounded, the catch-all most needs it.
+6. **B1 / B2 / B3** — the real architectural arcs; do ONE at a time, design + audit each, treat
+   as features (they touch gameplay paths — smoke after each per the pre-deploy checklist).
+7. **B4** (blob_chunks move) + remaining C rows as cap-relief between the above.
+
+Everything in Tiers A/C/D is behavior-preserving and can ship without a hands-on (build +
+link + the existing autotest smoke suffice). Tier B touches live gameplay seams — full
+pre-deploy checklist + a real smoke before handoff.
+
+Related: `[[feedback-folder-per-domain-concept-rule]]` · `[[feedback-modular-file-size-rule]]`
+· `[[feedback-one-owner-order-axis]]` · `docs/OPUS_48_DISCIPLINE.md`.
