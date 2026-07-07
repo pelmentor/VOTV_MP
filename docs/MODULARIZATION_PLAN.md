@@ -109,14 +109,28 @@ modular", not the LOC counting. Each is a multi-file arc — treat like a featur
 the existing homes, MTA-check the shape, audit after.
 
 ### B1. The "grab / held-item" concern is smeared across 3 files
+> **B1a DONE + SMOKE-VERIFIED (2026-07-07, commit pending).** Extracted the InpActEvt_use
+> client-grab interceptor family (`OnPileUseIntercept`/`OnPileUseDenySuppress`/
+> `OnPileUseReleaseSuppress`/`OnFirePre` + the `_41`/`_38`/`_42`/`_58`/`_59` registration +
+> `g_cancelPairedUseRelease`) out of trash_collect_sync into `coop/props/trash_use_intercept.
+> {h,cpp}`. The 4 functions moved byte-identically; Install/OnDisconnect delegate (own session
+> cache — standard per-module pattern, NOT a shared global). **trash_collect_sync 810→552,
+> trash_use_intercept ~370** (both under cap). Audit: 5/5 wiring points faithful. **Autonomous
+> LAN smoke PASS**: both peers connect, all interceptor seams install (2/2, 2/2) on host+client,
+> retained observers arm, grab test drives held-state pipeline, 0 err/warn from the area, clean
+> exit. Full client-grab BEHAVIOR still wants a user hands-on E-press (autonomous smoke can't
+> press E), but registration + pipeline + no-regression are proven.
+> **B1b (remaining, NOT started):** the actual smear consolidation — fold `prop_lifecycle`'s
+> take-obj observers + the held-item broadcast into ONE grab owner. Bigger/riskier; assess
+> whether it's worth it now that the interceptor is cleanly separated.
+
 - `prop_lifecycle.cpp:379-510` — take-obj grab observers (`TakeObj_PRE/_POST`) + `InstallInventory`
 - `trash_collect_sync.cpp:94-437` — BeginDeferredSpawn observer + `EnsureHeldItemBroadcast`
 - `remote_prop.cpp:814-1071` — `OnConvert` (grab-driven form change)
 The includes already point at an existing intended home: **`coop/props/grab_observer`**.
 **Plan:** consolidate the grab/held-item observers + broadcast into `grab_observer.{h,cpp}`
-as the single owner (CAPTURE the grab edge in one place; other modules subscribe). This also
-absorbs the queued `trash_use_intercept` extraction (see C-note) — do B1 and that extraction
-become the same arc, not two.
+as the single owner (CAPTURE the grab edge in one place; other modules subscribe). B1a (above)
+already carved out the interceptor half.
 
 ### B2. "Prop-position reconcile" (pile/kerfur divergence) squats in two files
 - `save_transfer.cpp:541-730` (~190 LOC) — pile/kerfur divergence flush riding save-transfer timing

@@ -315,6 +315,7 @@ add_library(votv-coop SHARED
     src/coop/props/host_spawn_watcher.cpp
     src/coop/props/trash_channel.cpp
     src/coop/props/trash_collect_sync.cpp
+    src/coop/props/trash_use_intercept.cpp
     src/coop/props/trash_pile_sync.cpp
     src/coop/props/trash_proxy.cpp
     src/coop/props/native_pile_mirror.cpp
