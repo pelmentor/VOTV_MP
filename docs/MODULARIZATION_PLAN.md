@@ -27,7 +27,9 @@ back-compat alias, no "kept for now". A move is a move.
 >   longer includes any `coop/` header — verified coop-free. Behavior-preserving.
 > - **A2 — DONE** (commit pending). `git rm`'d the two empty `.gitkeep` placeholders; the dead
 >   `include/votv-coop/` tree is gone. Zero includers, not a CMake include root — no compile impact.
-> - A3 — reclassified (see below, NOT a delete)
+> - **A3 — RESOLVED, no code change.** Reclassified: `identity.h` is a living architecture-doc +
+>   umbrella-include header (content is current, not stale) — the audit mislabeled it as "dead".
+>   Kept as-is (see below).
 > - **A4 — DONE** (commit pending, built Release clean). `g_shuttingDown` is now file-static
 >   (internal linkage) in `shutdown.cpp`; `IsShuttingDown()` moved out-of-line into the .cpp;
 >   `shutdown.h` keeps only the `bool IsShuttingDown();` declaration. NO public setter added —
@@ -54,13 +56,21 @@ lines 55 + 155 call `coop::players::Registry::Get().Local()`. This inverts princ
 placeholder dirs shadowing the real `include/coop` + `include/ue_wrap`. Nothing includes
 from `votv-coop/...` (grep = 0 hits). RULE 2 baggage. `git rm` both.
 
-### A3. Resolve the dead API header `include/coop/element/identity.h`
-103 LOC, self-described "the entity-identity authority facade", included by NO file
-(verified: only the file itself matches the grep). Either it documents the intended public
-face of `coop::element` and the callers SHOULD route through it (wire it), or it is a stale
-pre-refactor artifact (the `coop/sync`->`coop/element` dissolve left it orphaned). Decide
-from its content vs what `identity_create.cpp`/`identity_destroy.cpp` actually expose; if
-stale, delete it (RULE 2).
+### A3. `include/coop/element/identity.h` — RECLASSIFIED: NOT dead code, KEEP (no action)
+The boundary audit flagged this as a "dead API header." Read 2026-07-07: it is NOT dead and
+NOT a violation. Lines 1-97 are a living **architecture-doc** for the whole `coop::element`
+identity layer — and the content is CURRENT, not stale: it accurately describes the built
+state (`element::Registry` as the unified eid<->actor owner, `MirrorManager<T>`,
+`ElementDeleter`, `quiescence_drain`, the sealed-`Install` compile wall, and the
+HOST-AUTHORITATIVE / CLIENT-RELAY-INTENT / PEER-SYMMETRIC authority contract). Lines 99-104
+are an **umbrella include** (`quiescence_drain.h` + `identity_create.h` + `identity_destroy.h`).
+It simply has no `#include` sites yet — that makes it unused, not stale.
+- **Decision: KEEP as-is.** Deleting it would lose current, accurate architecture documentation
+  (RULE 2 is about retired CODE, not a living design note). Do NOT delete.
+- Optional, LOW value: realize its stated intent by having the `coop::element` consumers include
+  the umbrella `identity.h` instead of the three headers individually — but that is include-churn
+  across many TUs for near-zero gain and risks each TU pulling more than it needs. Not worth it;
+  left as a documentation/umbrella header. This item needs no code change.
 
 ### A4. Tighten `g_shuttingDown` global — DONE
 `include/coop/session/shutdown.h:48` exposed `extern std::atomic<bool> g_shuttingDown;` as a
