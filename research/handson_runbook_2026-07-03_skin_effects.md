@@ -230,7 +230,7 @@ PASS` — obelisk armed=0 shots=1 → NOW! → shots=0 [FIRED], client `REPLAY r
 alive; the gap = missing peer kill choreography → CLOSED by v2). What autonomy CANNOT see:
 everything visual — your hands-on below still decides those.
 
-## 2026-07-07 ~13:00 (DLL `340E5573E87DF5AB` — ТЕКУЩИЙ 4/4, wire v105 без изменений; СМОУК НЕ ГОНЯЛСЯ — ты за ПК; аудит 0 CRIT/HIGH; supersedes 6A98740DCF703723)
+## 2026-07-07 ~13:00 (DLL `340E5573E87DF5AB` — ТЕКУЩИЙ 4/4, wire v105 без изменений; аудит 0 CRIT/HIGH; supersedes 6A98740DCF703723) — **USER-VERIFIED PASS** («вроде всё норм»; Q-menu спавн у клиентов мгновенный — FinishSpawn-дренаж жив; grab-регрессия ушла)
 
 ### 0ae-SEAM-v106b. Разбор твоего 11:40–11:43-теста: «клиент берёт pile → clump удаляется, у хоста clump виснет» + «почему не разом»
 

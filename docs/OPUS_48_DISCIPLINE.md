@@ -114,11 +114,65 @@ Forbidden phrases: "should work", "ready for test" without the checklist table.
 - UE TArray<struct> stride = 16-aligned, not the raw Size.
 - deploy-all ships Release — always build Release and hash-verify all 4 game folders
   before trusting a smoke.
+- deploy-all.ps1 prints "[deploy-all] done." and THEN exits 1 on a benign PowerShell
+  format-object error. Judge the deploy by the SHA-256 of all 4 deployed DLLs vs the
+  build output, never by the exit code.
+- The cmake build dir is `build/votv-coop` (not `build/`).
 - The smoke host slot s_1234 is stateful — restore coop_backup after killed runs.
 - HighResShot in hands-on scenarios = toast spam; screenshots only in autonomous runs.
 - User AT the PC = user tests; you never launch the game then.
+- Stray CJK characters have leaked into Russian doc text 4+ times (e.g. "不" for "не").
+  Scan your own doc/runbook edits for non-Cyrillic/non-ASCII leakage before saving.
 
-## 8. Scope guard
+## 8. Widening a seam widens its blast radius (added 2026-07-07, same-day burn)
+
+Humbling data point first: the Fable-5 session itself shipped this regression, with a
+clean build and a clean audit, and the user hit it within the hour. The defense is
+process, not capability — so for you it is doubly mandatory.
+
+v106 swapped the prop destroy observer from a ProcessEvent hook to a UFunction::Func
+patch on K2_DestroyActor. The callback BODY was unchanged and still correct for every
+destroy the OLD seam ever saw. But the new seam also fires on dispatches the old one
+was blind to — including the pile's morph-husk self-destruct inside playerGrabbed.
+The unchanged body treated that husk death as entity death: it broadcast DESTROY(eid)
+ahead of the convert and drained the element row. Every grab, host or client, killed
+its own entity ("клиент берет любой pile и он превращается в clump и удаляется").
+
+Mechanical rule: when you move a hook to a MORE-VISIBLE dispatch layer (PE observer ->
+Func patch, press-sim -> entity-sim, one class -> a base class), the callback's firing
+set has changed even though its code has not. Before shipping:
+1. Enumerate the NEW call sites (bytecode grep of the relevant BPs for the native) and
+   classify each: REAL EVENT vs INTERNAL CHURN (morph husks, destroy+respawn cycles,
+   view-actor recycling).
+2. Re-audit every assumption in the callback body against the churn sites. "This
+   callback was correct for a year" is evidence about the OLD firing set only.
+3. Prefer discriminating by an INVARIANT (see §9) over a site list or a skip-flag —
+   a skip-flag per churn site is RULE-1 crutch territory.
+
+## 9. Identity migrates at the successor's BIRTH; a husk dies eid-less
+
+Actor death is NOT element death. This game is full of destroy+respawn morphs where
+one logical entity hops actors: pile<->clump, the updateHold hand actor, kerfur
+NPC<->prop. The invariant that makes every downstream handler simple: rebind the
+element onto the successor AT the successor's spawn seam, BEFORE the predecessor's
+destroy runs (both morph directions do this now — trash_channel::NoteClumpBorn and
+the re-pile thunk). Then a destroy handler needs ZERO morph special-casing: a dying
+actor that resolves no eid is a husk by construction; one that still owns its row is
+a real entity death. If you catch yourself adding "if (isMorphing) skip" to a destroy
+path, the rebind is in the wrong place — move it earlier, don't gate later.
+
+## 10. Reconcile provably-stale SETS wholesale at one owner — never lazily per interaction
+
+If the system can PROVE a class of objects is stale/identity-less (post-quiescence
+unbound natives, orphaned mirrors), retire/repair the WHOLE set in one owner pass —
+the arm->apply shape (quiescence_drain: event handlers only ARM; one sequence
+APPLIES, in order). A fix that waits for the user to touch each broken object one by
+one reads as "still broken" to the user, and they will call it out (2026-07-07:
+«почему разом нельзя привести мир клиента к миру хоста, а не ждать нажатия E»).
+Lazy per-interaction adjudication is a crutch with good manners — RULE 1 still
+applies to it.
+
+## 11. Scope guard
 
 Do not start: engine-level redesigns, new frameworks "for the future" (the
 fix-then-generalize rule: N>=3 working cases before any abstraction), speculative
