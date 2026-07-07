@@ -25,7 +25,9 @@ back-compat alias, no "kept for now". A move is a move.
 >   now take `void* localPlayer`; the coop-side caller (`spawn_menu_unlock.cpp`) resolves
 >   `Registry::Get().Local()` on the game thread and injects it. `ue_wrap/spawn_menu.cpp` no
 >   longer includes any `coop/` header — verified coop-free. Behavior-preserving.
-> - A2 — pending · A3 — reclassified (see below, NOT a delete) · A4 — pending
+> - **A2 — DONE** (commit pending). `git rm`'d the two empty `.gitkeep` placeholders; the dead
+>   `include/votv-coop/` tree is gone. Zero includers, not a CMake include root — no compile impact.
+> - A3 — reclassified (see below, NOT a delete) · A4 — pending
 
 ### A1. `ue_wrap/spawn_menu.cpp` reaches UP into `coop` [the one real layer breach] — DONE
 `src/votv-coop/src/ue_wrap/spawn_menu.cpp:5` includes `coop/player/players_registry.h`;
