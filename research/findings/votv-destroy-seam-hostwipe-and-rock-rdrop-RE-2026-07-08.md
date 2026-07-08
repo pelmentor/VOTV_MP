@@ -57,10 +57,59 @@ with DIFFERENT origins, timings, and host impact:
   (`[HITCH] frame=69ms ... GC/render/physics -- permanent-both-peers GC signature`) during the save-load
   world-swap (host save `zcoop_6800.sav` written 11:54:30, client loading it).
 - **What the log does NOT record: the CALLER of those 2,269 `K2_DestroyActor` calls.** The destroy-seam log
-  line prints the broadcast, not the callstack. So WHICH exact code path issues the keyed-destroy burst (our
-  reconcile/dedup of local keyed twins vs a BP vs GC-coincident world teardown) is STILL RE-pending — needs a
-  callstack in the diagnostic or the dispatch-route RE. "reconcile/purge" was an inference; the measured facts
-  are the timing, the count, the key-resolution, and the GC-hitch coincidence.
+  line prints the broadcast, not the callstack. WHICH code path issues the burst is STILL RE-pending (see the
+  dispatch-route method below). "reconcile/purge" was an inference; the measured facts are the timing, count,
+  key-resolution, GC coincidence, and the destroy+recreate trace below.
+
+### Mechanism — MEASURED: a client-local DESTROY+RECREATE churn, only the destroy half reaches the host
+Tracing one wiped key end-to-end in the 11:54 client log (`FXMIrEnEjutSmIrUQwLOvw` = `secBoothDoor`, a `prop_C`):
+1. **11:54:33** `remote_prop::OnSpawn key='FXMI...' resolves to LIVE actor CE54D280 -- already aligned (d=0.00cm)`
+   then `CreateOrAdoptPropMirror: eid=2297 bound to actor=CE54D280` — the client ALREADY had this keyed actor
+   (its own save) and ADOPTED it WITH eid=2297.
+2. **11:54:38** `broadcasting DESTROY actor=CE54D280 key='FXMI...' eid=0` — the SAME actor is destroyed; the seam
+   broadcasts `eid=0` -> host resolves by KEY and destroys ITS copy.
+3. **11:54:45** `join_membership_sweep: keyed churn RE-BIND -- unclaimed 'prop_C' key='FXMI...' is the RE-CREATE
+   of already-expressed eid=2297 (mirror row held a dead actor) -> row rebound, actor claimed, NOT doomed`.
+So the world-swap (client loading the host save) DESTROYS **and RE-CREATES** the client's keyed props same-key.
+Locally that is net-zero (sweep rebinds). But on the wire it is ASYMMETRIC: the **destroy half fires the seam ->
+host destroys its authoritative copy**, while the **recreate half is a client keyed SPAWN -> skipped at
+`prop_lifecycle:195` (host-authoritative) -> host is NEVER told to re-create**. Net: host loses the prop
+permanently; client keeps it. This is the WIPE, and it is a firing-set problem (H1): the game's world-swap
+destroy+recreate churn should be net-zero on the wire, but the seam carries only the destroy half.
+
+### The eid=0 discriminator — MEASURED here, but a CONFLATED wire sentinel (not type-safe)
+- **This instance is reading (a):** the element WAS assigned (eid=2297 @11:54:33) and was drained/in-flux by the
+  destroy @11:54:38 — NOT "adopted-by-key, never assigned an eid." So for the wiped props, `eid=0` genuinely
+  means "had a live element, lost it during the destroy+recreate churn."
+- **BUT `eid=0` is a CONFLATED wire sentinel** (`prop_lifecycle.cpp:373`: `dp.elementId = (destroyEid ==
+  kInvalidId) ? 0 : destroyEid`, per the protocol.h contract "elementId==0 -> sender had no Element"). Both
+  "element drained/raced to kInvalidId" AND "genuinely never had an Element" map to wire 0. The v12 comment at
+  `:363-368` names the race explicitly: "actor may have been Unmark'd already by the time we get here
+  (parallel-anim race)". So a LEGIT intent destroy that races to kInvalidId would ALSO arrive `eid=0`.
+- => "eid=0 ⇒ teardown" is a THIS-INSTANCE measurement, NOT a type guarantee. An eid-liveness gate is plausible
+  but NOT proven safe (see the census gap below). A cleaner discriminator the trace suggests: **a destroy
+  immediately followed by a same-key RE-CREATE is not a real destroy** (`join_membership_sweep` already detects
+  this post-hoc) — or the authority symmetry (client never authors keyed destroys, mirroring the `:195` spawn
+  skip). Both still need the caller RE + the census.
+
+### SAFETY GAP for any eid=0 gate (uncensused)
+The pile-twin dedup carried LIVE client eids (42821…), not eid=0 — one data point, not a census. No enumeration
+of client-authored keyed-destroy paths against eid=0 exists yet. Because eid=0 is conflated (above), a legit
+keyed destroy CAN arrive eid=0 via the parallel-anim race -> an eid=0 gate could wrongly suppress it. Precondition
+for the gate: census every client keyed-destroy path (rock R-pickup = live eid=X, morph destroys, intent relays)
+and confirm none legitimately presents eid=0. Until then the gate is UNSAFE to build.
+
+### Dispatch-route RE — the CONCRETE method to name the caller (answers "how, not hand-wave")
+- The seam callback `OnK2DestroyFunc(context, srcObj, result)` (`prop_lifecycle.cpp:385`) already RECEIVES
+  `srcObj` = the FFrame caller object, currently IGNORED. Cheapest probe: log `srcObj`'s class/name +
+  `RtlCaptureStackBackTrace` (symbolized into the game module) at the callback — a one-line diagnostic addition
+  (RULE-2-exempt), rebuild + the user re-runs the bare-join.
+- **Guardrail against "route confirmed, caller unknown":** the seam is a Func patch on the `K2_DestroyActor`
+  UFUNCTION — it fires only when that UFunction is INVOKED (BP / EX_CallMath / ProcessEvent), NOT on a raw
+  native `AActor::Destroy()`. The 2,269 firings therefore PROVE a UFunction-level invoker exists -> there IS a
+  BP/UObject caller for `srcObj`+backtrace to name (pure-native world teardown would be INVISIBLE to this seam,
+  so "fired but no nameable caller" is self-contradictory). Worst case the backtrace lands in a native thunk,
+  which still localizes the call site. Confirms H1 (game world-swap teardown) vs H2 (a deliberate reconcile-diff).
 
 ### Root FRAMING — NAMING THE CALLER IS A PRECONDITION (both live hypotheses presuppose it)
 - **The candidate `InPurgeEpisode()` gate is TIMING-INVALIDATED by the log.** net_pump raises the mass-purge
