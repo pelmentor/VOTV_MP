@@ -7,14 +7,19 @@ Full RE: `research/findings/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07
 Both bugs were seen in ONE braided log (join + pile-throw + no rock). These two repros ISOLATE each.
 **Piles are ALREADY FIXED — do NOT throw piles in either repro; it only re-confounds the log.**
 
-## Repro 1 — HOST-WIPE from a BARE join — DONE + ROOT ANALYSIS WRITTEN 2026-07-08
+## Repro 1 — HOST-WIPE from a BARE join — FIXED + USER-VERIFIED 2026-07-08
 **RESULT (11:54 bare-join): host wiped on a bare join, zero player action.** `grab/throw`=0 both peers; CLIENT
 broadcast 3140 DESTROY (2270 keyed + 871 pile) 11:54:35-39 -> HOST 3345->1255 keyed props, never recovered.
-**RESULT (15:43-15:45 `[HOSTWIPE-CALLER]` probe, DLL `f2fda78cafe167c7`): caller = loadObjects, 2270/2270 =
+**RESULT (15:43-15:45 `[HOSTWIPE-CALLER]` probe, DLL `f2fda78`): caller = loadObjects, 2270/2270 =
 `mainGamemode_C`**; two legit post-join destroys = SELF-caller (`prop_foodBox_C` food morph, `trashBitsPile_C`
-trash-E). => root closed: v106 broadcasts the client's loadObjects world-load churn. **FIX = peer-symmetric
-world-load EPISODE gate (DESIGN-only, NOT built)** — see the finding's ROOT ANALYSIS section. NEXT = one /qf
-vetting round of the design + per-rule-1 green-light. Steps below kept for re-runs / regression checks.
+trash-E). => root closed: v106 broadcasts the client's loadObjects world-load churn.
+**FIX SHIPPED (v107, `3180c4ab`, DLL `04ebfdb0`) + USER-VERIFIED:** source-anchored CLIENT-scoped world-load
+EPISODE LATCH (`coop::world_load_episode`) — arm at the client join boot (CAUSAL), clear at load-tail
+quiescence, suppress OUTBOUND KEYED destroy broadcasts while in-episode. User confirmed the host world survives
+a bare join. `[HOSTWIPE-CALLER]` probe retired. Steps below kept as a REGRESSION check (re-run to confirm the
+host props survive a bare join). Log markers: client `world_load_episode: ARMED` -> N `CLIENT suppressed KEYED
+DESTROY ... inside world-load episode` -> `world_load_episode: CLOSED at load-tail quiescence`; host re-seed
+stays high (no 3345->1255 drop).
 
 Goal: prove the host loses its keyed props on a PLAIN join (no rock, no pile-throwing) — isolates the
 join-purge destroy-seam leak from the pile-throw stress.

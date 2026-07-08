@@ -376,6 +376,43 @@ destroys** — they are local world-rebuild churn, never a cross-peer event. Con
 3. **Re-entry / nested loads:** confirm the latch is set/cleared correctly if a load re-triggers (rejoin,
    cave/level travel) — a bare bool must be a depth counter or idempotent set+quiescence-clear, not toggle.
 
+## FIX AS-BUILT (v107, 2026-07-08 — SHIPPED `3180c4ab`, DLL `04ebfdb0`, USER-VERIFIED)
+
+The fix is a **source-anchored, client-scoped WORLD-LOAD EPISODE LATCH** — `coop::world_load_episode`
+(`src/votv-coop/{include,src}/coop/props/world_load_episode.{h,cpp}`). The DESIGN above evolved across /qf
+rounds 0-13; the SHIPPED mechanism (below) is the resting point. Both the FFrame::Node caller gate AND the
+`g_inWorldLoad` timing-latch variants named in the earlier DESIGN were REFUTED along the way — the final
+form arms at a coop-side causal trigger and reuses the existing quiescence edge (no new latch to time, no
+ue_wrap->coop hook).
+
+- **Arm** — `harness.cpp DriveMenuModeJoinWorldBoot`, immediately before `BootStorySaveBlocking`. This IS the
+  client join world-load trigger and is CAUSALLY before the burst on every path (the boot triggers
+  `loadObjects`, whose pre-delete IS the burst) — not a wire-timing coincidence. Sole, client-only arm site
+  (no principle-7 issue). Measured (15:43 log): `loadObjects=1` write + `open untitled_1` ~15:43:47, burst
+  15:43:54-55.
+- **Clear** — `join_membership_sweep.cpp:633` at `g_sweepFired = true` (load-tail quiescence, measured
+  @15:44:00) — the SAME deadline-capped edge (quiescence OR the sweep's 45 s hard deadline) that ends the
+  divergence sweep, so the episode can never outlive the load. The two legit post-load keyed intent destroys
+  (`prop_foodBox_C` @15:44:30, `trashBitsPile_C` @15:44:51) fire AFTER this edge → broadcast normally. Reset
+  at teardown (`ResetClaimTracking`).
+- **Gate** — `prop_lifecycle.cpp DestroySeamBody`: `if (!keyless && role==Client && InEpisode()) → suppress
+  the OUTBOUND broadcast` (the local `K2_DestroyActor` already ran). Scoped to KEYED (the wipe is 100 % keyed
+  props); eid-only (pile) destroys pass through UNTOUCHED (piles already fixed; host defers them). The
+  `role==Client` check is defense-in-depth on the shared bidirectional seam.
+- **Why the latch, not the alternatives** (all refuted with measurement, /qf rounds 0-13): FFrame::Node
+  caller gate = §9 site-list (leaks if the churn-UFunction set is incomplete); authority-default-deny must
+  re-allow synth-keyed pile morphs → touches the frozen pile path; recreate-pairing has no successor at
+  destroy time on a bare join (recreate arrives ~7 s later via the sweep scan-rebind); mark-the-victims is
+  infeasible (victims born AFTER the arm, inside the un-hookable `loadObjects`).
+- **Measured window** (15:43 log): arm ~15:43:49 → 2280 `mainGamemode_C` keyed wipe destroys @15:43:54-55 →
+  clear @15:44:00. ZERO legit keyed non-gamemode destroys in-window (player on the join loading screen) →
+  over-suppress set measured empty.
+- **Verification**: USER hands-on 2026-07-08 — the host world survives a bare join. `[HOSTWIPE-CALLER]` probe
+  RETIRED (RULE 2). **Punch-list (open, non-blocking, unmeasured extensions):** host-symmetric arm (a host
+  mid-session reload wiping its clients — the arm is currently client-only); within-session world-change
+  (cave/level travel that re-runs `loadObjects` — only the join arms today); pin the backstop-timeout
+  (currently inherits the sweep's 45 s deadline).
+
 ## Source map
 `prop_lifecycle.cpp` (DestroySeamBody:313 / OnK2DestroyFunc:385 = the v106 Func seam `29dfd079`; :195 client
 Aprop spawn skip; :376 destroy broadcast) · `remote_prop_destroy.cpp:84` (host OnDestroy) · `net_pump.cpp`
