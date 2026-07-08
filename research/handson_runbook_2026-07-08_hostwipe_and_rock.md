@@ -53,4 +53,14 @@ the drop.
   probe closed it. NEXT = one /qf vetting round of the design (esp. window-bounding) -> per-rule-1 green-light
   -> implement `g_inWorldLoad` latch -> smoke + hands-on. The gate does NOT touch the rock (R-pickup fires
   outside the load episode) — they stay SEPARATE.
-- **ROCK (Bug B): still OPEN, RE-derived only, not log-captured, no fix.** Repro 2 (below) still pending.
+- **ROCK (Bug B): design SETTLED + per-rule-1 green-lit 2026-07-08; F2 build in progress.** The `/qf` thread
+  (11 rounds) + two headless RE gates converged: **[H3] FFrame::Node CLEAN** (rock pickup = `mainPlayer::"Hold
+  Object"`, disjoint from foodBox/loadObjects/piles) and **[H1] Key PRESERVED** (getData writes / loadData
+  restores the same save-Key). Design = HOST-AUTHORITATIVE + CLIENT INTENT with a client eid-PARK at the pickup
+  seam (see the finding's "Fix shape — SETTLED"). **Repro 2 below is now the PREMISE-CONFIRMATION for the build**
+  (it is [RD], never log-witnessed — the same inference class that burned on ":195 gates the recreate"):
+  runnable READ-ONLY on the deployed `04ebfdb0` (no rebuild). It must confirm (a) the host loses its copy at
+  pickup: HOST `remote_prop::OnDestroy: ... eid=X -> destroying local actor` fires on the client's hold-R pickup,
+  and NOTHING re-spawns on the drop; and (b) **grab-vs-push for F1**: whether a host-moved rock was GRABBED
+  (E-carry/throw) or PHYSICS-pushed — this decides F1's easy (reliable-ize the release express) vs hard (no seam)
+  fork. Report both back before the F1 half is designed.

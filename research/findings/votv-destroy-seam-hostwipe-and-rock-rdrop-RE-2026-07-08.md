@@ -211,15 +211,50 @@ E-grab (and "sometimes even E can't recover it").
    fresh rock became tracker-known, that path DECLINES at `trash_collect_sync:339` ("pose stream suffices" — a
    false promise for a no-longer-streamed prop).
 
-### Fix shape — UNSETTLED (do NOT build without green-light; feature-grade)
-- Candidate discriminator "owns an eid at pickup" REJECTED (doesn't separate suspend-into-hand from a genuine
-  delete — both drain the row).
-- §9-clean shape (successor claims eid at its birth -> the pickup-destroy resolves a husk, no skip-flag) is
-  FEASIBLE (migration window exists) BUT the successor is the churning display hand actor -> fragile; collides
-  with the v105 "hotbar = player expression, not a world entity" decision (`project-hand-item-axis-2026-07-06`).
-- One-owner (RULE 2026-05-28): route through the EXISTING held-prop author seam E uses, NOT a new drop-seam path.
-- Spans hand_item + destroy seam + element registry + author seam = feature-grade -> §1 written root analysis
-  + explicit per-rule-1 green-light BEFORE design. Fix N=1 rock first, generalize at N>=3 (§11).
+### Fix shape — SETTLED (per-rule-1 green-lit 2026-07-08 after /qf rounds 1-11 + [H3]/[H1] GREEN)
+The design converged over an 11-round `/qf` thread (full transcript: `<scratchpad>/qf_thread.md`, this session)
+plus two headless RE gates that both came back GREEN. Superseded candidates (kept as the audit trail): "owns an
+eid at pickup" (doesn't separate suspend-into-hand from a delete); a LIVE two-hop-§9 carrier on the display hand
+actor (MEASURED to die on stow/switch — `hand_item.cpp:105-120` — so it is not a stable carrier); a client-side
+"suppression owner" at the destroy seam (a §8.3 skip-flag); a client-authored suspend/reclaim of a
+host-authoritative prop (REINTRODUCES the client-authors-keyed-lifecycle asymmetry that caused the host-wipe).
+
+**THE DESIGN — HOST-AUTHORITATIVE + CLIENT INTENT, with a client eid-PARK (natural husk) at the pickup seam:**
+- **PICKUP** at `ac.K2_DestroyActor()` inside `mainPlayer::"Hold Object"` (the v106 Func seam), gated on
+  `FFrame::Node == "Hold Object"` ([H3] GREEN — a DEDICATED function graph, disjoint from foodBox/loadObjects/
+  pile destroy issuers): **PARK** the client's own eid=X into a bounded map → the local `K2_DestroyActor`
+  resolves an eid-less actor → the EXISTING husk rule (`keyless && !hasEid`) broadcasts NOTHING by construction
+  (no new suppression owner). **ALSO send `PropPickupIntent`** → the HOST suspends its own authoritative copy
+  (holds the pre-pickup transform; expresses a held-item so it is visible, not limbo).
+- **DROP** at the fresh `Aprop_C` Init-POST (`prop_lifecycle.cpp:196`), gated on **parked-Key membership**
+  (the real discriminator; a `loadObjects` recreate has no locally-parked entry → stays `:196`-skipped):
+  **REBIND** the parked eid=X onto the drop `Aprop` + **send `PropDropIntent`(eid=X, settled-rest transform)**.
+  The HOST re-places its authoritative eid=X + broadcasts; the client reconciles via the EXISTING
+  `remote_prop` OnSpawn epsilon-converge (2 cm/1°).
+- **TEARDOWN (two-sided, bounded):** client park-map = rebind-consumed / session-end / inventory-exit /
+  deadline; HOST suspend = peer-disconnect-without-drop → restore that peer's suspended rocks at their
+  pre-pickup transform (tied to the PEER CONNECTION, not a timer — a client may hold a rock arbitrarily long).
+- **New keyed-prop pickup/drop `ReliableKind`** (3 wiring sites per `[[feedback-reliablekind-router-checklist]]`).
+  Precedent: pile `GrabIntent=78`/`ThrowIntent=79` (client-intent→host-commit) + MTA `CClientObject::AttachTo`
+  (validates the GOAL of one identity across pickup/drop; VOTV destroys+respawns so we span it with park+rebind).
+
+**Measured gates (both GREEN, 2026-07-08 headless RE — do NOT re-derive, verify against these):**
+- **[H3] FFrame::Node separability = CLEAN** `[V-bytecode]`: rock pickup issues `K2_DestroyActor` from
+  `mainPlayer::"Hold Object"` (a dedicated fn, directly at expr [64], NOT in addEquip/updateHold), disjoint from
+  foodBox (`ExecuteUbergraph_prop_food`), loadObjects (`mainGamemode::loadObjects×3/Load Primitives/loadTriggers×2`),
+  and piles (`ExecuteUbergraph_trashBitsPile/actorChipPile`). CAVEAT: the DROP-side spawn (`simulateDrop` is a
+  CustomEvent → `ExecuteUbergraph_mainPlayer`) shares the mainPlayer uber with ragdoll@25665/activeHook@113293/
+  lastDroppedItem-destroy@119341 — so the drop rebind uses the **parked-Key membership** as its discriminator,
+  not Node alone. The pickup (`"Hold Object"`) has no such coarseness.
+- **[H1] Key round-trip = PRESERVED** `[V-bytecode]`: `getData@409` writes `actor.key → struct_save.key → equip
+  slot`; `loadData@74` restores it verbatim (`key := data.key`, first action) onto the fresh actor; spawn/
+  BeginPlay/init do not mint; `lib.assignKey` mints ONLY when `key=='None'` (guarded). A world-persistent rock
+  (non-None key) round-trips IDENTICALLY → the client can bind the host's authoritative eid onto the dropped
+  actor **by save-Key via the existing adopt-by-key** (the park carries the eid too → belt+suspenders; multi-
+  in-hand is Key-discriminated). Only precondition: the picked-up prop's key was non-None at pickup (always true
+  for world-persistent props).
+
+Fix N=1 rock first, generalize at N>=3 (§11).
 
 ### Coupling to the host-wipe fix — CORRECTED: NOT forced to pair; host-wipe ships ALONE
 Earlier claim "the authority-fix STRANDS the rock -> they must pair" was an OVERSTATEMENT. Reality:
