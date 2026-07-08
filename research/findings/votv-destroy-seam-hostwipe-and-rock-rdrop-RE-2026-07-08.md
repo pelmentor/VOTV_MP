@@ -11,11 +11,26 @@ Deployed at investigation time: DLL `753bb549` (rock `[ROCK-DROP]` diagnostics, 
 
 ## BUG A — HOST-WIPE: client join-window purge churn wipes the host's keyed props
 
-**Status: OUTCOME + LEAK CONFIRMED from a REAL log [V log 2026-07-08 11:06]. v106-regression = SUGGESTIVE, not proven.
-Fix = DESIGN only (not started). Needs a CLEAN bare-join repro before the root analysis is called settled.**
+**Status: CONFIRMED on a CLEAN BARE-JOIN log [V log 2026-07-08 11:54] — zero player action, no rock, no manual
+pile-throw. v106-regression = STRONGLY supported (clean bare-join wipe + pre-v106 counterfactual). Fix = DESIGN
+only (not started). TOP PRIORITY: a bare join empties the host world -> coop is unusable. Rock (Bug B) is PAUSED.**
 
 ### Symptom (user, hands-on)
-"Last time host world had no PROPS at all, they got removed." The host's keyed props vanished en masse.
+"Last time host world had no PROPS at all, they got removed." The host's keyed props vanished en masse. Reproduced
+on a deliberate bare-join test 11:54: client connected, user did NOTHING, host world emptied anyway.
+
+### What the CLEAN bare-join log proves (11:54 run — no rock, no manual grab/throw either side)
+- **Bare, verified**: `grab_hook[grab]`/`grab_hook[throw]` = **0 on BOTH host and client**; `[ROCK-DROP]` = **0**.
+  Zero player action — the "did NOTHING" claim is log-verified, not asserted.
+- **Timeline**: join `BeginConnect` 11:54:24 -> peer slot 11:54:26 -> `BeginSnapshot` (3183 objects) 11:54:33 ->
+  CLIENT broadcasts **3,140 DESTROY in 11:54:35-39** = **2,269 keyed props** (`eid=0`, `key='FXMI...'`) + 871
+  eid-only trash clumps -> HOST executes **3,140 `OnDestroy`** in the same window.
+- **Host wiped, verified**: host re-seed went **3,345 -> 1,255 live keyed props** (2,099 dying) at 11:54:42, and
+  **1,255 is the LAST re-seed before shutdown (11:54:52)** — the host never recovered. ~2,090 keyed props gone.
+- This ISOLATES the leak: it is inherent to the join reconcile/purge, fires on a bare join, and is NOT the
+  pile-throw stress (there was none this run).
+
+### What the earlier BRAIDED log first showed (11:06 run — join + pile-throw, superseded by the clean 11:54 run)
 
 ### What the log proves (HOST=`Game_0.9.0n_HOST`, CLIENT=`Game_0.9.0n_CLIENT_1`, 2026-07-08)
 - **11:06:44** — CLIENT join hits a world/level-change reconcile: `re-seed found 2556 live keyed props ... 857 dying`.
@@ -48,21 +63,27 @@ distinguishes a client's local purge-churn from a real destroy.
   over a skip-flag/site-list.
 - **If v106 introduced it, the cleanest fix is at the seam change**, not a new gate bolted on top.
 
-### v106-regression evidence (SUGGESTIVE, not proof)
+### v106-regression evidence (now STRONGLY supported)
 | | client `broadcasting DESTROY` | host `OnDestroy` executed |
 |---|---|---|
 | pre-v106 (`research/crash_2026-07-03_rehost_wispkill`, PE observer) | 840 | **10 — no wipe** |
-| post-v106 (2026-07-08, Func patch `29dfd079`) | 3,142 | **2,066 — wipe** |
+| post-v106 bare join (2026-07-08 11:54, Func patch `29dfd079`) | 3,140 | **3,140 -> host 3,345->1,255 = wipe** |
 
-The jump (840->3142 broadcasts, 10->2066 host executions) matches the §8 signature: the Func patch catches a
-new firing set (the join-purge churn). BUT the pre-v106 log is a crash-REHOST, not a clean join -> directional
-only.
+Logic: the mod shipped working joins before v106 (joins did not empty the host). Post-v106, a BARE join with
+zero player action empties the host. The only thing that changed the destroy DISPATCH set is the v106
+`K2_DestroyActor` Func patch (it catches a wider firing set than the old PE observer). Combined with the pre-v106
+counterfactual (10 host destroys on a rehost, no wipe), this is strong regression evidence. Caveat: the pre-v106
+row is a crash-REHOST, not a clean join, so the counterfactual is directional — but it no longer gates priority
+or the "is it real" question; the clean 11:54 bare-join log settles both.
 
-### ISOLATION before the root analysis is settled (both PENDING)
-1. **USER — clean bare-join repro**: two peers, client joins, NO rock, NO manual pile-throwing. Does the host
-   lose its keyed props on a PLAIN join? Proves bare-join vs pile-throw-stress trigger.
-2. **ME — dispatch-route RE**: confirm the client's join-purge keyed destroys dispatch via the
-   `EX_CallMath`/native route the PE observer could NOT see (would pin the v106 regression -> fix at the seam).
+### ISOLATION status
+1. **USER — clean bare-join repro: DONE (11:54 log above).** Host wipes on a plain join, zero player action,
+   no rock, no manual pile-throw. The leak is inherent to the join reconcile/purge, not a pile-throw trigger.
+2. **ME — dispatch-route RE: still useful, but NO LONGER blocking.** It is no longer needed to establish THAT
+   v106 regressed or the priority (the clean log + counterfactual carry those). Its remaining purpose is to
+   LOCATE the fix: confirm the client's join-purge keyed destroys dispatch via the `EX_CallMath`/native route
+   the PE observer could not see -> the classification gate (`InPurgeEpisode()`) belongs AT the v106 seam, not
+   bolted on elsewhere. Feeds the fix design, not the diagnosis.
 
 ---
 

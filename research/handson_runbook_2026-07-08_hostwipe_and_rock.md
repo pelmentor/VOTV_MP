@@ -7,7 +7,12 @@ Full RE: `research/findings/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07
 Both bugs were seen in ONE braided log (join + pile-throw + no rock). These two repros ISOLATE each.
 **Piles are ALREADY FIXED — do NOT throw piles in either repro; it only re-confounds the log.**
 
-## Repro 1 — HOST-WIPE from a BARE join (the higher-severity one)
+## Repro 1 — HOST-WIPE from a BARE join — DONE 2026-07-08 11:54 (CONFIRMED)
+**RESULT: host wiped on a bare join, zero player action.** `grab/throw`=0 both peers, `[ROCK-DROP]`=0; CLIENT
+broadcast 3140 DESTROY (2269 keyed eid=0 + 871 trash clumps) 11:54:35-39 -> HOST 3345->1255 keyed props, never
+recovered. Cited in `research/findings/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07-08.md` (BUG A). TOP
+PRIORITY. Steps below kept for re-runs.
+
 Goal: prove the host loses its keyed props on a PLAIN join (no rock, no pile-throwing) — isolates the
 join-purge destroy-seam leak from the pile-throw stress.
 1. Host launches (`mp_host_game.bat`), reaches gameplay with its normal world of props.
