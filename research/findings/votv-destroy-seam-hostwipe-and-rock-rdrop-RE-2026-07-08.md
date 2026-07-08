@@ -62,27 +62,33 @@ with DIFFERENT origins, timings, and host impact:
   callstack in the diagnostic or the dispatch-route RE. "reconcile/purge" was an inference; the measured facts
   are the timing, the count, the key-resolution, and the GC-hitch coincidence.
 
-### Root FRAMING — the AUTHORITY reframe now outweighs the classify-the-churn candidate
+### Root FRAMING — NAMING THE CALLER IS A PRECONDITION (both live hypotheses presuppose it)
 - **The candidate `InPurgeEpisode()` gate is TIMING-INVALIDATED by the log.** net_pump raises the mass-purge
   flag at **11:54:40** ("reaped 256 >= 64"), but the keyed-destroy wipe fires at **11:54:38** — the flag is
   NOT set during the burst. Whether gated on the client SEND or the host EXECUTE, `InPurgeEpisode()` as wired
-  would be inactive at the moment of the wipe. It also only removes "destroys during a detected mass-purge
-  episode" (a timing-classified subset), not the general defect. => it is a skip-flag/timing-heuristic in a
-  nicer hat (RULE 1), and it does not even cover this window.
-- **The deeper root is an AUTHORITY asymmetry (§141 / `prop_lifecycle:195`):** the client already SKIPS keyed
-  SPAWNS (host-authoritative), but the v106 bidirectional seam lets it freely AUTHOR keyed DESTROYS. Keyed-prop
-  lifecycle is host-owned; a client's local teardown/GC/dedup destroys of keyed props should be **LOCAL-ONLY,
-  never broadcast** — symmetric with the spawn skip. That DELETES the class (removes client authority over host
-  keyed-prop destroys) instead of filtering a symptom.
-- **Completeness caveat (why this is NOT the earlier-rejected blanket suppress):** the authority fix is only
-  correct if genuine player-INTENT keyed destroys (the rock's R-pickup) have a proper home — an INTENT channel
-  to the host (client says "I picked up rock X" -> host destroys its authoritative copy), i.e. the same
-  "route through the existing held-prop author seam" one-owner shape Bug B needs. Authority-fix alone (drop
-  client keyed destroys) fixes the host-wipe but would strand the rock -> the two must be paired. This
-  PARTIALLY re-opens the unify question in a PRINCIPLED way: shared architecture (host-authoritative keyed
-  lifecycle + client intent channel), distinct call sites. Still a DESIGN HYPOTHESIS -> written root analysis
-  + per-rule-1 green-light before any code; and confirm no legit client-authored KEYED destroy exists that
-  isn't reroutable to intent (v106 bidirectional was added for eid-only clump/pile morphs, not keyed props).
+  would be inactive at the moment of the wipe. It also only removes a timing-classified subset. => skip-flag in
+  a nicer hat (RULE 1), and it does not even cover this window. DEAD.
+- **PRECONDITION (adversarial-agent, correct): the fix framing cannot be chosen until the CALLER of the 2,269
+  keyed `K2_DestroyActor` calls is named.** The two live hypotheses each PRESUPPOSE a different caller:
+  - **(H1) FIRING-SET / §8 narrowing** — if the caller is the GAME's world-swap TEARDOWN (client tearing down
+    its OLD world to load the host save), then the v106 seam — built to carry **eid-only clump/pile morphs** —
+    is now ALSO firing on **keyed-prop world-teardown it was never meant to carry**. Fix = narrow the firing
+    set back to its intended payload, NOT an authority gate. This is the LEANING hypothesis: (a) no our-code
+    reconcile-destroy marker precedes the burst in the 11:54:37-39 window (only `CreateOrAdoptPropMirror` binds
+    + pile morphs); (b) 2,268 destroys in ONE frame right after a `[HITCH] 69ms GC` during the save-load = a
+    bulk engine teardown, not an incremental reconcile. CIRCUMSTANTIAL — the seam logs no caller.
+  - **(H2) AUTHORITY asymmetry** — if instead a deliberate client reconcile-diff compares client-world to
+    host-world and destroys "dupes", the root is that the client authors keyed destroys at all (it already
+    SKIPS keyed SPAWNS at `prop_lifecycle:195`); fix = client keyed destroys are LOCAL-ONLY, symmetric with
+    the spawn skip.
+  - Both converge on roughly the same code IF the discriminator is keyed-ness; they DIVERGE on justification
+    and edge cases. **A candidate INVARIANT worth testing in the RE (not yet confirmed): the wipe destroys are
+    `eid=0` (key-only) because the element was ALREADY DRAINED before the actor died = teardown/GC ORDER; a
+    genuine tracked player-intent destroy would carry a LIVE eid.** If that holds, "client broadcasts a keyed
+    destroy only when the element is still LIVE" gates teardown without a timing flag and without blanket
+    keyed-suppress. Must verify (does the rock R-pickup carry a live eid? do all teardown deaths present eid=0?).
+- **DECISION GATE: the dispatch-route RE (name the caller + the eid-liveness at the seam) is a PRECONDITION for
+  the root analysis, not a follow-up.** Only after it does H1-vs-H2 resolve and the discriminator get chosen.
 
 ### v106-regression evidence (now STRONGLY supported)
 | | client `broadcasting DESTROY` | host `OnDestroy` executed |
@@ -153,6 +159,18 @@ E-grab (and "sometimes even E can't recover it").
 - One-owner (RULE 2026-05-28): route through the EXISTING held-prop author seam E uses, NOT a new drop-seam path.
 - Spans hand_item + destroy seam + element registry + author seam = feature-grade -> §1 written root analysis
   + explicit per-rule-1 green-light BEFORE design. Fix N=1 rock first, generalize at N>=3 (§11).
+
+### Coupling to the host-wipe fix — CORRECTED: NOT forced to pair; host-wipe ships ALONE
+Earlier claim "the authority-fix STRANDS the rock -> they must pair" was an OVERSTATEMENT. Reality:
+- The rock's R-pickup broadcasts `DESTROY(**eid=X**)` — a LIVE eid (the rock is tracked). The host-wipe destroys
+  are `eid=0` (element already drained = teardown). So the eid-liveness invariant (gate `eid=0` keyed destroys)
+  fixes the host-wipe and **does NOT touch the rock's eid=X pickup broadcast at all -> rock UNCHANGED.**
+- Even under a blanket keyed-suppress, removing the client's keyed-destroy broadcast would only make R-pickup
+  leave the HOST's copy in place (host shows a stale rock at the pre-pickup position instead of nothing) — a
+  DIFFERENT desync, not a WORSE one; the rock is already host-invisible on R-drop regardless.
+- => Nothing FORCES pairing. **Host-wipe fix is shippable ALONE; the rock defers** to the clean intent-channel
+  hook (route R-pickup/R-drop through the held-prop author seam). Verify the "unchanged vs stale-at-old-pos"
+  distinction with the rock repro when the rock work starts; it does not gate the host-wipe.
 
 ### Diagnostics added this session (RULE-2-exempt, log-only, UNCOMMITTED, in DLL `753bb549`)
 - `prop_lifecycle.cpp:195` — logs the silent client-Aprop spawn skip (`[ROCK-DROP] CLIENT Aprop spawn NOT
