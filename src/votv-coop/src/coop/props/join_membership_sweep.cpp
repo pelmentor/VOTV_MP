@@ -13,6 +13,7 @@
 #include "coop/creatures/kerfur_reconcile.h"
 #include "coop/creatures/npc_sync.h"
 #include "coop/dev/force_overdestroy_test.h"
+#include "coop/dev/join_window_pos_trace.h"  // F1 read-only: keyed-prop join-window position root discrimination
 #include "coop/dev/spawn_order_probe.h"
 #include "coop/element/element.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors (keyed churn re-bind: dead-actor mirror-row census)
@@ -133,6 +134,8 @@ void BeginClaimTracking() {
     coop::snapshot_census::Reset();
     // Phase 1 step 1A probe: arm the read-only keyless load-spawn coverage recorder for this join.
     coop::dev::spawn_order_probe::ArmForJoin();
+    // F1 probe: arm the read-only keyed-prop join-window position trace (loadObjects-clobber vs host-held).
+    coop::dev::join_window_pos_trace::ArmForJoin();
     UE_LOGI("join_membership_sweep: claim tracking ARMED (snapshot bracket open) -- "
             "unclaimed in-universe locals will be destroyed at SnapshotComplete");
 }
@@ -258,6 +261,9 @@ static void RunDivergenceSweep_(void* localPlayer) {
             auto dr = deadKeyedRows.find(narrowAscii(key));
             if (dr != deadKeyedRows.end()) {
                 coop::prop_element_tracker::UnmarkKnownKeyedProp(a);  // drain the re-create's fresh LOCAL element
+                // F1 probe (read-only): this unclaimed keyed local IS the loadObjects-recreate of an
+                // already-snapshot-expressed eid -> record its pos + order stamp (point B) BEFORE the re-bind.
+                coop::dev::join_window_pos_trace::NoteRecreateRebind(key, static_cast<uint32_t>(dr->second), a);
                 coop::remote_prop::RegisterPropMirror(dr->second, a, key, acls, /*senderSlot*/ 0,
                                                       /*rebindInPlace*/ true);
                 UE_LOGW("join_membership_sweep: keyed churn RE-BIND -- unclaimed '%ls' key='%ls' is the "
@@ -642,6 +648,8 @@ void TickClientReconcile() {
     RunDivergenceSweep_(localPlayer);
     // Phase 1 step 1A probe: load tail has quiesced -> emit the keyless-spawn coverage verdict (read-only).
     coop::dev::spawn_order_probe::EmitVerdictAtQuiescence();
+    // F1 probe: load tail has quiesced -> emit the keyed-prop position root verdict (read-only).
+    coop::dev::join_window_pos_trace::EmitVerdictAtQuiescence();
     // Phase 1 step 2b bind: load tail has quiesced -> emit the eid-range bind summary (bound count, case i/ii).
     coop::save_identity_bind::EmitBindSummary();
     // instant-world quiescence BACKSTOP: the sweep just destroyed the join-window ghosts/dups, so reveal

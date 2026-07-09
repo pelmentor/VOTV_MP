@@ -26,6 +26,7 @@
 #include "coop/props/pile_spawn_bind.h"  // anti-smear 2026-06-30: pile spawn-time twin-destroy / adopt / census
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: the claim set + divergence sweep (extracted out); OnSpawn records into it
 #include "coop/dev/spawn_order_probe.h"  // Phase 1 step 1A: keyless load-spawn coverage probe (read-only)
+#include "coop/dev/join_window_pos_trace.h"  // F1: keyed-prop join-window position root discrimination (read-only, point A)
 #include "coop/props/save_identity_bind.h"     // Phase 1 step 2b: eid-range bind summary at quiescence
 #include "coop/element/quiescence_drain.h"    // anti-smear 2026-06-30: the join-window order owner (sequence + steady triggers + deferred queues)
 #include "coop/props/snapshot_census.h"  // Phase 0: per-class completeness floor for the claim sweep
@@ -401,6 +402,18 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
         // divergent sweep at SnapshotComplete. Covers the drive-skip early
         // return below too.
         coop::join_membership_sweep::RecordClaimIfTracking(existing);
+        // F1 probe (read-only, point A): a genuine KEYED prop the host is expressing onto our pre-existing
+        // local copy -- record the host-carried pos + whether the host held it (drive-skip) + an order stamp,
+        // so the quiescence verdict can tell loadObjects-clobber from host-held-at-snapshot. Keyed only
+        // (eidOnly clumps / converts / keyless are not the F1 saved-rock case). Gated: no work when disabled.
+        if (!eidOnly && !fromConvert && !keyW.empty() && keyW != L"None" &&
+            coop::dev::join_window_pos_trace::IsEnabled()) {
+            const bool hostHeld = ue_wrap::engine::IsMainPlayerGrabbing(localPlayer, existing)
+                               || coop::remote_prop::IsActorUnderAnyDrive(existing);
+            coop::dev::join_window_pos_trace::NoteSnapshotExpression(
+                keyW, static_cast<uint32_t>(payload.elementId), existing,
+                ue_wrap::FVector{payload.locX, payload.locY, payload.locZ}, hostHeld);
+        }
         // Fork B 2d (2026-06-10): the LOCAL player's grab is authoritative
         // for props THEY hold (symmetric with the remote drive-skip below).
         // At a re-bracket the host re-expresses a prop this client is
