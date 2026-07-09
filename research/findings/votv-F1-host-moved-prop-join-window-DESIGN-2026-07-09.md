@@ -1,8 +1,15 @@
 # F1 — host-moved keyed prop during a client's JOIN WINDOW shows at the SAVE pos — DESIGN 2026-07-09
 
 STATUS: DESIGN, PROVISIONAL. `/qf` R1-R5 (2026-07-09) converged on a DIRECTION + a hard gate: **MEASURE
-FIRST (a read-only probe), design not ratified until the probe runs.** NOT built. Independent of the
+FIRST (a read-only probe), design not ratified until the probe runs.** Independent of the
 keyed-prop intent lane (that is client->host grab/drop; this is host->joiner position).
+
+**PROBE BUILT + DEPLOYED 2026-07-09 (commit 7acd887d, DLL AAC8502CFAA78871, all 4 folders hash-matched).**
+`coop/dev/join_window_pos_trace.{h,cpp}` -- CLIENT-side, ini-gated [dev] join_window_pos_trace=1 (added
+off-by-default to the CLIENT_1/CLIENT_2 inis). AWAITING a hands-on repro run (host moves ONE keyed rock
+during the client's join window; read the client log's `join_window_pos_trace: VERDICT` lines). The
+reconcile (piece 1) + the send-side settled-skip + the pile-only apply-time settled-skip (piece 2) stay
+UNBUILT until the probe's verdict discriminates root (1) loadObjects-clobber from root (2) host-held.
 
 ## Symptom
 The HOST moves a keyed world prop (rock) DURING a client's join window; after the client finishes joining
