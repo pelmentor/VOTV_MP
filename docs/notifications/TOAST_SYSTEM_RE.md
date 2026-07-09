@@ -71,7 +71,7 @@ mixed:
 | Subtitles | `lib_C::runSubtitle` (`lib.json:46638`) | subtitle UI (uses `list_subtitles`) | `EX_LocalVirtualFunction` — INVISIBLE |
 | Achievement toasts | gamemode → `ui_achievementPopup_C` into `VerticalBox_achievements` (`mainGamemode.json:369/4428/207949`) | own viewport widget | BP-internal — INVISIBLE |
 | Geiger alert | `mainPlayer.geigerAlert` (state field, `mainPlayer.json:1604/444296`) | local HUD | local state |
-| **Server-down** | `serverBox_C.active_downl` → `addHint` (`serverBox.json:102`); gamemode `serverDown_GEN_VARIABLE` + `serverEfficiency_downl` (`mainGamemode.json:390640/358092`) | via `addHint` → `ui_hints_C` | INVISIBLE — **NOT a distinct system**, just an `addHint` toast |
+| **Server-down** | **CORRECTED by the authoring census 2026-07-09 [V]:** `active_downl` is a Bool "download-active" CustomEvent that does NOT call addHint. "Server is down" is **EMAIL + console `writeToLog` + the `serverDown` alarm** (via `ui_console.serverBroken` delegate handler + `panel_SATconsole."Server Alert"` called from `serverBox.break_type`) — **never a toast.** serverBox's 4 addHint sites are all floppy/upgrade prompts ("Floppy disc slot is busy", "Max upgrade", …). | email/console/alarm | see the census in `research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md` |
 
 ## Open probes (before implementation)
 - **[?]** Dump `ui_hints_C` + `ui_hint_C` (offsets: `verT_hinTs`, the hint's text field, auto-expire timer).

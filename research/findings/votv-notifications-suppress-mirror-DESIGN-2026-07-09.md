@@ -1,7 +1,9 @@
 # Notifications (toast/email/console) suppress+mirror — DESIGN /qf convergence 2026-07-09
 
-STATUS: **DESIGN DIRECTION converged (ROOT), BUILD BLOCKED on 2 gates.** RE docs: `docs/notifications/`.
-Not built. `/qf` design pass (2 rounds → converged on the verdict below; thread in scratchpad).
+STATUS: **GATE-1 (authoring census) DONE + GATE-2 (scope) RATIFIED. Design REFINED to a mirror-state +
+suppress-edge + forward-host-edge HYBRID (pure ROOT falsified by the census). MECHANISM /qf in progress;
+4 residual runtime probes gate parts of the build.** RE docs: `docs/notifications/`. Not built. `/qf`
+design pass 2 rounds + census (below); thread in scratchpad.
 
 ## The premise CORRECTION (why this is bigger than "suppress a toast")
 The user asked to "suppress the client's false `SERVER "X" is down` toast + mirror the host's." The RE
@@ -26,7 +28,65 @@ which is UE-replicated. So the real feature is **server-state sync**, not toast 
   (one-shot email/console/alarm author — event_fire shape). Probably a state-mirror lane + an
   edge-forward lane, not one.
 
-## THE 2 GATES (before ANY build — do NOT skip, /qf-confirmed)
+## AUTHORING CENSUS — RUN 2026-07-09 (GATE-1 done; measured, corrects the /qf hypothesis)
+Agent census over the disassembled serverBox/panel_SATconsole/ui_console/ticker_serverBreaker/mainGamemode/lib:
+- **Q1 — the breaker is NOT the sole author.** ≥5 break paths call `serverBox.breakServer`: `ticker_serverBreaker`
+  (host tick), serverBox self (in-box floppy/power/damage), **`dish.loadData` (WORLD-LOAD — a client save-loading
+  the host world restores saved-broken servers)**, `trigger_breakDish`, `trigger_eventer.runSpecialEvent` (an
+  EVENT). A 2nd authoring verb `break_type` is called by `analogDScreenTest` (the repair minigame). `fix` is
+  called by `kerfurOmega`/`p_kerfus` (kerfur auto-repair). So **stopping the client ticker kills only 1 of ≥5**.
+- **Q2 — drive-REAL is viable (no shadow needed).** `breakServer`/`fix`/`break_type` ENTANGLE state-set with
+  authoring (broadcast `serverBroke`/`fixed`, spawn the repair minigame, `brokenServers±1`, `calcServerEff`,
+  and `break_type` fires the Server Alert email/alarm). BUT **`check()` is a clean notify-free re-skin**
+  (reads isBroken/damaged → SetMaterial/SetActive, no delegate/minigame). → mirror by raw-writing the fields
+  (isBroken/damaged/health/upgrades) + `gamemode.brokenServers` then calling `check()`; NEVER call the verbs.
+- **Q3 — the notice is an EDGE, two sinks, no state poll.** `ui_console.serverBroken` is bound to each
+  `servers[].serverBroke` multicast delegate (one-shot per breakServer) → addEmail + writeToLog.
+  `panel_SATconsole."Server Alert"` is a DIRECT call from `serverBox.break_type` (NOT a delegate subscription)
+  → addEmail + writeToLog + `serverDown` alarm `Activate()`. Neither polls isBroken → a pure state-mirror does
+  NOT re-author notices.
+- **Q4 — `active_downl` does NOT toast.** "Server is down" = EMAIL (`!!!Automatic Alert System!!!`, body
+  `Server "{serv}" is down!/has been damaged!`) + console writeToLog + the SAT-console alarm. serverBox's 4
+  addHint sites are all floppy/upgrade prompts. (Corrects TOAST_SYSTEM_RE; confirms TOAST_CATALOG.)
+- **Q5 — ROOT ALONE IS INSUFFICIENT (the decisive correction).** Stopping the client ticker kills path 1; but
+  the EDGE authors fire from the client's OWN `breakServer`/`break_type` on non-ticker triggers — world-load
+  dish (#2), events (#3), in-box (#4), repair-minigame (#5) — which survive both "stop ticker" and "mirror
+  state". So the design MUST ALSO suppress the client's authoring. Narrowest seam (census): the **2 edge sinks**
+  — `ui_console.serverBroken`, `panel_SATconsole."Server Alert"`, `serverDown.Activate()`.
+
+## REFINED DESIGN (post-census — a mirror-state + suppress-edge + forward-host-edge HYBRID)
+The pure "client never self-authors" ROOT was falsified (Q5). The measured design is host-authoritative with
+THREE parts (still one invariant: *the host owns server state + its notices; the client renders*):
+1. **STATE mirror (drive-real, alarm_sync shape):** host publishes `brokenServers` + per-serverBox
+   {isBroken,damaged,upgrades,health} + serverEfficiency; the client raw-writes its real serverBox fields +
+   calls `check()` to re-skin. Its SAT-console `sv.*`/`tw.*` queries then read TRUE state.
+2. **GATE THE VERB, not the sinks (mechanism /qf refinement — invariant, not a site-list):** the notice +
+   the state-mutation + the minigame all originate in the 3 verbs `breakServer`/`break_type`/`fix`. Gating
+   THOSE once on the client puts all ≥5 break callers (ticker, world-load dish, events, in-box, minigame)
+   under ONE authority-gate — timing-clean (unconditional on the client; no `world_load_episode` bracket
+   needed, unlike the edge-suppress fallback). The client's serverBox becomes a pure puppet driven by (1).
+   **BUILDABILITY GATE (M1):** the verbs dispatch via `EX_LocalVirtualFunction` (crude measure) → LIKELY
+   invisible to BOTH our ProcessEvent detour AND the Func-patch (the `[[lesson-script-fn-invisible-to-func-patch]]`
+   class). If confirmed, the verb-gate can't be a clean intercept → fall back to patching the NATIVE calls
+   INSIDE the verb (the delegate broadcast / minigame spawn / Server Alert) or, last, the 2-edge-sink
+   suppress (the site-list, with the world-load bracket). PRECISE schema-aware disasm of the verb call node
+   is required to choose — NOT YET DONE.
+3. **FORWARD the host notice EDGE (event_fire shape):** host forwards the real break/damaged edge ({server,
+   damageType}); the client authors the true notice via a reflected addEmail/writeToLog/alarm (we are the
+   dispatcher → visible), OR its now-gated edge sink fires only on the host-forwarded edge.
+Two dispatch causes (STATE poll vs EDGE) → likely 2 wire lanes (refuse-unification confirmed).
+
+## RESIDUAL RUNTIME PROBES (census-flagged — gate parts of the build)
+- **P1 (drive-real gate):** confirm `check()` fully re-skins from a RAW-written `isBroken`/`damaged`, and locate
+  the `EX_LetBool` that writes those bools (the census pinned upgrades/health writes, not the bool set). If
+  check() doesn't re-skin from raw bools, the STATE applier needs another path. **Gates part 1.**
+- **P2:** the exact in-box trigger of serverBox-internal breakServer (path #4 client-triggerability).
+- **P3:** the player-repair→`fix` path (not in the dumps) + whether the repair minigame calls `fix` on success.
+- **P4:** how to neutralize the 2 edge sinks on the client (they're BP delegate/direct calls — the suppress
+  mechanism for part 2 must be RE'd: unbind the delegate, gate the handler, or suppress addEmail/writeToLog/
+  alarm when client-locally-triggered).
+
+## THE 2 GATES (before ANY build — GATE-1 now DONE)
 1. **GATE-1 — the disasm AUTHORING CENSUS (a measurement, NOT YET RUN).** serverBox / panel_SATconsole /
    ui_console / ticker_serverBreaker are **absent from the bytecode dataset** (`research/pak_re/cfg/` has
    only mainGamemode/daynightCycle/directionalWind). Disassemble them (bp_reflect.py) to MEASURE, not infer:
@@ -53,10 +113,20 @@ breaks a server → client's console/email/alarm shows the TRUE notice (mirrored
 `sv.check` reads the true health — proving the state lane + the edge lane + the no-self-author invariant
 together. Exact shape is designed AFTER the census (a MECHANISM /qf on the measured facts).
 
-## Next steps (in order)
-1. Run GATE-1 (the disasm census) — read-only RE, ready to do.
-2. Present GATE-2 (scope) to the user — done in this session's handoff.
-3. MECHANISM /qf on the measured facts → the valid Inc-1 → build → implementation /qf.
+## Next steps (in order) — GATE-1 + GATE-2 + design/mechanism /qf all DONE; 2 build-gating measurements remain
+1. ~~GATE-1 census~~ DONE. ~~GATE-2 scope~~ RATIFIED (COOP_SCOPE `4f2be8b7`). ~~Design + mechanism /qf~~ DONE
+   (converged on the verb-gate hybrid above).
+2. **M1 — precise verb-dispatch disasm** (schema-aware read of a `breakServer`/`break_type`/`fix` call node):
+   is it `EX_LocalVirtualFunction` (invisible → verb-gate needs the native-inner-call patch or edge-suppress
+   fallback) or a Func-visible route (verb-gate = a cancelling Func-patch)? This chooses the part-2 mechanism.
+3. **M2 — P1 runtime probe:** does `serverBox.check()` re-skin from a RAW-written `isBroken`/`damaged` bool
+   (+ locate the `EX_LetBool` field write)? Gates the whole part-1 STATE lane (fallback = re-implement the
+   re-skin from SetMaterial/SetActive).
+4. THEN: build **Inc-1** = the chosen verb-gate/suppress (part 2) + the drive-real STATE mirror (part 1) —
+   host breaks a server → client `sv.check` reads broken + re-skins, ZERO false local notice. Then the
+   IMPLEMENTATION /qf on the wiring, then Inc-2 = the FORWARD host notice edge (part 3).
+Both M1 + M2 are read-only/probe measurements — the build cannot be correct without them (measure-don't-infer;
+building the verb-gate on the inference that the verbs are interceptable is the exact trap the /qf caught).
 
 Related: `docs/notifications/`, `docs/COOP_DISPATCH_VISIBILITY.md:126` (addHint invisibility),
 `src/votv-coop/src/coop/world/alarm_sync.*` (state-poll lane precedent),
