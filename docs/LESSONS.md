@@ -79,6 +79,20 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   save-authoritative pos reconcile is SEND-SIDE ONLY (capture baseline + flush); the chip overlay
   auto-skips a non-chip eid, so no dup. *Look FIRST:* `FlushDivergedSavePositionsForSlot` +
   `UpdateChipHostPos`. `memory/lesson_pos_reconcile_generalizes_via_generic_receiver.md`
+- **To sync a VOTV world SYSTEM (servers/alarm/…), mirror the STATE + drive the notify-free re-applier
+  from the host — NEVER intercept the mutating verb** (breakServer/runTrigger are `EX_Local*` invisible).
+  Poll the state field 1 Hz → broadcast on change → client raw-writes + reflected `check()`/`runTrigger`;
+  client neutralizes its own autonomous mutator (disable ticker tick / zero the data array). *Look FIRST:*
+  `coop/world/alarm_sync.cpp` (one instance) + `coop/interactables/serverbox_sync.cpp` (an array).
+  `memory/lesson_votv_world_system_sync_mirror_state_not_verb.md`
+- **`coop/world/email_sync` is PEER-SYMMETRIC** (each peer forwards its OWN new inbox rows) — so a client's
+  FALSE self-authored email/notice is broadcast to the host + all peers = permanent SHARED-inbox pollution,
+  not a cosmetic flash. Before designing a "hide a client's wrong notice" fix, check the channel's
+  direction. `memory/lesson_email_sync_peer_symmetric_client_false_notice_pollutes_shared.md`
+- **`server` naming/placement:** a signal-SERVER sync goes with its signal siblings in
+  `coop/interactables/` (signal_sync/console_state_sync), named after the engine class (`serverBox_C` →
+  `serverbox_sync`) — NOT `coop/world/` (a 14-file catch-all), and NOT "server_sync" (ambiguous with the
+  NETWORK server that saturates this mod). Instance of `memory/feedback_folder_per_domain_concept_rule.md`.
 
 ## 4. Dispatch, hooks & input seams
 
@@ -90,6 +104,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **Every global `GetAsyncKeyState` hotkey poller gates on `!IsOverlayCapturingText()` too** — else it
   fires while the user types in chat (T then G triggered voice). `memory/lesson_hotkey_pollers_gate_on_overlay_text_capture.md`
 - **A gated probe that "didn't fire": FIRST verify the GATE reads true.** `memory/lesson_gated_probe_verify_the_gate.md`
+- **BP dynamic-multicast delegate UNBIND from C++ is an UNPROVEN capability here** (zero
+  `RemoveDynamic`/`Unbind`/`ClearDelegate` in-tree) — before designing "suppress a BP event by killing its
+  delegate handler", PROVE the unbind (layout RE + probe); it's a BUILD GATE. Prefer the proven
+  caller-neutralization (disable a ticker / zero an array) or host-authoritative state.
+  `memory/lesson_bp_delegate_unbind_unproven_capability.md`
 
 ## 5. Engine / UE4 facts
 
@@ -100,6 +119,10 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   Static root silently no-ops the teleport). `memory/lesson_runtime_staticmeshactor_must_be_movable.md`
 - **SEH shields must NEVER absorb `0xC00000FD`** (stack overflow). `memory/lesson_never_absorb_stack_overflow.md`
 - **A bare proxy can NEVER be `lookAtActor`** — use a camera-ray cone. `memory/lesson_proxy_never_lookatactor_use_camera_cone.md`
+- **`serverBox_C.check()` re-skins PURELY from raw `IsBroken@0x378` (never `damaged`)** — notify-free, so a
+  visible break mirror = raw-write IsBroken + reflected `check()`. Offsets (CXXHeaderDump): servers@0x3F0 /
+  brokenServers@0x8A0 / eff@0x400/0x404. **A base runs ~54 serverBoxes** (a farm, not a handful) — never
+  assume a small fixed count; a 32-cap dropped 22 (smoke-caught). `memory/lesson_serverbox_check_reskins_from_isbroken.md`
 
 ## 6. Assets, models, geometry
 
