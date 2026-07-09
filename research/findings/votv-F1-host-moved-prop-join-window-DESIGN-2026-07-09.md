@@ -1,15 +1,36 @@
 # F1 — host-moved keyed prop during a client's JOIN WINDOW shows at the SAVE pos — DESIGN 2026-07-09
 
-STATUS: DESIGN, PROVISIONAL. `/qf` R1-R5 (2026-07-09) converged on a DIRECTION + a hard gate: **MEASURE
-FIRST (a read-only probe), design not ratified until the probe runs.** Independent of the
-keyed-prop intent lane (that is client->host grab/drop; this is host->joiner position).
+STATUS: FIX BUILT + AGENT-AUDITED (0 CRITICAL FAIL) + DEPLOYED 2026-07-09; NOT hands-on-verified.
+The `/qf` design was ratified by the probe and shipped:
 
-**PROBE BUILT + DEPLOYED 2026-07-09 (commit 7acd887d, DLL AAC8502CFAA78871, all 4 folders hash-matched).**
-`coop/dev/join_window_pos_trace.{h,cpp}` -- CLIENT-side, ini-gated [dev] join_window_pos_trace=1 (added
-off-by-default to the CLIENT_1/CLIENT_2 inis). AWAITING a hands-on repro run (host moves ONE keyed rock
-during the client's join window; read the client log's `join_window_pos_trace: VERDICT` lines). The
-reconcile (piece 1) + the send-side settled-skip + the pile-only apply-time settled-skip (piece 2) stay
-UNBUILT until the probe's verdict discriminates root (1) loadObjects-clobber from root (2) host-held.
+1. **PROBE ran, VERDICT = ROOT (1) CONFIRMED** (commit 7acd887d, `coop/dev/join_window_pos_trace`). User
+   ran the repro; client log: `keys=2203 clobber=12 snapshot-won=2082 host-held=1 dead=1 unresolved=0`.
+   The loadObjects-clobber root is MEASURED, not inferred. (unresolved=0 => the two-root model is complete.
+   no-snapshot=107 = a probe COVERAGE gap: fresh-spawned keyed props the point-A converge trace didn't
+   cover -- NOT a contradiction.)
+2. **FIX BUILT** (commit 3199eae2 + perf throttle 44127e2e, DLL DA7901777A8DD305, all 4 folders hash-matched).
+   Piece 1 = the b3 pile reconcile generalized to keyed props (`FlushDivergedPilePositionsForSlot` ->
+   `FlushDivergedSavePositionsForSlot`; new `g_blobKeyedXforms` baseline via `CollectTrackedKeyedPropTransforms`).
+   Piece 2 = the apply-time settled-skip in `ApplyPendingPosCorrections`. Receiver UNCHANGED (eid-generic;
+   the chip overlay auto-skips a keyed eid).
+3. **AUDITED** by an agent (2026-07-09): zero CRITICAL FAIL; the no-dup claim is code-verified
+   (`UpdateChipHostPos` matches only `g_chipEntries` -> no vacate twin for a keyed eid). WARNs addressed/noted:
+   perf (GetActorLocation is a UFunction dispatch -> keyed scan THROTTLED to firstRun + every 5th late-arm
+   tick, 44127e2e); a narrow self-seed gap + the two file-size flags remain as noted below.
+
+**NOT YET hands-on-verified** -- needs a real 2-peer join with the host moving a keyed rock during the
+client's join window; watch the client log for `[PILE-B3] CLIENT ... keyed` apply lines + the rock landing
+at the host pos. This is the user's test.
+
+## KNOWN LIMITATIONS (from the audit, do NOT re-dig -- MEASURED)
+- **Self-seed gap:** `CollectTrackedKeyedPropTransforms` (unlike the pile collector) does NOT self-seed an
+  unindexed keyed prop. Mainline F1 is fine (a moved rock is index-tracked), but the COMPOUND case
+  host-world-change + move-a-keyed-prop + join in the same deferred-reseed window can miss it. N=1; a
+  won't-fix unless it recurs (add the self-seed to the collector, mirroring `CollectTrackedPileTransforms`).
+- **Kerfur off-prop overlap:** the keyed map also captures off-form kerfurs (they are keyed Aprops). Benign
+  (disjoint host actions vs the scope-A kerfur lane; a converted off-prop fails the IsLive gate), but noted.
+- **Modularity:** `save_transfer.cpp` (901 LOC) + `prop_element_tracker.cpp` (1057) are over the 800 soft
+  cap. Proposed extraction: pull the whole diverged-save-pos flush into `coop/session/save_diverged_pos_flush.*`.
 
 ## Symptom
 The HOST moves a keyed world prop (rock) DURING a client's join window; after the client finishes joining

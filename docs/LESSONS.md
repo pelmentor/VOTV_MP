@@ -75,6 +75,10 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **Pre-world subsystems Install at StartCoopSession, NOT world-gated.** `memory/feedback_preworld_install_at_startcoopsession.md`
 - **When a release VERB can't be caught, STREAM THROUGH the state.** `memory/lesson_stream_through_release_not_verb.md`
 - **An e2e assert must DISCRIMINATE the axis it claims.** `memory/lesson_e2e_assert_must_discriminate_the_axis.md`
+- **The join-window PropSnapPos POSITION reconcile is eid-generic at the receiver** — a new
+  save-authoritative pos reconcile is SEND-SIDE ONLY (capture baseline + flush); the chip overlay
+  auto-skips a non-chip eid, so no dup. *Look FIRST:* `FlushDivergedSavePositionsForSlot` +
+  `UpdateChipHostPos`. `memory/lesson_pos_reconcile_generalizes_via_generic_receiver.md`
 
 ## 4. Dispatch, hooks & input seams
 
@@ -111,6 +115,9 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 ## 7. Performance
 
+- **`GetActorLocation`/`GetComponentLocation` are UFunction DISPATCHES, not raw reads** — never bulk-call
+  per-tick over thousands of actors (invisible on a fresh save, hitches the host on a mature world);
+  throttle / pre-filter / read the raw transform. *Look FIRST:* `engine.cpp GetActorLocation`. `memory/lesson_getactorlocation_is_a_ufunction_dispatch.md`
 - **Per-tick `GUObjectArray` walk: cheap class check BEFORE `NameOf`.** `memory/lesson_full_array_walk_cheap_filter_before_nameof.md`
 - **A periodic FPS hitch by PERIOD COINCIDENCE is not causation** — measure the real source. `memory/lesson_periodic_hitch_not_the_walk_by_period_coincidence.md`
 - **A fixed-capacity hook table + ASYMMETRIC roles = a half-working fix.** `memory/lesson_hook_table_capacity_asymmetric_peers.md`
