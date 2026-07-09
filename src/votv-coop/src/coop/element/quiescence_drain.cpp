@@ -20,6 +20,7 @@
 #include "coop/props/remote_prop_spawn.h"      // HasLoadTailQuiesced (the quiescence gate)
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/props/save_identity_bind.h"     // BindUnboundReCreates (identity layer the sequence calls)
+#include "coop/player/players_registry.h"      // F1 piece 2: Local() -> settled-skip a held actor at apply
 #include "coop/props/save_time_retire_util.h"  // FindExactMatch + UnmarkAndDestroy (shared kernel)
 #include "coop/session/ini_config.h"           // IsIniKeyTrue (pile_dup_probe gate)
 #include "ue_wrap/engine.h"
@@ -336,6 +337,9 @@ void ArmPendingPosCorrection(coop::element::ElementId eid,
 
 void ApplyPendingPosCorrections() {
     if (g_pendingPosCorrection.empty()) return;  // game-thread only (the event_feed drain / the sweep), by contract
+    // F1 piece 2 (2026-07-09): resolve the local player once for the per-entry settled-skip below (skip a
+    // correction whose actor is now held by THIS client). Cold path (the quiescence drain / a late arrival).
+    void* localPlayer = coop::players::Registry::Get().Local();
     for (auto it = g_pendingPosCorrection.begin(); it != g_pendingPosCorrection.end(); ) {
         const uint32_t eid = it->first;
         PendingPosCorrection& c = it->second;
@@ -353,6 +357,26 @@ void ApplyPendingPosCorrections() {
                         "post-quiescence passes -- eid never bound a live native (re-bind found no candidate); "
                         "accepting the divergence rather than pinning the 4 Hz drain (FPS-pin guard)",
                         eid, c.x, c.y, c.z, c.unresolvedPasses);
+                it = g_pendingPosCorrection.erase(it);
+                continue;
+            }
+            ++it;
+            continue;
+        }
+        // SETTLED RE-VALIDATION (F1 piece 2, 2026-07-09): the actor is LIVE, but a grab/convert may have landed
+        // BETWEEN arm (PropSnapPos receipt) and apply (this sweep). If it did, eid E now renders as a CARRIED
+        // clump (a grabbed pile) or a held prop -- SetActorLocation here would fling the carried body to a ghost
+        // pos (the latent bug: this loop USED to re-check only liveness). A grabbed ROCK is already gone (hold-R
+        // pickup destroys the world actor -> the liveness check above drops it), so this is the PILE/clump guard.
+        // Defer bounded (share unresolvedPasses with the not-bound leg) so a TRANSIENT grab still gets its
+        // correction after release; drop LOUD if it stays held past the cap rather than pinning the drain.
+        if ((localPlayer && ue_wrap::engine::IsMainPlayerGrabbing(localPlayer, actor)) ||
+            coop::remote_prop::IsActorUnderAnyDrive(actor)) {
+            if (++c.unresolvedPasses >= kMaxPosCorrectionPasses) {
+                UE_LOGW("[PILE-B3] CLIENT dropping pos-correction eid=%u -- actor stayed HELD/driven for %d "
+                        "passes (a grab/convert owns its position now); accepting the divergence over fighting "
+                        "the carry (snapping a carried clump would fling it to a ghost pos)",
+                        eid, c.unresolvedPasses);
                 it = g_pendingPosCorrection.erase(it);
                 continue;
             }

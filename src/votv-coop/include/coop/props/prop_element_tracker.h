@@ -195,6 +195,18 @@ void CollectTrackedPileTransforms(
 void CollectTrackedKerfurTransforms(
     std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out);
 
+// F1 (2026-07-09): collect the SAVE-TIME position of every live KEYED prop (rock etc.),
+// keyed by its host ElementId. Sibling to CollectTrackedPileTransforms but for the KEYED
+// Aprop set (the live key index g_keyToActor). Unlike a pile, a keyed prop DOES ride the
+// connect snapshot at the host's current pos -- but the joiner's own loadObjects RECREATES
+// it at the SAVE pos AFTER, clobbering the snapshot, so it renders stale. Capturing the
+// host pos at the blob instant (== what the joiner loads) lets the diverged-position flush
+// re-assert the host-moved pos at quiescence, past the clobber. Copy the live keyed-actor
+// set under the leaf mutex, read positions OUTSIDE the lock. One index copy + engine reads,
+// game thread, cold connect-edge cost.
+void CollectTrackedKeyedPropTransforms(
+    std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out);
+
 // ---- One-shot seed -------------------------------------------------------
 // GUObjectArray walk that populates KnownKeyedProps + creates Prop Element
 // shadows for every live keyed-interactable. Internal latch; safe to

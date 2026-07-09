@@ -129,6 +129,16 @@ std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
     g_blobKerfurXforms[coop::net::kMaxPeers];
 
+// F1 (2026-07-09): the SAVE-TIME position of every live KEYED prop (rock etc.) at the blob instant,
+// keyed by host eid. Captured alongside g_blobPileXforms in OnRequest (same tick == what the joiner
+// loads). Unlike a pile (which has NO wire-position channel), a keyed prop DOES ride the connect
+// snapshot at the host's current pos -- but the joiner's own loadObjects RECREATES it at the SAVE pos
+// AFTER the snapshot, clobbering it (F1 probe 2026-07-09: clobber=12 confirmed). The diverged-position
+// flush re-asserts the host's live pos at quiescence, PAST the clobber. Same lifetime/threading + clears
+// as g_blobPileXforms.
+std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
+    g_blobKeyedXforms[coop::net::kMaxPeers];
+
 // How many chunks one TickHost pass may push per slot. 4 x 56KB at 60 Hz = ~13
 // MB/s ceiling; the GNS send buffer's backpressure (send failure -> stop, retry
 // next tick) is the real pacer on slower links.
@@ -140,9 +150,11 @@ constexpr int kChunksPerTick = 4;
 // RE-BIND-by-position resurrected the @old copy (18:17 trace). Fix: keep flushing that joiner's authoritative
 // pile positions for a window past world-ready, so EVERY in-window move (whenever it happens) is delivered.
 // Per (slot,eid) last-sent position dedups the wire to actual position CHANGES (cold: a few dozen entries x an
-// O(1) map lookup per cadence tick). g_pileFlushArmUntil[slot] is set by FlushDivergedPilePositionsForSlot (the
+// O(1) map lookup per cadence tick). g_pileFlushArmUntil[slot] is set by FlushDivergedSavePositionsForSlot (the
 // one-shot call at ConnectReplayForSlot opens the window); TickHost re-runs on the cadence until it expires.
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector> g_lastFlushedPilePos[coop::net::kMaxPeers];
+// F1 (2026-07-09): the keyed-prop half's own per-(slot,eid) last-sent dedup, sharing the same arm window.
+std::unordered_map<coop::element::ElementId, ue_wrap::FVector> g_lastFlushedKeyedPos[coop::net::kMaxPeers];
 std::chrono::steady_clock::time_point g_pileFlushArmUntil[coop::net::kMaxPeers]{};
 std::chrono::steady_clock::time_point g_pileFlushLastRun[coop::net::kMaxPeers]{};
 constexpr auto kPileFlushLateWindow = std::chrono::seconds(25);       // cover a long load tail + late clusters
@@ -465,10 +477,15 @@ void OnRequest(int peerSlot) {
             // onto the KerfurConvert at a window turn-on so the client retires its stale local off-prop.
             g_blobKerfurXforms[peerSlot].clear();
             coop::prop_element_tracker::CollectTrackedKerfurTransforms(g_blobKerfurXforms[peerSlot]);
-            UE_LOGI("save_transfer: slot %d -- captured %zu keyed-prop keys + %zu pile + %zu kerfur "
-                    "save-time xforms at blob instant (R2 + Path 1c + scope A baselines)",
+            // F1 (2026-07-09): capture every live KEYED prop's save-time position at this SAME blob instant --
+            // the pos the joiner loads its keyed natives at. The diverged-position flush re-asserts a
+            // host-moved keyed prop's live pos at quiescence, past the joiner's loadObjects clobber.
+            g_blobKeyedXforms[peerSlot].clear();
+            coop::prop_element_tracker::CollectTrackedKeyedPropTransforms(g_blobKeyedXforms[peerSlot]);
+            UE_LOGI("save_transfer: slot %d -- captured %zu keyed-prop keys + %zu pile + %zu kerfur + %zu keyed "
+                    "save-time xforms at blob instant (R2 + Path 1c + scope A + F1 baselines)",
                     peerSlot, g_blobKeys[peerSlot].size(), g_blobPileXforms[peerSlot].size(),
-                    g_blobKerfurXforms[peerSlot].size());
+                    g_blobKerfurXforms[peerSlot].size(), g_blobKeyedXforms[peerSlot].size());
             return;
         }
         UE_LOGW("save_transfer: slot %d -- live scratch '%ls.sav' unreadable after capture; "
@@ -531,8 +548,10 @@ void CancelForSlot(int peerSlot) {
     g_blobKeys[peerSlot].clear();  // R2: drop any unconsumed blob baseline
     g_blobPileXforms[peerSlot].clear();  // v86 Path 1c: drop the unconsumed save-time pile map
     g_blobKerfurXforms[peerSlot].clear();  // scope A: drop the unconsumed save-time kerfur map
-    g_pileFlushArmUntil[peerSlot] = {};        // b3 late-arm: disarm the diverged-pile flush window
-    g_lastFlushedPilePos[peerSlot].clear();    // and drop its per-eid dedup baseline
+    g_blobKeyedXforms[peerSlot].clear();   // F1: drop the unconsumed save-time keyed-prop map
+    g_pileFlushArmUntil[peerSlot] = {};        // b3 late-arm: disarm the diverged save-pos flush window
+    g_lastFlushedPilePos[peerSlot].clear();    // and drop its per-eid dedup baselines (pile + keyed)
+    g_lastFlushedKeyedPos[peerSlot].clear();
 }
 
 // v86 Path 1c: the save-time position of pile `eid` captured at the blob instant for
@@ -593,36 +612,39 @@ bool TryGetSaveTimePileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVect
 // Core flush: send a PropSnapPos for every save-time pile whose host-current pos DIFFERS from what we last
 // delivered to this joiner (a real, not-yet-delivered move). `firstRun` (the ConnectReplayForSlot one-shot)
 // arms the late window + resets the dedup baseline; later cadence runs (TickHost) deliver only NEW moves.
-void FlushDivergedPilePositionsForSlot_(int peerSlot, bool firstRun) {
+// F1 (2026-07-09): generalized from the pile-only b3 flush into ONE reconcile for EVERY save-authoritative
+// entity (piles AND keyed props). Both symptoms share ONE root -- "the joiner's save-load stales any host
+// in-window move" -- but differ in why the position went stale: a PILE has no wire-position channel at all;
+// a KEYED prop DOES ride the connect snapshot at the host's pos, but the joiner's own loadObjects RECREATES
+// it at the save pos AFTER, clobbering it (F1 probe 2026-07-09: clobber=12 confirmed, unresolved=0). Both are
+// fixed the same way: re-assert the host's CURRENT pos at quiescence (the receiver arms it, ApplyPending applies
+// it AFTER loadObjects), where the host pos diverged from the joiner's save-time baseline. Pure position-compare
+// (robust regardless of any convert/snapshot timing).
+void FlushDivergedSavePositionsForSlot_(int peerSlot, bool firstRun) {
     if (!g_session || peerSlot < 1 || peerSlot >= coop::net::kMaxPeers) return;
-    const auto& m = g_blobPileXforms[peerSlot];
-    if (m.empty()) return;  // stale-fallback join (no save-time pile map captured)
-    auto& lastSent = g_lastFlushedPilePos[peerSlot];
+    const auto& pileM  = g_blobPileXforms[peerSlot];
+    const auto& keyedM = g_blobKeyedXforms[peerSlot];
+    if (pileM.empty() && keyedM.empty()) return;  // stale-fallback join (no save-time maps captured)
     if (firstRun) {
-        lastSent.clear();
+        g_lastFlushedPilePos[peerSlot].clear();
+        g_lastFlushedKeyedPos[peerSlot].clear();
         g_pileFlushArmUntil[peerSlot] = std::chrono::steady_clock::now() + kPileFlushLateWindow;
     }
     constexpr float kDivergeCm2 = 4.0f * 4.0f;  // >4cm moved (above settle jitter) = a real in-window move
     constexpr float kResendCm2  = 4.0f * 4.0f;  // only re-send when the pos moved >4cm from what we last sent
-    int sent = 0, checked = 0;
-    for (const auto& [eid, savePos] : m) {
-        ++checked;
-        coop::element::Element* el = coop::element::Registry::Get().Get(eid);
-        void* actor = el ? el->GetActor() : nullptr;
-        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead -> skip
-        // CRITICAL (docs/piles/12, 18:52): only a RESTING chipPile native gets a position correction. A pile
-        // the host is actively GRABBING/THROWING is a CLUMP (morphed), and its live actor is airborne on the
-        // throw arc -- the trash-channel convert stream (ToClump/ToPile) is its authority, delivered correctly
-        // (LAND drift ~0). The b3 flush must NOT compete: chasing the clump's mid-air waypoints armed identity-key
-        // updates + HOST-VACATE twins at airborne spots => the paired native+proxy dup. Skip non-native actors.
-        if (!ue_wrap::prop::IsChipPile(actor)) continue;  // grabbed clump / proxy -> the convert stream owns it
+
+    // Shared sender: a PropSnapPos for `eid` at `actor`'s current transform, deduped per (slot,eid). Returns
+    // true iff a correction went out (the host pos diverged from the joiner's save baseline AND was not already
+    // delivered at essentially this pos). `kind` is a log tag only.
+    auto sendCorrection = [&](coop::element::ElementId eid, const ue_wrap::FVector& savePos, void* actor,
+                              std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& lastSent,
+                              const char* kind) -> bool {
         const ue_wrap::FVector cur = ue_wrap::engine::GetActorLocation(actor);
         const float dx = cur.X - savePos.X, dy = cur.Y - savePos.Y, dz = cur.Z - savePos.Z;
-        if (dx * dx + dy * dy + dz * dz <= kDivergeCm2) continue;  // unmoved (save IS current) -> no correction
-        // Dedup: skip if we already delivered this eid at (essentially) this position (the late-arm re-runs 2 Hz).
+        if (dx * dx + dy * dy + dz * dz <= kDivergeCm2) return false;  // unmoved (save IS current)
         if (auto it = lastSent.find(eid); it != lastSent.end()) {
             const float sx = cur.X - it->second.X, sy = cur.Y - it->second.Y, sz = cur.Z - it->second.Z;
-            if (sx * sx + sy * sy + sz * sz <= kResendCm2) continue;  // already delivered @this pos -> no re-send
+            if (sx * sx + sy * sy + sz * sz <= kResendCm2) return false;  // already delivered @this pos
         }
         const ue_wrap::FRotator rot = ue_wrap::engine::GetActorRotation(actor);
         coop::net::PropSnapPosPayload p{};
@@ -631,20 +653,53 @@ void FlushDivergedPilePositionsForSlot_(int peerSlot, bool firstRun) {
         p.rotPitch = rot.Pitch; p.rotYaw = rot.Yaw; p.rotRoll = rot.Roll;
         g_session->SendReliableToSlot(peerSlot, coop::net::ReliableKind::PropSnapPos, &p, sizeof(p));
         lastSent[eid] = cur;
-        ++sent;
-        UE_LOGI("[PILE-B3] HOST slot %d pos-correction eid=%u save=(%.1f,%.1f,%.1f) -> current=(%.1f,%.1f,%.1f) "
+        UE_LOGI("[PILE-B3] HOST slot %d %s pos-correction eid=%u save=(%.1f,%.1f,%.1f) -> current=(%.1f,%.1f,%.1f) "
                 "drift=%.1fcm (%s in-window move -> deliver the authoritative position)",
-                peerSlot, static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z,
+                peerSlot, kind, static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z,
                 cur.X, cur.Y, cur.Z, std::sqrt(dx * dx + dy * dy + dz * dz), firstRun ? "one-shot" : "late-arm");
+        return true;
+    };
+
+    int sentPile = 0, checkedPile = 0;
+    for (const auto& [eid, savePos] : pileM) {
+        ++checkedPile;
+        coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+        void* actor = el ? el->GetActor() : nullptr;
+        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead -> skip
+        // CRITICAL (docs/piles/12, 18:52): only a RESTING chipPile native gets a position correction. A pile
+        // the host is GRABBING/THROWING is a CLUMP (morphed), airborne on the throw arc -- the trash-channel
+        // convert stream owns it (LAND drift ~0). Chasing its mid-air waypoints armed identity-key updates +
+        // HOST-VACATE twins at airborne spots => the paired native+proxy dup. Skip non-native actors.
+        if (!ue_wrap::prop::IsChipPile(actor)) continue;  // grabbed clump / proxy -> the convert stream owns it
+        if (sendCorrection(eid, savePos, actor, g_lastFlushedPilePos[peerSlot], "pile")) ++sentPile;
     }
-    if (sent > 0 || firstRun)
-        UE_LOGI("[PILE-B3] HOST slot %d diverged-pile flush (%s) -- %d correction(s) sent of %d save-time pile(s) "
-                "(connect-snapshot save-authoritative hole closed; late-armed through the join tail)",
-                peerSlot, firstRun ? "one-shot arm" : "late-arm tick", sent, checked);
+
+    int sentKeyed = 0, checkedKeyed = 0;
+    for (const auto& [eid, savePos] : keyedM) {
+        ++checkedKeyed;
+        coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+        void* actor = el ? el->GetActor() : nullptr;
+        if (!actor || !ue_wrap::reflection::IsLive(actor)) continue;  // dead (e.g. hold-R pickup destroyed it) -> skip
+        // The keyed path arms only the GENERIC pos correction (the receiver's UpdateChipHostPos matches nothing
+        // for a keyed eid -> NO vacate twin, unlike the pile path) so there is NO dup risk needing an IsChipPile
+        // resting gate. A host CARRYING the keyed prop mid-join sends transient positions, but they self-correct
+        // on the late-arm (the final resting pos wins) and the CLIENT-side apply settled-skip guards a client
+        // interacting with it -- so no host-carry skip is needed here. Defensive: a keyed eid that resolved to a
+        // pile is the pile map's row, not ours.
+        if (ue_wrap::prop::IsChipPile(actor)) continue;
+        if (sendCorrection(eid, savePos, actor, g_lastFlushedKeyedPos[peerSlot], "keyed")) ++sentKeyed;
+    }
+
+    if (sentPile > 0 || sentKeyed > 0 || firstRun)
+        UE_LOGI("[PILE-B3] HOST slot %d diverged save-pos flush (%s) -- pile %d/%d + keyed %d/%d "
+                "correction(s)/checked (connect-snapshot save-authoritative hole closed for piles AND keyed "
+                "props; late-armed through the join tail)",
+                peerSlot, firstRun ? "one-shot arm" : "late-arm tick",
+                sentPile, checkedPile, sentKeyed, checkedKeyed);
 }
 
-void FlushDivergedPilePositionsForSlot(int peerSlot) {
-    FlushDivergedPilePositionsForSlot_(peerSlot, /*firstRun=*/true);
+void FlushDivergedSavePositionsForSlot(int peerSlot) {
+    FlushDivergedSavePositionsForSlot_(peerSlot, /*firstRun=*/true);
 }
 
 // Host cadence (TickHost, host-only, ~per frame): keep flushing each armed joiner's authoritative pile
@@ -658,6 +713,7 @@ void TickPileFlushLateArm() {
         if (now >= g_pileFlushArmUntil[slot]) {                                    // window expired -> disarm + free dedup
             g_pileFlushArmUntil[slot] = {};
             g_lastFlushedPilePos[slot].clear();
+            g_lastFlushedKeyedPos[slot].clear();  // F1: retire the keyed dedup baseline with the pile one
             // JOIN WINDOW CLOSED for this slot (2026-07-02 client-FPS storm): the save-time blob
             // maps are JOIN-WINDOW structures, but "active join" was defined as map-non-empty and
             // nothing ever emptied them -- so for the whole session every host pile grab kept
@@ -671,19 +727,22 @@ void TickPileFlushLateArm() {
             // drained), and a LATE kerfur turn-on resolves by EID against its already-bound prop
             // (the save-time key only serves the in-window unbound race). Retire the maps ->
             // steady-state grabs stop stamping keys -> clients stop arming hopeless twins.
-            if (!g_blobPileXforms[slot].empty() || !g_blobKerfurXforms[slot].empty()) {
+            if (!g_blobPileXforms[slot].empty() || !g_blobKerfurXforms[slot].empty() ||
+                !g_blobKeyedXforms[slot].empty()) {
                 UE_LOGI("[PILE-09] slot %d join window CLOSED (b3 late-flush expiry) -- retiring "
-                        "save-time maps (%zu pile + %zu kerfur xform(s)); steady-state grabs no "
+                        "save-time maps (%zu pile + %zu kerfur + %zu keyed xform(s)); steady-state grabs no "
                         "longer stamp save-time keys for this joiner",
-                        slot, g_blobPileXforms[slot].size(), g_blobKerfurXforms[slot].size());
+                        slot, g_blobPileXforms[slot].size(), g_blobKerfurXforms[slot].size(),
+                        g_blobKeyedXforms[slot].size());
                 g_blobPileXforms[slot].clear();
                 g_blobKerfurXforms[slot].clear();
+                g_blobKeyedXforms[slot].clear();  // F1: retire the keyed baseline with the pile + kerfur ones
             }
             continue;
         }
         if (now - g_pileFlushLastRun[slot] < kPileFlushCadence) continue;          // debounce to the cadence
         g_pileFlushLastRun[slot] = now;
-        FlushDivergedPilePositionsForSlot_(slot, /*firstRun=*/false);
+        FlushDivergedSavePositionsForSlot_(slot, /*firstRun=*/false);
     }
 }
 
@@ -832,6 +891,10 @@ void OnDisconnect() {
         g_blobKeys[slot].clear();  // R2: no blob baseline survives a session end
         g_blobPileXforms[slot].clear();  // v86 Path 1c: nor the save-time pile map
         g_blobKerfurXforms[slot].clear();  // scope A: nor the save-time kerfur map
+        g_blobKeyedXforms[slot].clear();  // F1: nor the save-time keyed-prop map
+        g_pileFlushArmUntil[slot] = {};
+        g_lastFlushedPilePos[slot].clear();
+        g_lastFlushedKeyedPos[slot].clear();
     }
 }
 

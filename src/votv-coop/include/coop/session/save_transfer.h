@@ -96,13 +96,14 @@ void RecordGrabTimePileXform(coop::element::ElementId eid, const ue_wrap::FVecto
 // is a single fan-out, not per-joiner; a pile eid is unique). Game thread.
 bool TryGetSaveTimePileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out);
 
-// b3 (v90): at `peerSlot`'s world-ready, send a PropSnapPos position correction for every save-authoritative
-// chipPile whose CURRENT host actor position diverges from THIS joiner's save-time position -- i.e. a pile the
-// host MOVED during the join window whose PropConvert was dropped (chipPiles carry no position in the connect-
-// snapshot). Closes the connect-snapshot's save-authoritative hole. Iterates g_blobPileXforms[peerSlot] (the
-// per-joiner save-time pile map), resolves each eid's live host actor (element Registry), position-compares,
-// and SendReliableToSlot's the diverged. Called from ConnectReplayForSlot AFTER the gate opened. Game thread.
-void FlushDivergedPilePositionsForSlot(int peerSlot);
+// b3 (v90) + F1 (2026-07-09): at `peerSlot`'s world-ready, send a PropSnapPos position correction for every
+// save-authoritative entity -- chipPILE and KEYED prop -- whose CURRENT host actor position diverges from THIS
+// joiner's save-time position (a pile/prop the host MOVED during the join window). A pile carries no position
+// in the connect snapshot; a keyed prop DOES, but the joiner's loadObjects RECREATES it at the save pos AFTER,
+// clobbering it -- both stale on the joiner, both fixed by re-asserting the host's pos at quiescence. Iterates
+// g_blobPileXforms + g_blobKeyedXforms[peerSlot], resolves each eid's live host actor, position-compares, and
+// SendReliableToSlot's the diverged. Called from ConnectReplayForSlot AFTER the gate opened. Game thread.
+void FlushDivergedSavePositionsForSlot(int peerSlot);
 
 // scope A (kerfur off->active dup retire, 2026-06-24): the SAVE-TIME position of OFF-form kerfur `eid`,
 // captured at the blob instant (OnRequest), searched across ALL active peer slots' blob maps (the host

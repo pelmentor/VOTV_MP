@@ -827,6 +827,33 @@ void CollectTrackedKerfurTransforms(
                 "kerfur off-prop(s) -> %zu kerfur save-time xform(s)", minted, out.size());
 }
 
+void CollectTrackedKeyedPropTransforms(
+    std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out) {
+    // F1 (2026-07-09): host save-time KEYED-prop positions by host eid (see the header). The key
+    // index g_keyToActor holds exactly the live keyed Aprops the save persists (keyless chipPiles
+    // never enter it). Copy the actor set under the leaf mutex, then read eid + pos OUTSIDE the lock
+    // (no engine calls under the mutex -- same discipline as CollectTrackedKeyedPropKeys). No self-seed
+    // needed: keyed props are already index-tracked by the connect seed (that is what the R2 key-diff +
+    // the snapshot walk both rely on); an unindexed keyed prop is simply skipped (the snapshot's own
+    // pos still applies for it -- only a HOST-MOVED prop needs this correction, and a moved prop is
+    // tracked).
+    struct KeyedActor { void* actor; int32_t idx; };
+    std::vector<KeyedActor> actors;
+    {
+        std::lock_guard<std::mutex> lk(g_keyIndexMutex);
+        actors.reserve(g_keyToActor.size());
+        for (const auto& kv : g_keyToActor)
+            actors.push_back({kv.second.actor, kv.second.internalIdx});
+    }
+    for (const KeyedActor& ka : actors) {
+        // IsLiveByIndex (not raw IsLive): the index may hold a recycled slot; the by-index check rejects it.
+        if (!ka.actor || !R::IsLiveByIndex(ka.actor, ka.idx)) continue;
+        const coop::element::ElementId eid = GetPropElementIdForActor(ka.actor);
+        if (eid == coop::element::kInvalidId || eid == 0u) continue;
+        out[eid] = ue_wrap::engine::GetActorLocation(ka.actor);
+    }
+}
+
 bool HasSeededOnce() {
     return g_seededOnce.load(std::memory_order_acquire);
 }

@@ -205,7 +205,7 @@ void ConnectReplayForSlot(int slot) {
     // snapshot above). Closes the connect-snapshot's save-authoritative hole; the client snaps the bound native
     // at quiescence. AFTER TriggerForSlot so it rides Bulk behind the snapshot. (#1 kerfur is unaffected -- the
     // active kerfur is already delivered via EntitySpawn / npc_sync below.)
-    coop::save_transfer::FlushDivergedPilePositionsForSlot(slot);
+    coop::save_transfer::FlushDivergedSavePositionsForSlot(slot);
     coop::item_activate::QueueConnectBroadcastForSlot(slot);
     coop::weather_sync::QueueConnectBroadcastForSlot(slot);
     coop::interactable_sync::QueueConnectBroadcastForSlot(slot);  // door/light/container states
