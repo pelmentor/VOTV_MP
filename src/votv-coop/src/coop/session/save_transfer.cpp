@@ -155,6 +155,14 @@ constexpr int kChunksPerTick = 4;
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector> g_lastFlushedPilePos[coop::net::kMaxPeers];
 // F1 (2026-07-09): the keyed-prop half's own per-(slot,eid) last-sent dedup, sharing the same arm window.
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector> g_lastFlushedKeyedPos[coop::net::kMaxPeers];
+// F1 perf throttle (audit 2026-07-09): the keyed leg reads GetActorLocation (a UFunction DISPATCH, not a raw
+// read) for EVERY keyed prop to test divergence; a mature world has ~2000, and scanning all at the pile 2 Hz
+// hitches the host game thread through the join tail. Run the keyed scan on firstRun (the one-shot -- catches
+// every ALREADY-moved prop) + only every Nth late-arm tick, so a LATE in-tail keyed move is still caught within
+// ~N*cadence (~2.5 s) at a fraction of the cost. FULL scan each time it runs (no windowing) -> zero risk of
+// silently skipping a moved prop. Piles stay 2 Hz (far fewer survive the IsChipPile filter).
+constexpr int kKeyedLateArmEvery = 5;   // 2 Hz / 5 = ~0.4 Hz keyed re-scan
+int g_keyedLateArmTick[coop::net::kMaxPeers]{};
 std::chrono::steady_clock::time_point g_pileFlushArmUntil[coop::net::kMaxPeers]{};
 std::chrono::steady_clock::time_point g_pileFlushLastRun[coop::net::kMaxPeers]{};
 constexpr auto kPileFlushLateWindow = std::chrono::seconds(25);       // cover a long load tail + late clusters
@@ -628,6 +636,7 @@ void FlushDivergedSavePositionsForSlot_(int peerSlot, bool firstRun) {
     if (firstRun) {
         g_lastFlushedPilePos[peerSlot].clear();
         g_lastFlushedKeyedPos[peerSlot].clear();
+        g_keyedLateArmTick[peerSlot] = 0;
         g_pileFlushArmUntil[peerSlot] = std::chrono::steady_clock::now() + kPileFlushLateWindow;
     }
     constexpr float kDivergeCm2 = 4.0f * 4.0f;  // >4cm moved (above settle jitter) = a real in-window move
@@ -674,8 +683,16 @@ void FlushDivergedSavePositionsForSlot_(int peerSlot, bool firstRun) {
         if (sendCorrection(eid, savePos, actor, g_lastFlushedPilePos[peerSlot], "pile")) ++sentPile;
     }
 
+    // F1 perf throttle: keyed scan runs on firstRun, else only every kKeyedLateArmEvery-th late-arm tick.
+    bool doKeyed = firstRun;
+    if (!firstRun && !keyedM.empty() && ++g_keyedLateArmTick[peerSlot] >= kKeyedLateArmEvery) {
+        g_keyedLateArmTick[peerSlot] = 0;
+        doKeyed = true;
+    }
     int sentKeyed = 0, checkedKeyed = 0;
-    for (const auto& [eid, savePos] : keyedM) {
+    for (auto kit = keyedM.begin(); doKeyed && kit != keyedM.end(); ++kit) {
+        const auto& eid = kit->first;
+        const auto& savePos = kit->second;
         ++checkedKeyed;
         coop::element::Element* el = coop::element::Registry::Get().Get(eid);
         void* actor = el ? el->GetActor() : nullptr;
