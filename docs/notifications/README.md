@@ -27,8 +27,13 @@ toasts (`Cannot be used when held`) alone.
    in research/findings/.)
 
 ## Status (2026-07-09)
-- RE: system mechanism DONE (agent-verified against bp_reflection + bytecode). Catalog: in
-  progress. Design: NOT started (awaits the catalog + a `/qf 15` design pass). Implementation:
+- RE: system mechanism + catalog DONE (agent-verified vs bp_reflection + bytecode).
+- Design: **`/qf`-converged on ROOT** (host owns server state; clients mirror+render, don't run the
+  server sim → no per-channel suppressor crutch). **BUILD BLOCKED on 2 gates:** (1) the disasm authoring
+  census (serverBox/panel_SATconsole/ui_console/ticker_serverBreaker — absent from the bytecode dataset,
+  must be disassembled to MEASURE whether the breaker is the sole author + drive-real-vs-shadow + state-vs-
+  edge), (2) a user COOP_SCOPE ratification (server-state sync is a NEW lane, bigger than "suppress a
+  toast"). See `research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`. Implementation:
   NOT built.
 - Confidence tags in the docs: **[V]** verified-from-code/reflection · **[RD]** from-a-dump/
   RE-doc · **[?]** needs a runtime probe (e.g. `ui_hints_C`/`ui_hint_C` internals, `enum_notifyType`
