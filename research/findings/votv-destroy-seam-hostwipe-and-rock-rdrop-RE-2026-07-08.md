@@ -177,13 +177,82 @@ or the "is it real" question; the clean 11:54 bare-join log settles both.
 
 ## BUG B — ROCK R-drop invisibility (client places a pre-existing rock -> host can't see it)
 
-**Status: ROOT RE-derived from bytecode + code [RD 2026-07-08]. NOT captured in a real log this session
-(`[ROCK-DROP]`=0 in the 07-08 run — that run was pile-throw-during-join, not a rock repro). Fix shape
-UNSETTLED. Needs a CLEAN rock-only repro.**
+**Status: v2 BUILT (DLL `7DC715F92974`, UNCOMMITTED) — hands-on FAILED under drop-pickup CHURN
+2026-07-09; a CLEAN single-drop is UNTESTED. NOT VERIFIED. The v2 mechanism (route the fresh dropped
+Aprop to `trash_collect_sync::EnsureHeldItemBroadcast` in a settled session) DOES reach the host: log
+12:06 shows client `EXPRESSED` + host `OnSpawn ... spawned` at the drop pos. BUT the host `OnSpawn` is
+followed SAME-TICK by `OnDestroy key='uwmsjz' -> destroying local actor <the just-spawned one>` — the
+pickup's destroy resolves BY KEY and kills the freshly-dropped actor (eid mismatch: spawn eid=47211,
+destroy eid=47210 — destroy-by-key ignores the eid and hits the newest same-key actor). During the
+user's rapid drop->pickup cycling EVERY spawn died → the rock FLICKERED, never stayed → "host never saw
+the rock" [user hands-on 2026-07-09]. UNKNOWN whether a CLEAN drop (drop once, leave it, no re-pickup)
+survives — the churn log has no clean drop. OPEN CHURN ROOT: same-key drop/pickup interleave + a lagging
+destroy-by-key kills the successor. The `## F2 AS-BUILT (v2)` section documents the as-built + the churn
+failure; MINIMAL-A/PARK/`prop_pickup_park.h` below it is SUPERSEDED history — do NOT implement.**
 
-### Symptom (user, "from other times")
+### The root, stated plainly (why host works, client didn't)
+The prop-sync model is **host-authoritative**: the host owns every world prop; clients are mirrors. So a
+HOST hold-R drop broadcasts downstream and appears instantly on clients. A CLIENT hold-R drop is
+**upstream** — and the client's keyed-spawn author is **globally disabled** at `prop_lifecycle.cpp:210`
+(`if (IsDescendantOfProp(self)) return;`) **because on a join the client re-spawns EVERY save-loaded prop
+(loadObjects churn) and broadcasting those would flood/dupe/wipe the host** (the exact host-wipe class,
+Bug A). The cost: a GENUINE client placement (hold-R drop) is silenced by that blanket rule. The fix is
+therefore NOT a new mechanism but a **carve-out**: a client keyed spawn in a SETTLED session (outside the
+world-load episode) is a real placement and must cross — the exact mirror of the v107 host-wipe fix
+(which carves the same `!InEpisode` line for DESTROYS). See `## F2 AS-BUILT (v2)`.
+
+## F2 AS-BUILT (v2, 2026-07-09) — the SHIPPED fix (LOG-VERIFIED; supersedes MINIMAL-A/PARK below)
+
+**One file changed: `coop/props/host_spawn_watcher.cpp` (a CLIENT branch on `OnFinishSpawnFunc`). No
+`prop_lifecycle` change, no PARK, no new module.** Deployed `7DC715F92974` (UNCOMMITTED).
+
+- **Seam:** the FinishSpawningActor Func-patch already fires on the client for a hold-R drop
+  (`simulateDrop -> FinishSpawningActor -> fresh Aprop`; the ROCK-PROBE proved it, 2026-07-09). The host
+  branch stays host-only (`:235`); a NEW client branch catches the fresh dropped Aprop.
+- **Gates:** `!InEpisode` (the v107 primitive — excludes loadObjects churn, the sole reason `:210`
+  exists) `&& !PeekIncomingSpawn` (mirror echo) `&& IsDescendantOfProp && actor!=LocalHandActor &&
+  GetPropElementIdForActor==kInvalidId` (untracked; this gate self-closes the branch after the express).
+- **Defer for the Key:** the fresh drop actor has a MINTED placeholder Key at FinishSpawningActor;
+  `loadData` restores the real save-Key ~**+1 tick** later (ROCK-PROBE: 14/14 mint->save at +1). So the
+  branch captures `key0` (the mint) and DEFERS via recursive `GT::Post`, authoring when the Key CHANGES
+  from `key0`, cap 6. Each poll re-checks `IsLiveByIndex` -> a drop actor **picked-up within the defer
+  window is dead -> the express is skipped (no host ghost)**.
+- **Terminal author = `trash_collect_sync::EnsureHeldItemBroadcast(freshActor, s)`** — the CANONICAL,
+  PROVEN-IN-PRODUCTION client author (it is how an E-grab already made a placed rock visible; it runs on
+  the client — the `BROADCAST held untracked` line is client-side — and has all the right gates: `:313`
+  pre-quiescence, kerfur/clump, `:339` tracker-known). It expresses ONLY when untracked; after it runs the
+  rock is tracked+host-visible, so a later E-grab/held-stream `:339` DECLINE is CORRECT (no regression).
+- **HANDS-ON FAILED under churn [V-log 2026-07-09 12:06]:** client `EXPRESSED` + host `OnSpawn name='rock'
+  ... spawned` fire correctly, BUT the host `OnSpawn` (e.g. actor `000002429A57F200`, eid 47211 @12:06:31)
+  is followed **same-tick** by `OnDestroy key='uwmsjz' eid=47210 -> destroying local actor 000002429A57F200`.
+  The pickup's destroy resolves **by KEY** and kills the just-dropped actor (the eid on the destroy is the
+  PREVIOUS instance's — destroy-by-key ignores the eid mismatch). Under the user's rapid drop->pickup
+  cycling **every spawn died before it could be seen** → "host never saw the rock." So v2 delivers the
+  spawn but the **same-key churn destroys it**. A CLEAN single drop (no re-pickup) is **untested** — no
+  clean drop exists in the churn log.
+- **THE OPEN CHURN ROOT (next):** rapid same-key drop/pickup — the drop's `SendPropSpawn` (deferred +1
+  tick) and the pickup's `SendPropDestroy` (immediate) interleave, and a lagging destroy-by-key from cycle
+  N kills the spawn of cycle N+1 (they share `uwmsjz`). Candidate directions (unvetted): the host's
+  destroy-by-key should not kill an actor bound to a NEWER eid than the destroy carries (eid-freshness
+  guard); or the drop-author should not fire while a same-key pickup/destroy is in flight; or the whole
+  hold-R should stop churning the world identity (keep one eid across the hold — the migration the design
+  rejected). NEEDS a fresh /qf + a CLEAN single-drop measurement first.
+- **Also:** one drop logged `key 'mYKL...' never changed from key0 after 6 ticks -- not authored` (loadData
+  didn't resolve within 6 ticks OR a no-save-lineage prop) — a separate rare miss. `int_save` persistence
+  of an authored rock is a SEPARATE unmeasured axis (visibility != persistence).
+
+### WHY v1 (MINIMAL-A/PARK) REGRESSED — the lesson (do NOT retry the raw author)
+v1 authored the drop with a **raw `MarkPropElement` + `SendPropSpawn`**. `MarkPropElement` marked the rock
+**tracker-known**, so the E-grab's `EnsureHeldItemBroadcast` then hit its `:339` tracker-known DECLINE
+("pose stream suffices") and **declined** — breaking the recovery lane that worked pre-fix. Root: a
+client-author that REIMPLEMENTS the express instead of calling the canonical `EnsureHeldItemBroadcast`
+collides with the grab/held-item tracker model. `[[lesson-reuse-proven-author-not-raw-reimpl]]`.
+
+### Symptom (user, "from other times") — the ORIGINAL two-part symptom (now fixed by AS-BUILT v2 above)
 CLIENT picks up a rock with **R**, holds it, places it with **R** -> the rock is invisible to the HOST until an
-E-grab (and "sometimes even E can't recover it").
+E-grab (and "sometimes even E can't recover it"). Part (A) invisible-until-E-grab = the `:210` skip (only a
+HELD prop reached `EnsureHeldItemBroadcast`); part (B) "sometimes E can't recover" = the `:339` false decline.
+v2 fixes (A) by triggering the express at the DROP; (B) is moot (the drop already expresses, no E-grab needed).
 
 ### Ground truth (RE agent, mainPlayer bytecode + `ue_wrap/prop.cpp`)
 - A "rock" is a generic **`prop_C`/`Aprop_C`** instance (name-driven from `list_props`), a KEYED interactable
