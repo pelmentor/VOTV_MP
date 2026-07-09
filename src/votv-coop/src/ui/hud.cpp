@@ -255,29 +255,31 @@ void DrawChat() {
 
     const ImGuiIO& io = ImGui::GetIO();
     const float pad = S(14.f);
-    // Anchor the window's BOTTOM-LEFT corner at the left edge, RAISED to ~mid-screen height.
-    // The chat used to sit in the bottom-left corner; the user (2026-06-08) wanted it higher,
-    // around the middle. Pivot (0,1) keeps it growing UPWARD as lines stack (newest at the
-    // bottom), so the bottom edge sits at kBottomFrac of the screen height.
+    // Anchor the feed's BOTTOM-LEFT at the left edge, raised to ~mid-screen (user
+    // 2026-06-08). Lines grow UPWARD (newest at the bottom, oldest at the top).
+    //
+    // 2026-07-09: drawn DIRECTLY to a draw list -- NOT an ImGui window. The old
+    // AlwaysAutoResize + bottom-pivot window flickered the expiring (top) line a
+    // couple frames before it vanished: on the frame a line expired and the window
+    // resized, the pivot-derived position AND the window clip-rect lagged the
+    // content by one frame, so the top row was clipped/jumped, then corrected. The
+    // published fade alpha was proven monotone (the feed ALPHA-JUMP probe never
+    // fired), so the blink was pure window-layout lag. Drawing bottom-anchored to a
+    // draw list -- like the nameplates + object overlay already do -- removes the
+    // window entirely: no resize, no pivot, no clip lag, no flicker.
     constexpr float kBottomFrac = 0.5f;  // 0.5 = vertical middle; raise toward 0 / lower toward 1
-    ImGui::SetNextWindowPos(ImVec2(pad, io.DisplaySize.y * kBottomFrac), ImGuiCond_Always, ImVec2(0.f, 1.f));
-    ImGui::SetNextWindowBgAlpha(0.0f);
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoBackground;
-    // 2026-07-04 chat-imgui-samp adoption: bold chat font (Cyrillic-capable), per-slot
-    // colored nick prefix, 4-way outline (replaces the 1px shadow -- reads over any
-    // scene), word-wrap at a fixed column width, and the feed's new fade-IN ramp.
+    const float anchorBottomY = io.DisplaySize.y * kBottomFrac;
+
+    // 2026-07-04 chat-imgui-samp: bold chat font (Cyrillic-capable), per-slot colored
+    // nick prefix, 4-way outline (reads over any scene), word-wrap at a fixed width.
     ImFont* font = ui::fonts::Chat();
     if (!font) font = ImGui::GetFont();
-    // ChatPx() = the px the chat font was BAKED at (scaled): drawing at exactly
-    // that size renders the crisp 1:1 rasterization, no bitmap resample.
+    // ChatPx() = the px the chat font was BAKED at (scaled): drawing at exactly that
+    // size renders the crisp 1:1 rasterization, no bitmap resample.
     const float px = ui::fonts::Chat() ? ui::fonts::ChatPx() : ImGui::GetFontSize();
     const float wrapW = std::min(io.DisplaySize.x * 0.42f, S(640.f));
+    const float rowH = px + S(2.f);
+    const float o = std::max(1.f, S(1.f));  // outline offset (see TextOutlined)
 
     // Per-slot nick palette (8 entries, wraps). Matches the scoreboard's hue family:
     // distinct, readable on dark AND bright scenes at full alpha.
@@ -292,57 +294,67 @@ void DrawChat() {
         IM_COL32(255, 160, 110, 255),  // 7 coral
     };
 
-    if (ImGui::Begin("##coop_chat", nullptr, flags)) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        for (int i = 0; i < cs.count; ++i) {
-            const auto& l = cs.lines[i];
-            const float a = std::clamp(l.alpha, 0.f, 1.f);
-            const ImU32 outline = IM_COL32(0, 0, 0, static_cast<int>(a * 200.f));
-            const ImU32 body    = IM_COL32(236, 236, 236, static_cast<int>(a * 245.f));
-            ImU32 nickCol = body;
-            if (l.nickLen > 0) {
-                // v103 (12f): a peer's custom nick color overrides the per-slot
-                // palette; unset -> the palette as before.
-                const uint32_t custom = coop::nick_color::PackedForSlot(l.slot);
-                const ImU32 c = coop::nick_color::IsCustom(custom)
-                    ? IM_COL32(coop::nick_color::R(custom), coop::nick_color::G(custom),
-                               coop::nick_color::B(custom), 255)
-                    : kSlotCols[l.slot % (sizeof(kSlotCols) / sizeof(kSlotCols[0]))];
-                nickCol = (c & 0x00FFFFFFu) | (static_cast<ImU32>(a * 255.f) << 24);
-            }
-
-            // Manual wrap + colored-segment draw. Each visual row advances the
-            // ImGui cursor (Dummy) so the auto-resize window grows to fit.
-            const char* s   = l.text;
-            const char* end = l.text + std::strlen(l.text);
-            const char* nickEnd = l.text + ((l.nickLen && l.nickLen < std::strlen(l.text))
-                                            ? l.nickLen : 0);
-            const float o = std::max(1.f, S(1.f));  // outline offset (see TextOutlined)
-            while (s < end) {
-                const char* rowEnd = font->CalcWordWrapPositionA(px / font->FontSize, s, end, wrapW);
-                if (rowEnd == s) rowEnd = s + 1;  // never stall on a single overlong glyph
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                float x = pos.x;
-                const char* seg = s;
-                // Split the row at the nick boundary when it falls inside this row.
-                while (seg < rowEnd) {
-                    const char* segEnd = (seg < nickEnd && nickEnd < rowEnd) ? nickEnd : rowEnd;
-                    const ImU32 col = (seg < nickEnd) ? nickCol : body;
-                    dl->AddText(font, px, ImVec2(x - o, pos.y), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x + o, pos.y), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x, pos.y - o), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x, pos.y + o), outline, seg, segEnd);
-                    dl->AddText(font, px, ImVec2(x, pos.y), col, seg, segEnd);
-                    x += font->CalcTextSizeA(px, FLT_MAX, 0.f, seg, segEnd).x;
-                    seg = segEnd;
-                }
-                ImGui::Dummy(ImVec2(x - pos.x, px + S(2.f)));
-                s = rowEnd;
-                while (s < end && *s == ' ') ++s;  // swallow the wrap-point space
-            }
+    // Visual-row iterator: invokes fn(rowStart, rowEnd) once per wrapped row of `text`.
+    // The SAME split feeds the height pass and the draw pass so they never disagree.
+    auto forEachRow = [&](const char* text, auto&& fn) {
+        const char* s   = text;
+        const char* end = text + std::strlen(text);
+        while (s < end) {
+            const char* rowEnd = font->CalcWordWrapPositionA(px / font->FontSize, s, end, wrapW);
+            if (rowEnd == s) rowEnd = s + 1;  // never stall on a single overlong glyph
+            fn(s, rowEnd);
+            s = rowEnd;
+            while (s < end && *s == ' ') ++s;  // swallow the wrap-point space
         }
+    };
+
+    // Pass 1: total wrapped height (bounded -- kMaxLines=6 lines), to place the block.
+    float totalH = 0.f;
+    for (int i = 0; i < cs.count; ++i)
+        forEachRow(cs.lines[i].text, [&](const char*, const char*) { totalH += rowH; });
+
+    // BACKGROUND draw list: over the scene, under real windows (menus/scoreboard) --
+    // the same layer the nameplates use. Drawn after DrawNameplates() so chat wins if
+    // they ever overlap.
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    float y = anchorBottomY - totalH;  // top of the whole block; newest row ends at the anchor
+
+    // Pass 2: draw oldest -> newest, top -> down.
+    for (int i = 0; i < cs.count; ++i) {
+        const auto& l = cs.lines[i];
+        const float a = std::clamp(l.alpha, 0.f, 1.f);
+        const ImU32 outline = IM_COL32(0, 0, 0, static_cast<int>(a * 200.f));
+        const ImU32 body    = IM_COL32(236, 236, 236, static_cast<int>(a * 245.f));
+        ImU32 nickCol = body;
+        if (l.nickLen > 0) {
+            // v103 (12f): a peer's custom nick color overrides the per-slot palette.
+            const uint32_t custom = coop::nick_color::PackedForSlot(l.slot);
+            const ImU32 c = coop::nick_color::IsCustom(custom)
+                ? IM_COL32(coop::nick_color::R(custom), coop::nick_color::G(custom),
+                           coop::nick_color::B(custom), 255)
+                : kSlotCols[l.slot % (sizeof(kSlotCols) / sizeof(kSlotCols[0]))];
+            nickCol = (c & 0x00FFFFFFu) | (static_cast<ImU32>(a * 255.f) << 24);
+        }
+        const char* nickEnd = l.text + ((l.nickLen && l.nickLen < std::strlen(l.text))
+                                        ? l.nickLen : 0);
+        forEachRow(l.text, [&](const char* rowStart, const char* rowEnd) {
+            float x = pad;
+            const char* seg = rowStart;
+            // Split the row at the nick boundary when it falls inside this row.
+            while (seg < rowEnd) {
+                const char* segEnd = (seg < nickEnd && nickEnd < rowEnd) ? nickEnd : rowEnd;
+                const ImU32 col = (seg < nickEnd) ? nickCol : body;
+                dl->AddText(font, px, ImVec2(x - o, y), outline, seg, segEnd);
+                dl->AddText(font, px, ImVec2(x + o, y), outline, seg, segEnd);
+                dl->AddText(font, px, ImVec2(x, y - o), outline, seg, segEnd);
+                dl->AddText(font, px, ImVec2(x, y + o), outline, seg, segEnd);
+                dl->AddText(font, px, ImVec2(x, y), col, seg, segEnd);
+                x += font->CalcTextSizeA(px, FLT_MAX, 0.f, seg, segEnd).x;
+                seg = segEnd;
+            }
+            y += rowH;
+        });
     }
-    ImGui::End();
 }
 
 }  // namespace
