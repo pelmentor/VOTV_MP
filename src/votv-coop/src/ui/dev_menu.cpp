@@ -401,8 +401,9 @@ void RenderFontPref() {
         if (ImGui::RadioButton(F::FamilyLabel(f), cur == f)) F::SetFamily(f);
     }
     ImGui::TextDisabled("Applies instantly to the whole overlay (chat, menus, nameplates).");
-    ImGui::TextDisabled("Saved to votv-coop.ini (ui.font). JetBrains Mono / Cascadia Code");
-    ImGui::TextDisabled("are monospace; Roboto is proportional.");
+    ImGui::TextDisabled("Saved to votv-coop.ini (ui.font). Fixedsys (VOTV) is the game's own");
+    ImGui::TextDisabled("terminal pixel font (default). JetBrains Mono / Cascadia Code are");
+    ImGui::TextDisabled("monospace; Roboto is proportional.");
 
     // UI size (2026-07-04, user: "все менюшки и тексты ПОБОЛЬШЕ"): a multiplier
     // on top of the resolution factor. Applied on slider RELEASE, not per drag

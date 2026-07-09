@@ -13,9 +13,10 @@
 // re-runs it (it clears the atlas first) when the scale or family changes,
 // then invalidates the DX11 device objects so the backend re-bakes.
 //
-// Family is a user pref: votv-coop.ini ui.font = roboto | jetbrains |
-// cascadia (default roboto -- user 2026-07-04 after comparing all three);
-// switch live in F1 > Cosmetics > Interface.
+// Family is a user pref: votv-coop.ini ui.font = fixedsys | roboto |
+// jetbrains | cascadia (default fixedsys -- VOTV's own terminal pixel font,
+// 2026-07-09); switch live in F1 > Cosmetics > Interface. fixedsys is the
+// game's own font (FSEX300 = font_terminal), bundled from the VOTV assets.
 //
 // Load() must run between ImGui::CreateContext() and the first NewFrame (the
 // DX11 backend bakes the atlas lazily on frame 1).
@@ -31,8 +32,8 @@ namespace ui::fonts {
 inline constexpr float kUiPx   = 16.f;
 inline constexpr float kChatPx = 18.f;
 
-enum class Family : int { JetBrainsMono = 0, Roboto = 1, CascadiaCode = 2 };
-inline constexpr int kFamilyCount = 3;
+enum class Family : int { JetBrainsMono = 0, Roboto = 1, CascadiaCode = 2, Fixedsys = 3 };
+inline constexpr int kFamilyCount = 4;
 
 // (Re)bake the overlay fonts into the shared atlas at the current scale +
 // family. Clears the atlas first. Call only BETWEEN frames (bring-up, or the

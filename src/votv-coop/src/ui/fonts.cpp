@@ -19,7 +19,7 @@ namespace {
 
 ImFont* g_chat = nullptr;
 float   g_chatPx = kChatPx;      // px the chat font was last baked at
-Family  g_family = Family::Roboto;  // default (user 2026-07-04, after comparing: "Roboto самый лучший")
+Family  g_family = Family::Fixedsys;  // default 2026-07-09: VOTV's own terminal pixel font (overwritten by FamilyFromIni on first Load)
 bool    g_familyRead = false;    // ini read once; SetFamily overrides after
 
 struct FamilyDesc {
@@ -32,13 +32,16 @@ constexpr FamilyDesc kFamilies[kFamilyCount] = {
     { "jetbrains", "JetBrains Mono", IDR_FONT_JBMONO_REGULAR,   IDR_FONT_JBMONO_BOLD },
     { "roboto",    "Roboto",         IDR_FONT_ROBOTO_REGULAR,   IDR_FONT_ROBOTO_BOLD },
     { "cascadia",  "Cascadia Code",  IDR_FONT_CASCADIA_REGULAR, IDR_FONT_CASCADIA_BOLD },
+    // VOTV's own terminal pixel font (FSEX300 -> font_terminal). Single weight,
+    // so the chat "bold" face reuses Regular. Covers Cyrillic (cmap-verified, 5992 cp).
+    { "fixedsys",  "Fixedsys (VOTV)", IDR_FONT_FIXEDSYS_REGULAR, IDR_FONT_FIXEDSYS_REGULAR },
 };
 
 Family FamilyFromIni() {
-    const std::string v = harness::config::ReadIniValue("ui.font", "roboto");
+    const std::string v = harness::config::ReadIniValue("ui.font", "fixedsys");
     for (int i = 0; i < kFamilyCount; ++i)
         if (v == kFamilies[i].iniValue) return static_cast<Family>(i);
-    return Family::Roboto;
+    return Family::Fixedsys;
 }
 
 // Locate an RCDATA TTF embedded in OUR module (not the game exe).

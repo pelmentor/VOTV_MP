@@ -7,6 +7,8 @@
 //   Roboto         -- Apache 2.0
 //   JetBrains Mono -- OFL 1.1
 //   Cascadia Code  -- OFL 1.1
+//   Fixedsys Excelsior 3.01 -- freeware (Darien Valentine); VOTV's own terminal
+//     font (FSEX300 -> font_terminal). Single weight -> bold reuses Regular.
 
 #pragma once
 
@@ -16,3 +18,4 @@
 #define IDR_FONT_JBMONO_BOLD      304
 #define IDR_FONT_CASCADIA_REGULAR 305
 #define IDR_FONT_CASCADIA_BOLD    306
+#define IDR_FONT_FIXEDSYS_REGULAR 307

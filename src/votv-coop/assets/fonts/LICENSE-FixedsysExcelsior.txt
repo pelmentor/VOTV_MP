@@ -1,0 +1,22 @@
+Fixedsys Excelsior 3.01
+=======================
+
+Font:        Fixedsys Excelsior 3.01 (file FSEX300.ttf; PostScript name
+             FixedsysExcelsiorIIIb)
+Author:      Darien Valentine
+Homepage:    http://www.fixedsysexcelsior.com/
+Version:     3.010, 2007
+
+Source of THIS copy
+-------------------
+Bundled from the Voices of the Void (VOTV, Alpha 0.9.0-n) game asset
+`FSEX300.ufont` (the game's `font_terminal` typeface) -- a byte-identical,
+unmodified TrueType file (sfnt header 00 01 00 00), renamed .ufont -> .ttf.
+It is the chunky pixel/bitmap terminal font seen in VOTV's on-screen text.
+
+License
+-------
+Fixedsys Excelsior is released by its author as free software -- free to use,
+copy, and distribute for any purpose (see the author's homepage above). It is
+bundled here purely to offer VOTV's native look inside the coop overlay's font
+picker; no modification was made to the font file.
