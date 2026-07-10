@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ GATED: fork call 2026-07-10 pm = **NOT CALLABLE (7/16) → DEFER** (resident accumulation; see SECOND CENSUS section) | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ UNGATED 2026-07-10 eve: fork = **STRUCTURAL** (3 client-live rows; callable gate 7/16 user-waived — see THIRD CENSUS) — run the DESIGN pass next | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -326,7 +326,46 @@ precisely so nothing gets built on "points".
 exposure needs user-driven sessions or repeated slices; copy the client log to the scratchpad
 before every relaunch.
 
+## T1 THIRD (KEEPALIVE) CENSUS — 2026-07-10 evening: fork = **STRUCTURAL** (user-called; callable gate waived)
+
+**The run:** 65-min continuous LAN session (17:58–19:03), both peers alive the WHOLE time — the
+idle-death blocker was ROOT-FIXED first: the new `[dev] vitals_keepalive_sec=180` ticker
+(`0211b9c5`, DLL `7CBC7122`) measured the cause as STARVATION (harness save starts food=24.4;
+idle drain ~2.3 food/min) and pins vitals at 100 via the proven restore_vitals path (host refill
++ RestoreVitals broadcast). Orchestrated by scratchpad `census_overnight.py` (log snapshots,
+death-watch, hourly analyzer). Final logs: scratchpad `t1_final_{host,client}.log`.
+
+**Adjudication (final analyzer run, 19:03):**
+- **live (client, coop=0, episode=0): deerSpawner, bp7Spawner, hexahiveSpawner** (hexahive
+  converted armed→live at ~60 min — its 40–60 min cycle fired ON THE CLIENT, coop-unexplained)
+  — **3 rows ≥ the pre-registered STRUCTURAL threshold.**
+- **armed:** mannequinSpawner (1–3 h), eyers, roachSummoner (tickEnabled=1) — 3 rows.
+- **DONE-suppressed:** yellowWispSpawner. **confirmed-starved:** none.
+- **CONDITIONAL:** the same 9 (4 static event-triggered per gate 3; 5 with NO spawner instance in
+  this world at all). QuitGame: zero records on either peer across the whole run.
+
+**The call (recorded honestly):** fork inputs = 3 client-live un-suppressed shared-world classes
+→ the pre-registered fork rule reads **STRUCTURAL**. The callable-check (≥11/16 non-CONDITIONAL)
+stands at 7/16 — formally short. The USER terminated the run and called the design pass
+(2026-07-10 evening, “Kill it” after the confirmation-not-discovery framing), so this is a
+**user-called STRUCTURAL with the callable gate explicitly waived**, not a silent re-basing.
+The waiver is sound because the 9 CONDITIONAL rows are structurally NON-adjudicable by idle
+exposure (5 have no world instance to testify; 4 are event-triggered by construction) — and the
+STRUCTURAL design covers them BY CONSTRUCTION (the client rolls NOTHING shared-world), so their
+per-row measurement moves to POST-BUILD VERIFICATION, not the design gate. Every row idle
+exposure COULD adjudicate (7/7) confirmed client-side spawn machinery: 3 live + 3 armed + 1
+suppressed-by-us. Zero rows contradict STRUCTURAL.
+
+**Consequences now armed:** the RULE-2 pre-commitment (ambient_spawner_suppress's per-class
+cancels dissolve into the structural suppress set in the same change), the color-wisp
+PRODUCT-EXEMPTION carry-through, placement #2 (ambient-spawn authority home), and the
+mirror-step-3 generalization all go to the **T1 `/qf 15` DESIGN pass — the next work item.**
+
 ## CHANGELOG
+- **2026-07-10 (evening)** — THIRD (keepalive) census: idle-death root-fixed (starvation;
+  vitals_keepalive `0211b9c5`), 65-min continuous 2-peer run, hexahive converted → 3 client-live
+  rows → **fork = STRUCTURAL (user-called; 7/16 callable gate waived — rationale in section)**.
+  DESIGN pass UNGATED; run `/qf 15` on the structural fix next.
 - **2026-07-10 (afternoon)** — SECOND (exposure) census run: host full day, client 18-min slice
   (idle death) + an aborted rejoin. **Formal fork call NOT CALLABLE (7/16 < 11/16) → DEFER**,
   per the pre-registered rule (section above). Analyzer tool `tools/rng_census_analyze.py`
