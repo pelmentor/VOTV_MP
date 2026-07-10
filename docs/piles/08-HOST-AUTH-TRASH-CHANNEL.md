@@ -113,13 +113,13 @@
 >   under the same eid E while it is a LIVE garbageClump (`IsLive`-gated — a churn re-pile kills the clump →
 >   skip; a real release leaves it flying → stream); the client's fixed-delay interp shows the arc; it ends when
 >   the clump re-piles (ToPile re-skins+snaps). The arc FLIES (user: "дуга ЛЕТИТ"; the autotest does a real
->   DIRECTIONAL throw). The dead `dropGrabObject` read-only thunk (`trash_collect_sync.cpp:45,99-126,396`) is
->   STILL PRESENT — to be retired RULE 2 next. **Host carries FINE** (native); **OTHER physics props mirror
+>   DIRECTIONAL throw). The dead `dropGrabObject` read-only thunk was RETIRED 2026-07-10 `fb490e36`
+>   (RULE 2; retirement notes left in trash_collect_sync.cpp). **Host carries FINE** (native); **OTHER physics props mirror
 >   fine** (pure pose-stream). The proxy is NoCollision (the client-grab aim is a camera-ray cone, not
 >   collision). **STILL OPEN (NEXT):** a `garbageCollider`-analog SHAPE component on the proxy (occlusion-
 >   correct aim + movement-block — the cone ignores walls, the proxy is walk-through); the WHOOSH throw sound
->   (no ReliableKind; user-deprioritized, best confirmed by hearing); retire the dead `dropGrabObject` thunk
->   (RULE 2). **(Increment 2 client-grab full chain is AS-BUILT v85 — see the bullet below.)** **Dead
+>   (no ReliableKind; user-deprioritized, best confirmed by hearing). (The dead `dropGrabObject`
+>   thunk: RETIRED 2026-07-10 `fb490e36`.) **(Increment 2 client-grab full chain is AS-BUILT v85 — see the bullet below.)** **Dead
 >   ends:** option 1
 >   (`8bc797ef`, `SetNotifyRigidBodyCollision(false)` on the held clump)
 >   BUILT + FAILED (the live host BP re-arms hit-notify); option 2 (the `holdPlayer` convert/ctx gate) is
@@ -136,8 +136,8 @@
 >   harness-verified). Verification this session ran on the autonomous log-truth harness (`tools/pile-test-assert.ps1`,
 >   13 invariants, VERDICT PASS) — `[V harness]` = asserted against real autonomous-run logs, NOT a human
 >   hands-on. Option 1 failed; option 2 (the `holdPlayer` convert/ctx gate) is DISPROVEN by bytecode
->   (`holdPlayer` never cleared). STILL OPEN: the WHOOSH throw sound (no ReliableKind); retire the dead
->   `dropGrabObject` thunk (RULE 2). (The s38 grab cue / re-pile vanish-return checks were a separate track,
+>   (`holdPlayer` never cleared). STILL OPEN: the WHOOSH throw sound (no ReliableKind). (The dead
+>   `dropGrabObject` thunk: RETIRED 2026-07-10 `fb490e36`.) (The s38 grab cue / re-pile vanish-return checks were a separate track,
 >   now folded into the take-30 verified state.)
 > - **CLIENT-grab direction (Increment 2) — FULL CHAIN AS-BUILT + [V harness]** (proto **v85**, HEAD
 >   `29353191`, deployed `BB94A120A969A51E`, push held). A client AIMS at a mirrored pile, GRABS, CARRIES,
@@ -612,8 +612,8 @@ autonomous log-truth harness against real autonomous-run logs, NOT a human hands
   release leaves it flying → stream); the client's fixed-delay interp shows the arc; it ends when the clump
   re-piles (ToPile re-skins+snaps). The arc FLIES (user: "дуга ЛЕТИТ"; the autotest does a real DIRECTIONAL
   throw; harness arc-flight-stream PASS). The carry main branch (heldActor-keyed) is byte-identical (additive,
-  audited zero-CRITICAL). The dead `dropGrabObject` read-only thunk (`trash_collect_sync.cpp:45,99-126,396`) is
-  STILL PRESENT — to be retired RULE 2 next. **Dead ends:** **Option 1** (`8bc797ef`,
+  audited zero-CRITICAL). The dead `dropGrabObject` read-only thunk was RETIRED 2026-07-10 `fb490e36`
+  (RULE 2; retirement notes left in trash_collect_sync.cpp). **Dead ends:** **Option 1** (`8bc797ef`,
   `SetNotifyRigidBodyCollision(false)` on the held clump) BUILT + FAILED — the live host BP re-arms hit-notify.
   **Option 2 (DISPROVEN by bytecode, NOT pending):** the `holdPlayer` convert/ctx gate is DEAD — `holdPlayer`
   (`@0x0240 AmainPlayer_C*`, CXXHeaderDump-confirmed) is set ONCE on grab (`actorChipPile.json` @8492) and

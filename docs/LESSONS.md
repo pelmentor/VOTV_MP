@@ -173,8 +173,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **`deploy-all.ps1` deploys Release** → ALWAYS build Release + hash-verify. `memory/lesson_deploy_sources_release_config_not_relwithdebinfo.md`
 - **The smoke HOST slot `s_1234` is STATEFUL — restore `coop_backup` FIRST.** `memory/lesson_s1234_host_slot_stateful_coop_backup.md`
 - **`votv-coop.log` is TRUNCATED at boot (no rotation)** — copy a peer's log to the scratchpad BEFORE any
-  mid-run relaunch or the previous life's evidence is destroyed (2026-07-10: an 18-min census slice lost;
-  and an IDLE autonomous client dies in ~18 min — plan exposure in slices).
+  mid-run relaunch or the previous life's evidence is destroyed (2026-07-10: an 18-min census slice lost).
+  **Idle death claims BOTH peers** (client ~18 min, HOST ~80 min — the 14:27:16 "LOCAL PLAYER DIED
+  role=HOST" real log): a later "connect timed out" against such a host is CORRECT, not a join bug (the
+  2026-07-10 "stale-slot race" candidate was exactly this, refuted from the saved logs). Long exposure
+  runs must keep peers alive or script around per-peer deaths.
   `memory/lesson_copy_peer_log_before_relaunch.md`
 - **NEVER `git add -A`/`<dir>` over held WIP — explicit paths or stash.** `memory/lesson_never_git_add_A_over_held_wip.md`
 - **AUTONOMOUS pile test loop harness** (reference). `memory/reference_pile_test_harness.md`

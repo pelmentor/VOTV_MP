@@ -27,6 +27,17 @@
 >   (design-level); join-edge GetActorLocation bulk-scan chunking; ExpressReleasedHandActor +
 >   [ROCK-DROP] diag retirement (both gated on the rock hands-on); kEmptyDebounceTicks dust +
 >   dropGrabObject dead thunk + shutdown.h dead <atomic> (untouched LOW).
+>
+> **STATUS UPDATE 3 (same day, evening, commit `fb490e36`): the three untouched LOWs are DONE** —
+> kEmptyDebounceTicks + g_ownEmptyStreak removed (threshold-1 no-op shell; the edge-instant
+> rationale folded into the announce site), the dropGrabObject read-only thunk retired with its
+> install block + latch (its question closed 2026-06-22 — the clump release uses no catchable
+> verb, stream-through replaced it; retirement notes left at both sites), shutdown.h dead
+> `<atomic>` removed. Deployed `EDFED54A`, LAN smoke PASS, 0 ERROR both peers. The evening block
+> also EXECUTED the three queued soft-cap extractions (`dab12a2e` prop_key_index / `1aa93f5e`
+> trash_grab_intent / `a7f02f22` prop_container_extract). Remaining OPEN set is unchanged
+> otherwise: serverbox Inc-2 (gated), drop-intent park durability, join-edge scan chunking,
+> ExpressReleasedHandActor + [ROCK-DROP] diags (gated on rock hands-on).
 
 **Trigger:** user — "let's check previous bug fixes like rock — we did it with opus48, which can
 make stupid mistakes... architectural mistakes of opus too."

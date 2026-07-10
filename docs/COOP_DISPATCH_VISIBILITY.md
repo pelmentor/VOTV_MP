@@ -263,7 +263,7 @@ OUTER door (engine/native/delegate → BP); it is not re-entered for an inner BP
   `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`; the autonomous verification
   harness: `[[reference-pile-test-harness]]` (`tools/pile-test-assert.ps1`, 13 log-truth invariants, VERDICT
   PASS). **STILL OPEN:** the WHOOSH throw sound (no ReliableKind exists in `protocol.h`; user-deprioritized,
-  best confirmed by hearing); the dead `dropGrabObject` read-only thunk (to be retired, RULE 2). **[V hands-on:
+  best confirmed by hearing). The dead `dropGrabObject` read-only thunk was RETIRED 2026-07-10 `fb490e36` (RULE 2). **[V hands-on:
   dup-fix(derived) + visibility + carry-freeze + carry-JANK + throw-arc + rotation + sound; V harness: Z-fix +
   level-pile dup-destroy + FPS-fix; SCALE AS-BUILT; option 2 DISPROVEN.]**
 
@@ -279,9 +279,10 @@ OUTER door (engine/native/delegate → BP); it is not re-entered for an inner BP
   > garbageClump (`IsLive` is the churn/flight discriminator — a churn re-pile kills the clump → skip; a real
   > release leaves it flying → stream); the client's fixed-delay interp renders the arc; it ends when the clump
   > re-piles (ToPile re-skins+snaps). Shipped `136ed779`; the arc FLIES — VERIFIED [V hands-on take-29 + harness
-  > arc-flight-stream PASS] (user: "дуга ЛЕТИТ"). The dead `dropGrabObject` read-only thunk is STILL PRESENT
-  > (`trash_collect_sync.cpp:45,99-126,396`) — to be retired RULE 2 next (NOT YET removed). **[V the zero-fire
-  > fact; V hands-on + harness the flight-stream arc; dropGrabObject-retire STILL OPEN]**
+  > arc-flight-stream PASS] (user: "дуга ЛЕТИТ"). The dead `dropGrabObject` read-only thunk was RETIRED
+  > 2026-07-10 `fb490e36` (observer + install block + latch removed; retirement notes left in
+  > trash_collect_sync.cpp at both sites). **[V the zero-fire fact; V hands-on + harness the
+  > flight-stream arc; dropGrabObject-retire DONE `fb490e36`]**
 
 > **⚠ A render-blind smoke caveat (the 2026-06-21 trap).** Our autonomous smoke can verify log markers and
 > that a UFunction `Call()` returned, but it CANNOT verify that the call's *effect* actually landed on the

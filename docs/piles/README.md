@@ -203,8 +203,8 @@ history/diagnosis/design, and **08 is the CURRENT design** (the host-authoritati
   exact ~1cm match; a read-only PILE-PROBE shipped `29069f05`); the `simulateDrop` throw-velocity FLIP is DEAD
   — REPLACED by carry/flight stream-continuity (shipped `136ed779`: BOTH `simulateDrop`+`dropGrabObject`
   thunks fire ZERO for the clump release; the release-edge `!carrying`-SKIP branch now streams the LIVE clump's
-  flight pose under E until it re-piles, `IsLive`-gated; hands-on PENDING; the dead `dropGrabObject` thunk to
-  be retired RULE 2 next). **Dead ends:** option 1 (`8bc797ef`,
+  flight pose under E until it re-piles, `IsLive`-gated; later [V hands-on take-29]; the dead `dropGrabObject`
+  thunk RETIRED 2026-07-10 `fb490e36`). **Dead ends:** option 1 (`8bc797ef`,
   `SetNotifyRigidBodyCollision(false)` on the held clump) BUILT + FAILED — the live host BP re-arms hit-notify;
   option 2 (the `holdPlayer` convert/ctx gate) is **DISPROVEN by bytecode** — `holdPlayer` is set ONCE on grab
   and NEVER cleared in any BP, so it cannot mark "released" (DEAD, NOT pending). Phase 1 = visual + position +
@@ -332,8 +332,8 @@ channel**, which is the CURRENT design + as-built. The day-to-day live state is 
    proxy SCALE AS-BUILT; the client-grab FULL CHAIN (recognition camera-cone + carry stream + throw)
    AS-BUILT + [V harness] v85 (HEAD `29353191`). **The NEXT (greenlight) is now the `garbageCollider`-analog
    SHAPE component** on the proxy (occlusion-correct aim + movement-block — the camera cone ignores walls, the
-   proxy is still walk-through); the WHOOSH cue; retire the dead `dropGrabObject` thunk (RULE 2); the
-   `event_dispatch_trash.cpp` extraction. (The "suppress-native" client plan is RETIRED, RULE 2 — recognition
+   proxy is still walk-through); the WHOOSH cue; the `event_dispatch_trash.cpp` extraction. (The dead `dropGrabObject` thunk:
+   RETIRED 2026-07-10 `fb490e36`.) (The "suppress-native" client plan is RETIRED, RULE 2 — recognition
    is the camera cone.)
 
 **DEPLOYED: `BB94A120A969A51E` (proto v85) = HEAD `29353191`** — the client-grab FULL CHAIN (camera-cone

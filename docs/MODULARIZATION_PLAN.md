@@ -25,7 +25,11 @@
 > | reflection FProperty walkers -> `reflection_props.cpp` (877 -> 651) | DONE, self-contained | `6b9d9309` |
 > | prop_lifecycle destroy seam -> `prop_destroy_seam.cpp` (966 -> 804) | DONE, detail header `prop_lifecycle_detail.h` | `2a802322` |
 > | event_dispatch_state INTENT family -> `event_dispatch_intent.cpp` (816 -> 636; 4th dispatch family) | DONE | `5b95c602` |
-> | Series audit be98beb6..606fda3b | 0 CRITICAL / 0 HIGH; residue: tracker 848 / trash_channel 808 / lifecycle 804 marginally over cap (proposals: key-index family / clump-birth family / takeObj pair) | — |
+> | Series audit be98beb6..606fda3b | 0 CRITICAL / 0 HIGH; residue: tracker 848 / trash_channel 808 / lifecycle 804 marginally over cap (proposals queued) | — |
+> | tracker key->live-actor index family -> `prop_key_index.cpp` (848 -> 662; maps private to one TU, tracker uses IndexKeyForActor_/EraseKeyIndexForActor_ via detail hdr) | DONE (eve) | `dab12a2e` |
+> | trash_channel client grab/throw INTENT LANE -> `trash_grab_intent.cpp` (808 -> 486; owns HELD_BY + client toggles; core uses HeldByAny/ClearHeldBy/ResetIntentState via NEW `trash_channel_detail.h`). NOTE: the queued "clump-birth family" proposal was set aside on read — births are inseparable from TickCarry's prune/express; the intent lane is the self-contained concept | DONE (eve) | `1aa93f5e` |
+> | prop_lifecycle takeObj container-extract seam -> `prop_container_extract.cpp` (804 -> 646; PRE/POST pair + `g_takeObjInFlight` defined there, shared via detail hdr; InstallInventory moved) | DONE (eve) | `a7f02f22` |
+> | Dead residue: hand-item empty-streak debounce shell + dropGrabObject diag thunk + shutdown.h `<atomic>` | DONE (eve), filtered-staged around the held [ROCK-DROP] WIP | `fb490e36` |
 >
 > **The modularization is COMPLETE at the RULE-1-correct boundary.** Every safe/valid extraction
 > shipped (A/D/C-engine_save/B5/B1a/B4). B1b was measured to be mis-scoped (executing it would
@@ -148,6 +152,11 @@ the existing homes, MTA-check the shape, audit after.
 >    skips MarkPropElement for a container-extract. takeObj + Init-POST are ONE coupled spawn-catch
 >    machine. Moving takeObj out would SPLIT a mutable flag across two files — the exact cross-file-
 >    global anti-smear the folder rule forbids. takeObj BELONGS in prop_lifecycle.
+>    *(2026-07-10 eve `a7f02f22` nuance: the soft-cap extraction moved the takeObj pair to
+>    `prop_container_extract.cpp` — a SIBLING TU of the SAME module (namespace coop::prop_lifecycle),
+>    flag shared via the module's own `prop_lifecycle_detail.h` (the session_lanes.h precedent, same
+>    as `g_session_ptr` with prop_destroy_seam). That is a within-module file split, NOT the
+>    cross-CONCEPT move into grab_observer this point forbids — the B1b cancellation stands.)*
 > 3. `EnsureHeldItemBroadcast` (trash_collect_sync.cpp:229) is a shared held-item broadcast SERVICE
 >    called from 3 sites (hand_item, local_streams, net_pump) — not a diagnostic observer; it is
 >    correctly a residual trash/prop service, not grab_observer material.
@@ -158,8 +167,8 @@ the existing homes, MTA-check the shape, audit after.
 > only, deferred unless requested. NET: the current homes are already RULE-1 correct — do NOT
 > execute B1b.
 
-- `prop_lifecycle.cpp:379-510` — take-obj grab observers (`TakeObj_PRE/_POST`) + `InstallInventory`
-- `trash_collect_sync.cpp:94-437` — BeginDeferredSpawn observer + `EnsureHeldItemBroadcast`
+- ~~`prop_lifecycle.cpp:379-510`~~ take-obj observers + `InstallInventory` (now `prop_container_extract.cpp`, `a7f02f22`)
+- `trash_collect_sync.cpp` — BeginDeferredSpawn observer + `EnsureHeldItemBroadcast` (line refs shifted by the `fb490e36` thunk retirement)
 - `remote_prop.cpp:814-1071` — `OnConvert` (grab-driven form change)
 The includes already point at an existing intended home: **`coop/props/grab_observer`**.
 **Plan:** consolidate the grab/held-item observers + broadcast into `grab_observer.{h,cpp}`
