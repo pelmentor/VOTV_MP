@@ -43,7 +43,10 @@ struct Slot {
 // slot) -> "table full" -> the head fix silently worked on one peer and not the other.
 // Asymmetric peers = asymmetric slot pressure: size for the whole roster, not "a
 // handful".
-constexpr int kMaxNativeHooks = 16;
+// 16 -> 40 (2026-07-10, rng_roll_census): the T1 probe Func-patches 6 driver natives + QuitGame on
+// top of ~15 standing installs -- 16 was one asymmetric-peer table-full away from the half-working-
+// fix lesson repeating. Same sizing rule as the interceptor table (whole roster, not "a handful").
+constexpr int kMaxNativeHooks = 40;
 Slot g_slots[kMaxNativeHooks];
 int  g_slotCount = 0;
 

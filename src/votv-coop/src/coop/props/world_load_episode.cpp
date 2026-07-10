@@ -8,13 +8,16 @@
 
 #include "ue_wrap/log.h"
 
+#include <atomic>
 #include <chrono>
 
 namespace coop::world_load_episode {
 namespace {
-// Game-thread only (armed on the join bringup thread's Post to the game thread; cleared on the client
-// reconcile tick; read on the destroy seam -- all game thread). No atomic needed.
-bool g_inEpisode = false;
+// WRITES are game-thread only (armed on the join bringup thread's Post to the game thread; cleared
+// on the client reconcile tick / the watchdog; the destroy seam reads on the GT). Atomic (relaxed)
+// so the rng_roll_census probe may TAG records with the episode flag from the ProcessEvent-
+// dispatching worker threads without a data race -- the tag is advisory, staleness is fine.
+std::atomic<bool> g_inEpisode{false};
 
 // The watchdog ceiling sits ABOVE join_membership_sweep's 120 s absolute sweep ceiling: when the sweep
 // path is healthy it always closes the episode first (quiescence or its own deadlines), so the watchdog

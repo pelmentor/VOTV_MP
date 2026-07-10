@@ -66,8 +66,25 @@ bool Resolve() {
     return IsResolved();
 }
 
+// COOP-ORIGIN dispatch latch (rng_roll_census, 2026-07-10). Every dispatch OUR code issues goes
+// through this one choke point, so a thread-local depth counter cleanly discriminates "the mod
+// called this native" from "the game's own BP called it" inside a UFunction interceptor -- the
+// context object alone cannot (our re-arms set timers ON game objects, e.g. spaceRenderer).
+// Depth (not bool): a nested dispatch fired from within a coop dispatch stays tagged. RAII so an
+// unwind can't leave the flag stuck.
+namespace {
+thread_local int t_coopDispatchDepth = 0;
+struct CoopDispatchScope {
+    CoopDispatchScope() { ++t_coopDispatchDepth; }
+    ~CoopDispatchScope() { --t_coopDispatchDepth; }
+};
+}  // namespace
+
+bool InCoopDispatch() { return t_coopDispatchDepth > 0; }
+
 bool CallFunction(void* object, void* function, void* params) {
     if (!g_processEvent || !object || !function) return false;
+    CoopDispatchScope scope;
     g_processEvent(object, function, params);
     return true;
 }

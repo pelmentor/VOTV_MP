@@ -14,6 +14,7 @@
 
 #include "coop/creatures/npc_sync.h"
 
+#include "coop/dev/rng_roll_census.h"       // channel (a): BeginDeferred pass-through census
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
@@ -365,6 +366,8 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         void* actorClass = *reinterpret_cast<void**>(
             reinterpret_cast<uint8_t*>(params) + g_npcSpawnActorClassParamOff);
         if (!actorClass || !IsClassOrDerivedFromAnyAllowlisted(actorClass)) {
+            // rng_roll_census channel (a), HOST half: a BP deferred spawn we do NOT track.
+            coop::dev::rng_roll_census::NotePassThrough(actorClass, /*isHostRole=*/true);
             return false;  // not an NPC; let it run, no broadcast
         }
         // Read the SpawnTransform param. Offset resolved ONCE at Install()
@@ -517,6 +520,11 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         }
         return true;  // SKIP the original
     }
+    // rng_roll_census channel (a), CLIENT half: the silent pass-through -- a connected client is
+    // about to run a BP deferred spawn our suppression does not cover (the exact set the T1
+    // structural-vs-allowlist fork adjudicates on). Name-agnostic; no-op unless the [dev] ini
+    // flag is on.
+    coop::dev::rng_roll_census::NotePassThrough(actorClass, /*isHostRole=*/false);
     return false;  // not an NPC; let it run
 }
 

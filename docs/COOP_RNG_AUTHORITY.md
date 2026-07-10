@@ -255,7 +255,46 @@ channel or hands-on diff if the RE leaves it open. The tier's probe does NOT sil
 
 ---
 
+## T1 PROBE v9 — AS-BUILT + FIRST PARTIAL CENSUS (2026-07-10)
+
+**AS-BUILT:** `coop/dev/rng_roll_census.{h,cpp}` (ini `[dev] rng_roll_census=1`), wired via
+subsystems Install/Tick + npc_sync pass-through notes. SEAM CORRECTION measured by the probe's own
+positive control on the first smoke: the driver natives are EX_CallMath-invoked → the PE-detour
+interceptor table was BLIND (zero records against 973 PE-visible BeginDeferreds); channels (b)+(d)
+were moved to the ufunction_hook FUNC-PATCH seam (capacity raised 16→40), where
+sourceObject=FFrame::Object gives free caller attribution. Coop-origin via a TLS depth latch in
+reflection::CallFunction. All 5 static pre-work gates CLOSED: the 3 undumped chains are
+BeginDeferred + known drivers (no instrument amendment); gen_gear lives on gearer_C (interaction
+content roll → gate-5 family, not a spawner row); interval literals extracted (mannequin 1-3 h,
+hexahive 40-60 min, eyers 30-45 min, deer 60-300 s; greenFire/furfurAltar/hillRoller/arirBuster/
+propSpawner_editor have NO drivers in own bytecode = externally-triggered CONDITIONAL);
+wakeup expresses through BeginDeferred (visible to (a)), createDream entry is state-only;
+chipType is ALREADY wire-stamped host-auth at spawn/convert — T1-4 residue = per-interaction rolls
+(turnIntoScrap ×135, clump crowbarOpen) → INTENT family + food spoilage → the
+COOP_WORLD_PROP_DIVERGENCE class.
+
+**FIRST PARTIAL CENSUS (150 s LAN smoke, 2026-07-10 12:48 — PARTIAL per the exposure rule;
+positives admissible, fork NOT formally callable yet at ~9/16 adjudicated < 2/3):**
+- **LIVE client-side steady-state rolling (episode=0, coop=0):** `mainGamemode_C` 157 Delay arms +
+  1 SetTimerDelegate (the master director's machinery — incl. the QuitGame lane — runs on the
+  CLIENT at the host's rate 188) · `ticker_dishUncalib_C` 11 TickInterval re-arms (dish-scramble
+  drift rolls independently; host 11 — same rate = parallel divergence) ·
+  `ticker_insomniacSpawner_C` 26 · `autumnLeafSpawner_C` live · `prop_food_mushroom_C` 4462
+  steady TickInterval re-arms (food-spoilage self-sim, the divergence-class live confirmation).
+- **ARMED on the client** (one-shot load arms + census (c) tickEnabled=1, awaiting their 30 min-3 h
+  cycles): deerSpawner, mannequinSpawner, hexahiveSpawner, bp7Spawner, treeSpawner, susHoleSpawner,
+  bushSpawning, eyers, fossilhoundSpawner, roachSummoner.
+- **DONE-suppressed corroborated:** serverBreaker tickEnabled=0; yellowWisp/pinecone cancelled at
+  the fn body (analysis join marks DONE).
+- QuitGame: zero (channel armed, global).
+- **Partial verdict: every measured row points STRUCTURAL** (far more than 3 shared-world classes
+  armed/live). Formal fork call = the full 1x day-night exposure run (the probe is resident;
+  any long organic session with the ini flag on accumulates it).
+
 ## CHANGELOG
+- **2026-07-10 (later)** — probe v9 BUILT + smoked twice (seam correction in between) + first
+  partial census recorded (section above). Pre-work gates 1-5 closed. NEXT: full 1x day-night
+  exposure run → formal fork call → `/qf 15` DESIGN pass on the structural fix.
 - **2026-07-10 (late)** — T1 `/qf 15` QUESTION pass CONVERGED (11 rounds — critic "that holds" at
   R11; 3 self-refutations by measurement; R10-R11 pinned the callable-check arithmetic, the
   instrument scope (T1-3 static/INTENT, T1-4 gate-5 RE), and the color-wisp PRODUCT-EXEMPTION).

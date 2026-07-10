@@ -46,6 +46,13 @@ uintptr_t ProcessEventAddr();
 // unresolved. Must run on the game thread.
 bool CallFunction(void* object, void* function, void* params);
 
+// True while the CURRENT THREAD is inside a CallFunction dispatch issued by our own code (a
+// thread-local depth latch around the one ProcessEvent choke point). Lets a UFunction
+// interceptor discriminate mod-originated native calls from the game's own BP calls
+// (rng_roll_census self-noise exclusion; the context object cannot discriminate -- our
+// re-arms target game objects).
+bool InCoopDispatch();
+
 // GUObjectArray.ObjObjects.NumElements (count of allocated UObject slots).
 int32_t NumObjects();
 
