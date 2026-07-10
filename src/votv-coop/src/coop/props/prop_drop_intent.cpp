@@ -104,7 +104,11 @@ void OnClientFinishSpawn(void* /*context*/, void* /*srcObj*/, void* result) {
     if (coop::prop_echo_suppress::PeekIncomingSpawn(actor)) return;  // a host-authored mirror we adopt, not a place
     if (!ue_wrap::prop::IsDescendantOfProp(actor)) return;          // keyed Aprop_C lineage only
     if (PT::GetPropElementIdForActor(actor) != coop::element::kInvalidId) return;  // already tracked = not a fresh place
-    if (actor == coop::hand_item::LocalHandActor()) return;         // the in-hand display husk, not a world place
+    // Hand-axis exclusion, ENQUEUE half (fast path only -- NOT load-bearing here: at FinishSpawn-return
+    // updateHold has NOT yet written holding_actor, so the freshly-spawned hand view actor can pass this
+    // check; the DRAIN-time re-check in Tick() is the authoritative one, the proven host_spawn_watcher
+    // shape. Audit 2026-07-10 CRITICAL.). IsHandAxisActor also covers remote display mirrors.
+    if (coop::hand_item::IsHandAxisActor(actor)) return;
     if (g_pending.size() >= kMaxPending) {
         UE_LOGW("[PROP-DROP] client pending-place cap %zu hit -- dropping %p", kMaxPending, actor);
         return;
@@ -213,6 +217,12 @@ void Tick(coop::net::Session* session) {
         if (!e.actor || !R::IsLiveByIndex(e.actor, e.idx)) continue;                 // died before drain
         if (coop::element::Registry::Get().EidForActor(e.actor) != coop::element::kInvalidId) continue; // got tracked/bound
         if (coop::prop_echo_suppress::PeekIncomingSpawn(e.actor)) continue;          // a late echo mark -> not a place
+        // DRAIN-time hand-axis re-check (audit 2026-07-10 CRITICAL): the enqueue-time check runs before
+        // updateHold writes holding_actor (host_spawn_watcher.cpp documents this exact window and excludes
+        // at drain for the same reason). Without this, a hold-R pickup's hand view husk -- carrying the
+        // item's PARKED key -- authors a FALSE drop intent: the host spawns a duplicate world prop while
+        // the item is still in the player's hand, and the park is consumed. Drop the entry permanently.
+        if (coop::hand_item::IsHandAxisActor(e.actor)) continue;
         std::wstring key = ue_wrap::prop::GetInteractableKeyString(e.actor);
         if (key.empty() || key == L"None") {
             // Key not restored yet (loadData runs AFTER Finish). Re-defer a few ticks.

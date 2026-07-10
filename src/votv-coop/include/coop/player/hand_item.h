@@ -74,6 +74,21 @@ void ReplayPeerStatesToSlot(int slot);
 // updateHold can have respawned the actor in between.
 void* LocalHandActor();
 
+// The FULL hand-axis boundary, ONE owner (audit 2026-07-10 HIGH: v105 excluded
+// only the LOCAL half -- a REMOTE peer's display mirror was census-adoptable as
+// a world prop, the other half of the 13:44:00 eid=5377 dupe class). True for
+// the local hand actor AND any live remote display mirror. Dead-mirror recycled
+// addresses are NOT matched (IsLiveByIndex-gated) -- a recycled slot belongs to
+// a different, adoptable actor. Consumers: prop_element_tracker::SeedWalk_
+// (via CollectHandAxisActors, hoisted once per walk), prop_drop_intent (enqueue
+// AND drain -- the drain-time re-check is load-bearing: holding_actor is not
+// yet written at FinishSpawn-return). Game thread only.
+bool IsHandAxisActor(void* actor);
+
+// Snapshot the current hand-axis actors (local hand + live remote mirrors)
+// into out[]; returns the count (<= 1 + kMaxPeers). For per-walk hoisting.
+size_t CollectHandAxisActors(void* out[], size_t cap);
+
 // Session lifecycle.
 void Reset();                          // destroy all mirrors + clear states
 void OnSlotDisconnected(uint8_t slot); // destroy that slot's mirror + state

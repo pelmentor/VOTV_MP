@@ -49,6 +49,13 @@ inline Lane LaneForKind(ReliableKind k) {
     // b3 (v90): PropSnapPos rides Bulk so it delivers AFTER the connect-snapshot PropSpawns for the same join
     // (it corrects a save-authoritative native's position; ordering after the snapshot keeps it consistent).
     case ReliableKind::PropSnapPos:    return Lane::Bulk;
+    // F2 Inc-1 fix (audit 2026-07-10 HIGH): PropDropIntent is ORDER-PAIRED with PropDestroy -- the lane's
+    // race defense is "the pickup's no-op husk-destroy delivers BEFORE the place's intent re-spawn", which
+    // GNS only guarantees WITHIN a lane. Unpinned it rode Normal via default: while PropDestroy rides Bulk:
+    // under backpressure the intent could overtake the pickup-destroy (host dup-guard sees the key live ->
+    // place lost) or the husk-destroy could land after the intent's re-spawn (fresh authoritative copy
+    // retracted on every peer -- the exact v2 killer this lane exists to beat).
+    case ReliableKind::PropDropIntent: return Lane::Bulk;
     case ReliableKind::EntitySpawn:    return Lane::Bulk;
     case ReliableKind::EntityDestroy:  return Lane::Bulk;
     // v80 (B3b): WorldActorSpawn + WorldActorDestroy share the Spawn/Destroy lane for the same reason --

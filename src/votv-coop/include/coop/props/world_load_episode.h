@@ -35,6 +35,13 @@
 //                      measured window [arm .. quiescence] brackets the wipe burst; the only legit post-load
 //                      keyed intent destroys (food morph, trash-container E-press, rock R-pickup) fire AFTER
 //                      quiescence and are broadcast normally.
+//   TickWatchdog()  -- the SELF-deadline (audit 2026-07-10 HIGH): NotifyQuiesced is reachable only while
+//                      g_sweepPending is armed, and the sweep arm rides SnapshotBegin -- on the documented
+//                      SnapshotBegin-lost flake (join_membership_sweep.cpp bracket-not-armed case) the
+//                      episode would otherwise stick TRUE for the whole session, eating EVERY client keyed
+//                      destroy broadcast. Ticked unconditionally (above the g_sweepPending gate); force-
+//                      closes the episode after a wall-clock ceiling ABOVE the sweep's own 120 s absolute
+//                      ceiling, so it can only fire when the normal quiescence edge cannot.
 //   Reset()         -- session teardown (join_membership_sweep::ResetClaimTracking).
 //   InEpisode()     -- the destroy seam (prop_lifecycle::DestroySeamBody) queries this to suppress the
 //                      OUTBOUND broadcast of KEYED destroys. eid-only (pile) destroys are NOT gated here.
@@ -50,6 +57,11 @@ void Arm();
 
 // Load-tail quiescence reached -- end the episode (join_membership_sweep at g_sweepFired). Game thread.
 void NotifyQuiesced();
+
+// Unconditional per-tick watchdog (join_membership_sweep::TickClientReconcile, ABOVE its sweep-armed
+// gate): force-closes a stuck episode after a wall-clock ceiling the normal quiescence edge always beats
+// (fires only on the SnapshotBegin-lost flake / a pathological stall). Game thread.
+void TickWatchdog();
 
 // Session teardown -- clear the episode unconditionally. Game thread.
 void Reset();

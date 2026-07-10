@@ -322,6 +322,22 @@ void OnDisconnect() {
     g_gm = nullptr; g_gmIdx = -1;
     g_polledGm = nullptr; g_primed = false;
     g_lastMask = 0; g_lastBroken = 0; g_lastPollMs = 0;
+    // Restore the neutralized breaker (audit 2026-07-10 HIGH): KillLocalBreaker disabled the actor tick;
+    // resetting only the latch left servers permanently unbreakable in the SAME process after the session
+    // (solo play / re-host) -- the event_fire_sync restore precedent ("local scheduler resumes") applies
+    // here identically. The fanout runs on the game thread (net_pump teardown; wisp_grab_hold dispatches
+    // UFunctions from the same fanout). Re-walk rather than a stored pointer: restoring EVERY live breaker
+    // instance is idempotent and also covers a breaker respawned after the kill.
+    if (g_breakerKilled && GT::IsGameThread()) {
+        int restored = 0;
+        for (void* obj : R::FindObjectsByClass(L"ticker_serverBreaker_C")) {
+            if (!obj || !R::IsLive(obj) || R::NameStartsWith(R::NameOf(obj), L"Default__")) continue;
+            if (E::SetActorTickEnabled(obj, true)) ++restored;
+        }
+        if (restored > 0)
+            UE_LOGI("serverbox_sync: restored %d ticker_serverBreaker on session end (local sim resumes)",
+                    restored);
+    }
     g_breakerKilled = false;
     g_session.store(nullptr, std::memory_order_release);
 }

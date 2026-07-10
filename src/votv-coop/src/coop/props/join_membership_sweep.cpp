@@ -584,6 +584,10 @@ void TickClientReconcile() {
     // a 250 ms debounce) and only walks the array when a save-pile grabbed/moved after the join sweep armed a
     // twin. Below this line is the join-window one-shot trigger (disarmed = zero cost). See coop/sync.
     coop::element::quiescence_drain::OnTick();
+    // Episode self-deadline (audit 2026-07-10 HIGH): must run ABOVE the g_sweepPending gate -- on the
+    // SnapshotBegin-lost flake the sweep never arms, NotifyQuiesced below is unreachable, and the
+    // world-load episode would otherwise eat every client keyed destroy broadcast for the session.
+    coop::world_load_episode::TickWatchdog();
     if (!g_sweepPending) return;  // zero cost when disarmed (the steady state)
     UE_ASSERT_GAME_THREAD("join_membership_sweep::TickClientReconcile");  // no-mutex: all sweep state is GT-only
     const auto now = std::chrono::steady_clock::now();

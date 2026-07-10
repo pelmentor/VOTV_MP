@@ -336,6 +336,27 @@ void* LocalHandActor() {
     return ha;
 }
 
+size_t CollectHandAxisActors(void* out[], size_t cap) {
+    size_t n = 0;
+    if (void* lh = LocalHandActor(); lh && n < cap) out[n++] = lh;
+    for (uint8_t slot = 0; slot < coop::players::kMaxPeers && n < cap; ++slot) {
+        const Mirror& m = g_mirrors[slot];
+        // IsLiveByIndex, not a bare pointer match: a dead mirror's recycled
+        // address belongs to a DIFFERENT actor that must stay adoptable.
+        if (m.actor && R::IsLiveByIndex(m.actor, m.idx)) out[n++] = m.actor;
+    }
+    return n;
+}
+
+bool IsHandAxisActor(void* actor) {
+    if (!actor) return false;
+    void* axis[1 + coop::players::kMaxPeers];
+    const size_t n = CollectHandAxisActors(axis, 1 + coop::players::kMaxPeers);
+    for (size_t i = 0; i < n; ++i)
+        if (axis[i] == actor) return true;
+    return false;
+}
+
 void TickMirrors() {
     auto& reg = coop::players::Registry::Get();
     const uint8_t self = reg.LocalPeerId();

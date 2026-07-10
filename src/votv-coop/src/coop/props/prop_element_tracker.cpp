@@ -15,7 +15,7 @@
 #include "coop/element/registry.h"
 #include "coop/creatures/kerfur_entity.h"  // K-5: IsKerfurActor (the client-mint gate)
 #include "coop/net/session.h"
-#include "coop/player/hand_item.h"  // v105 axis boundary: LocalHandActor (SeedWalk_ skip)
+#include "coop/player/hand_item.h"  // hand-axis boundary: CollectHandAxisActors (SeedWalk_ skip; local hand + remote mirrors)
 #include "ue_wrap/engine.h"  // GetActorLocation (v86 Path 1c pile save-time map)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -580,20 +580,29 @@ std::atomic<bool>     g_inPurgeEpisode{false};
 SeedCounts SeedWalk_(std::vector<void*>* outNewActors) {
     const int32_t n = R::NumObjects();
     SeedCounts c;
-    // v105 axis boundary (2026-07-06): the LOCAL player's hotbar hand actor is
-    // PLAYER EXPRESSION, not a world entity (updateHold destroys + respawns it
-    // per quick-slot switch; peers see it via the HandItem lane). Adopting it
-    // here minted a world eid + broadcast an incremental PropSpawn for an actor
-    // that is about to die -- the client rendered a frozen dupe at the puppet
-    // for ~4s until the death-watch cleaned it (hands-on 13:44:00, eid=5377).
-    // Read once per walk (the actor is stable within one GT walk).
-    void* const localHand = coop::hand_item::LocalHandActor();
+    // v105 axis boundary (2026-07-06), WIDENED 2026-07-10 (audit HIGH): hand-axis
+    // actors are PLAYER EXPRESSION, not world entities -- the LOCAL player's
+    // hotbar hand (updateHold destroys + respawns it per quick-slot switch;
+    // peers see it via the HandItem lane) AND every REMOTE peer's display
+    // mirror (SpawnMirror mints a real Aprop_C whose adoption here would
+    // broadcast a phantom keyed PropSpawn to all peers + the connect snapshot,
+    // with its destroy echo-suppressed -- permanent phantom; the other half of
+    // the 13:44:00 eid=5377 dupe class). Hoisted once per walk (<= 8 entries,
+    // stable within one GT walk).
+    void* handAxis[1 + coop::players::kMaxPeers];
+    const size_t handAxisN =
+        coop::hand_item::CollectHandAxisActors(handAxis, 1 + coop::players::kMaxPeers);
+    const auto isHandAxis = [&](void* obj) {
+        for (size_t h = 0; h < handAxisN; ++h)
+            if (handAxis[h] == obj) return true;
+        return false;
+    };
     std::vector<void*> live;
     live.reserve(4096);
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
-        if (obj == localHand) continue;  // the hand is not a world prop
+        if (isHandAxis(obj)) continue;  // hand-axis display actors are not world props
         if (!ue_wrap::prop::IsKeyedInteractable(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) { ++c.cdo; continue; }
