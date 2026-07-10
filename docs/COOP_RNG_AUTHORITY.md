@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ✅ converged 2026-07-10 eve (6 rounds, critic hold; ratified DESIGN section below) | ⬜ Inc-1 next | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ✅ converged 2026-07-10 eve (6 rounds; ratified DESIGN below) | ✅ **Inc-1 AS-BUILT `e6c1371b`** (insomniac+fossilhound parked, ambient dissolved into coop/world/spawn_authority, tripwire live; VERIFY-gate passed by census; Inc-2 families next) | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -363,7 +363,17 @@ mirror-step-3 generalization all go to the **T1 `/qf 15` DESIGN pass — the nex
 
 ## T1 STRUCTURAL DESIGN — ratified (/qf DESIGN pass, 6 rounds, 2026-07-10 evening; NOT built)
 
-**Status: DESIGN.** Transcript: scratchpad qf_thread.md (session 86866d94). Critic hold at R6.
+**Status: Inc-1 AS-BUILT `e6c1371b` (2026-07-10 night); the rest DESIGN.** Transcript:
+scratchpad qf_thread.md (session 86866d94). Critic hold at R6.
+**Inc-1 as-built + VERIFIED-by-census (host-as-control, smoke x2, 0 errors):** module
+`coop/world/spawn_authority.{h,cpp}` -- t1 parks ticker_insomniacSpawner_C +
+ticker_fossilhoundSpawner_C (client tickEnabled=0, ZERO post-park driver re-arms; refined run
+parked at +7s BEFORE the first re-arm; host control 26 insomniac re-arms in-window), t3 = the
+four ambient cancels migrated verbatim (ambient_spawner_suppress DELETED, RULE-2), shipping
+tripwire in npc_sync's client pass-through, analyzer suppress-join re-pointed. The measured
+join-window fact: save-loaded spawner instances appear AFTER install -> the 1 Hz first-instance
+hunt bounds the pre-park window to ~1 s (was: the design's 'park inside the join episode' --
+as-built this is hunt-until-first-park, measurably equivalent).
 
 **INVARIANT:** a connected CLIENT ticks NO shared-world spawner and rolls NO shared-world spawn
 RNG; shared-world content arrives ONLY via the host wire; per-peer exemptions are an explicit
@@ -448,6 +458,9 @@ player-local; the earlier default is superseded.
 stands unless reordered.
 
 ## CHANGELOG
+- **2026-07-10 (night, later)** — **Inc-1 BUILT + VERIFIED-by-census `e6c1371b`** (see the
+  as-built note in the design section). DLL `92C7FC96` deployed all 4; smoke x2 PASS. Audit
+  0 findings (npc_sync 978-LOC pre-existing cap flag carried -> extraction on next touch).
 - **2026-07-10 (night)** — USER DECISIONS answered: OWNER-EFFECT rule (per-peer authority +
   cross-peer mirror for all player-proximity ambient effects — wisps/fireflies/leaves; own
   both layers), dreams default PLAYER-LOCAL, Inc-2 order default accepted. EXEMPT-PER-PEER
