@@ -1,5 +1,8 @@
 # Hands-on runbook — 2026-07-10 fix-pass + reorg + camera-front hand item (take 2)
 
+> **SUPERSEDED by take 3 (`handson_runbook_2026-07-10_eve_v108.md`, DLL `D9F35C9A` proto 108)** —
+> every still-pending item below is carried there; run take 3, not this.
+
 **Supersedes take 1 (same day, morning).** Take 1's DLL predates the afternoon series.
 
 **Deployed:** DLL `92C7FC96` (hash-verified all 4 installs; supersedes `EDFED54A` — adds the

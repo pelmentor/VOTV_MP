@@ -107,14 +107,34 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   or intent. Every gap row is STATIC-INFERRED → run a LIVE client-roll probe before any fix. *Look FIRST:*
   `docs/COOP_RNG_AUTHORITY.md` (living tracker) + `memory/lesson_votv_rng_host_ownable_at_ticker_director_layer.md`.
 
+- **Classify an ambient spawner's tier by its ANCHOR read** (minutes in the dump): player-camera source
+  → OWNER-EFFECT; absolute float coords → world host-auth; navmesh random-walk var → world roamer; a
+  PRODUCT that stalks the local player → OWNER-ENTITY. Two wrong name-and-vibes calls reversed in one
+  day (pinecone wrongly suppressed; sky wisps wrongly per-peer). *Look FIRST:*
+  `research/findings/votv-ambient-anchor-audit-RE-2026-07-10.md` + the tier table in spawn_authority.h.
+  `memory/lesson_ambient_spawner_anchor_read_decides_tier.md`
+- **Peer-keyed mirror lanes have 3 measured traps** (owner_entity_sync audit): a CLIENT has no transport
+  edge for another client's slot → leaver teardown must be HOST-FANNED; your own mirror spawn re-enters
+  every BeginDeferred hook → ScopedMirrorSpawn-exclude EVERYWHERE incl. the rng census; collision must
+  drop INSIDE the deferred window (BeginPlay overlap runs during Finish). *Look FIRST:*
+  `coop/creatures/owner_entity_sync.cpp` (reference impl). `memory/lesson_peer_keyed_mirror_lane_traps.md`
+
 ## 4. Dispatch, hooks & input seams
 
 - **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. THIRD instance
   2026-07-10: the T1 probe's PE-table interceptors on `Delay`/`K2_SetTimer*`/`SetActorTickInterval`/`QuitGame`
   were BLIND for a whole smoke (caught by its own positive control; moved to the Func-patch seam `7109efd1`).
   BONUS: a Func-patch POST hook's `sourceObject = FFrame::Object` = the CALLING BP actor — free per-caller
-  attribution, no param stepping. *Look FIRST:* the dispatch map's MECHANISM row, not just the function row.
+  attribution, no param stepping. FOURTH instance 2026-07-10 eve (the INVERSE trap): the STATIC dump
+  `$type` cannot PREDICT visibility either way — garbagePile/pinecone read `EX_CallMath` yet measurably
+  FIRE the PE POST; chipPile reads the same and doesn't. Only a live catch classifies a caller.
+  *Look FIRST:* the dispatch map's MECHANISM row + its live-catch evidence, never the dump alone.
   `memory/lesson_ex_callmath_invisible_to_processevent.md`
+- **`R::FindFunction(cls, name)` is EXACT-OWNER — no SuperStruct climb**: a parent-class UFunction
+  (AActor::SetLifeSpan) looked up on a BP leaf returns NULL every call + pays a futile full-array walk
+  (audit CRITICAL 2026-07-10: the ambient-mirror lifespan backstop was silently dead). Resolve on the
+  DECLARING class + cache. *Look FIRST:* the SDK header for which class declares the fn.
+  `memory/lesson_findfunction_exact_owner_no_superstruct_climb.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
   NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`
 - **BP-JSON call censuses: text-grepping an export for a NATIVE fn name gives FALSE NEGATIVES** — imported
