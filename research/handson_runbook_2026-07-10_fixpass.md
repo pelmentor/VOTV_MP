@@ -1,45 +1,42 @@
-# Hands-on runbook — 2026-07-10 fix-pass + probe (take 1)
+# Hands-on runbook — 2026-07-10 fix-pass + reorg + camera-front hand item (take 2)
 
-**Supersedes** `handson_runbook_2026-07-09_F2inc1.md` (that build had the two rock-lane defects
-below UNFIXED — do not test against it).
+**Supersedes take 1 (same day, morning).** Take 1's DLL predates the afternoon series.
 
-**Deployed:** DLL from HEAD (fix pass `db6ecd0b` + reorg `a0853315` + probe `7109efd1` +
-garbage-gate fix); hash printed by deploy at documentize. Proto unchanged (107).
-**Probe note:** `[dev] rng_roll_census=1` is ON in HOST + CLIENT_1 inis — your session
-automatically accumulates the T1 RNG census ([RNG-CENSUS] lines; ~every 10 min a TICKERS/RESIDUE/
-DUMP block). Leave it on unless something feels off; it is read-only.
+**Deployed:** DLL `3F02AA29` (hash-verified all 4 installs) = the full 2026-07-10 day:
+fix pass `db6ecd0b` + probe `7109efd1` + hand-item camera-front `be98beb6` + placement series
+#5-#13 + 4 soft-cap extractions + residue fixes `9becc5e3`/`89bb24e0` + email census gate
+`606fda3b`. Proto unchanged (107). Post-deploy smoke PASS (LAN, 0 ERROR both peers).
+**Probe note:** `[dev] rng_roll_census=1` stays ON in HOST + CLIENT_1 — every session you play
+accumulates the T1 census (the fork call is formally DEFERRED at 7/16 until more client-side
+exposure lands; your organic sessions are the accumulation path).
 
-## What changed since the 07-09 runbook (why rock is now testable)
-1. F2 drop-intent CRITICAL: the hand view husk can no longer author a false intent (drain-time
-   re-check) — pre-fix, EVERY hold-R pickup risked a host-side duplicate.
-2. F2 drop-intent HIGH: PropDropIntent now rides the same GNS lane as PropDestroy — the
-   "husk-destroy delivers before the intent" ordering actually holds under load.
-3. serverbox: leaving a session now restores the local server-breaker (solo play breaks servers
-   again).
-4. Join safety: the world-load episode force-closes after 150 s even on the SnapshotBegin flake.
-5. Remote peers' hand-item mirrors can no longer be adopted as phantom world props.
+## Already VERIFIED by a real log this day (no action needed)
+- **serverbox breaker restore on session end** — the census client's 14:15:00 death teardown
+  printed `serverbox_sync: restored 1 ticker_serverBreaker on session end`; event_fire
+  (allEvents 0->69) + time_sync (TimeScale->1) restores fired on the same path.
 
 ## Test steps (client = you, host = second box/window unless noted)
-1. **F2 rock (the headline)**: as CLIENT, hold-R pick up a keyed rock -> walk -> hold-R place it.
-   EXPECT: host sees the rock vanish at pickup and appear at the place spot; NO duplicate at the
-   pickup spot, NO rock stuck mid-air at the hand. Log markers: `[PROP-DROP] CLIENT authored drop
-   intent key=...` (client) -> `[PROP-DROP] HOST spawned placed prop` + a host PropSpawn broadcast.
-   Also try: pick up, then QUICK-SLOT switch a few times while carrying, then place (the drain-time
-   re-check path); pick up and NEVER place (expect: nothing spawns anywhere).
-2. **serverbox**: host waits for / forces a server break. EXPECT client sees the same server down
-   (map + box skin), no false "server down" on the client at other times, none at join. Then
-   CLIENT DISCONNECTS GRACEFULLY (menu) and keeps playing solo: EXPECT
-   `serverbox_sync: restored N ticker_serverBreaker` in the client log and servers CAN break in
-   solo afterwards.
-3. **email host-only**: client plays until a story email WOULD trigger client-side. EXPECT: host
-   inbox receives ZERO client-authored emails; both peers' inboxes match the host's.
-4. **peer-action chat**: either peer deletes an email. EXPECT chat line "<nick> deleted an email:
-   <subject>" on all peers ("You ..." on the deleter). F1 > Cosmetics > Chat > "Peer action
-   notifications" toggle off -> no line; toggle survives relaunch.
-5. **(passive) census**: play >= one full in-game day at NORMAL speed (no clock acceleration —
-   it breaks the census axes). The [RNG-CENSUS] blocks in both logs feed the T1 fork call.
+1. **Hand item, camera-front (the new look, `be98beb6`)**: hold-R pick up any item; the OTHER
+   peer looks at your puppet. EXPECT: the item floats in FRONT of the puppet's face (camera
+   height, slight right bias, follows your look up/down) — the SP hold look from third person;
+   NOT at the right shoulder (the old placement). If it needs to sit closer / lower / more
+   centered, say it in those words — it's a 3-constant retune.
+2. **F2 rock (the headline, unchanged from take 1)**: as CLIENT, hold-R pick up a keyed rock ->
+   walk -> hold-R place. EXPECT: host sees vanish at pickup + appear at place; NO duplicate, NO
+   mid-air rock. Log: `[PROP-DROP] CLIENT authored drop intent key=...` -> `HOST spawned placed
+   prop`. Also try quick-slot switching while carrying, and pick-up-never-place.
+3. **serverbox mirror**: host waits for / forces a server break. EXPECT client sees the same
+   server down (map + box skin), no false "server down" otherwise. (The disconnect-restore half
+   is already real-log-verified.)
+4. **email host-only + the census gate**: play until a story email triggers. EXPECT both inboxes
+   match the host's; host inbox receives ZERO client-authored emails.
+5. **peer-action chat**: either peer deletes an email. EXPECT "<nick> deleted an email: <subject>"
+   on all peers ("You ..." on the deleter); F1 > Cosmetics > Chat toggle kills it; survives
+   relaunch.
+6. **(passive) census**: just play — a longer CLIENT life is what the fork call needs (the
+   armed spawners fire on 30 min-3 h cycles; the autonomous client only survives ~18 min idle).
 
 ## Honest status
-Everything above is AS-BUILT + autonomous-smoke-clean ONLY (LAN connect, 0 [Error], watchdog
-silent, RAM stable). None of the positive paths (an actual place, a graceful-disconnect restore,
-an email delete) ran in the smokes — this runbook IS the verification.
+Everything above except the serverbox restore is AS-BUILT + smoke-clean ONLY (LAN connect,
+0 ERROR, RAM stable). The positive paths (a real place, a real break, a real delete, the new
+hand-item look) have not run under human eyes — this runbook IS that verification.

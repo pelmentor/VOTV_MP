@@ -6,6 +6,27 @@
 > one-owner boundary consulted at census + both drop-intent seams). Smoke PASS, 0 [Error], watchdog
 > correctly silent on a healthy join. NOT hands-on: the positive paths (an actual client place, a
 > graceful disconnect restore). Finding 6 cluster (MEDIUMs) + finding 7 remain OPEN as listed.
+>
+> **STATUS UPDATE 2 (same day, afternoon, commits `9becc5e3` + `89bb24e0` + `a2d85644` +
+> `606fda3b`): most of finding 6 + 7 is now CLOSED, each item verified against code before fixing:**
+> - FIXED: email relay residue (EmailAppend out of the whitelist + host-side drop); freecam
+>   HOME/MMB text-capture gate; imgui_overlay SEH text-capture unlatch (chat close + publish
+>   false); GHOST-RETIRE pass-cap 40 + keep-armed-until-drained; TakeClumpBorn IsLiveByIndex
+>   consume guard; hand-mirror echo-suppress mark leak (DestroyMirror consumes the spawn mark);
+>   hand_item Reset() pointer nulling; fonts Chat()/ChatPx() aliases retired (RULE 2); ToUtf8
+>   deduped into chat_feed.h; email topic truncation surrogate-safe + shadow rebuild move-not-copy;
+>   dev_menu dup include; stale global-ui.font help text; ini_config input-focus extraction
+>   (= placement #5, `4541e37f`: ui/input_focus.{h,cpp}).
+> - REFUTED BY CENSUS (`606fda3b`): the peer-action "You deleted" misattribution — the pak-wide
+>   delete-verb census (import-resolved bytecode) found the ONLY remover of saveSlot.emails is the
+>   player's ui_laptop.delEmail; a bulk-removed re-baseline gate (>32/poll) added as desync safety.
+> - ALSO VERIFIED BY REAL LOG (2026-07-10 14:15:00, the census client's death teardown): the
+>   finding-3 serverbox breaker restore fired on a genuine session end.
+> - STILL OPEN: serverbox parked-payload re-assert (Inc-2 — its design pass verdict is "do not
+>   build until Inc-1 is hands-on-verified", honored); prop_drop_intent park-set durability
+>   (design-level); join-edge GetActorLocation bulk-scan chunking; ExpressReleasedHandActor +
+>   [ROCK-DROP] diag retirement (both gated on the rock hands-on); kEmptyDebounceTicks dust +
+>   dropGrabObject dead thunk + shutdown.h dead <atomic> (untouched LOW).
 
 **Trigger:** user — "let's check previous bug fixes like rock — we did it with opus48, which can
 make stupid mistakes... architectural mistakes of opus too."

@@ -15,7 +15,17 @@
 > | C engine_world/engine_spawn | DEFERRED — shared world-context, not a clean move; under cap |
 > | **B1b grab-owner consolidation** | **CANCELLED — MEASURED mis-scoped: would CREATE smears (see B1 §)** |
 > | **B2 prop-reconcile / B3 conversion-adoption** | **DEFERRED — measured REDESIGNs (not moves); modularity-only, need a dedicated hands-on window** |
-> | reflection.cpp extraction | NOT DONE — off-limits without explicit user direction (§11 substrate guard) |
+> | reflection.cpp extraction | ~~NOT DONE — off-limits (§11 Opus substrate guard)~~ **DONE 2026-07-10** `6b9d9309` (Fable session, user blanket green light + the standing >800-queue proposal): FProperty walkers -> `reflection_props.cpp` (877 -> 651), byte-faithful, self-contained family |
+>
+> ## Execution ledger 2 (2026-07-10, Fable window, user-green-lit) — all pushed
+> | Item | State | Commit |
+> |---|---|---|
+> | Placement series #5-#13 (see votv-folder-placement-audit-2026-07-10.md) | DONE — coop/{moderation,save,dispatch,config,world}/, ui/{multiplayer_menu,input_focus}, element/mirror_defer, items/inventory_pickup_sync; ini_config RETIRED | `c7c29894`..`4541e37f` |
+> | prop_element_tracker census family -> `prop_census.cpp` (1066 -> 848) | DONE, detail header `prop_element_tracker_detail.h` | `b0b8040f` |
+> | reflection FProperty walkers -> `reflection_props.cpp` (877 -> 651) | DONE, self-contained | `6b9d9309` |
+> | prop_lifecycle destroy seam -> `prop_destroy_seam.cpp` (966 -> 804) | DONE, detail header `prop_lifecycle_detail.h` | `2a802322` |
+> | event_dispatch_state INTENT family -> `event_dispatch_intent.cpp` (816 -> 636; 4th dispatch family) | DONE | `5b95c602` |
+> | Series audit be98beb6..606fda3b | 0 CRITICAL / 0 HIGH; residue: tracker 848 / trash_channel 808 / lifecycle 804 marginally over cap (proposals: key-index family / clump-birth family / takeObj pair) | — |
 >
 > **The modularization is COMPLETE at the RULE-1-correct boundary.** Every safe/valid extraction
 > shipped (A/D/C-engine_save/B5/B1a/B4). B1b was measured to be mis-scoped (executing it would
@@ -260,7 +270,7 @@ each (`wc -l`) — some may already be handled by Tier B.
 | `props/remote_prop_spawn.cpp` | 972 | `OnSpawn` is a 740-line monolith — split by PHASE | (in-file or siblings) | phases: unkeyed-drop / trash-proxy / exact-key converge / kerfur fuzzy-rekey / deferred finish. Kerfur rekey -> B3 |
 | `creatures/npc_sync.cpp` | 964 | `NpcSuppress_Interceptor` L330-524 (~195) + `Install` L595-809 | `npc_sync_install.cpp` | cohesive file otherwise; interceptor is the fat block |
 | `props/prop_element_tracker.cpp` | 1030 | `DebugCheckPropElementReap` self-test L926+ (~104) | a `_test`/dev TU | plus B2 moves reconcile IN — net LOC may rise; watch the cap |
-| `session/save_transfer.cpp` | 838 | pile/kerfur divergence L541-730 | -> B2 target | same move as B2 |
+| `coop/save/save_transfer.cpp` (moved 2026-07-10) | 838 | pile/kerfur divergence L541-730 | -> B2 target | same move as B2 |
 | `session/player_handshake.cpp` | 828 | UTF-8 codec L132-181 + nick-color/skin wire pack-parse L90-131 | shared string util + `nick_color`/`nameplate` | codec is a generic dup (see D) |
 | `props/trash_collect_sync.cpp` | 810→498 | use-interceptor family (~258) | `trash_use_intercept.{h,cpp}` (~370) | **DONE (B1a, smoke-verified `03d38d2b`)** — see the B1 section |
 | `world/weather_sync.cpp` | 1141 | cohesive — LOW priority | (sky/lightning are internal sub-concerns) | only split if it grows; no misplaced code |

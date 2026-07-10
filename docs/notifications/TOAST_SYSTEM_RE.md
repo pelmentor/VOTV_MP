@@ -83,4 +83,4 @@ mixed:
   to verify before relying).
 
 Related: `[[lesson-script-fn-invisible-to-func-patch]]`, `docs/COOP_DISPATCH_VISIBILITY.md`,
-`src/votv-coop/src/coop/session/save_indicator_suppress.cpp` (existing latent addHint-wrapper hook).
+`src/votv-coop/src/coop/save/save_indicator_suppress.cpp` (existing latent addHint-wrapper hook).

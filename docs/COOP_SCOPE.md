@@ -39,7 +39,7 @@ items.
   Decided 2026-05-22 (user). Design: `docs/MULTIPLAYER_UI.md`.
   STATUS 2026-07-02: **SHIPPED** (docs/MULTIPLAYER_UI.md "BUILT"; the menu
   shell + host save picker + server browser live in `src/votv-coop/src/ui/` +
-  `coop/session/multiplayer_menu.cpp`). The "build gated on Phase 3" note is
+  `src/ui/multiplayer_menu.cpp`). The "build gated on Phase 3" note is
   history — Phase 3 shipped long ago.
 
 - **Nameplate ping readout** — the floating per-player nameplate shows the
@@ -100,7 +100,7 @@ items.
   STATUS 2026-07-02: **SHIPPED** — `ui/server_browser.cpp` (live lobby feed =
   master `GET /v1/lobbies` via `lobby_client`, heartbeat age, direct-connect
   row that works with the master down) + the master-up flow overriding the
-  signaling URL/token per session (`harness/config.cpp`; env/ini overrides =
+  signaling URL/token per session (`coop/config/config.cpp` (moved from harness/ 2026-07-10); env/ini overrides =
   the dev framework).
   Methodology phase: this is a WAN concern (Phase 7+ per COOP_METHODOLOGY 3.1
   "LAN first ... WAN is a Phase 7+ concern"); the LAN direct-IP path ships

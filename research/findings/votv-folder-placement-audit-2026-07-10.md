@@ -5,8 +5,16 @@
 > #12 coop/scan/ -> ue_wrap/ (namespace ue_wrap::scan), #4 join_curtain -> ui/ (executed as a WHOLE-
 > FILE move, not the render/trigger split the finding proposed — the split remains available if the
 > file ever grows). Build clean. #2 (ambient-spawn authority merge) stays pre-registered to the T1
-> structural design. #5-#11, #13 (config merge, world_actor lane, mirror_defer, inventory twins,
-> dispatch router, moderation/, save/, multiplayer_menu) remain the OPEN series below.
+> structural design.
+>
+> **STATUS UPDATE 2 (same day, afternoon): the ENTIRE remaining series is EXECUTED** — #10
+> moderation/ `c7c29894`, #11 coop/save/ `c22998e1`, #7 element/mirror_defer + #8
+> items/inventory_pickup_sync + #13 ui/multiplayer_menu `e9fe2b22`, #6 coop/world/world_actor_*
+> `42ec2f37`, #9 coop/dispatch/ (event_feed + event_dispatch_* router) `e35da47a`, #5 ONE config
+> home coop/config/ + the ui/input_focus extraction + session/ini_config RETIRED `4541e37f`.
+> Builds clean per commit; series audit (be98beb6..606fda3b) 0 CRITICAL / 0 HIGH. **Only #2
+> remains, pre-registered to the T1 structural design.** coop/session/ now passes the
+> name-the-concept test (lifecycle + join only).
 
 **Trigger:** user — "check what else of .cpps sit in wrong folder" (after ambient_spawner_suppress
 was found in coop/session/). **Method:** one audit agent, all 567 files under src/votv-coop/

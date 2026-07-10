@@ -10,7 +10,7 @@ rotting/spoiling, growing, heating/cooling, count-decrementing).
 
 ## The root (one, code-verified)
 
-A joining client **loads the host's save** (`coop/session/save_transfer.cpp` —
+A joining client **loads the host's save** (`coop/save/save_transfer.cpp` —
 `CaptureLiveWorldToScratchSlot` → the joiner's native `loadObjects()` builds the world), so **every
 keyed world prop is reconstructed as a real save-loaded `Aprop_C` with its FULL Blueprint brain**. A
 network snapshot (`coop/props/prop_snapshot.cpp`) then reconciles by key (binds to the save-loaded

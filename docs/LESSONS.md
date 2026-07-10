@@ -117,6 +117,10 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   `memory/lesson_ex_callmath_invisible_to_processevent.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
   NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`
+- **BP-JSON call censuses: text-grepping an export for a NATIVE fn name gives FALSE NEGATIVES** — imported
+  callees are bare `StackNode` indices; resolve `Imports[-idx-1].ObjectName` first (2026-07-10 twice:
+  updateHold "no attach", delEmail "removes=[]"). *Look FIRST:* the resolver pattern in
+  `tools/rng_census_analyze.py`. `memory/lesson_bp_json_grep_resolve_imports.md`
 - **use-HOLD (`canBeUsedHold`) bypasses InputAction press-sims** — bind identity on the ENTITY-sim. `memory/lesson_use_hold_bypasses_press_seams.md`
 - **An InputAction can have MULTIPLE delegate bindings — hook ALL.** `memory/lesson_input_action_multiple_delegate_bindings.md`
 - **Every global `GetAsyncKeyState` hotkey poller gates on `!IsOverlayCapturingText()` too** — else it
@@ -168,5 +172,9 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 - **`deploy-all.ps1` deploys Release** → ALWAYS build Release + hash-verify. `memory/lesson_deploy_sources_release_config_not_relwithdebinfo.md`
 - **The smoke HOST slot `s_1234` is STATEFUL — restore `coop_backup` FIRST.** `memory/lesson_s1234_host_slot_stateful_coop_backup.md`
+- **`votv-coop.log` is TRUNCATED at boot (no rotation)** — copy a peer's log to the scratchpad BEFORE any
+  mid-run relaunch or the previous life's evidence is destroyed (2026-07-10: an 18-min census slice lost;
+  and an IDLE autonomous client dies in ~18 min — plan exposure in slices).
+  `memory/lesson_copy_peer_log_before_relaunch.md`
 - **NEVER `git add -A`/`<dir>` over held WIP — explicit paths or stash.** `memory/lesson_never_git_add_A_over_held_wip.md`
 - **AUTONOMOUS pile test loop harness** (reference). `memory/reference_pile_test_harness.md`

@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ next: after the full-exposure census | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` (first PARTIAL census: everything points STRUCTURAL; formal fork call needs the 1x day-night run) |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ GATED: fork call 2026-07-10 pm = **NOT CALLABLE (7/16) → DEFER** (resident accumulation; see SECOND CENSUS section) | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -291,7 +291,48 @@ positives admissible, fork NOT formally callable yet at ~9/16 adjudicated < 2/3)
   armed/live). Formal fork call = the full 1x day-night exposure run (the probe is resident;
   any long organic session with the ini flag on accumulates it).
 
+## T1 SECOND (EXPOSURE) CENSUS — 2026-07-10 afternoon: formal fork call = **NOT CALLABLE → DEFER**
+
+**The run:** 95-min LAN session (host: full 75-min in-game day at 1x + margin; `maxTime=4500 s`
+measured from the daynightCycle CDO). **Client exposure came in SLICES, not a full day:** the idle
+autonomous client DIED in-world at 14:15 (~18-min life, permadeath → menu; pre-death log shows
+`prop_burgerHallucinate_C` spawning — cause unadjudicated), and the relaunched second client's join
+ABORTED during the save transfer ("Remote player left" hit it mid-transfer — likely the kill of the
+old menu client racing the fresh join on the recycled slot; candidate join-window bug, OPEN). The
+first life's raw log was then TRUNCATED by the relaunch (the DLL truncates votv-coop.log at boot —
+[[lesson-copy-peer-log-before-relaunch]]); its evidence survives as the 14:55 analyzer aggregates.
+
+**Adjudication (life-1 aggregates via `tools/rng_census_analyze.py` — the pre-registered
+suppressed-set JOIN + spawner-vs-product evidence rules live IN the script):**
+- **live (client, coop=0, episode=0): deerSpawner** (ticker re-arms outside the join episode),
+  **bp7Spawner** (9 TickInterval re-arms) — 2 rows.
+- **armed:** mannequinSpawner, hexahiveSpawner, eyers, roachSummoner (tickEnabled=1; their
+  30 min–3 h cycles exceed the 18-min client life) — 4 rows.
+- **DONE-suppressed:** yellowWispSpawner (suppress-join; its BeginPlay-time arm record is visible
+  but the fn body is cancelled — the analyzer flags arm-only evidence on a suppressed class).
+- **CONDITIONAL:** the remaining 9 (4 static event-triggered per gate 3; 5 with no records —
+  grayBoar/ghostcar/bunny/bloodSkeleton/ufoDropper never appeared in the world census).
+- QuitGame: zero records on either peer (channel armed, global).
+
+**Formal arithmetic (pinned):** 7/16 adjudicated non-CONDITIONAL < the 11/16 (≥2/3) callable
+threshold → **the fork may NOT be called. Pre-registered consequence: DEFER + extend resident
+accumulation.** (Fork inputs would also be only 2 live < 3.) The probe stays resident
+(`rng_roll_census=1` in HOST+CLIENT_1 inis); the user's organic sessions accumulate client
+exposure; the armed 4 firing within a longer client life settles it. **The T1 DESIGN pass stays
+gated on the fork call** — the partial signal still points STRUCTURAL, but the gate exists
+precisely so nothing gets built on "points".
+
+**Exposure reality for future runs:** an IDLE autonomous client survives ~18 min — full-day client
+exposure needs user-driven sessions or repeated slices; copy the client log to the scratchpad
+before every relaunch.
+
 ## CHANGELOG
+- **2026-07-10 (afternoon)** — SECOND (exposure) census run: host full day, client 18-min slice
+  (idle death) + an aborted rejoin. **Formal fork call NOT CALLABLE (7/16 < 11/16) → DEFER**,
+  per the pre-registered rule (section above). Analyzer tool `tools/rng_census_analyze.py`
+  committed (`a287b3f1`). DESIGN pass stays gated. Also: the audit's ambient-module fact-base
+  rows unchanged; placement #2 (ambient-spawn authority merge) still pre-registered to the
+  T1 design (the rest of the placement series EXECUTED this day — see the placement finding).
 - **2026-07-10 (later)** — probe v9 BUILT + smoked twice (seam correction in between) + first
   partial census recorded (section above). Pre-work gates 1-5 closed. NEXT: full 1x day-night
   exposure run → formal fork call → `/qf 15` DESIGN pass on the structural fix.

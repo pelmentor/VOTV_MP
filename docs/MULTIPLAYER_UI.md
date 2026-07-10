@@ -68,7 +68,7 @@ too. The on-screen clamp reserves the bubble height (no off-screen-top).
 **F1 > Administration > Players (AS-BUILT 2026-07-05 `f66d2c7f`, verdict =
 runbook 0w-b):** HOST-role-gated F1 category (dev_menu Cat/Sub `host` flag on
 `roster::LocalIsHost` — clients/solo never see it): Online (roster rows +
-Teleport/Kick/Ban), Offline (`coop/session/seen_players` — the persistent
+Teleport/Kick/Ban), Offline (`coop/moderation/seen_players` — the persistent
 GUID-keyed seen-players registry, votv-coop-players.txt `guid|nick|lastSeen|ip`,
 written at the host Join seam + disconnect edge), Banned (ban_list rows now
 with REASON + Unban; file format `ip|nick|unixtime|reason`, lenient back-compat
