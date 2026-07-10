@@ -42,20 +42,23 @@ constexpr size_t kMaxStr = 63;
 // the worst case is a single-frame mirror destroy+respawn on the peer.)
 constexpr int kEmptyDebounceTicks = 1;
 
-// Display placement (hands-on iterations 2026-07-06, user: "mirror what the
-// local player sees"). The owner sees the item at the bottom-right of the
-// CAMERA -- so the mirror reproduces the owner's VIEW-space placement on the
-// puppet: eye anchor + synced-look basis x {forward, right, down}, re-driven
-// every tick (the exact puppet_carry_drive shape: head + syncedAim * len).
-// No attach at all -- the native FP-arms chain never ticks on a puppet (its
-// ref-pose socket put the mirror on the BACK, hands-on 14:2x), and a capsule
-// attach can't follow look pitch.
-// Tuned to the user's NATIVE observation (2026-07-06: "предмет в руке held --
-// в районе правого плеча прикреплён"): hugging the right shoulder, barely
-// forward. Anchor = GetHeadPosition() (head bone + its +33 nameplate lift).
-constexpr float kViewForwardCm = 18.f;   // out along the look direction
-constexpr float kViewRightCm   = 30.f;   // to the look-right (the shoulder)
-constexpr float kViewUpCm      = -58.f;  // shoulder height below the lifted head anchor
+// Display placement (user 2026-07-10: "attached to the root of the camera --
+// same as the SP local player: the item just appears in front of the camera,
+// but seen from third person on the puppet"). Natively the held item is
+// welded into the FP-arms VIEWMODEL chain (updateHold K2_AttachToComponent ->
+// 'weapon' <- arms <- arms_lag <- viewmodel, mainPlayer SCS) which is drawn
+// camera-relative -- that chain is bHiddenInGame and never ticks on a puppet
+// (ref-pose socket put the mirror on the BACK, hands-on 2026-07-06 14:2x),
+// and the puppet's Camera component never pitches (pitch is controller-fed).
+// So the SP look is reproduced by the per-tick drive: eye anchor +
+// synced-look basis x {forward, right, down}, following yaw AND pitch --
+// functionally "attached to the camera root". Offsets = camera-front, the
+// SP viewmodel's bottom-center-right feel (was: right-shoulder placement,
+// superseded by the 2026-07-10 ask). Anchor = GetHeadPosition() (head bone
+// + its +33 nameplate lift).
+constexpr float kViewForwardCm = 45.f;   // out along the look direction (in front of the face)
+constexpr float kViewRightCm   = 10.f;   // slight right bias, like the SP viewmodel
+constexpr float kViewUpCm      = -40.f;  // chin height below the lifted head anchor
 
 // ---- per-slot wire state (what each peer's hand holds) -------------------
 struct SlotHand {
