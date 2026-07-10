@@ -34,8 +34,6 @@
 
 #pragma once
 
-#include <atomic>
-
 namespace coop::net { class Session; }
 
 namespace coop::shutdown {

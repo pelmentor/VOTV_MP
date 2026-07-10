@@ -31,17 +31,6 @@ namespace E = ue_wrap::engine;
 // are short ASCII; 63 is generous headroom, one byte each on the wire.
 constexpr size_t kMaxStr = 63;
 
-// Stow announce is EDGE-INSTANT (user 2026-07-06 per rule 1: "it's supposed
-// to be instant"). The bytecode proves a quick-slot switch is ONE synchronous
-// updateHold call (destroy @935 -> spawn @1023 -> holding_name @3183 all in
-// the same invocation), so a poll never observes a mid-switch null -- the
-// original 15-tick (~250 ms) debounce guarded a flicker that does not exist
-// and made the stowed item linger in the peer's hand a quarter second after
-// it was already on the ground. Value 1 = announce on the first null tick.
-// (If some exotic flow ever DOES split a switch across two updateHold calls,
-// the worst case is a single-frame mirror destroy+respawn on the peer.)
-constexpr int kEmptyDebounceTicks = 1;
-
 // Display placement (user 2026-07-10: "attached to the root of the camera --
 // same as the SP local player: the item just appears in front of the camera,
 // but seen from third person on the puppet"). Natively the held item is
@@ -86,7 +75,6 @@ coop::net::Session* g_session = nullptr;
 bool         g_ownHas = false;
 std::wstring g_ownCls;
 std::wstring g_ownName;
-int          g_ownEmptyStreak = 0;
 // The last-seen holding_actor identity (pointer + captured GUObjectArray index —
 // updateHold recycles addresses). While it is unchanged, TickOwner skips the
 // ClassNameOf/ReadItemName renders entirely (audit 2026-07-06 MEDIUM: FName::
@@ -280,7 +268,6 @@ void TickOwner(coop::net::Session& session, void* local, void* holdingProp) {
     if (self >= coop::players::kMaxPeers) return;
 
     if (holdingProp) {
-        g_ownEmptyStreak = 0;
         // O(1) steady-state: same live actor as last tick -> skip the renders,
         // EXCEPT a slow re-check every 30 ticks (~0.5 s) — the game renames a
         // held prop IN PLACE (grenade arm: 'name' -> grenade_1), which a pure
@@ -319,19 +306,22 @@ void TickOwner(coop::net::Session& session, void* local, void* holdingProp) {
         ExpressReleasedHandActor(session, g_ownHeldPtr, g_ownHeldIdx);
         g_ownHeldPtr = nullptr;
         g_ownHeldIdx = -1;
-        // Debounce the updateHold switch flicker: only a PERSISTENT null is a stow.
-        if (++g_ownEmptyStreak >= kEmptyDebounceTicks) {
-            g_ownHas = false;
-            g_ownCls.clear();
-            g_ownName.clear();
-            SlotHand& h = g_hands[self];
-            h = SlotHand{};
-            SendState(session, self, h);
-            UE_LOGI("hand_item: local hand -> EMPTY (announced)");
-            // (v106: no reconcile request here -- the released world actor was
-            // expressed at the hand edge above, and inventory-path spawns ride
-            // the FinishSpawningActor Func seam.)
-        }
+        // Stow announce is EDGE-INSTANT (user 2026-07-06 per rule 1): the bytecode
+        // proves a quick-slot switch is ONE synchronous updateHold call (destroy
+        // @935 -> spawn @1023 -> holding_name @3183), so a poll never observes a
+        // mid-switch null -- no debounce needed. (A 15-tick debounce guarded a
+        // flicker that does not exist and made the stowed item linger a quarter
+        // second; its 1-tick residue was pure dust -- retired 2026-07-10.)
+        g_ownHas = false;
+        g_ownCls.clear();
+        g_ownName.clear();
+        SlotHand& h = g_hands[self];
+        h = SlotHand{};
+        SendState(session, self, h);
+        UE_LOGI("hand_item: local hand -> EMPTY (announced)");
+        // (v106: no reconcile request here -- the released world actor was
+        // expressed at the hand edge above, and inventory-path spawns ride
+        // the FinishSpawningActor Func seam.)
     }
 }
 
@@ -489,7 +479,6 @@ void Reset() {
     g_ownHas = false;
     g_ownCls.clear();
     g_ownName.clear();
-    g_ownEmptyStreak = 0;
     g_ownHeldPtr = nullptr;
     g_ownHeldIdx = -1;
     // Cached engine pointers die with the session too (2026-07-10 audit LOW):

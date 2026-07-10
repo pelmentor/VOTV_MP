@@ -51,7 +51,6 @@ namespace P  = ue_wrap::profile;
 // Cached Session for the pile-grab observer (the PRE callback can't take a param). Set by Install
 // (re-cached every call for reconnect). Game-thread read inside the observer.
 std::atomic<coop::net::Session*> g_session{nullptr};
-bool g_dropGrabThunkInstalled = false;  // read-only dropGrabObject Func-thunk latch (the PHC-grab release seam)
 
 // RULE 1+2 (2026-06-21, docs/piles/08): the v81 MORPH (proximity FindNearestChipPile land-detect) is FULLY
 // RETIRED -- it mis-bound on a NEIGHBOUR pile in a dense cluster. The host-grab sync is now: the InpActEvt
@@ -189,40 +188,12 @@ void OnBeginDeferredSpawnObserve(void* /*context*/, void* srcObj, void* newActor
     coop::trash_channel::OnHostConvert(*s, E, coop::net::propconvert_kind::kToPile, newActor, loc, rot, chipType);
 }
 
-// DIAGNOSTIC read-only thunk on AmainPlayer_C::dropGrabObject -- the PHC-GRAB RELEASE verb (RE-confirmed
-// 2026-06-22, mainPlayer.json: it writes `grabbing_actor = NoObject` @167013 + `grabHandle->ReleaseComponent()`
-// @167059). This is the seam for releasing a PHYSICS-HANDLE-grabbed object: the chipPile clump rides
-// grabbing_actor, NOT holding_actor (confirmed -- neither chipPile nor clump references holding_actor). It
-// catches BOTH a plain drop AND a throw: a throw runs throwShit (SetPhysicsLinearVelocity) + thrown() on the
-// SAME tick immediately BEFORE dropGrabObject, so by this POST the clump already carries its throw velocity (no
-// need to classify drop-vs-throw here -- the release edge reads whatever velocity the clump has). The earlier
-// simulateDrop thunk was the EQUIPMENT drop (throwHoldingProp -> simulateDrop) and NEVER fired for the clump:
-// SIM-DROP=0 across 6 grabs + drops + throws, the live disproof. RULE 2: simulateDrop retired, this is correct.
-// PostNativeCallback fires AFTER dropGrabObject runs, so grabbing_actor is already null -> the ROBUST signal is
-// AnyCarryingEid() (our latch, untouched by dropGrabObject): carrying == the carry-eid in [HELD-STATE] == the
-// release fired for the carried clump. The FLIP will close the latch HERE (read-only logs only now).
-//
-// CONFIRM before the flip: (a) [DROP-GRAB] fires on the real drop AND throw with carrying=<the carry-eid>;
-// (b) it does NOT fire DURING the carry (at a churn re-grab -- the held clump ptr changes ~every 3 s). If it
-// fires on churn, the flip would close the latch mid-carry (regress the smooth carry) -> the close needs a gate.
-void OnDropGrabObserve(void* /*context*/, void* player, void* /*result*/) {
-    auto* s = g_session.load(std::memory_order_acquire);
-    if (!s || !s->connected() || s->role() != coop::net::Role::Host) return;
-    const coop::element::ElementId carryEid = coop::trash_channel::AnyCarryingEid();
-    void* held = nullptr;
-    coop::element::ElementId heldEid = coop::element::kInvalidId;
-    ue_wrap::engine::MainPlayerGrabState gs{};
-    if (player && ue_wrap::engine::ReadMainPlayerGrabState(player, gs)) {
-        held = gs.grabbingActor ? gs.grabbingActor : gs.holdingActor;  // POST -> grabbing_actor already nulled by dropGrabObject
-        if (held && R::IsLive(held)) heldEid = PT::GetPropElementIdForActor(held);
-    }
-    UE_LOGI("[DROP-GRAB] dropGrabObject fired player=%p grabbed=%p(POST) heldEid=%u carrying=%u -- READ-ONLY "
-            "(cross-check carrying vs the carry-eid in [HELD-STATE]; MUST fire on a REAL drop/throw, NOT during "
-            "the carry/churn; the FLIP closes the latch here -> the release edge then ships the throw velocity)",
-            player, held,
-            static_cast<unsigned>((heldEid  == coop::element::kInvalidId) ? 0u : heldEid),
-            static_cast<unsigned>((carryEid == coop::element::kInvalidId) ? 0u : carryEid));
-}
+// (The read-only dropGrabObject diagnostic thunk is RETIRED, 2026-07-10. Its
+// question closed 2026-06-22: the clump release fires NEITHER simulateDrop NOR
+// dropGrabObject -- the release edge is STREAM-THROUGH, not a verb (see
+// local_streams.cpp "THROW ARC"), so the planned latch-close FLIP here can
+// never happen. The thunk only logged noise on unrelated PHC drops and held a
+// fixed-capacity Func-hook slot.)
 
 }  // namespace
 
@@ -444,24 +415,9 @@ void Install(coop::net::Session* session) {
         // bdFn null -> GameplayStatics not loaded yet; retry next world-gated Install call.
     }
 
-    // DIAGNOSTIC read-only: Func-thunk on AmainPlayer_C::dropGrabObject -- the PHC-GRAB RELEASE verb (the
-    // correct seam; the prior simulateDrop thunk was the EQUIPMENT drop and NEVER fired for the PHC-grabbed
-    // clump -- SIM-DROP=0 live, RULE 2 retired). dropGrabObject writes grabbing_actor = NoObject +
-    // grabHandle->ReleaseComponent(); it is FUNC_BlueprintEvent dispatched EX_LocalVirtualFunction -> below
-    // ProcessEvent, so a PRE observer can't see it -> the Func-thunk catches it. Logs carrying eid; the FLIP
-    // will close the carry latch here so a real drop/throw lets the release edge ship the throw velocity.
-    if (!g_dropGrabThunkInstalled) {
-        void* pcls = R::FindClass(P::name::MainPlayerClass);
-        void* dgFn = pcls ? R::FindFunction(pcls, L"dropGrabObject") : nullptr;
-        if (dgFn) {
-            ue_wrap::ufunction_hook::InstallPostHook(dgFn, &OnDropGrabObserve);
-            g_dropGrabThunkInstalled = true;
-            UE_LOGI("trash_collect: read-only dropGrabObject thunk armed (the PHC-grab release seam -- logs "
-                    "carrying eid; drop AND throw both route through dropGrabObject; confirm it fires on a REAL "
-                    "release NOT on a churn re-grab before the flip)");
-        }
-        // dgFn null -> mainPlayer_C not loaded yet; retry next world-gated Install call.
-    }
+    // (The dropGrabObject diagnostic thunk install is RETIRED, 2026-07-10 -- see the
+    // retirement note above OnBeginDeferredSpawnObserve's sibling comment: the clump
+    // release uses no catchable verb; the stream-through design replaced it.)
 
     // The InpActEvt_use interceptor family (client-grab bridge on _41, the _38/_42 use_deny
     // suppressors, and the _58/_59 LMB hard-throw bridge) lives in trash_use_intercept
