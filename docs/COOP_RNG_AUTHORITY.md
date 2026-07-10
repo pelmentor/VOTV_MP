@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ UNGATED 2026-07-10 eve: fork = **STRUCTURAL** (3 client-live rows; callable gate 7/16 user-waived — see THIRD CENSUS) — run the DESIGN pass next | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ✅ converged 2026-07-10 eve (6 rounds, critic hold; ratified DESIGN section below) | ⬜ Inc-1 next | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` + exposure run 2026-07-10 pm (host full day; client 18-min slice — idle death); 2 live + 4 armed + 1 DONE; signal still points STRUCTURAL |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -361,7 +361,77 @@ cancels dissolve into the structural suppress set in the same change), the color
 PRODUCT-EXEMPTION carry-through, placement #2 (ambient-spawn authority home), and the
 mirror-step-3 generalization all go to the **T1 `/qf 15` DESIGN pass — the next work item.**
 
+## T1 STRUCTURAL DESIGN — ratified (/qf DESIGN pass, 6 rounds, 2026-07-10 evening; NOT built)
+
+**Status: DESIGN.** Transcript: scratchpad qf_thread.md (session 86866d94). Critic hold at R6.
+
+**INVARIANT:** a connected CLIENT ticks NO shared-world spawner and rolls NO shared-world spawn
+RNG; shared-world content arrives ONLY via the host wire; per-peer exemptions are an explicit
+table row, never an omission.
+
+**Mechanism — ONE cancel TABLE (data), THREE tiers (fixed seams):**
+- **Table row:** spawner class + tier tag (t1/t2/t3/EXEMPT-PER-PEER) + optional
+  (class, latent-UUID) rows for mixed classes. `ticker_wispSpawner_C` = explicit EXEMPT row
+  (recorded user decision: color wisps stay per-peer).
+- **t1 tick-park:** engine's own `SetActorTickEnabled` wrapper (ue_wrap/engine.cpp:539 — the
+  mirror brain-park path; no raw field writes). Park during the JOIN EPISODE (before client
+  gameplay ticks → zero window); 1 Hz drift-only re-assert over a CACHED instance set (one
+  class-filtered walk at install, cheap-class-check-before-NameOf; 60s reconcile belt; late
+  instances also enter via the BeginDeferred interceptor); restore-on-disconnect. The
+  suppression loan is repaid by construction: every session-end path tears down to the main
+  menu (measured), so the next world load re-arms everything; the restore is belt for the
+  teardown window.
+- **t2 latent-starve:** ONE shared PRE Func-patch each on Delay / SetTimerDelegate /
+  SetActorTickInterval (3-4 slots total): cancel the arm iff role==Client && running() &&
+  caller UClass* ∈ table (flat pointer set resolved at install; allocation/NameOf/lock-free;
+  parallel-anim-thread safe). Catches Delay-latent re-arm chains regardless of BP-internal
+  dispatch (probe-v9-measured seam, caller attribution via FFrame::Object).
+- **t3 entry-fn cancel:** the ~5 externally-triggered spawners (greenFire/furfurAltar/
+  hillRoller/arirBuster/propSpawner_editor — NO drivers in own bytecode): targeted body cancel
+  of the triggered entry fn (proven ambient shape); their post-trigger chains have
+  caller==spawner so t2 catches those too.
+- **Directors (mainGamemode/daynightCycle) are NOT parked** — their roll lanes stay T1-2
+  per-lane work (QuitGame freeze = its own small patch).
+- **The PRODUCT seam stays:** the BeginDeferred interceptor keeps wire-bypass + the allowlist
+  keeps its MIRROR-set role (product-class-keyed regardless of caller) + a SHIPPING low-rate
+  tripwire WARN when a table class spawns client-side without coop origin (regression alarm;
+  silent against the measured 121-spawn census). New-class DISCOVERY stays with the ini-gated
+  resident census (dev tooling) — stated, not silently claimed.
+
+**Phasing (no content regression):**
+- **Inc-1:** park ONLY spawners whose products are already mirrored (npc allowlist 15 +
+  ambient 4). Per-class gates BEFORE parking: (i) bytecode-dump read (all 28 dumps exist) for
+  non-spawn responsibilities (mixed class → (class,UUID) grain) AND the product-class literal
+  (converts the name-inferred product→spawner mapping to VERIFIED; unmirrored product →
+  self-moves to Inc-2); (ii) MEASURED free-hook-slot count before any t2/t3 wiring (estimate:
+  ≤10 new vs 14 free of kMaxNativeHooks=40).
+- **Inc-2+:** one product FAMILY per increment: extend the host EntitySpawn mirror to the
+  product class FIRST, then park its spawner. Proposed order (measured-liveness default,
+  user-adjustable): hexahive → bp7 → eyers → roach → mannequin. Slow classes are Inc-2 by
+  construction (their gates need long windows; the vitals keepalive 0211b9c5 makes 12h+
+  verification runs routine).
+- **Per-class VERIFY gate (discriminating, host-as-control, same run + instrument):** client
+  BeginPlay arm record present + host ≥2 driver re-arms in the window + client ZERO re-arms;
+  window = 2x the class's max interval literal. Ambient-4 mechanism is grandfathered through
+  the dissolve but re-gated after the move as relocation proof.
+
+**RULE-2 / placement:** new module `coop/world/spawn_authority.{h,cpp}`;
+ambient_spawner_suppress dissolves INTO it in the SAME commit; host_spawn_watcher mirror halves
+stay. Residue census rows are classified to their OWN lanes, never stuffed into T1-1:
+growingPlant → COOP_WORLD_PROP_DIVERGENCE, weatherFogController → weather_sync, grime_* →
+grime_sync/T3, dirthole_item_C (~330/pass, first-sighted in the join window with flat per-pass
+count) = census-ARTIFACT candidate (level-streaming re-instantiation) → targeted classify probe
+before any lane assignment, NewBlueprint3/41 → RE.
+
+**USER DECISIONS surfaced (none block Inc-1):** (1) autumn leaves — shared-world or per-peer
+cosmetic (T3)? (2) dreams/wakeup — reclassify PLAYER-LOCAL (personal experience, not shared
+world)? (3) Inc-2 family order — accept the measured-liveness default above?
+
 ## CHANGELOG
+- **2026-07-10 (late evening)** — T1 `/qf` DESIGN pass CONVERGED (6 rounds, critic hold at R6;
+  transcript scratchpad qf_thread.md): ratified STRUCTURAL DESIGN section added (cancel table +
+  3 tiers + product seam retained + Inc phasing + verify gates + RULE-2 dissolve). NOT built.
+  NEXT: Inc-1 implementation plan; 3 non-blocking user decisions surfaced.
 - **2026-07-10 (evening)** — THIRD (keepalive) census: idle-death root-fixed (starvation;
   vitals_keepalive `0211b9c5`), 65-min continuous 2-peer run, hexahive converted → 3 client-live
   rows → **fork = STRUCTURAL (user-called; 7/16 callable gate waived — rationale in section)**.
