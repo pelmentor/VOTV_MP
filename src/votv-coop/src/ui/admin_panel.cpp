@@ -3,9 +3,9 @@
 #include "ui/admin_panel.h"
 
 #include "coop/player/roster.h"
-#include "coop/session/ban_list.h"
-#include "coop/session/moderation.h"
-#include "coop/session/seen_players.h"
+#include "coop/moderation/ban_list.h"
+#include "coop/moderation/moderation.h"
+#include "coop/moderation/seen_players.h"
 #include "ui/scale.h"
 
 #include "imgui.h"

@@ -1,9 +1,9 @@
-// coop/moderation.cpp -- see coop/moderation.h.
+// coop/moderation/moderation.cpp -- see coop/moderation/moderation.h.
 
-#include "coop/session/moderation.h"
+#include "coop/moderation/moderation.h"
 
-#include "coop/session/ban_list.h"
-#include "coop/session/seen_players.h"
+#include "coop/moderation/ban_list.h"
+#include "coop/moderation/seen_players.h"
 #include "coop/session/teleport_client.h"
 #include "coop/net/session.h"
 #include "coop/session/player_handshake.h"

@@ -434,9 +434,9 @@ add_library(votv-coop SHARED
     src/ui/scale.cpp
     resources/fonts.rc
     src/coop/player/roster.cpp
-    src/coop/session/ban_list.cpp
-    src/coop/session/moderation.cpp
-    src/coop/session/seen_players.cpp
+    src/coop/moderation/ban_list.cpp
+    src/coop/moderation/moderation.cpp
+    src/coop/moderation/seen_players.cpp
     src/harness/harness.cpp
     src/harness/harness_diag.cpp
     src/harness/autotest/autotest.cpp

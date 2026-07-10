@@ -22,9 +22,9 @@
 #include "coop/props/grab_observer.h"
 #include "coop/player/item_activate.h"
 #include "coop/player/players_registry.h"
-#include "coop/session/ban_list.h"
-#include "coop/session/seen_players.h"
-#include "coop/session/moderation.h"
+#include "coop/moderation/ban_list.h"
+#include "coop/moderation/seen_players.h"
+#include "coop/moderation/moderation.h"
 #include "coop/session/ini_config.h"
 #include "coop/session/player_handshake.h"  // SetLocalGuid (v73 per-player inventory identity)
 #include "coop/player/local_body.h"         // SetInitialSkin (v93 skins: ini player_skin=)

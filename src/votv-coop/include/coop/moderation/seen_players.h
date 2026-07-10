@@ -1,4 +1,4 @@
-// coop/session/seen_players.h -- HOST-side persistent registry of every player this
+// coop/moderation/seen_players.h -- HOST-side persistent registry of every player this
 // host has ever seen: durable identity GUID (the v73 32-hex Join field) + last known
 // nick + last seen time + last known IP.
 //

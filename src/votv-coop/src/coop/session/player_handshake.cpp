@@ -4,7 +4,7 @@
 
 #include "player_handshake_detail.h"  // co-located private header (src tree, not include/)
 
-#include "coop/session/seen_players.h"
+#include "coop/moderation/seen_players.h"
 
 #include "coop/element/player.h"
 #include "coop/element/registry.h"

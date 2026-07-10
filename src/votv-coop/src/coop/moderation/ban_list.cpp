@@ -1,6 +1,6 @@
-// coop/ban_list.cpp -- see coop/ban_list.h.
+// coop/moderation/ban_list.cpp -- see coop/moderation/ban_list.h.
 
-#include "coop/session/ban_list.h"
+#include "coop/moderation/ban_list.h"
 
 #include "ue_wrap/log.h"
 

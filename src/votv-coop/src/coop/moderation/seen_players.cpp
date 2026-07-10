@@ -1,6 +1,6 @@
-// coop/session/seen_players.cpp -- see coop/session/seen_players.h.
+// coop/moderation/seen_players.cpp -- see coop/moderation/seen_players.h.
 
-#include "coop/session/seen_players.h"
+#include "coop/moderation/seen_players.h"
 
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"  // kMaxPeers
