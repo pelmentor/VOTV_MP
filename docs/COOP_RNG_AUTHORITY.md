@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ⬜ not started | ⬜ | ⬜ | ⬜ |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (9 rounds; PRE-REGISTRATION below) | ⬜ | ⬜ | ⬜ probe first |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -77,10 +77,22 @@ ventCrawler, wisp) + piramid2 + arirShip. UNCOVERED spawners (each ticker rolls 
 | furfurAltarSpawner | paranormalSpot_C | pos + timing | NEEDS-PROBE |
 | hillRollerSpawner | prop/propThrown/nail | which prop + pos | NEEDS-PROBE |
 | ufoDropper | kerfurOmega/fallingBody/lampPost | Array_Random which drop + where | NEEDS-PROBE |
-| ticker_yellowWispSpawner | killerwisp_C (covered class) | spawner's own gate+pos | NEEDS-PROBE |
+| ticker_yellowWispSpawner | killerwisp_C (covered class) | spawner's own gate+pos | **DONE-MIRROR** (2026-07-10 correction: ambient_spawner_suppress.cpp cancels its ReceiveTick on the client; wisp class allowlisted) |
 **Root decision (the /qf):** broaden the allowlist (add each) vs STRUCTURAL — client runs NO
 world-spawn ticker; host owns all spawns; allowlist becomes only the MIRROR set. Structural is the
 rule-1 root (allowlist inherently lags 15/40).
+
+**2026-07-10 fact-base correction (the audit missed a shipped module):**
+`src/coop/session/ambient_spawner_suppress.cpp` ALREADY client-cancels 4 rollers via per-class
+PE-visible fn PRE-interceptors (mushroomMaster.Spawn, mushroomSpawner.Spawn,
+pineconeSpawner.ReceiveTick, ticker_yellowWispSpawner.ReceiveTick), and `host_spawn_watcher.cpp`
+MIRRORS the pinecone-family outputs (keyless PropSpawn + death-watch) — the full suppress+mirror
+shape is SHIPPED for ambient flora. Color wisps (ticker_wispSpawner) are deliberately per-peer
+(product decision, comment in that file). Consequences: (i) mechanism precedent =
+fn-cancel-at-the-class, the structural option generalizes it at the driver layer; (ii) the module
+sits in the WRONG folder (coop/session/ is not spawn-authority) — the move is owed to the T1 design;
+(iii) the probe analysis must JOIN against this module's targets + the npc allowlist (from live
+source, at analysis time) so cancelled classes read DONE, not false-live.
 
 ### T1-2 · mainGamemode rare weighted rolls — STATUS: NEEDS-PROBE / OPEN-DIVERGES
 | roll | consequence | status |
@@ -111,10 +123,13 @@ Sky-signal GENERATION host-auth (console_state_sync); CATCH host-mediated (signa
 `dish` calibration drift (RandomFloat losePrec), `coordRadarDish`/`radiotower` periodic `Array_Shuffle`
 scramble, `ticker_dishUncalib`/`ticker_disher`. Two peers' dish calibration + radar order diverge.
 
-### T2-6 · Ambient wildlife / flora spawners — STATUS: OPEN-DIVERGES (product call: sync vs accept-cosmetic)
-ticker_beehiveSpawner, ticker_treeSpawner (walkingTree), ticker_bushSpawning (growingPlant),
-ticker_susHoleSpawner, mushroomMaster, pineconeSpawner/birchSpawner/autumnLeafSpawner. Real shared
-actors, low gameplay stakes — each peer grows its own.
+### T2-6 · Ambient wildlife / flora spawners — STATUS: PARTIAL (2026-07-10 correction)
+**DONE-MIRROR already** (ambient_spawner_suppress + host_spawn_watcher pinecone mirror, shipped
+pre-audit; the 07-10 audit missed the module): mushroomMaster, mushroomSpawner, pineconeSpawner
+(outputs mirrored as keyless PropSpawn). **Deliberately per-peer** (product decision): color wisps
+(ticker_wispSpawner). **Still OPEN / NEEDS-PROBE:** ticker_beehiveSpawner, ticker_treeSpawner
+(walkingTree), ticker_bushSpawning (growingPlant), ticker_susHoleSpawner,
+birchSpawner/autumnLeafSpawner. Real shared actors, low gameplay stakes.
 
 ### T2-7 · Seed-replication opportunity — STATUS: SEED-OPP
 `garbagePileSpawner` (garbage layout+types), `radiotower.generateGizmos` (décor), `xmaslight`
@@ -142,6 +157,113 @@ peer rolls" BUG class = N=1 (email append) → CLOSED.
 
 ---
 
+## T1 PRE-REGISTRATION (2026-07-10 — the /qf 15 QUESTION pass converged; written BEFORE the probe build)
+
+**The probe instrument (v9)** — ini-gated `[dev]`, read-only, both roles, resident:
+- **(a)** unfiltered BeginDeferredActorSpawnFromClass pass-through census at the existing npc_sync
+  silent-pass point — class + location, role-stamped, JOIN-EPISODE-tagged (see gates below);
+  per-class summaries inside the join window.
+- **(b)** driver-census: native Func-patch on K2_SetTimerDelegate, K2_SetTimer, Delay,
+  RetriggerableDelay, DelayFrames, SetActorTickInterval (engine natives, patched at boot →
+  client-side install-before-arm holds: a client's world loads AT JOIN, no pre-armed state).
+  First-sight-per-class + relaxed atomic counters (pointer-hash flat set; allocation-free steady
+  state; NameOf only on first sight); self-instrumented overhead counters; TLS coop-origin latch
+  excludes our own machinery's arms; role-stamped; JOIN-EPISODE-tagged.
+- **(c)** PERIODIC (~10 min) one-shot censuses of live ticker_base_C descendants: existence +
+  tick-enabled + tick interval.
+- **(d)** global QuitGame native log (7 sites measured in mainGamemode: 6 ubergraph +
+  1 calculateAreaError body; the native patch is global so any other asset's call is also caught).
+  Caveat: static-library Func context = the library CDO, NOT the caller → attribution by timing at
+  analysis (autonomous smokes contain no user-initiated quits).
+- **(e)** PERIODIC paired world class-histogram censuses as per-actor (class, ptr, InternalIndex)
+  SETS, diffed actor-wise, wire-explained actors subtracted per-actor via the mirror registries —
+  the seam-agnostic backstop (catches native-path spawns; count cancellation impossible).
+
+**Semantics (pre-registered):**
+- Positive assertions come from ARMED-state + driver calls + histogram residue — never from
+  fire-absence.
+- Records inside the world-load episode (world_load_episode latch) are JOIN-EPISODE and EXCLUDED
+  from fork arithmetic (fail-safe: a stuck latch over-tags, which can never manufacture a positive;
+  a fully-tagged log is visibly broken and the run repeats).
+- Suppressed-set JOIN at ANALYSIS time against the LIVE source (kNpcAllowlist +
+  ambient_spawner_suppress targets) — nothing hand-copied into the probe.
+- Streaming admissibility: (a)/(b)/(d) stream to the log; a crash leaves the last completed (c)/(e)
+  pair + streamed records as a PARTIAL census. POSITIVES always admissible; ABSENCE claims require
+  the full exposure.
+- **Shared-world definition:** the spawned class is a physical world actor a peer can see/interact
+  with (creature, prop, vehicle, structure); excludes UI widgets, fx/sound-only, camera/viewmodel-
+  local. All 16 T1-1 table rows above classify Y (shared-world) under this definition. Definition
+  changes require a CHANGELOG entry — no silent reclassification.
+- **Exposure minimum:** >= 1 full in-game day-night cycle on both peers + a standard join, at
+  NATURAL 1x time — clock acceleration FORBIDDEN for census runs (it decouples the real-second
+  delay axis from the game-clock gate axis). Shorter runs = PARTIAL census; phase-gated rows stay
+  CONDITIONAL.
+- Under-exposed / event-gated / dormant-on-both-roles rows are CONDITIONAL and EXCLUDED from the
+  fork arithmetic (they never count toward "targeted").
+
+**The fork rule (pre-registered):**
+- **>= 3 distinct** client-side positively-measured live un-suppressed shared-world spawner classes
+  → **STRUCTURAL** (client runs no autonomous world-spawn ticker; allowlist becomes the mirror set).
+- **<= 2**, both event-gated rarities → targeted per-class adds.
+- Positively-measured < 3 while many rows remain CONDITIONAL → **DEFER** (extend resident
+  accumulation) — no default to targeted.
+- **Callable-check:** the fork may be called only when >= 2/3 of the pre-registered shared-world
+  rows are adjudicated non-CONDITIONAL; otherwise a longer run is mandated. (Exclusion can only
+  push toward targeted/DEFER, so a mostly-CONDITIONAL census must not be allowed to call the fork.)
+  **Pinned arithmetic:** denominator = the 16 T1-1 rows as listed at pre-registration; the
+  adjudication vocabulary is live / armed / confirmed-starved / **DONE-suppressed** (a class the
+  analysis-time join marks already-suppressed — e.g. yellowWisp — counts as adjudicated
+  non-CONDITIONAL). No analysis-time re-basing of the denominator.
+- Orthogonal lanes regardless of fork: any client-side QuitGame liveness → freeze that mainGamemode
+  roll lane; the seeded-3 (garbagePileSpawner, radiotower, xmaslight) → seed replication (T2-7).
+
+**Named accepted blind spot:** native-path AND transient-lifetime actors. Static argument: every
+audited VOTV spawner is BP-authored; no native transient spawner is evidenced. If the pre-work
+dumps reveal a spawn native or re-arm driver OUTSIDE the BeginDeferred family / the 6 patched
+natives, the pre-registered response is **AMEND THE INSTRUMENT BEFORE BUILD** (widen (a)/(b)) —
+never silently file a KNOWN row under the blind spot.
+
+**RULE-2 pre-commitment:** if the fork lands STRUCTURAL, ambient_spawner_suppress's 4 per-class
+cancels dissolve into the structural suppress set in the SAME change (no parallel suppress paths);
+the mirror halves (host_spawn_watcher pinecone lane) stay. The module's folder move (out of
+coop/session/ into the spawn-authority home) is owed REGARDLESS of the fork.
+**PRODUCT-EXEMPTION list (STRUCTURAL must not silently overrule it):** ticker_wispSpawner color
+wisps stay PER-PEER (recorded user/product decision in ambient_spawner_suppress.cpp). The
+structural design carries an explicit exemption set; extending it is a DESIGN-pass decision with
+the user, never an implementation-time default.
+
+**Instrument scope (pinned):** channels (a)-(e) adjudicate **T1-1 and T1-2** (spawns, drivers,
+quits, histograms). **T1-3** (server minigame type) is ALREADY adjudicated statically: the roll is
+per-interaction, serverbox_sync does not touch it → OPEN by construction, shape = INTENT (no probe
+needed). **T1-4** (loot content: chipType/count, garbageClump contents, spoilage) lands as
+property writes on existing actors — INVISIBLE to (a)-(e); its adjudication path is its own static
+RE (pre-work gate 5: who rolls chipType, at which seam, on which role) + a targeted follow-up
+channel or hands-on diff if the RE leaves it open. The tier's probe does NOT silently cover it.
+
+**Static pre-work gates (execute before the probe build):**
+1. Dump + classify cockroachMaster, propSpawner_editor, prop_notebook_busterSpawner — BOTH the
+   spawn native AND the re-arm driver (a fifth mechanism widens (b) first).
+2. Locate gen_gear (not in mainGamemode exports; likely daynightCycle).
+3. Extract per-spawner interval/delay literals from the 28 ticker dumps (sizes expected
+   fires-per-cycle per row — feeds the callable-check; non-gating for liveness).
+4. wakeup/createDream trampoline-offset segment walk (attribution only; consequence observability
+   already covered by (a)/(b)/(d); also decide their PLAYER-LOCAL reclassification in the DESIGN
+   pass — dreams are personal experience, plausibly not shared world state).
+5. T1-4 loot-content RE: who rolls chipType/count (actorChipPile), garbageClump break contents,
+   prop_food spoilage — which function, which seam, which role runs it in coop. Adjudicates T1-4
+   (outside the (a)-(e) instrument's scope — see Instrument scope above).
+
+---
+
 ## CHANGELOG
+- **2026-07-10 (late)** — T1 `/qf 15` QUESTION pass CONVERGED (11 rounds — critic "that holds" at
+  R11; 3 self-refutations by measurement; R10-R11 pinned the callable-check arithmetic, the
+  instrument scope (T1-3 static/INTENT, T1-4 gate-5 RE), and the color-wisp PRODUCT-EXEMPTION).
+  PRE-REGISTRATION section added (probe v9 + fork rule + blind spot + RULE-2 fate).
+  Fact-base corrections: ambient_spawner_suppress discovered (audit missed it) → T1-1 yellowWisp
+  row flipped DONE-MIRROR, T2-6 split (mushroom/pinecone DONE-MIRROR, color wisps product-per-peer);
+  mainGamemode ubergraph native census measured (66 spawn pairs, 62 delays, 20 timer arms,
+  7 QuitGame, 24 weighted rolls); ticker re-arm heterogeneity measured; 15/17 spawners
+  BeginDeferred-based (2 undumped chains gated as pre-work).
 - **2026-07-10** — doc created. 3-agent audit → tiers seeded. All T1/T2 rows NEEDS-PROBE/OPEN.
   Next session: live client-roll probe → then `/qf 15` per tier (start T1 structural-suppression).
