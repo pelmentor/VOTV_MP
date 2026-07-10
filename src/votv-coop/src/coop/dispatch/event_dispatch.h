@@ -42,12 +42,21 @@ bool HandleEntityEvent(net::Session& session,
 
 // Keyed device-state family: DoorState/LightState/ContainerState/GarageDoorState/
 // ApplianceState (the shared KeyedTogglePayload case), KeypadState,
-// PowerControlState, AtvState, DroneState, OrderRequest, WindowCleanState,
-// GrimeState, TrashPileState, DoorOpenRequest, KerfurConvert (v78 client apply).
+// PowerControlState, AtvState, DroneState, WindowCleanState, GrimeState,
+// TrashPileState, KerfurConvert (v78 client apply), email/signal/comp/voice.
 // `localPlayer` threads into the KerfurConvert client apply (prop teardown/materialize).
 bool HandleStateEvent(net::Session& session,
                       const net::Session::ReliableMessage& msg,
                       void* localPlayer);
+
+// CLIENT->HOST intent/request family (2026-07-10 extraction): OrderRequest,
+// DoorOpenRequest, KerfurConvertRequest, KerfurCommand, GrabIntent,
+// ThrowIntent, PileResyncRequest, PropDropIntent. Every case validates
+// role()==Host + a client sender slot, then hands the request to the
+// authoritative module.
+bool HandleIntentEvent(net::Session& session,
+                       const net::Session::ReliableMessage& msg,
+                       void* localPlayer);
 
 // Ambient / world-event family: FireflySpawn, InventoryPickup, TimeSync,
 // SkyState, RedSky, LightningStrike, WeatherState.

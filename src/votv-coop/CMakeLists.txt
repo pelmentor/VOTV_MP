@@ -254,6 +254,7 @@ add_library(votv-coop SHARED
     src/coop/comms/peer_action_feed.cpp
     src/coop/dispatch/event_feed.cpp
     src/coop/dispatch/event_dispatch_entity.cpp
+    src/coop/dispatch/event_dispatch_intent.cpp
     src/coop/dispatch/event_dispatch_state.cpp
     src/coop/dispatch/event_dispatch_world.cpp
     src/coop/comms/chat_sync.cpp
