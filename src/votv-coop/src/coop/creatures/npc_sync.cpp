@@ -15,6 +15,7 @@
 #include "coop/creatures/npc_sync.h"
 
 #include "coop/dev/rng_roll_census.h"       // channel (a): BeginDeferred pass-through census
+#include "coop/world/spawn_authority.h"     // T1 Inc-1 shipping tripwire (park-class spawner spawn on client)
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
@@ -520,6 +521,11 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         }
         return true;  // SKIP the original
     }
+    // spawn_authority TRIPWIRE (shipping, always-on): a t1 park-class SPAWNER spawning on a
+    // connected client -- log-only regression alarm + the late-instance signal (the reconcile
+    // walk parks it). Pre-resolved pointer compares only (this thread may be a parallel-anim
+    // worker).
+    coop::spawn_authority::NoteClientSpawnPassThrough(actorClass);
     // rng_roll_census channel (a), CLIENT half: the silent pass-through -- a connected client is
     // about to run a BP deferred spawn our suppression does not cover (the exact set the T1
     // structural-vs-allowlist fork adjudicates on). Name-agnostic; no-op unless the [dev] ini

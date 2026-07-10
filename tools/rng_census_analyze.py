@@ -83,8 +83,7 @@ def suppressed_sets():
             if cm:
                 out.add(cm.group(1))
     amb = None
-    for cand in ("src/votv-coop/src/coop/session/ambient_spawner_suppress.cpp",
-                 "src/votv-coop/src/coop/props/ambient_spawner_suppress.cpp"):
+    for cand in ("src/votv-coop/src/coop/world/spawn_authority.cpp",):
         p = ROOT / cand
         if p.exists():
             amb = p.read_text(encoding="utf-8", errors="replace")

@@ -274,6 +274,7 @@ add_library(votv-coop SHARED
     src/coop/interactables/drone_sync.cpp
     src/coop/items/order_sync.cpp
     src/coop/world/firefly_sync.cpp
+    src/coop/world/spawn_authority.cpp
     src/coop/world/event_cue_sync.cpp
     src/coop/world/event_fire_sync.cpp
     src/coop/world/event_active_sync.cpp
@@ -322,7 +323,6 @@ add_library(votv-coop SHARED
     src/coop/props/join_membership_sweep.cpp
     src/coop/props/world_load_episode.cpp
     src/coop/interactables/garbage_sync.cpp
-    src/coop/session/ambient_spawner_suppress.cpp
     src/coop/props/host_spawn_watcher.cpp
     src/coop/props/trash_channel.cpp
     src/coop/props/trash_grab_intent.cpp
