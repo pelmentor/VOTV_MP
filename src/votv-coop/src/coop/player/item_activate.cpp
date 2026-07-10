@@ -104,7 +104,7 @@ inline constexpr float kIntensityOffDefault = 0.f;  // turn light fully off
 uint32_t g_flashlightClassHash = 0;
 
 // Session pointer (atomic so the observer's BG read can't race with
-// a setter on another thread -- same pattern as coop::dev::teleport_client).
+// a setter on another thread -- same pattern as coop::teleport_client).
 std::atomic<coop::net::Session*> g_session{nullptr};
 
 // Phase 5F Inc5 (connect-time replay) -- pending receiver-side applies.

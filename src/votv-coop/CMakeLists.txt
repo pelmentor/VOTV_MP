@@ -290,7 +290,7 @@ add_library(votv-coop SHARED
     src/coop/session/shutdown.cpp
     src/coop/player/players_registry.cpp
     src/coop/session/mirror_defer.cpp
-    src/coop/session/join_curtain.cpp
+    src/ui/join_curtain.cpp
     src/coop/creatures/npc_adoption.cpp
     src/coop/creatures/npc_mirror.cpp
     src/coop/creatures/npc_pose_drive.cpp
@@ -411,7 +411,7 @@ add_library(votv-coop SHARED
     src/coop/dev/spawn_menu_unlock.cpp
     src/coop/dev/spawn_npc.cpp
     src/coop/dev/kerfur_toggle.cpp
-    src/coop/dev/teleport_client.cpp
+    src/coop/session/teleport_client.cpp
     src/coop/dev/menu_proceed.cpp
     src/coop/dev/object_overlay.cpp
     src/coop/dev/ragdoll_bone_overlay.cpp

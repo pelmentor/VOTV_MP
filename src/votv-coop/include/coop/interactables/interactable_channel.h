@@ -23,7 +23,7 @@
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"  // WireKeyFromString / StringFromWireKey / FnvKey (shared)
 #include "coop/player/players_registry.h"   // coop::players::kMaxPeers
-#include "coop/scan/settled_object_scan.h"  // the stream-settle scan discipline (L5 fix + the 18:41 reload cure)
+#include "ue_wrap/settled_object_scan.h"  // the stream-settle scan discipline (L5 fix + the 18:41 reload cure)
 
 #include "ue_wrap/door.h"            // TickSmartApply (HostAuth Tick finishes mid-animate doors)
 #include "ue_wrap/log.h"
@@ -53,7 +53,7 @@ using coop::net::FnvKey;
 
 inline constexpr auto kRetryRebuildThrottle = std::chrono::seconds(2);
 // Settle/backstop tuning (15 scans / 30-tick backstop) + its door-57 history moved to
-// coop/scan/settled_object_scan.h with the extracted scan discipline.
+// ue_wrap/settled_object_scan.h with the extracted scan discipline.
 inline constexpr auto kPendingTTL = std::chrono::seconds(25);
 // After the host commands a door close, isOpened flips ~0.5s later (the door animates).
 // The poll skips the door for this bridge window so the mid-animation transient isn't
@@ -95,7 +95,7 @@ public:
     enum class Mode { Symmetric, HostAuth };
 
     // Scan discipline (stream-settle + staggered backstop) is owned by SettledObjectScan --
-    // see coop/scan/settled_object_scan.h for the L5 take-3 rationale it was extracted from.
+    // see ue_wrap/settled_object_scan.h for the L5 take-3 rationale it was extracted from.
     explicit Channel(const Adapter& a, Mode mode = Mode::Symmetric) : a_(a), mode_(mode) {}
 
     void SetSession(coop::net::Session* s) { session_.store(s, std::memory_order_release); }
@@ -472,10 +472,10 @@ public:
         // L5 fix (2026-06-23, take 2 + take 3): the stream-settle scan discipline -- full-walk while the
         // live count changes, cheap tail-scan once settled, staggered 60s full backstop. The rationale +
         // history (door 57->19 take-1 regression, the 18:41 world-reload prune-to-0 root) live with the
-        // extracted implementation: coop/scan/settled_object_scan.h. Under the tail-scan: REMOVAL is
+        // extracted implementation: ue_wrap/settled_object_scan.h. Under the tail-scan: REMOVAL is
         // pruned each tick (cached idx + IsLiveByIndex), state is read every tick by PollAndBroadcast.
         const bool settled = scan_.settled();
-        const coop::scan::ScanRange range = scan_.Begin();
+        const ue_wrap::scan::ScanRange range = scan_.Begin();
         std::vector<std::pair<std::wstring, Ref>> found;
         found.reserve(64);
         for (int32_t i = range.begin; i < range.end; ++i) {
@@ -588,7 +588,7 @@ private:
 
     std::mutex indexMutex_;
     std::unordered_map<std::wstring, Ref> byKey_;
-    coop::scan::SettledObjectScan scan_;  // the stream-settle scan discipline (auto-staggered per instance)
+    ue_wrap::scan::SettledObjectScan scan_;  // the stream-settle scan discipline (auto-staggered per instance)
 
     std::mutex stateMutex_;
     std::unordered_map<std::wstring, bool> lastKnown_;

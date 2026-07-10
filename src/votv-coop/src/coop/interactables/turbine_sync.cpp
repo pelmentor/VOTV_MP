@@ -9,7 +9,7 @@
 #include "ue_wrap/engine.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/windturbine.h"
 
@@ -112,11 +112,11 @@ bool PayloadFinite(const coop::net::TurbineStatePayload& p) {
 }
 
 // Rebuild the posKey->actor index (~13 static actors; the set virtually never changes).
-// Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+// Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
 // host world reload (prune-to-0, recycled slots below the cursor). WT::IsTurbine is the same
 // cheap class-descendant filter the old FindObjectsByClass applied, per-object on the range.
 void RebuildIndex() {
-    static coop::scan::SettledObjectScan sScan;
+    static ue_wrap::scan::SettledObjectScan sScan;
     const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     for (int32_t i = r.begin; i < r.end; ++i) {

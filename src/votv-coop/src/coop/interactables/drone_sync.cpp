@@ -8,7 +8,7 @@
 
 #include "coop/interactables/drone_sync.h"
 
-#include "coop/interactables/lerp_window.h"
+#include "coop/element/lerp_window.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 

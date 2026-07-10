@@ -27,7 +27,7 @@
 #include "ue_wrap/grime.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <algorithm>
@@ -163,13 +163,13 @@ size_t RebuildIndex() {
     // recomputes; dead actors drop). GT-only (RebuildIndex is game-thread-serial). [Ideal per the
     // audit is a direct RootComponent->location field read with no UFunction at all -- queued.]
     static std::unordered_map<void*, std::wstring> s_posKeyByActor;
-    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
     // host world reload (prune-to-0, recycled slots below the cursor). settleScans=2 (not 15):
     // grime CHURNS whenever the player washes (decal deaths re-arm the gate), so 15 would pin a
     // cleaning session in 2s-cadence full walks (perf-audit 2026-07-04 Q2); new decals APPEND (tail
     // catches them), recycled-slot arrivals heal within the 60s backstop. The PosKey cache below is
     // maintained incrementally (new actors compute + cache; a full scan rebuilds it from scratch).
-    static coop::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
+    static ue_wrap::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
     const auto r = sScan.Begin();
     std::unordered_map<void*, std::wstring> nextCache;  // populated only on a full scan
     std::vector<std::pair<std::wstring, Ref>> found;

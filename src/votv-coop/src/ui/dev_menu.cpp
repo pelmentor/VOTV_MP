@@ -15,7 +15,7 @@
 #include "coop/dev/set_clock.h"
 #include "coop/dev/spawn_menu_unlock.h"
 #include "coop/dev/spawn_npc.h"
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 #include "coop/comms/peer_action_feed.h"
 #include "coop/player/nameplate.h"
 #include "coop/player/nick_color.h"
@@ -61,7 +61,7 @@ void RenderSnow() {
 }
 
 void RenderTeleportClients() {
-    if (ImGui::Button("Teleport clients to me")) coop::dev::teleport_client::TeleportClientsToHost();
+    if (ImGui::Button("Teleport clients to me")) coop::teleport_client::TeleportClientsToHost();
     ImGui::SameLine();
     ImGui::TextDisabled("(host only)");
 }

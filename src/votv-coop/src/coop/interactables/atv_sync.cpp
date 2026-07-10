@@ -10,7 +10,7 @@
 
 #include "coop/interactables/atv_sync.h"
 
-#include "coop/interactables/lerp_window.h"
+#include "coop/element/lerp_window.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"  // WireKeyFromString / StringFromWireKey / FnvKey (shared)
@@ -20,7 +20,7 @@
 #include "ue_wrap/engine.h"          // ReadMainPlayerGrabState (grabber authority) + Get/SetActorRootPhysicsVelocity (release)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"           // FVector, FRotator, NormalizeAxis
 
@@ -259,11 +259,11 @@ size_t RebuildIndex() {
     // a few seconds slow to mint its UCS key still lands in the save-set before the first joiner.)
     const bool capturing = isHost && (!s || !s->connected());
 
-    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
     // host world reload (prune-to-0, recycled slots below the cursor; the host log's "atv: indexed
     // 0 ATV(s)" at 18:41:10 is this). The capturing baseline + purchase-detect orderings are preserved
     // below: the not-settled phase scans [0, N) so the initial save-set is fully captured.
-    static coop::scan::SettledObjectScan sScan;
+    static ue_wrap::scan::SettledObjectScan sScan;
     const auto r = sScan.Begin();
 
     struct Found { std::wstring wireKey; void* obj; int32_t idx; std::wstring realKey; };

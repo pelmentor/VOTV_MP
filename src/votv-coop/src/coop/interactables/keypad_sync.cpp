@@ -76,7 +76,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/passwordlock.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
@@ -174,10 +174,10 @@ void* ResolveFast(const std::wstring& key) {
 // (cross-peer Key stability signal) only on change.
 size_t RebuildIndex() {
     if (!PL::EnsureResolved()) return 0;
-    // Stream-settle scan (see coop/scan/settled_object_scan.h): full-walk while the count changes,
+    // Stream-settle scan (see ue_wrap/settled_object_scan.h): full-walk while the count changes,
     // tail-scan once settled. The raw tail-scan this replaces died at the 18:41 host world reload
     // (prune-to-0, new actors in recycled slots below the cursor -> keypad 0-sync all session).
-    static coop::scan::SettledObjectScan sScan;
+    static ue_wrap::scan::SettledObjectScan sScan;
     const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(32);

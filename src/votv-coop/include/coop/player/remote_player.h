@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include "coop/interactables/lerp_window.h"
+#include "coop/element/lerp_window.h"
 #include "coop/net/protocol.h"
 #include "coop/player/puppet_body_yaw.h"
 #include "coop/player/puppet_footsteps.h"

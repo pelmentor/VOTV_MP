@@ -59,7 +59,7 @@ void Unban(const char* ip);
 
 // Teleport the client at peerSlot to the host's current pose (the dev-gated
 // action -- the scoreboard only offers it under [dev] devkeys). Host-only.
-// Thin pass-through to coop::dev::teleport_client::TeleportSlotToHost.
+// Thin pass-through to coop::teleport_client::TeleportSlotToHost.
 void TeleportSlotToMe(int peerSlot);
 
 }  // namespace coop::moderation

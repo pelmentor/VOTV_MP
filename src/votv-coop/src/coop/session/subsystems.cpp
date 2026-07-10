@@ -37,7 +37,7 @@
 #include "coop/creatures/kerfur_menu_input.h"  // client radial-menu verb detection (InpActEvt_use PRE -> kerfur_command relay)
 #include "coop/creatures/kerfur_entity.h"   // K-3: stable-KerfurId authority table (the redesign root fix)
 #include "coop/props/prop_stick_sync.h"  // v68: wall-attachable stick mirror (camera-on-wall)
-#include "coop/dev/teleport_client.h"  // TeleportSlotToHost: spawn a joiner at the host pose (connect edge)
+#include "coop/session/teleport_client.h"  // TeleportSlotToHost: spawn a joiner at the host pose (connect edge)
 #include "coop/dev/keypad_probe.h"
 #include "coop/dev/door_probe.h"
 #include "coop/dev/lightswitch_probe.h"
@@ -246,7 +246,7 @@ void ConnectReplayForSlot(int slot) {
     // world-ready per slot -- otherwise a traveller would be yanked back to the
     // host on every cave exit. Subsequent re-syncs re-deliver state only.
     if (!g_joinPlaced[slot]) {
-        coop::dev::teleport_client::TeleportSlotToHost(slot);
+        coop::teleport_client::TeleportSlotToHost(slot);
         g_joinPlaced[slot] = true;
     } else {
         UE_LOGI("net: slot %d re-sync replay -- skipping join teleport (already placed)", slot);

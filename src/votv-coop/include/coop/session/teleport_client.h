@@ -1,8 +1,10 @@
-// coop/dev/teleport_client.h -- teleport connected clients to the host's pose.
+// coop/session/teleport_client.h -- teleport connected clients to the host's pose.
 //
-// Driven by the ImGui dev menu (Player > Movement > "Teleport clients to me").
-// The legacy F4 hotkey was RETIRED 2026-06-02 (RULE [[feedback-dev-features-in-
-// imgui-menu]]: dev features live in the F1 menu, not ad-hoc hotkeys).
+// MOVED coop/dev/ -> coop/session/ 2026-07-10 (placement audit HIGH-1): this is a SHIPPED
+// join/moderation verb, not a dev toy -- every join spawns the joiner at the host pose through
+// TeleportSlotToHost (subsystems connect edge), the F1 Admin scoreboard teleport uses it
+// (moderation.cpp), and event_feed applies its wire packet. The F1 dev-menu button is just one
+// more caller. Namespace followed the move (coop::dev::teleport_client -> coop::teleport_client).
 //
 // Direction: HOST -> CLIENT only. The action is a no-op on a client (it self-
 // gates on Session::Role::Host). Mirrors MTA's `!tphere` chat command but as a
@@ -12,7 +14,7 @@
 
 namespace coop::net { class Session; }
 
-namespace coop::dev::teleport_client {
+namespace coop::teleport_client {
 
 // Cache the Session pointer so the action can snapshot host pose + broadcast.
 // Called once from harness boot.
@@ -40,4 +42,4 @@ struct ApplyArgs {
 };
 void ApplyLocally(const ApplyArgs& args);
 
-}  // namespace coop::dev::teleport_client
+}  // namespace coop::teleport_client

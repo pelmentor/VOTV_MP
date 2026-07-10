@@ -33,7 +33,7 @@
 #include "coop/player/player_damage.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 #include "ue_wrap/call.h"
 #include "ue_wrap/engine.h"
 #include "ue_wrap/game_thread.h"
@@ -400,7 +400,7 @@ void ObserveDamageOnHost() {
                     // front of the puppet (toward -X) looking back at it, so the red
                     // body is in the screenshot regardless of where the puppet is
                     // (static test-pose teleports desync the puppet on a big jump).
-                    coop::dev::teleport_client::ApplyLocally({P.X + 280.f, P.Y, P.Z + 20.f,
+                    coop::teleport_client::ApplyLocally({P.X + 280.f, P.Y, P.Z + 20.f,
                                                               /*pitch*/ -2.f, /*yaw*/ 180.f, /*roll*/ 0.f});
                     void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
                     std::wstring matName = L"<?>";

@@ -1,6 +1,6 @@
-// coop/join_curtain.cpp -- see coop/join_curtain.h. The instant-world SHORT curtain.
+// ui/join_curtain.cpp -- see coop/join_curtain.h. The instant-world SHORT curtain.
 
-#include "coop/session/join_curtain.h"
+#include "ui/join_curtain.h"
 
 #include "imgui.h"
 

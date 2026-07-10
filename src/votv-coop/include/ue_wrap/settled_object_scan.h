@@ -1,4 +1,4 @@
-// coop/scan/settled_object_scan.h -- the STREAM-SETTLE scan discipline over IncrementalObjectScan.
+// ue_wrap/settled_object_scan.h -- the STREAM-SETTLE scan discipline over IncrementalObjectScan.
 //
 // WHY (2026-07-04, the 18:41 keypad-0-sync root): a raw NextRange tail-scan is only correct while
 // its index's world is ALIVE. At a world reload (host session start: menu world -> save world) the
@@ -20,20 +20,20 @@
 //     settle, and a reload's prune-to-0 immediately re-arms the full walk (the 18:41 cure).
 //
 // Usage (the shape every *_sync RebuildIndex uses):
-//   static coop::scan::SettledObjectScan sScan;          // or a member; auto-staggered
-//   const coop::scan::ScanRange r = sScan.Begin();
+//   static ue_wrap::scan::SettledObjectScan sScan;          // or a member; auto-staggered
+//   const ue_wrap::scan::ScanRange r = sScan.Begin();
 //   ... scan [r.begin, r.end); if (r.isFull) clear index first; else prune dead after ...
 //   sScan.End(indexSizeNow);                             // feeds the settle gate
 //
 // Game-thread only (NumObjects + the state are GT-serial, like every *_sync Tick).
 #pragma once
 
-#include "coop/scan/incremental_object_scan.h"
+#include "ue_wrap/incremental_object_scan.h"
 
 #include <cstddef>
 #include <cstdint>
 
-namespace coop::scan {
+namespace ue_wrap::scan {
 
 // Proven tuning (interactable_channel L5 take-3, 2026-06-23): at a 2s caller throttle,
 // settle after 15 unchanged scans (~30s -- settling earlier is the take-1 door 57->19
@@ -94,4 +94,4 @@ private:
     IncrementalObjectScan scan_;
 };
 
-}  // namespace coop::scan
+}  // namespace ue_wrap::scan

@@ -2,7 +2,7 @@
 
 #include "coop/session/join_progress.h"
 
-#include "coop/session/join_curtain.h"  // instant-world: drop the curtain on a join ABORT (not the normal Complete path)
+#include "ui/join_curtain.h"  // instant-world: drop the curtain on a join ABORT (not the normal Complete path)
 #include "ue_wrap/log.h"
 
 #include <atomic>

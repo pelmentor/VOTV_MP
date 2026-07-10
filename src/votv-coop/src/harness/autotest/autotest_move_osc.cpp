@@ -23,7 +23,7 @@
 // behaviour). Role-agnostic: it just moves whichever peer has the env set; enable
 // it on ONE peer and read the OTHER peer's pose-diag. Motion is applied as small
 // per-tick absolute SetActorLocation writes (small moves stick; VOTV's player
-// constraints silently revert large teleports -- see coop/dev/teleport_client.cpp).
+// constraints silently revert large teleports -- see coop/session/teleport_client.cpp).
 // Game thread only (every engine touch goes through GT::Post).
 
 #include "harness/autotest.h"

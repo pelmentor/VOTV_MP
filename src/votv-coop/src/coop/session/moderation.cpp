@@ -4,7 +4,7 @@
 
 #include "coop/session/ban_list.h"
 #include "coop/session/seen_players.h"
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 #include "coop/net/session.h"
 #include "coop/session/player_handshake.h"
 #include "coop/player/players_registry.h"
@@ -127,7 +127,7 @@ void Unban(const char* ip) {
 void TeleportSlotToMe(int peerSlot) {
     if (!ValidClientSlot(peerSlot)) return;
     // teleport_client self-gates on host + posts to the game thread itself.
-    coop::dev::teleport_client::TeleportSlotToHost(peerSlot);
+    coop::teleport_client::TeleportSlotToHost(peerSlot);
 }
 
 }  // namespace coop::moderation

@@ -18,7 +18,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/power_control.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 
 #include <atomic>
@@ -78,9 +78,9 @@ void* ResolveFast(const std::wstring& key) {
 // (cross-peer Key stability signal) only on change.
 size_t RebuildIndex() {
     if (!PC::EnsureResolved()) return 0;
-    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
     // host world reload (prune-to-0, recycled slots below the cursor).
-    static coop::scan::SettledObjectScan sScan;
+    static ue_wrap::scan::SettledObjectScan sScan;
     const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(4);  // there are typically 1-2 panels in a base

@@ -1,4 +1,4 @@
-// coop/scan/incremental_object_scan.h -- INCREMENTAL GUObjectArray discovery (L5 FPS root fix, 2026-06-23).
+// ue_wrap/incremental_object_scan.h -- INCREMENTAL GUObjectArray discovery (L5 FPS root fix, 2026-06-23).
 //
 // WHY: a dozen *_sync subsystems each rebuilt their interactable index by walking ALL ~237k UObjects every
 // 2s. Measured cost: 5-20ms per walk (game thread) firing ~every 2.4s in a live session = the periodic FPS
@@ -17,8 +17,8 @@
 //
 // Usage:
 //   size_t RebuildIndex() {
-//     static coop::scan::IncrementalObjectScan sScan;
-//     const auto r = coop::scan::NextRange(sScan);   // {begin,end,isFull}
+//     static ue_wrap::scan::IncrementalObjectScan sScan;
+//     const auto r = ue_wrap::scan::NextRange(sScan);   // {begin,end,isFull}
 //     // scan [r.begin, r.end): add matches to the index;  if (r.isFull) clear first;  else prune dead after.
 //   }
 // Game-thread only (NumObjects + the static state are GT-serial, like every *_sync Tick).
@@ -28,7 +28,7 @@
 
 #include <cstdint>
 
-namespace coop::scan {
+namespace ue_wrap::scan {
 
 struct IncrementalObjectScan {
     int32_t scannedTo = 0;  // GUObjectArray count covered so far (the tail starts here)
@@ -57,4 +57,4 @@ inline ScanRange NextRange(IncrementalObjectScan& s, int fullEvery = 150) {
     return ScanRange{begin, n, false};
 }
 
-}  // namespace coop::scan
+}  // namespace ue_wrap::scan

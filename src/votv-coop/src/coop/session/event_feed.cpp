@@ -15,7 +15,7 @@
 #include "coop/comms/chat_feed.h"
 #include "coop/session/ini_config.h"  // IsIniKeyTrue -- v86 Path 1c JOIN-WINDOW CLOSED hands-on cue gate
 #include "coop/interactables/interactable_sync.h"
-#include "coop/session/join_curtain.h"  // instant-world SEAM 1: the short curtain (Show at SnapshotBegin / dismiss at Complete)
+#include "ui/join_curtain.h"  // instant-world SEAM 1: the short curtain (Show at SnapshotBegin / dismiss at Complete)
 #include "coop/session/join_progress.h"
 #include "coop/session/mirror_defer.h"  // instant-world SEAM 2+3: arm deferred-hide / reveal-confirmed at the lift
 #include "coop/net/session.h"
@@ -34,7 +34,7 @@
 #include "coop/session/save_transfer.h"
 #include "coop/session/seen_players.h"
 #include "coop/dev/restore_vitals.h"
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 
@@ -338,11 +338,11 @@ void Update(net::Session& session, void* localPlayer) {
                 UE_LOGI("event_feed: TeleportClient self-echo on host -- no-op");
                 break;
             }
-            ::coop::dev::teleport_client::ApplyArgs args{
+            ::coop::teleport_client::ApplyArgs args{
                 p.locX, p.locY, p.locZ,
                 p.rotPitch, p.rotYaw, p.rotRoll,
             };
-            ue_wrap::game_thread::Post([args] { ::coop::dev::teleport_client::ApplyLocally(args); });
+            ue_wrap::game_thread::Post([args] { ::coop::teleport_client::ApplyLocally(args); });
             break;
         }
         case net::ReliableKind::SnapshotBegin: {

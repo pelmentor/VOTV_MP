@@ -22,7 +22,7 @@
 #include "ue_wrap/base_window.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"                  // L5: [WALK-TIME] profiling (logs only the rare full safety)
 
 #include <algorithm>
@@ -90,12 +90,12 @@ void* ResolveFast(const std::wstring& key) {
 // Key stability (AbaseWindow_C is an Aactor_save_C -- its Key should be stable like doors).
 size_t RebuildIndex() {
     if (!BW::EnsureResolved()) return 0;
-    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
     // host world reload (prune-to-0, recycled slots below the cursor). settleScans=2: a window
     // break/repair changes the count and would re-arm 15x2s of full walks for a routine event
     // (perf-audit 2026-07-04); only 4 windows exist -- 2 stable scans suffice, the 60s backstop
     // covers recycled-slot stragglers.
-    static coop::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
+    static ue_wrap::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
     const auto r = sScan.Begin();
     std::vector<std::pair<std::wstring, Ref>> found;
     found.reserve(8);

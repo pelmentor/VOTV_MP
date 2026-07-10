@@ -1,4 +1,4 @@
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 
 #include "coop/player/players_registry.h"
 #include "coop/net/protocol.h"
@@ -15,7 +15,7 @@
 #include <cmath>
 #include <string>
 
-namespace coop::dev::teleport_client {
+namespace coop::teleport_client {
 
 namespace P = ue_wrap::profile;
 namespace R = ue_wrap::reflection;
@@ -183,4 +183,4 @@ void TeleportSlotToHost(int peerSlot) {
     GT::Post([s, peerSlot] { SnapshotAndSendToSlot(s, peerSlot); });
 }
 
-}  // namespace coop::dev::teleport_client
+}  // namespace coop::teleport_client

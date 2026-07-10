@@ -14,7 +14,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
-#include "coop/scan/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
+#include "ue_wrap/settled_object_scan.h"  // stream-settle scan (L5 + the 18:41 world-reload cure)
 #include "ue_wrap/walk_timer.h"           // L5: [WALK-TIME] profiling
 #include "ue_wrap/types.h"
 
@@ -72,13 +72,13 @@ uint64_t Fnv1a(const std::wstring& s, uint64_t h) {
 // signal for cross-peer key identity (~392 placed piles expected).
 void RebuildIndex() {
     size_t before = g_index.size();
-    // Stream-settle scan (coop/scan/settled_object_scan.h) -- the raw tail-scan died at the 18:41
+    // Stream-settle scan (ue_wrap/settled_object_scan.h) -- the raw tail-scan died at the 18:41
     // host world reload (prune-to-0, recycled slots below the cursor). settleScans=2 (not the
     // static-channel 15): this class CHURNS at runtime (depleted pile self-destructs + spawner
     // re-spawns) and every churn re-arms the full walk -- 15 would keep a collecting session in
     // permanent full-walk mode (the L5 hitch). 2 full walks heal a reload/churned slot immediately;
     // the 60s backstop (fullEvery=30 at the 2s throttle, unchanged) covers any straggler.
-    static coop::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
+    static ue_wrap::scan::SettledObjectScan sScan{/*settleScans*/ 2, /*backstopFullEvery*/ 30};
     const auto r = sScan.Begin();
     for (int32_t i = r.begin; i < r.end; ++i) {
         void* obj = R::ObjectAt(i);

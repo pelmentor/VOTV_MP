@@ -95,7 +95,7 @@ std::atomic<bool> g_schedulerSuppressActive{false};
 bool g_windOriginInterceptorReg = false;
 
 // Session pointer; atomic so the observer / interceptor reads can't race
-// the harness setter on another thread (matches coop::dev::teleport_client +
+// the harness setter on another thread (matches coop::teleport_client +
 // item_activate pattern).
 std::atomic<coop::net::Session*> g_session{nullptr};
 

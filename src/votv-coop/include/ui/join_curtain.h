@@ -1,4 +1,4 @@
-// coop/join_curtain.h -- instant-world UPPER layer (SEAM 1): the SHORT curtain.
+// ui/join_curtain.h -- instant-world UPPER layer (SEAM 1): the SHORT curtain.
 //
 // A full-viewport opaque cover the joining client raises at connect and DISMISSES with a
 // smooth alpha-fade when the "primary world is assembled" (SnapshotComplete + spawn-drain --

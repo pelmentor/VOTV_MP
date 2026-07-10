@@ -16,7 +16,7 @@
 #include "coop/dev/spawn_menu_unlock.h"
 #include "coop/dev/spawn_npc.h"
 #include "coop/dev/kerfur_toggle.h"
-#include "coop/dev/teleport_client.h"
+#include "coop/session/teleport_client.h"
 #include "coop/session/event_feed.h"
 #include "coop/interactables/garbage_sync.h"
 #include "coop/props/grab_observer.h"
@@ -426,7 +426,7 @@ bool StartCoopSession(const coop::net::Config& netCfg) {
     coop::npc_sync::SetSession(&g_session);
     coop::prop_snapshot::SetSession(&g_session);
     coop::dev::restore_vitals::SetSession(&g_session);
-    coop::dev::teleport_client::SetSession(&g_session);
+    coop::teleport_client::SetSession(&g_session);
     coop::dev::force_weather::SetSession(&g_session);
     coop::dev_gate::SetSession(&g_session);  // the strict CLIENT lockout for every dev feature
     coop::moderation::SetSession(&g_session);
@@ -931,7 +931,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                 const float ayaw   = yaws.empty()   ? 0.f : static_cast<float>(std::atof(yaws.c_str()));
                 const float apitch = pitchs.empty() ? 0.f : static_cast<float>(std::atof(pitchs.c_str()));
                 // Audit H8 (2026-05-27): use VOTV's `teleportWObackrooms` via
-                // coop::dev::teleport_client::ApplyLocally. That path bypasses the
+                // coop::teleport_client::ApplyLocally. That path bypasses the
                 // CMC constraints K2_TeleportTo loses to (the same root-cause
                 // fix shipped in teleport_client.cpp:60-71). The retry loop
                 // still wraps it because Registry::Get().Local() can be null
@@ -945,7 +945,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                     Post([ax, ay, az, ayaw, apitch, target, okFlag] {
                         void* local = coop::players::Registry::Get().Local();
                         if (!local) { okFlag->store(2); return; }
-                        coop::dev::teleport_client::ApplyLocally({ax, ay, az, apitch, ayaw, 0.f});
+                        coop::teleport_client::ApplyLocally({ax, ay, az, apitch, ayaw, 0.f});
                         const auto cur = ue_wrap::engine::GetActorLocation(local);
                         const float dx = cur.X - target.X, dy = cur.Y - target.Y, dz = cur.Z - target.Z;
                         const bool ok = std::fabs(dx) < 200.f && std::fabs(dy) < 200.f && std::fabs(dz) < 200.f;
