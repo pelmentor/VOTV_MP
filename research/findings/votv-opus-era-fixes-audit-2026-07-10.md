@@ -1,5 +1,12 @@
 # Opus 4.8-era fixes audit (2026-07-10)
 
+> **STATUS UPDATE (same day, commit `db6ecd0b`): findings 1-5 are FIXED + smoked** (drop-intent
+> drain-time hand-axis re-check; PropDropIntent pinned Lane::Bulk; serverbox OnDisconnect breaker
+> tick-restore; world_load_episode TickWatchdog 150 s self-deadline; hand_item IsHandAxisActor
+> one-owner boundary consulted at census + both drop-intent seams). Smoke PASS, 0 [Error], watchdog
+> correctly silent on a healthy join. NOT hands-on: the positive paths (an actual client place, a
+> graceful disconnect restore). Finding 6 cluster (MEDIUMs) + finding 7 remain OPEN as listed.
+
 **Trigger:** user — "let's check previous bug fixes like rock — we did it with opus48, which can
 make stupid mistakes... architectural mistakes of opus too."
 **Method:** 4 parallel audit agents over the Opus-window commits (1e3c81f5 2026-07-06 →

@@ -72,7 +72,11 @@ bool IsGarbageInstance(void* self) {
 // Host + any other open-container subclass -> return false (run normally).
 bool OnOpenContainerReceiveTickPre(void* self, void* /*params*/) {
     auto* s = LoadSession();
-    if (!s || s->role() != coop::net::Role::Client) return false;
+    // running()-gated, NOT bare role(): role() reads cfg_.role which Stop never resets -- a bare
+    // role gate keeps cancelling in SOLO play after a client session ends (the post-session
+    // SP-bleed class; the serverbox breaker instance was fixed db6ecd0b, this one found by the
+    // same-class census 2026-07-10). fn-body PRE-cancels SELF-restore once gated on running().
+    if (!s || !s->running() || s->role() != coop::net::Role::Client) return false;
     if (!IsGarbageInstance(self)) return false;
     // Throttled cancel-log so we can prove the path fires the first few
     // times but a 60-Hz tick over many garbage containers doesn't drown
@@ -88,7 +92,11 @@ bool OnOpenContainerReceiveTickPre(void* self, void* /*params*/) {
 
 bool OnOpenContainerCheckPickupPre(void* self, void* /*params*/) {
     auto* s = LoadSession();
-    if (!s || s->role() != coop::net::Role::Client) return false;
+    // running()-gated, NOT bare role(): role() reads cfg_.role which Stop never resets -- a bare
+    // role gate keeps cancelling in SOLO play after a client session ends (the post-session
+    // SP-bleed class; the serverbox breaker instance was fixed db6ecd0b, this one found by the
+    // same-class census 2026-07-10). fn-body PRE-cancels SELF-restore once gated on running().
+    if (!s || !s->running() || s->role() != coop::net::Role::Client) return false;
     if (!IsGarbageInstance(self)) return false;
     UE_LOGI("garbage_sync[checkPickup PRE]: cancelling BP body on client garbage container %p",
             self);
@@ -124,7 +132,8 @@ bool OnOpenContainerCheckPickupPre(void* self, void* /*params*/) {
 #define MAKE_SPAWNER_CANCEL(fn_name, log_tag)                                       \
 bool fn_name(void* self, void* /*params*/) {                                        \
     auto* s = LoadSession();                                                        \
-    if (!s || s->role() != coop::net::Role::Client) return false;                   \
+    /* running()-gated, not bare role() -- the post-session SP-bleed class (see above) */ \
+    if (!s || !s->running() || s->role() != coop::net::Role::Client) return false;  \
     static std::atomic<uint64_t> sCount{0};                                         \
     const uint64_t n = sCount.fetch_add(1, std::memory_order_relaxed) + 1;          \
     if (n <= 3 || (n % 60) == 0) {                                                  \

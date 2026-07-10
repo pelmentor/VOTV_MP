@@ -1,3 +1,5 @@
+> SUPERSEDED by handson_runbook_2026-07-10_fixpass.md -- this build had the two rock-lane defects (false-intent + lane pin) UNFIXED; do not test against it.
+
 # Hands-on runbook — F2 Increment 1 (client places a keyed prop → host sees it)
 
 **Deployed:** DLL `1A4C5BEF3107E50E`, proto **v106**, all 4 folders (HOST / CLIENT_1 / CLIENT_2 / CLIENT_3).

@@ -35,7 +35,7 @@ Cosmetic-local RNG (no shared consequence) is LEFT ALONE.
 
 | Tier | scope | rows | DONE | OPEN | /qf QUESTION | /qf DESIGN | /qf IMPL | build |
 |---|---|---|---|---|---|---|---|---|
-| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (9 rounds; PRE-REGISTRATION below) | ⬜ | ⬜ | ⬜ probe first |
+| **T1** | gameplay divergence | 4 groups | 0 | 4 | ✅ converged 2026-07-10 (11 rounds; PRE-REGISTRATION below) | ⬜ next: after the full-exposure census | ⬜ | ✅ **probe v9 BUILT+DEPLOYED** `7109efd1` (first PARTIAL census: everything points STRUCTURAL; formal fork call needs the 1x day-night run) |
 | **T2** | world consistency | 3 groups | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |
 | **T3** | cosmetic-local | — | n/a (leave) | — | — | — | — | — |
 | **SEED** | seed replication | 3 | 0 | 3 | ⬜ | ⬜ | ⬜ | ⬜ |

@@ -1,5 +1,13 @@
 # Folder-placement audit — full sweep (2026-07-10)
 
+> **STATUS UPDATE (same day, commit `a0853315`): the HIGH moves are EXECUTED** — #1 teleport_client
+> -> coop/session/ (namespace followed: coop::teleport_client), #3 lerp_window.h -> coop/element/,
+> #12 coop/scan/ -> ue_wrap/ (namespace ue_wrap::scan), #4 join_curtain -> ui/ (executed as a WHOLE-
+> FILE move, not the render/trigger split the finding proposed — the split remains available if the
+> file ever grows). Build clean. #2 (ambient-spawn authority merge) stays pre-registered to the T1
+> structural design. #5-#11, #13 (config merge, world_actor lane, mirror_defer, inventory twins,
+> dispatch router, moderation/, save/, multiplayer_menu) remain the OPEN series below.
+
 **Trigger:** user — "check what else of .cpps sit in wrong folder" (after ambient_spawner_suppress
 was found in coop/session/). **Method:** one audit agent, all 567 files under src/votv-coop/
 {src,include} (322 src + 245 include), judged by each file's own purpose comment + load-bearing

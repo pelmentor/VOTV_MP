@@ -72,6 +72,12 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **A new `ReliableKind` wires in THREE places** — check the router checklist. `memory/feedback_reliablekind_router_checklist.md`
 - **Host TRACKING/enroll gates on HOSTING, never `connected()`.** `memory/lesson_tracking_gates_on_hosting_not_connected.md`
 - **EVERY session-end path runs the FULL teardown fanout.** `memory/lesson_every_session_end_path_full_teardown_fanout.md`
+- **Every client-side SUPPRESSION is a LOAN, not a purchase (N=3: weather 06-11, serverbox 07-09,
+  garbage_sync 07-10).** Persistent-state neutralizations (tick-disable, field-zero, TimeScale=0,
+  suppress flags) need an EXPLICIT OnDisconnect restore; fn-body PRE-cancels SELF-restore ONLY when
+  gated on `s->running()`/`connected()` — a bare `role()==Client` gate keeps suppressing in SOLO play
+  forever (Stop never resets cfg_.role). *Look FIRST:* name the restore mechanism in the SAME commit;
+  census: grep bare role-gates without running(). `memory/lesson_suppression_needs_paired_restore_or_running_gate.md`
 - **Pre-world subsystems Install at StartCoopSession, NOT world-gated.** `memory/feedback_preworld_install_at_startcoopsession.md`
 - **When a release VERB can't be caught, STREAM THROUGH the state.** `memory/lesson_stream_through_release_not_verb.md`
 - **An e2e assert must DISCRIMINATE the axis it claims.** `memory/lesson_e2e_assert_must_discriminate_the_axis.md`
@@ -103,7 +109,12 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 ## 4. Dispatch, hooks & input seams
 
-- **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. `memory/lesson_ex_callmath_invisible_to_processevent.md`
+- **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. THIRD instance
+  2026-07-10: the T1 probe's PE-table interceptors on `Delay`/`K2_SetTimer*`/`SetActorTickInterval`/`QuitGame`
+  were BLIND for a whole smoke (caught by its own positive control; moved to the Func-patch seam `7109efd1`).
+  BONUS: a Func-patch POST hook's `sourceObject = FFrame::Object` = the CALLING BP actor — free per-caller
+  attribution, no param stepping. *Look FIRST:* the dispatch map's MECHANISM row, not just the function row.
+  `memory/lesson_ex_callmath_invisible_to_processevent.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
   NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`
 - **use-HOLD (`canBeUsedHold`) bypasses InputAction press-sims** — bind identity on the ENTITY-sim. `memory/lesson_use_hold_bypasses_press_seams.md`
