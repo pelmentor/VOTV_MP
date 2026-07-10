@@ -77,13 +77,13 @@ ventCrawler, wisp) + piramid2 + arirShip. UNCOVERED spawners (each ticker rolls 
 | furfurAltarSpawner | paranormalSpot_C | pos + timing | NEEDS-PROBE |
 | hillRollerSpawner | prop/propThrown/nail | which prop + pos | NEEDS-PROBE |
 | ufoDropper | kerfurOmega/fallingBody/lampPost | Array_Random which drop + where | NEEDS-PROBE |
-| ticker_yellowWispSpawner | killerwisp_C (covered class) | spawner's own gate+pos | **DONE-MIRROR** (2026-07-10 correction: ambient_spawner_suppress.cpp cancels its ReceiveTick on the client; wisp class allowlisted) |
+| ticker_yellowWispSpawner | killerwisp_C (covered class) | spawner's own gate+pos | **DONE-MIRROR** (2026-07-10 correction: the client ReceiveTick cancel — now a t3 row in coop/world/spawn_authority.cpp, `e6c1371b`; wisp class allowlisted) |
 **Root decision (the /qf):** broaden the allowlist (add each) vs STRUCTURAL — client runs NO
 world-spawn ticker; host owns all spawns; allowlist becomes only the MIRROR set. Structural is the
 rule-1 root (allowlist inherently lags 15/40).
 
 **2026-07-10 fact-base correction (the audit missed a shipped module):**
-`src/coop/session/ambient_spawner_suppress.cpp` ALREADY client-cancels 4 rollers via per-class
+the ambient module (dissolved 2026-07-10 into `src/coop/world/spawn_authority.cpp` `e6c1371b`) ALREADY client-cancels 4 rollers via per-class
 PE-visible fn PRE-interceptors (mushroomMaster.Spawn, mushroomSpawner.Spawn,
 pineconeSpawner.ReceiveTick, ticker_yellowWispSpawner.ReceiveTick), and `host_spawn_watcher.cpp`
 MIRRORS the pinecone-family outputs (keyless PropSpawn + death-watch) — the full suppress+mirror
@@ -124,7 +124,7 @@ Sky-signal GENERATION host-auth (console_state_sync); CATCH host-mediated (signa
 scramble, `ticker_dishUncalib`/`ticker_disher`. Two peers' dish calibration + radar order diverge.
 
 ### T2-6 · Ambient wildlife / flora spawners — STATUS: PARTIAL (2026-07-10 correction)
-**DONE-MIRROR already** (ambient_spawner_suppress + host_spawn_watcher pinecone mirror, shipped
+**DONE-MIRROR already** (the t3 cancels now in coop/world/spawn_authority + host_spawn_watcher pinecone mirror, shipped
 pre-audit; the 07-10 audit missed the module): mushroomMaster, mushroomSpawner, pineconeSpawner
 (outputs mirrored as keyless PropSpawn). **Deliberately per-peer** (product decision): color wisps
 (ticker_wispSpawner). **Still OPEN / NEEDS-PROBE:** ticker_beehiveSpawner, ticker_treeSpawner
@@ -322,9 +322,10 @@ exposure; the armed 4 firing within a longer client life settles it. **The T1 DE
 gated on the fork call** — the partial signal still points STRUCTURAL, but the gate exists
 precisely so nothing gets built on "points".
 
-**Exposure reality for future runs:** an IDLE autonomous client survives ~18 min — full-day client
-exposure needs user-driven sessions or repeated slices; copy the client log to the scratchpad
-before every relaunch.
+**Exposure reality for future runs [SUPERSEDED 2026-07-10 night]:** the ~18-min idle death was
+ROOT-FIXED (starvation; `[dev] vitals_keepalive_sec=180`, commit `0211b9c5`) — autonomous peers now
+survive indefinitely (65-min continuous run measured, both peers alive at kill). Log-copy-before-
+relaunch still applies ([[lesson-copy-peer-log-before-relaunch]]).
 
 ## T1 THIRD (KEEPALIVE) CENSUS — 2026-07-10 evening: fork = **STRUCTURAL** (user-called; callable gate waived)
 

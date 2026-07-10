@@ -174,10 +174,24 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **The smoke HOST slot `s_1234` is STATEFUL — restore `coop_backup` FIRST.** `memory/lesson_s1234_host_slot_stateful_coop_backup.md`
 - **`votv-coop.log` is TRUNCATED at boot (no rotation)** — copy a peer's log to the scratchpad BEFORE any
   mid-run relaunch or the previous life's evidence is destroyed (2026-07-10: an 18-min census slice lost).
-  **Idle death claims BOTH peers** (client ~18 min, HOST ~80 min — the 14:27:16 "LOCAL PLAYER DIED
+  **Idle death claims BOTH peers — ROOT = STARVATION, now keepalive-fixed** (2026-07-10 night: harness
+  save starts food=24.4, idle drain ~2.3 food/min, measured by the ticker's own pre-refill log;
+  `[dev] vitals_keepalive_sec=180` `0211b9c5` pins vitals -> 65-min continuous run, zero deaths)
+  (client ~18 min, HOST ~80 min — the 14:27:16 "LOCAL PLAYER DIED
   role=HOST" real log): a later "connect timed out" against such a host is CORRECT, not a join bug (the
   2026-07-10 "stale-slot race" candidate was exactly this, refuted from the saved logs). Long exposure
   runs must keep peers alive or script around per-peer deaths.
   `memory/lesson_copy_peer_log_before_relaunch.md`
+
+- **OWNER-EFFECT RULE (user, 2026-07-10)** — player-proximity ambient effects (color wisps, fireflies,
+  autumn leaves): the local peer KEEPS rolling them (never host-rolled, never suppressed) but a
+  cross-peer mirror makes them visible to all peers. Shipped precedent = `coop/world/firefly_sync`
+  (v51) — generalize THAT shape, don't invent. Look FIRST: docs/COOP_RNG_AUTHORITY.md USER DECISIONS +
+  `memory/feedback_owner_effect_rule.md`
+
+- **A one-shot session-start pass over world state parks/indexes NOTHING — the world materializes
+  LATER** (2026-07-10, spawn_authority: initial park pass found 0 instances; the fix is
+  hunt-until-first-hit at 1 Hz then relax). Instance #4 of the snapshot-before-state-ready class.
+  Look FIRST: `memory/feedback_snapshot_before_state_ready.md`
 - **NEVER `git add -A`/`<dir>` over held WIP — explicit paths or stash.** `memory/lesson_never_git_add_A_over_held_wip.md`
 - **AUTONOMOUS pile test loop harness** (reference). `memory/reference_pile_test_harness.md`

@@ -578,7 +578,7 @@ Design implications (do NOT build yet; record so the architecture serves it):
   on connected clients; dirthole mounds per-peer LOCAL** (Fork C of the snapshot-
   adoption session). A connected CLIENT PRE-cancels its own
   `mushroomMaster_C::spawn`, `mushroomSpawner_C::spawn` and
-  `pineconeSpawner_C::ReceiveTick` (new `coop/ambient_spawner_suppress`,
+  `pineconeSpawner_C::ReceiveTick` (2026-06-10 `coop/ambient_spawner_suppress`; dissolved 2026-07-10 into `coop/world/spawn_authority` `e6c1371b`,
   runtime-gated on running()+role==Client — SP and post-session solo play
   unaffected); the HOST's spawn results stream over the existing prop pipeline
   with v54 identity. Consequence: a connected client loses its local "a shroom

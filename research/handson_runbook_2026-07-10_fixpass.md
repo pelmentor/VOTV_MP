@@ -2,7 +2,11 @@
 
 **Supersedes take 1 (same day, morning).** Take 1's DLL predates the afternoon series.
 
-**Deployed:** DLL `EDFED54A` (hash-verified all 4 installs) = the full 2026-07-10 day:
+**Deployed:** DLL `92C7FC96` (hash-verified all 4 installs; supersedes `EDFED54A` — adds the
+NIGHT block: vitals_keepalive `0211b9c5` [dev-flag, no player-visible change] + T1 Inc-1
+spawn_authority `e6c1371b` [client no longer rolls insomniac/fossilhound spawns — content
+UNCHANGED, those NPCs still arrive via the host mirror; mushroom/pinecone behavior identical,
+module moved]). Everything below remains valid. = the full 2026-07-10 day:
 fix pass `db6ecd0b` + probe `7109efd1` + hand-item camera-front `be98beb6` + placement series
 #5-#13 + 7 soft-cap extractions + residue fixes `9becc5e3`/`89bb24e0` + email census gate
 `606fda3b` + the evening block `dab12a2e..fb490e36` (3 more extractions + dead-residue

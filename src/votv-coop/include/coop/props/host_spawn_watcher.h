@@ -23,7 +23,7 @@
 // the two-observer split is the lowest-risk delivery now.)
 //
 // HOST-ONLY broadcaster. The client never runs these spawners (its copies are
-// cancelled by coop/ambient_spawner_suppress), so it never locally spawns a
+// cancelled by the t3 rows in coop/world/spawn_authority), so it never locally spawns a
 // divergent pinecone; it receives the host's via PropSpawn ->
 // remote_prop_spawn::OnSpawn (UNCHANGED). The mirror spawns SIMULATING and
 // drops under its OWN physics: local fall physics is intentionally NOT synced

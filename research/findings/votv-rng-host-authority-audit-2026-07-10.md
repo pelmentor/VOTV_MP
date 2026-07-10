@@ -146,3 +146,13 @@ Every Tier-1/2 row is STATIC-INFERRED (class absent from our suppression set + t
 roller). Whether the CLIENT actually rolls each one depends on whether the client's ticker system /
 `mainGamemode` roll-machinery is live — which is NOT yet probed. The live client-side roll census is
 the first step before any build. No fix is justified until that probe confirms the diverging set.
+
+
+## STATUS UPDATE (2026-07-10 night)
+The probe RAN (v9, three censuses), the fork was CALLED (**STRUCTURAL**, 3 client-live rows —
+tracker THIRD CENSUS `419c262c`), the design pass CONVERGED (ratified T1 STRUCTURAL DESIGN,
+`d74be30d`), and **Inc-1 is BUILT `e6c1371b`** (coop/world/spawn_authority: insomniac+fossilhound
+parked, ambient dissolved, tripwire live; VERIFY-gate passed by census). This finding's tier
+tables remain the static census of record; live adjudication + the build ledger live in
+docs/COOP_RNG_AUTHORITY.md. The "no fix justified until the probe confirms" gate above was
+honored and is now CLOSED.
