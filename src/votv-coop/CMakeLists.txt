@@ -324,6 +324,7 @@ add_library(votv-coop SHARED
     src/coop/session/ambient_spawner_suppress.cpp
     src/coop/props/host_spawn_watcher.cpp
     src/coop/props/trash_channel.cpp
+    src/coop/props/trash_grab_intent.cpp
     src/coop/props/trash_collect_sync.cpp
     src/coop/props/trash_use_intercept.cpp
     src/coop/props/trash_pile_sync.cpp
