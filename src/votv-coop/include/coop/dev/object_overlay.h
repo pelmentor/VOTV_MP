@@ -11,6 +11,11 @@
 //      actor -- exactly the objects that break cross-peer mirroring.
 //   3. Physics state -- live sim vs at-rest + the static/frozen/sleep save flags
 //      (the falling-walls discriminator).
+//   4. Health (2026-07-11) -- live hp for creatures (any class-chain float
+//      'health', + 'maxHealth' when present) and props (comp_physicsImpact:
+//      live pool vs damageData.health max). With this layer on, the candidate
+//      walk also admits ACharacter-lineage actors (creatures/puppets; the
+//      local player is skipped), so damage testing reads directly off screen.
 // Master checkbox + per-layer checkboxes + radius live in the F1 menu
 // (Player > HUD); `[dev] object_overlay=1` force-enables at boot so the
 // autonomous smoke can exercise it without clicking.
@@ -46,6 +51,8 @@ struct Label {
     char    line1[56] = {}; // names layer ('\0' when the layer is off)
     char    line2[56] = {}; // net-identity layer
     char    line3[40] = {}; // physics layer
+    char    line4[24] = {}; // health layer ("hp 42/100"; live, rebuilt per projection)
+    float   healthFrac = -1.f;  // cur/max 0..1 for the color ramp; -1 = no max known
 };
 
 struct Snapshot {
@@ -77,6 +84,7 @@ void SetEnabled(bool on);
 bool  LayerNames();  void SetLayerNames(bool on);
 bool  LayerNet();    void SetLayerNet(bool on);
 bool  LayerPhys();   void SetLayerPhys(bool on);
+bool  LayerHealth(); void SetLayerHealth(bool on);
 float RadiusM();     void SetRadiusM(float meters);
 
 }  // namespace coop::dev::object_overlay

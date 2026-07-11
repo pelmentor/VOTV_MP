@@ -10,6 +10,7 @@
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
+#include "ue_wrap/sdk_profile.h"  // UStruct_SuperStruct (the Character-lineage walk)
 #include "ue_wrap/types.h"
 
 #include <algorithm>
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -38,6 +40,7 @@ std::atomic<bool>  g_enabled{false};
 std::atomic<bool>  g_layerNames{true};
 std::atomic<bool>  g_layerNet{true};
 std::atomic<bool>  g_layerPhys{false};
+std::atomic<bool>  g_layerHealth{true};  // 2026-07-11 user ask: creature + prop hp
 std::atomic<float> g_radiusM{25.f};
 std::atomic<bool>  g_dirty{false};
 
@@ -110,6 +113,115 @@ float DistCm_(const ue_wrap::FVector& a, const ue_wrap::FVector& b) {
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+// ---- health layer (2026-07-11, user ask: creature + prop health) ------------
+// Sources, in order:
+//   1. a float 'health' property anywhere on the actor's class chain
+//      (creatures: fossilhound@0x57C / grayboar / npc_zombie / ...; special
+//      props: ATV, prop_fish, prop_snack; + class-chain 'maxHealth' when
+//      present -- FindPropertyOffset climbs SuperStruct);
+//   2. prop fallback: Aprop_C.physicsImpact (Ucomp_physicsImpact_C) --
+//      comp.health = the live pool, comp.damageData.health = the configured
+//      max (health is field 0 of Fstruct_breakableProp).
+// Raw memory reads through reflection-resolved offsets -- no UFunction
+// dispatch -- read at Project_ time (~30 Hz x <=kMaxLabels) so the numbers
+// are LIVE during damage testing. Offsets cache per UClass* (game-thread
+// only); a class pointer recycled across a world swap aliases an old entry,
+// but a re-cooked same-BP class has the identical layout, so a stale hit
+// still reads the right offsets.
+// Decals (2026-07-11 follow-up ask): every dirt/crack/blood decal is an
+// Agrime_C {process@0x250, maxProcess@0x268, clean(sponge,...)} -- the
+// X-out-of-X "how much until it disappears" pool. Read as a second vital
+// source ("proc a/b") through the same class-chain offset cache.
+struct HealthOff {
+    int32_t health = -1;
+    int32_t maxHealth = -1;
+    int32_t process = -1;
+    int32_t maxProcess = -1;
+};
+std::unordered_map<void*, HealthOff> g_healthOff;
+
+int32_t g_offPropPhysImpact = -2;  // Aprop_C.physicsImpact  (-2 = not resolved yet)
+int32_t g_offCompHealth     = -2;  // comp_physicsImpact_C.health
+int32_t g_offCompDamageData = -2;  // comp_physicsImpact_C.damageData
+
+template <class T>
+T RawRead_(void* obj, int32_t off) {
+    return *reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(obj) + off);
+}
+
+// `isProcess` = the numbers are a grime-decal process pool ("proc"), not hp.
+bool ReadVitals_(void* actor, float& cur, float& max, bool& isProcess) {
+    isProcess = false;
+    void* cls = R::ClassOf(actor);
+    if (!cls) return false;
+    auto it = g_healthOff.find(cls);
+    if (it == g_healthOff.end()) {
+        HealthOff ho;
+        ho.health    = R::FindPropertyOffset(cls, L"health");
+        ho.maxHealth = R::FindPropertyOffset(cls, L"maxHealth");
+        // Only probe the decal pool where no health exists (grime_C has no
+        // 'health'; a class with both would be showing hp anyway).
+        if (ho.health < 0) {
+            ho.process    = R::FindPropertyOffset(cls, L"process");
+            ho.maxProcess = R::FindPropertyOffset(cls, L"maxProcess");
+        }
+        it = g_healthOff.emplace(cls, ho).first;
+    }
+    if (it->second.health >= 0) {
+        cur = RawRead_<float>(actor, it->second.health);
+        max = it->second.maxHealth >= 0 ? RawRead_<float>(actor, it->second.maxHealth) : 0.f;
+        return true;
+    }
+    if (it->second.process >= 0 && it->second.maxProcess >= 0) {
+        cur = RawRead_<float>(actor, it->second.process);
+        max = RawRead_<float>(actor, it->second.maxProcess);
+        isProcess = true;
+        return true;
+    }
+    if (!UP::IsDescendantOfProp(actor)) return false;
+    if (g_offPropPhysImpact == -2) {
+        void* propCls = R::FindClass(L"prop_C");
+        if (!propCls) return false;  // stay unresolved; retry next call
+        g_offPropPhysImpact = R::FindPropertyOffset(propCls, L"physicsImpact");
+    }
+    if (g_offPropPhysImpact < 0) return false;
+    void* comp = RawRead_<void*>(actor, g_offPropPhysImpact);
+    if (!comp || !R::IsLive(comp)) return false;
+    if (g_offCompHealth == -2) {
+        void* compCls = R::ClassOf(comp);
+        if (!compCls) return false;
+        g_offCompHealth     = R::FindPropertyOffset(compCls, L"health");
+        g_offCompDamageData = R::FindPropertyOffset(compCls, L"damageData");
+    }
+    if (g_offCompHealth < 0) return false;
+    cur = RawRead_<float>(comp, g_offCompHealth);
+    max = g_offCompDamageData >= 0 ? RawRead_<float>(comp, g_offCompDamageData) : 0.f;
+    return true;
+}
+
+// Extra admissions for the health layer's candidate walk (sticky class pointer
+// + SuperStruct walk -- the IsClassDescendantOfProp idiom, prop.cpp):
+//   Character -- creatures/puppets (the LOCAL player is skipped at the call
+//                site; a label pinned to the camera is noise);
+//   grime_C   -- the dirt/crack/blood decal family (process pools).
+bool IsLineageOf_(std::atomic<void*>& sticky, const wchar_t* clsName, void* obj) {
+    void* base = sticky.load(std::memory_order_acquire);
+    if (!base) {
+        base = R::FindClass(clsName);
+        if (!base) return false;
+        sticky.store(base, std::memory_order_release);
+    }
+    void* cls = R::ClassOf(obj);
+    for (int hops = 0; hops < 16 && cls; ++hops) {
+        if (cls == base) return true;
+        cls = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(cls) +
+                                        ue_wrap::profile::off::UStruct_SuperStruct);
+    }
+    return false;
+}
+std::atomic<void*> g_characterCls{nullptr};
+std::atomic<void*> g_grimeCls{nullptr};
+
 // Identity text for one candidate, baked once per refresh (stable between
 // refreshes; per-tick work is position + projection only).
 void BuildLines_(Entry& e, void* obj, bool tracked, uint32_t eid, bool mirror,
@@ -164,11 +276,12 @@ void BuildLines_(Entry& e, void* obj, bool tracked, uint32_t eid, bool mirror,
 // plus a GUObjectArray walk for UNTRACKED prop-lineage / keyed-interactable /
 // chipPile actors -- the local-only orphans are exactly the problem objects this
 // overlay exists to expose. Game thread.
-void Refresh_(const ue_wrap::FVector& eye) {
+void Refresh_(const ue_wrap::FVector& eye, void* lp) {
     const float radiusCm  = g_radiusM.load(std::memory_order_relaxed) * 100.f;
     const bool  wantNames = g_layerNames.load(std::memory_order_relaxed);
     const bool  wantNet   = g_layerNet.load(std::memory_order_relaxed);
     const bool  wantPhys  = g_layerPhys.load(std::memory_order_relaxed);
+    const bool  wantHp    = g_layerHealth.load(std::memory_order_relaxed);
 
     struct Cand {
         void*    actor;
@@ -217,7 +330,15 @@ void Refresh_(const ue_wrap::FVector& eye) {
         // would run the SEH-guarded check on every one of ~250k slots instead
         // of the ~3k lineage matches. An ObjectAt pointer is mapped for the
         // duration of this game-thread task (GC purges run between tasks).
-        if (!UP::IsKeyedInteractable(obj)) continue;
+        // Health layer (2026-07-11): ALSO admit ACharacter-lineage actors
+        // (creatures, puppets -- a fossilhound gets a label + hp even though it
+        // isn't prop-lineage) and grime_C decals (dirt/crack/blood process
+        // pools). Same cheap pointer-walk cost class as IsKeyedInteractable;
+        // the local player is skipped (camera-pinned noise).
+        if (!UP::IsKeyedInteractable(obj) &&
+            !(wantHp && obj != lp &&
+              (IsLineageOf_(g_characterCls, L"Character", obj) ||
+               IsLineageOf_(g_grimeCls, L"grime_C", obj)))) continue;
         if (seen.count(obj)) continue;
         if (R::ToString(R::NameOf(obj)).rfind(L"Default__", 0) == 0) continue;
         if (!R::IsLive(obj)) continue;
@@ -254,6 +375,7 @@ void Refresh_(const ue_wrap::FVector& eye) {
 void Project_(void* pc, const ue_wrap::FVector& eye) {
     const float radiusCm = g_radiusM.load(std::memory_order_relaxed) * 100.f;
     const float fadeFromCm = radiusCm * 0.85f;  // opaque inside, fading at the rim
+    const bool  wantHp = g_layerHealth.load(std::memory_order_relaxed);
 
     Snapshot snap;
     for (const Entry& e : g_entries) {
@@ -276,6 +398,22 @@ void Project_(void* pc, const ue_wrap::FVector& eye) {
         std::memcpy(L.line1, e.line1, sizeof(L.line1));
         std::memcpy(L.line2, e.line2, sizeof(L.line2));
         std::memcpy(L.line3, e.line3, sizeof(L.line3));
+        if (wantHp) {
+            // Built LIVE per projection (unlike the identity lines): hp/process
+            // move between the 2 s refreshes and the whole point is watching
+            // them tick during damage/clean/cement testing.
+            float cur = 0.f, max = 0.f;
+            bool isProc = false;
+            if (ReadVitals_(e.actor, cur, max, isProc)) {
+                const char* tag = isProc ? "proc" : "hp";
+                if (max > 0.f) {
+                    L.healthFrac = std::clamp(cur / max, 0.f, 1.f);
+                    std::snprintf(L.line4, sizeof(L.line4), "%s %.1f/%.1f", tag, cur, max);
+                } else {
+                    std::snprintf(L.line4, sizeof(L.line4), "%s %.1f", tag, cur);
+                }
+            }
+        }
         ++snap.count;
     }
 
@@ -333,7 +471,7 @@ void Update() {
     if (++g_sinceRefresh >= kRefreshEveryNTicks ||
         g_dirty.exchange(false, std::memory_order_acq_rel)) {
         g_sinceRefresh = 0;
-        Refresh_(eye);
+        Refresh_(eye, lp);
     }
 
     // Projection at ~30 Hz (every other 60 Hz pump tick): halves the per-tick
@@ -376,6 +514,12 @@ void SetLayerNet(bool on) {
 bool LayerPhys() { return g_layerPhys.load(std::memory_order_acquire); }
 void SetLayerPhys(bool on) {
     g_layerPhys.store(on, std::memory_order_release);
+    g_dirty.store(true, std::memory_order_release);
+}
+
+bool LayerHealth() { return g_layerHealth.load(std::memory_order_acquire); }
+void SetLayerHealth(bool on) {
+    g_layerHealth.store(on, std::memory_order_release);
     g_dirty.store(true, std::memory_order_release);
 }
 

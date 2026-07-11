@@ -151,6 +151,10 @@ void RenderObjectOverlay() {
     if (ImGui::Checkbox("Physics state", &phys)) OO::SetLayerPhys(phys);
     ImGui::SameLine();
     ImGui::TextDisabled("(sim/rest + static/frozen/sleep)");
+    bool hp = OO::LayerHealth();
+    if (ImGui::Checkbox("Health / progress", &hp)) OO::SetLayerHealth(hp);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(creature+prop hp; decal clean/cement pools)");
     float r = OO::RadiusM();
     ImGui::SetNextItemWidth(S(170.f));
     if (ImGui::SliderFloat("Radius (m)", &r, 5.f, 100.f, "%.0f")) OO::SetRadiusM(r);

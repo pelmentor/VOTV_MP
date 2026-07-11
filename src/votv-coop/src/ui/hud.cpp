@@ -245,7 +245,19 @@ void DrawObjectOverlay() {
         float ty = L.y - S(6.f) * s;
         if (L.line1[0]) { TextOutlined(dl, font, px1, ImVec2(tx, ty), kindCol, outline, L.line1); ty += px1 + S(1.f); }
         if (L.line2[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line2);   ty += px2 + S(1.f); }
-        if (L.line3[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line3); }
+        if (L.line3[0]) { TextOutlined(dl, font, px2, ImVec2(tx, ty), grey, outline, L.line3);   ty += px2 + S(1.f); }
+        if (L.line4[0]) {
+            // Health/process ramp: green (full) -> yellow -> red (empty); grey
+            // when no max is known (a bare pool has no meaningful fraction).
+            ImU32 hcol = grey;
+            if (L.healthFrac >= 0.f) {
+                const float f = L.healthFrac;
+                const int rr = static_cast<int>(255.f * std::min(1.f, 2.f - 2.f * f));
+                const int gg = static_cast<int>(255.f * std::min(1.f, 2.f * f));
+                hcol = IM_COL32(rr, gg, 40, static_cast<int>(a * 245.f));
+            }
+            TextOutlined(dl, font, px2, ImVec2(tx, ty), hcol, outline, L.line4);
+        }
     }
 }
 
@@ -325,7 +337,11 @@ void DrawChat() {
         const auto& l = cs.lines[i];
         const float a = std::clamp(l.alpha, 0.f, 1.f);
         const ImU32 outline = IM_COL32(0, 0, 0, static_cast<int>(a * 200.f));
-        const ImU32 body    = IM_COL32(236, 236, 236, static_cast<int>(a * 245.f));
+        // Peer-action lines ("<nick> deleted an email: X") draw their predicate in
+        // yellow (user 2026-07-11) so world-state actions read apart from typed chat.
+        const ImU32 body    = l.action
+            ? IM_COL32(255, 214,  80, static_cast<int>(a * 245.f))
+            : IM_COL32(236, 236, 236, static_cast<int>(a * 245.f));
         ImU32 nickCol = body;
         if (l.nickLen > 0) {
             // v103 (12f): a peer's custom nick color overrides the per-slot palette.
