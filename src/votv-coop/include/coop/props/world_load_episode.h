@@ -60,8 +60,12 @@ void NotifyQuiesced();
 
 // Unconditional per-tick watchdog (join_membership_sweep::TickClientReconcile, ABOVE its sweep-armed
 // gate): force-closes a stuck episode after a wall-clock ceiling the normal quiescence edge always beats
-// (fires only on the SnapshotBegin-lost flake / a pathological stall). Game thread.
-void TickWatchdog();
+// (fires only on the SnapshotBegin-lost flake / a pathological stall). Returns TRUE exactly once, on the
+// force-close edge -- the caller (the sweep, which owns the quiescence flag) declares load-tail
+// quiescence-by-ceiling so the quiescence_drain queues (spawn revalidation / destroys / twins / pos
+// corrections) drain via OnTick instead of stranding for the session (audit MEDIUM 2026-07-11: the
+// watchdog closed the episode but nothing ever drained the queues on the flake). Game thread.
+bool TickWatchdog();
 
 // Session teardown -- clear the episode unconditionally. Game thread.
 void Reset();

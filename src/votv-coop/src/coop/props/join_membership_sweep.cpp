@@ -609,7 +609,16 @@ void TickClientReconcile() {
     // Episode self-deadline (audit 2026-07-10 HIGH): must run ABOVE the g_sweepPending gate -- on the
     // SnapshotBegin-lost flake the sweep never arms, NotifyQuiesced below is unreachable, and the
     // world-load episode would otherwise eat every client keyed destroy broadcast for the session.
-    coop::world_load_episode::TickWatchdog();
+    // On the force-close EDGE, declare load-tail quiescence BY CEILING (audit MEDIUM 2026-07-11): the
+    // world finished loading long before the 150 s ceiling, and without g_sweepFired the quiescence_drain
+    // queues (spawn revalidation + destroys + twins + pos corrections) armed during the broken episode
+    // would strand for the session -- the exact invisible-prop class they exist to fix. g_sweepPending
+    // stays false: NO claims exist on this path, so the membership DOOM sweep must never run off it.
+    if (coop::world_load_episode::TickWatchdog()) {
+        g_sweepFired = true;
+        UE_LOGW("join_membership_sweep: load-tail quiescence declared BY WATCHDOG CEILING -- the deferred "
+                "reconcile queues drain via the steady tick (no doom sweep: no claim bracket ever armed)");
+    }
     if (!g_sweepPending) return;  // zero cost when disarmed (the steady state)
     UE_ASSERT_GAME_THREAD("join_membership_sweep::TickClientReconcile");  // no-mutex: all sweep state is GT-only
     const auto now = std::chrono::steady_clock::now();

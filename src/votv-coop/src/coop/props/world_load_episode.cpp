@@ -34,16 +34,17 @@ void Arm() {
             "suppressed until load-tail quiescence (host-wipe root fix)");
 }
 
-void TickWatchdog() {
-    if (!g_inEpisode) return;  // steady-state: one bool read
+bool TickWatchdog() {
+    if (!g_inEpisode) return false;  // steady-state: one bool read
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - g_armedAt).count();
-    if (elapsed < kEpisodeWatchdogMs) return;
+    if (elapsed < kEpisodeWatchdogMs) return false;
     g_inEpisode = false;
     UE_LOGW("world_load_episode: WATCHDOG force-close after %lldms -- the quiescence edge never fired "
             "(SnapshotBegin-lost flake / sweep never armed?). KEYED-prop destroy broadcasts resume; "
             "investigate the join bracket in this log.",
             static_cast<long long>(elapsed));
+    return true;  // the force-close edge -- the caller declares quiescence-by-ceiling (queue drain)
 }
 
 void NotifyQuiesced() {
