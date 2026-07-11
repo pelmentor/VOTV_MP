@@ -140,6 +140,15 @@ ticker_treeSpawner (walkingTree), ticker_bushSpawning (growingPlant), ticker_sus
 birchSpawner/autumnLeafSpawner (leaves = the OWNER-EFFECT candidate still lacking an anchor read).
 Real shared actors, low gameplay stakes.
 
+### T2-8 · Container loot roll (propInventory.addLoot) — STATUS: LANE-DESIGNED (2026-07-11, not built)
+Every `prop_container_C` rolls its contents ONCE at first registration (`init` when `Index<0`):
+DataTable row → `Array_Shuffle` + per-entry `RandomBoolWithWeight` — unseeded, on WHICHEVER peer runs
+that BeginPlay [bytecode, docs/items/container.md §1.3]. Save-loaded containers never re-roll
+(join-safe); mid-session spawns (orderbox delivery, Q-menu, mirrors) roll PER-PEER = divergent loot.
+**Closure = the container contents-list state mirror (container.md §3, DESIGN): the host's canonical
+list broadcast overwrites the client's roll — no addLoot hook needed (mirror-step-3 by state).**
+Tracker gap found by the 2026-07-11 container RE (this row was missing).
+
 ### T2-7 · Seed-replication opportunity — STATUS: SEED-OPP
 `garbagePileSpawner` (garbage layout+types), `radiotower.generateGizmos` (décor), `xmaslight`
 (pattern) use a SEEDED stream. Replicate the `seed` member host→client → identical rolls, no

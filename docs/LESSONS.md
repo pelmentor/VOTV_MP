@@ -119,6 +119,16 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   drop INSIDE the deferred window (BeginPlay overlap runs during Finish). *Look FIRST:*
   `coop/creatures/owner_entity_sync.cpp` (reference impl). `memory/lesson_peer_keyed_mirror_lane_traps.md`
 
+- **Continuously-MOVING display state needs an unreliable pose-rate stream, not reliable snapshots** —
+  the hand-item swing rendered at "1 fps" under a 0.5 s drift-gated reliable resend; split identity
+  (reliable announce) from motion (MsgType::HandPose=35, RagdollPose plumbing end-to-end).
+  *Look FIRST:* `memory/lesson_continuous_motion_needs_pose_stream.md` (v109 `a3c55529`).
+- **The client join world-load episode now guards TWO consumers** — the v106 keyed-destroy broadcast
+  suppression AND the email shadow diff (2026-07-11 `848a1fc0`: priming/diffing saveSlot.emails across
+  the client's own load mis-read 2 swapped default rows as player deletes → EmailDelete broadcast →
+  host rows deleted). Any poll-diff over save-backed state must gate on `world_load_episode::InEpisode()`.
+  `src/coop/world/email_sync.cpp` + `coop/props/world_load_episode.h`.
+
 ## 4. Dispatch, hooks & input seams
 
 - **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. THIRD instance
@@ -132,9 +142,21 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   `memory/lesson_ex_callmath_invisible_to_processevent.md`
 - **`R::FindFunction(cls, name)` is EXACT-OWNER — no SuperStruct climb**: a parent-class UFunction
   (AActor::SetLifeSpan) looked up on a BP leaf returns NULL every call + pays a futile full-array walk
-  (audit CRITICAL 2026-07-10: the ambient-mirror lifespan backstop was silently dead). Resolve on the
-  DECLARING class + cache. *Look FIRST:* the SDK header for which class declares the fn.
+  (audit CRITICAL 2026-07-10: the ambient-mirror lifespan backstop was silently dead). SECOND STRIKE
+  2026-07-11: BOTH spawn-by-key sites resolved `setKey` on the LEAF wire class → prop_crowbar_C mirrors
+  spawned keyless → field key diverged from the wire binding → pickup-destroys missed the host = the
+  host-side crowbar DUPE (rocks masked it: a rock IS prop_C). Resolve on the DECLARING class + cache;
+  when adding any reflected-call site, grep for other leaf-class resolves of the same fn.
+  *Look FIRST:* the SDK header for which class declares the fn + the RCA finding
+  `research/findings/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md`.
   `memory/lesson_findfunction_exact_owner_no_superstruct_climb.md`
+- **VOTV damage NEVER touches UE TakeDamage/ApplyDamage** — melee = `mainPlayer.attack` →
+  per-class `addDamage`/`damageByPlayer`, ALL EX_Local-invisible inward from `attack`; the ONE
+  Func-patchable choke is `VictoryFloatMinusEquals` (every prop+creature health write; FFrame::Object =
+  target). A client's hits are LOCAL-ONLY today (user live 2026-07-11: zero damage cross-peer, silent
+  crowbar door hits). The mannequin is a PROP (`Aprop_mannequin_C : Aprop_C`), not a Character.
+  *Look FIRST:* `research/findings/votv-melee-damage-path-RE-2026-07-11.md` (chain + ranked hook seams).
+  `memory/lesson_votv_damage_bypasses_ue_takedamage.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
   NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`
 - **BP-JSON call censuses: text-grepping an export for a NATIVE fn name gives FALSE NEGATIVES** — imported
@@ -165,6 +187,12 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   visible break mirror = raw-write IsBroken + reflected `check()`. Offsets (CXXHeaderDump): servers@0x3F0 /
   brokenServers@0x8A0 / eff@0x400/0x404. **A base runs ~54 serverBoxes** (a farm, not a handful) — never
   assume a small fixed count; a 32-cap dropped 22 (smoke-caught). `memory/lesson_serverbox_check_reskins_from_isbroken.md`
+
+- **VOTV `.sav` = uncompressed GVAS serialized DELTA-VS-CDO** — an absent property means "CDO default"
+  (Points=10, health/maxHealth=100, Version=""); row metadata is readable OFF-THREAD via a tag-walk that
+  seeks past payloads (`ue_wrap/gvas_meta`); never drive `LoadGameFromSlot` N times on the game thread
+  for display data (the 2026-07-11 picker freeze). `b_` = the SANDBOX prefix, not a backup marker.
+  `memory/lesson_gvas_savefile_delta_vs_cdo.md`
 
 ## 6. Assets, models, geometry
 
