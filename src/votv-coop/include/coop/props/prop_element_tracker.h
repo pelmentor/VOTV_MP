@@ -88,7 +88,15 @@ void UnmarkKnownKeyedProp(void* actor);
 // Reads its OWN cached session pointer inside the lock to determine host
 // vs peer allocation range. Names + class name optional (empty wstring
 // skips the field set).
-void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& cls);
+//
+// Returns the key the actor is ACTUALLY enrolled/known under -- normally the
+// input `key`, but the HOST KEY-UNIQUENESS AUTHORITY (2026-07-11 take-3: the
+// game's own save ships duplicate Keys, e.g. 65 trashBitsPile_C sharing one
+// GUID) re-keys a true duplicate (a DIFFERENT live actor already carries the
+// key) with a fresh unique Key before enrolling. Broadcast callers MUST build
+// their wire payload key from the RETURN, not the input (a payload carrying
+// the pre-rekey key would resolve to the incumbent on every receiver).
+std::wstring MarkPropElement(void* actor, const std::wstring& key, const std::wstring& cls);
 
 // Look up the host-allocated ElementId for `actor`. Returns kInvalidId if
 // not tracked.

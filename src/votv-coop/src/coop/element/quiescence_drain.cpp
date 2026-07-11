@@ -14,7 +14,6 @@
 
 #include "coop/creatures/kerfur_reconcile.h"   // SweepReconcileSaveTimeKerfurs + HasPendingRetire (mechanism the sequence calls)
 #include "coop/element/registry.h"             // Registry::Get (b3 pos-correction resolve)
-#include "coop/props/pile_spawn_bind.h"        // SweepReconcileSaveTimeTwins counterpart -> LogCensus (the pile-bind census)
 #include "coop/props/prop_element_tracker.h"   // IsBoundMirrorNative / InPurgeEpisode
 #include "coop/props/remote_prop.h"            // TryApplyDestroy + KeyToWString (deferred destroy-before-load re-apply)
 #include "coop/props/remote_prop_spawn.h"      // HasLoadTailQuiesced (the quiescence gate)
@@ -572,11 +571,16 @@ bool HasPendingWork() {
            !g_pendingSpawn.empty() || coop::kerfur_reconcile::HasPendingRetire() || g_ghostSweepArmed;
 }
 
-void RunReconcile(bool joinSweep) {
+void RunReconcile() {
     // Order matters (preserved from the join one-shot tail this was extracted from):
     // twin-destroy + kerfur-retire BEFORE / around the position re-bind, the deferred destroy AFTER the bind
     // (so its target resolves), and b3 pos-correction LAST (it resolves the now-bound eid). Each step is
     // internally bounded to armed/pending work, so a steady-state pass with nothing pending is cheap.
+    // Take-3 order fix (2026-07-11): at the join quiescence edge this whole sequence now runs BEFORE the
+    // membership doom sweep (TickClientReconcile fire edge) so step 4's re-runs converge-CLAIM the
+    // loadObjects re-creates that raced their wire expression -- doom judges LAST. The one-shot L1 orphan
+    // census (the retired step 7 / joinSweep param, RULE 2) moved to the sweep tail in
+    // join_membership_sweep.cpp: it must reflect the doom removals, which happen after this sequence.
     SweepReconcileSaveTimeTwins();                               // 1: retire stale native chipPile@old (pile twin)
     bool ghostDrained = true;
     coop::save_identity_bind::BindUnboundReCreates(&ghostDrained);  // 2: re-bind unbound natives (identity layer; chip=pos, kerfur=key)
@@ -588,11 +592,10 @@ void RunReconcile(bool joinSweep) {
     if (ghostDrained) g_ghostSweepArmed = false;
     else UE_LOGI("quiescence_drain: GHOST-SWEEP kept armed (retire tail capped/valved this pass)");
     coop::kerfur_reconcile::SweepReconcileSaveTimeKerfurs();     // 3: retire stale kerfur off-prop (eid-keyed; the folded-in 3rd owner)
-    ApplyPendingSpawns();                                        // 4: spawn-before-quiescence -- re-run episode-deferred fresh spawns,
+    ApplyPendingSpawns();                                        // 4: spawn revalidation -- re-run episode-deferred/dead-row expressions,
                                                                  //    post-bind (exact key wins) + BEFORE the destroys (spawn+destroy nets 0)
     ApplyPendingDestroys();                                      // 5: destroy-before-load -- apply destroys that raced the bind, post-bind
     ApplyPendingPosCorrections();                               // 6: b3 -- snap window-moved piles
-    if (joinSweep) coop::pile_spawn_bind::LogCensus();           // 7: one-shot L1 orphan census (join only)
 }
 
 void OnTick() {
@@ -617,7 +620,7 @@ void OnTick() {
     UE_LOGI("quiescence_drain: steady-state reconcile (%s past quiescence)",
             postPurge ? "post-purge window -- re-binding GC-churned natives (variant-1)"
                       : "pending twin/b3/destroy/kerfur work -- armed after the join sweep");
-    RunReconcile(/*joinSweep=*/false);
+    RunReconcile();
 }
 
 void Reset() {

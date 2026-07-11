@@ -18,7 +18,9 @@
 #include "coop/creatures/kerfur_entity.h"  // K-5: IsKerfurActor (the client-mint gate)
 #include "coop/net/session.h"
 #include "coop/player/hand_item.h"  // hand-axis boundary: CollectHandAxisActors (SeedWalk_ skip; local hand + remote mirrors)
-#include "ue_wrap/engine.h"  // GetActorLocation (v86 Path 1c pile save-time map)
+#include "coop/props/prop_synth_key.h"  // KEY-UNIQUENESS authority: MintFreshKeyForDuplicate (host re-key of save-born clone keys)
+#include "ue_wrap/engine.h"  // GetActorLocation (v86 Path 1c pile save-time map + the re-key identity log)
+#include "ue_wrap/game_thread.h"  // IsGameThread (setKey is a ProcessEvent dispatch -- GT-gate the re-key)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
@@ -277,13 +279,13 @@ bool IsBoundMirrorNative(void* actor) {
 // Take it back out of the manager + let the deferred destructor FreeId our eid. (The
 // old g_actorToPropElementIdMutex never actually serialized the check-vs-commit -- it
 // released across AllocAndInstall -- so the double-check was always the real guard.)
-void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& cls) {
-    if (!actor) return;
+std::wstring MarkPropElement(void* actor, const std::wstring& key, const std::wstring& cls) {
+    if (!actor) return key;
     // Guard: never mint a LOCAL element on an actor already bound as a host-range save-native MIRROR
     // (save_identity_bind). Without this the post-load SeedWalk_ would re-localize every bound native (the
     // g_actorToPropElementId idempotency check below does not know mirrors). Now sourced from the Element
     // flag via IsBoundMirrorNative (sync-refactor 2026-06-27). No-op in normal play.
-    if (IsBoundMirrorNative(actor)) return;
+    if (IsBoundMirrorNative(actor)) return key;
     // Audit fix 2026-05-29: capture role INSIDE the same locked block as the
     // idempotency check. Reading role after the lock release would race
     // SetSession / role-change between the two reads -- a seed-time
@@ -307,17 +309,68 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
     // see). The post-alloc double-check below resolves the two-concurrent-mint TOCTOU (the old leaf
     // mutex never prevented that either -- it released between the check and the commit; the
     // double-check was always the real guard).
-    if (coop::element::Registry::Get().EidForActor(actor) != coop::element::kInvalidId) return;
+    // NOTE (verify-audit 2026-07-11): this early-out makes the KEY-UNIQUENESS detector below
+    // first-enrollment-only -- a ONE-WAY DOOR. Any future host-activation flow that lets keyed
+    // props enroll BEFORE the role reads Host must be audited against it (today's only path,
+    // DriveHostBootIfPending, sets the session before the boot census -- verified). The detector's
+    // read-vs-index TOCTOU (two CONCURRENT same-key enrolls both missing the incumbent) is bounded
+    // by the GT gate: a rekey is GT-only and the GT cannot race itself; off-GT keyed enrolls
+    // (never measured) trip the LOUD off-GT warn path instead.
+    if (coop::element::Registry::Get().EidForActor(actor) != coop::element::kInvalidId) return key;
     auto* s = LoadSession();
     const bool isHost = (s != nullptr && s->role() == coop::net::Role::Host);
-    if (isKerfur && s != nullptr && s->role() == coop::net::Role::Client) return;  // K-5: no client mint
+    if (isKerfur && s != nullptr && s->role() == coop::net::Role::Client) return key;  // K-5: no client mint
+    // KEY-UNIQUENESS AUTHORITY (2026-07-11, take-3 RCA -- research/findings/
+    // votv-join-window-placed-prop-RCA-2026-07-11.md). VOTV's own save data ships DUPLICATE
+    // interactable Keys: the live host save carried 85 trashBitsPile_C across FOUR keys
+    // (65+12+5+3 clone families -- batch-persisted piles sharing one GUID). Every identity
+    // layer (key index, exact-key converge, keyed churn RE-BIND, R2 key-diff) assumes Key
+    // uniqueness; a clone family funnels all its wire rows onto ONE actor, the leftovers die
+    // at loadObjects churn, and the join reconcile then re-expresses them INTO already-
+    // occupied positions (take-3: ~75 interpenetrating awake pairs = the 2.5 fps physics
+    // storm + scattered props). The HOST is the identity authority (MTA shape: the server
+    // owns element-ID uniqueness; clients never mint): a keyed actor enrolling while a
+    // DIFFERENT live actor already carries its Key is a true clone -> re-key it with a fresh
+    // unique Key BEFORE the element/index/broadcast see it (the game re-saves each actor's
+    // live Key, so the fix bakes into the host save and every transferred client world). A
+    // DEAD incumbent means this actor is a loadObjects re-create INHERITING its identity --
+    // FindLiveActorByKey's liveness check spares it structurally. Lives HERE, at the ONE
+    // enrollment owner (audit 2026-07-11: a census-walk-only detector missed the Init-POST
+    // late-load catch), so every enroll path is covered. CLIENT never re-keys (its world IS
+    // the host's transfer); SP (no session) is untouched. setKey is a ProcessEvent dispatch
+    // -> GT-gated; an off-GT duplicate enroll (never measured) trips LOUD instead.
+    std::wstring enrollKey = key;
+    if (isHost && !enrollKey.empty() && enrollKey != L"None") {
+        void* incumbent = FindLiveActorByKey(enrollKey);
+        if (incumbent && incumbent != actor) {
+            if (!ue_wrap::game_thread::IsGameThread()) {
+                UE_LOGW("prop_element_tracker: KEY-UNIQUENESS tripwire -- duplicate Key '%ls' on '%ls' "
+                        "enrolling OFF the game thread (actor=%p incumbent=%p); cannot setKey here -- "
+                        "enrolling under the duplicate", enrollKey.c_str(), cls.c_str(), actor, incumbent);
+            } else {
+                const ue_wrap::FVector dupLoc = ue_wrap::engine::GetActorLocation(actor);
+                const std::wstring fresh = coop::prop_synth_key::MintFreshKeyForDuplicate(actor);
+                if (!fresh.empty() && fresh != enrollKey) {
+                    UE_LOGW("prop_element_tracker: KEY-UNIQUENESS -- second live actor carried Key '%ls': "
+                            "'%ls' loc=(%.1f,%.1f,%.1f) re-keyed -> '%ls' (save-born clone family; host key "
+                            "authority -- the new key persists via the game's own save)",
+                            enrollKey.c_str(), cls.c_str(), dupLoc.X, dupLoc.Y, dupLoc.Z, fresh.c_str());
+                    enrollKey = fresh;
+                } else {
+                    UE_LOGW("prop_element_tracker: KEY-UNIQUENESS -- re-key FAILED for duplicate '%ls' "
+                            "key='%ls' loc=(%.1f,%.1f,%.1f) -- enrolling under the duplicate (pre-fix behavior)",
+                            cls.c_str(), enrollKey.c_str(), dupLoc.X, dupLoc.Y, dupLoc.Z);
+                }
+            }
+        }
+    }
     auto el = std::make_unique<coop::element::Prop>();
     auto toStr = [](const std::wstring& w) {
         std::string s; s.reserve(w.size());
         for (wchar_t c : w) s.push_back(static_cast<char>(c & 0xFF));
         return s;
     };
-    if (!key.empty()) el->SetName(toStr(key));
+    if (!enrollKey.empty()) el->SetName(toStr(enrollKey));
     if (!cls.empty()) el->SetTypeName(toStr(cls));
     // Capture the GUObjectArray index now, while `actor` is live (Init POST /
     // discovery), so the late-joiner snapshot can later validate this pointer
@@ -335,8 +388,8 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
         UE_LOGW("prop_element_tracker: PropMirrors().AllocAndInstall returned kInvalidId "
                 "for actor=%p key='%ls' -- Prop Element not registered "
                 "(Registry exhausted / lifetime bug?)",
-                actor, key.c_str());
-        return;
+                actor, enrollKey.c_str());
+        return enrollKey;
     }
     // Re-check after the alloc window. AllocAndInstall wrote the unified Registry reverse
     // (actor -> eid) at id-assignment. If a concurrent MarkPropElement also minted this actor
@@ -349,12 +402,13 @@ void MarkPropElement(void* actor, const std::wstring& key, const std::wstring& c
     if (coop::element::Registry::Get().EidForActor(actor) != eid) {
         if (auto taken = PropMirrors().Take(eid))
             coop::element::ElementDeleter::Get().Enqueue(std::move(taken));
-        return;
+        return enrollKey;
     }
     // Index key -> live actor for the O(1) wire-key de-dupe used by the connect re-snapshot
     // (remote_prop::OnSpawn). Done AFTER the commit + only on the winning path (the lost-race
     // path above returns without indexing -> the key index + the registry reverse stay consistent).
-    IndexKeyForActor_(actor, key, internalIdx);
+    IndexKeyForActor_(actor, enrollKey, internalIdx);
+    return enrollKey;
 }
 
 coop::element::ElementId GetPropElementIdForActor(void* actor) {

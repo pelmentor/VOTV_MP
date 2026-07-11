@@ -11,17 +11,22 @@
 //                                                       distinct module the sequence CALLS, not absorbed)
 //   3. kerfur_reconcile::SweepReconcileSaveTimeKerfurs() -- retire a stale kerfur off-prop (kerfur retire
 //                                                       MECHANISM; another distinct module the sequence CALLS)
-//   4. ApplyPendingSpawns()                          -- re-run a fresh-mirror spawn deferred out of the
-//                                                       world-load episode (spawn-before-quiescence), AFTER the
-//                                                       rebind (a late save twin resolves by exact key) and
-//                                                       BEFORE the destroys (a spawn+destroy pair nets to zero)
+//   4. ApplyPendingSpawns()                          -- spawn revalidation: re-run every episode-deferred /
+//                                                       dead-row wire expression, AFTER the rebind (a late save
+//                                                       twin resolves by exact key) and BEFORE the destroys
+//                                                       (a spawn+destroy pair nets to zero)
 //   5. ApplyPendingDestroys()                        -- apply a destroy that raced ahead of the bind
 //                                                       (destroy-before-load), AFTER the rebind so it resolves
 //   6. ApplyPendingPosCorrections()                  -- snap a window-moved save-pile to the host pos (b3)
-//   7. (joinSweep only) LogCensus()                  -- the one-shot L1 orphan census
+//   (The one-shot L1 orphan census -- the retired step 7 / joinSweep param, RULE 2 -- lives at the doom-sweep
+//   tail in join_membership_sweep.cpp: it must reflect the doom removals, which happen AFTER this sequence.)
 //
 // TWO TRIGGERS, both at/after quiescence:
-//   - the join-window quiescence sweep (join_membership_sweep::RunDivergenceSweep_, joinSweep=true), and
+//   - the join-window quiescence FIRE EDGE (join_membership_sweep::TickClientReconcile), which since the
+//     take-3 order fix (2026-07-11) runs this sequence BEFORE RunDivergenceSweep_'s membership doom -- the
+//     revalidated spawns converge-CLAIM their loadObjects re-creates while claim tracking is still armed,
+//     so the sweep spares them (the take-2 order ran it a tick after the doom: 232 doomed + 230 re-expressed
+//     into occupied positions = the 2.5 fps physics storm). Doom judges LAST.
 //   - a steady-state throttled tick (OnTick) -- fires whenever there is armed-but-unconsumed work past
 //     load-tail quiescence (the D1 structural fix: a save-pile grabbed/moved AFTER the join one-shot, or a
 //     kerfur turned on when no pile bracket armed, would otherwise leave a pending queue nothing drains).
@@ -52,12 +57,12 @@
 
 namespace coop::element::quiescence_drain {
 
-// The ordered reconcile sequence (see the file header for the 6 steps). `joinSweep`=true at the join-window
-// quiescence sweep (also logs the one-shot orphan census); false on a steady-state pass. Game-thread only.
-void RunReconcile(bool joinSweep);
+// The ordered reconcile sequence (see the file header for the 6 steps). Called at the join-window quiescence
+// fire edge (BEFORE the doom sweep -- the take-3 order fix) and by the steady-state OnTick. Game-thread only.
+void RunReconcile();
 
 // Steady-state trigger. Call every client reconcile tick. Past load-tail quiescence, when there is pending
-// reconcile work (HasPendingWork) and the debounce interval has elapsed, runs RunReconcile(false). Cheap when
+// reconcile work (HasPendingWork) and the debounce interval has elapsed, runs RunReconcile(). Cheap when
 // idle: a pending-work bool poll + a time compare, NO GUObjectArray walk unless there is actually work (the
 // perf rule). Game-thread only.
 void OnTick();

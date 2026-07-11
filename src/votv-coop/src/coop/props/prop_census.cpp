@@ -150,6 +150,9 @@ SeedCounts SeedWalk_(std::vector<void*>* outNewActors) {
     // g_actorToPropElementId reverse map, the eid leaks for the session
     // lifetime because UnmarkKnownKeyedProp already ran for that actor and
     // won't fire again.
+    // (KEY-UNIQUENESS AUTHORITY note, 2026-07-11 take-3: the duplicate-Key re-key lives inside
+    // MarkPropElement -- the ONE enrollment owner -- so this walk AND the Init-POST late-load
+    // catch AND every other enroll path are all covered. See prop_element_tracker.cpp.)
     for (void* obj : live) {
         if (!R::IsLive(obj)) continue;
         const std::wstring cls = R::ClassNameOf(obj);

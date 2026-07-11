@@ -43,4 +43,18 @@ namespace coop::prop_synth_key {
 std::wstring EnsureKeyForBroadcast(void* self, const std::wstring& currentKey,
                                    bool mintForAprop = false);
 
+// KEY-UNIQUENESS AUTHORITY mint (2026-07-11, take-3 RCA): force-mint a fresh
+// unique Key onto `self` REGARDLESS of its current Key -- used by the host
+// census when a second live actor is found carrying an already-indexed Key
+// (VOTV's own save data ships clone families sharing one GUID; the identity
+// layer assumes uniqueness). Format `rk_<64-bit-random-hex>` (19 chars, fits
+// the 31-char wire key field; random -- unlike the cs_ counter format -- so a
+// key PERSISTED into the save can never collide with a future boot's mints).
+// Resolves setKey on the actual class first (chip/clump/trashBits declare
+// their own), falling back to the Aprop_C base for prop descendants
+// (FindFunction is exact-owner, [[lesson-findfunction-exact-owner-no-superstruct-climb]]).
+// Returns the CONFIRMED re-read key on success, L"" on any failure (caller
+// keeps the old key and logs). Game thread only.
+std::wstring MintFreshKeyForDuplicate(void* self);
+
 }  // namespace coop::prop_synth_key

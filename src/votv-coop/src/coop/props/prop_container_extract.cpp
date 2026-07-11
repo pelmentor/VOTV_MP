@@ -141,7 +141,13 @@ void GrabObserver_PropInventory_TakeObj_POST(void* self, void* function, void* p
     // Init POST returned early (g_takeObjInFlight) so MarkPropElement wasn't
     // called from that path. Mint the Prop Element here so this container-
     // extracted actor has a Registry shadow (audit fix 2026-05-28).
-    PT::MarkPropElement(spawnedActor, keyStr, cls);
+    // KEY-UNIQUENESS (2026-07-11): Mark may RE-KEY a duplicate (host key
+    // authority) -- rebuild p.key (filled above) from the enrolled key.
+    keyStr = PT::MarkPropElement(spawnedActor, keyStr, cls);
+    p.key.len = 0;
+    for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
+        p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
+    }
     {
         const coop::element::ElementId eid = PT::GetPropElementIdForActor(spawnedActor);
         p.elementId = (eid == coop::element::kInvalidId) ? 0u : eid;

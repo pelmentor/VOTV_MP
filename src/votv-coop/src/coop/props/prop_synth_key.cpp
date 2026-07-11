@@ -15,9 +15,11 @@
 #include "ue_wrap/sdk_profile.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <random>
 #include <unordered_map>
 
 namespace coop::prop_synth_key {
@@ -86,6 +88,62 @@ std::wstring EnsureKeyForBroadcast(void* self, const std::wstring& currentKey,
             buf, self, R::ClassNameOf(self).c_str());
     // Re-read via GetInteractableKey to confirm the field actually changed.
     return ue_wrap::prop::GetInteractableKeyString(self);
+}
+
+std::wstring MintFreshKeyForDuplicate(void* self) {
+    if (!self) return L"";
+    void* cls = R::ClassOf(self);
+    void* setKeyFn = ResolveSetKeyFn(cls);
+    // FindFunction is exact-owner (no SuperStruct climb): an Aprop_C descendant
+    // (prop_C rocks etc.) declares setKey on the BASE -- resolve there when the
+    // subclass misses. The per-class cache absorbs both resolutions.
+    if (!setKeyFn && ue_wrap::prop::IsDescendantOfProp(self)) {
+        if (void* base = R::FindClass(P::name::PropClass))
+            setKeyFn = ResolveSetKeyFn(base);
+    }
+    if (!setKeyFn) {
+        UE_LOGW("synth-key: rekey -- setKey UFunction not found on '%ls' (nor Aprop_C base) -- cannot re-key duplicate",
+                R::ClassNameOf(self).c_str());
+        return L"";
+    }
+    // Random (not counter-based like cs_): a re-key PERSISTS into the game's save,
+    // so it must stay unique across boots -- a counter restarting at 0 could
+    // re-mint a key already baked into an older record. 64 random bits is
+    // collision-free at this project's key volumes. GT-only caller (census walk)
+    // but keep the RNG mutex-guarded for the cost of nothing.
+    static std::mutex sRngMutex;
+    uint64_t r;
+    {
+        std::lock_guard<std::mutex> lk(sRngMutex);
+        static std::mt19937_64 sRng([] {
+            std::random_device rd;
+            return (static_cast<uint64_t>(rd()) << 32) ^ static_cast<uint64_t>(rd()) ^
+                   static_cast<uint64_t>(
+                       std::chrono::steady_clock::now().time_since_epoch().count());
+        }());
+        r = sRng();
+    }
+    wchar_t buf[64];
+    swprintf(buf, 64, L"rk_%016llx", static_cast<unsigned long long>(r));
+    const R::FName keyFName = ue_wrap::fname_utils::StringToFName(buf);
+    if (keyFName.ComparisonIndex == 0) {
+        UE_LOGW("synth-key: rekey StringToFName('%ls') -> NAME_None; cannot re-key", buf);
+        return L"";
+    }
+    ue_wrap::ParamFrame sk(setKeyFn);
+    if (!sk.SetRaw(L"Key", &keyFName, sizeof(keyFName))) {
+        UE_LOGW("synth-key: rekey setKey 'Key' param not found on '%ls'",
+                R::ClassNameOf(self).c_str());
+        return L"";
+    }
+    if (!ue_wrap::Call(self, sk)) {
+        UE_LOGW("synth-key: rekey setKey ProcessEvent call failed on '%ls'",
+                R::ClassNameOf(self).c_str());
+        return L"";
+    }
+    // Confirm by re-read: return the actual live key (L"" if the write did not take).
+    const std::wstring got = ue_wrap::prop::GetInteractableKeyString(self);
+    return (got == buf) ? got : L"";
 }
 
 }  // namespace coop::prop_synth_key

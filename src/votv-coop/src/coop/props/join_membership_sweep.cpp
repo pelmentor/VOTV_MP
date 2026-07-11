@@ -290,16 +290,16 @@ static void RunDivergenceSweep_(void* localPlayer) {
         doomedClass.push_back(acls);
         ++doomedByClass[acls];
     }
-    // TRIPWIRE (take 2, 2026-07-11): rows still in deadKeyedRows = wire identities whose actor churn-died
-    // and NO same-key recreate materialized (the prop was not a WORLD prop in the transferred save --
-    // e.g. hotbar'd before save-capture and placed after). The spawn-revalidation drain (quiescence_drain
-    // step 4, runs right after this sweep) re-expresses them from the captured in-episode payloads. Named
-    // here per-key so a log read localizes the residual instantly (the take-2 invisible rock left ZERO
-    // trace before this line existed).
+    // TRIPWIRE (take 2, 2026-07-11; tense updated take 3): rows still in deadKeyedRows = wire identities
+    // whose actor churn-died, NO same-key recreate materialized, AND the pre-sweep spawn-revalidation
+    // drain (which since the take-3 order fix runs BEFORE this sweep) could not re-express them either
+    // (no captured in-episode payload, or the re-express failed). Named per-key so a log read localizes
+    // the residual instantly (the take-2 invisible rock left ZERO trace before this line existed).
     for (const auto& [dkey, deid] : deadKeyedRows) {
-        UE_LOGW("join_membership_sweep: dead keyed mirror row SURVIVED the re-bind pass -- eid=%u key='%s' "
-                "has no churn re-create (not a world prop in the transferred save); the spawn-revalidation "
-                "drain re-expresses it", static_cast<unsigned>(deid), dkey.c_str());
+        UE_LOGW("join_membership_sweep: dead keyed mirror row SURVIVED the re-bind pass AND the pre-sweep "
+                "spawn-revalidation drain -- eid=%u key='%s' has no churn re-create and no re-expressed "
+                "payload; this identity stays invisible here until the host re-expresses it",
+                static_cast<unsigned>(deid), dkey.c_str());
     }
     if (!keylessSkippedByClass.empty()) {
         size_t skippedTotal = 0;
@@ -386,14 +386,11 @@ static void RunDivergenceSweep_(void* localPlayer) {
                 "actor(s) (>50%%); the host snapshot is INCOMPLETE (partial/racing bracket), not a "
                 "divergence. Keeping the loaded world (%d claimed stay converged).",
                 doomed.size(), inClass, claimedCount);
-        // (sync-refactor 2026-06-27) The membership DOOM-destroy is aborted (incomplete snapshot), but the
-        // IDENTITY reconcile must STILL run -- it is per-eid, armed-bounded (re-bind/retire by stable
-        // position/eid), NEVER a mass-destroy, so it is safe even on an incomplete world. Skipping it here
-        // was why variant-1 / twin-retire / b3 never ran on a save-transfer join with a mass-purge (the
-        // 15:25 verify: valve aborted -> reconcile skipped -> purge-churned natives left unbound). Run it
-        // (The deferred twins/corrections/destroys SURVIVE this bracket now -- they drain at the steady-state
-        // tick; only the spawn-time index is reset here. Anti-smear split 2026-06-30.)
-        coop::element::quiescence_drain::RunReconcile(/*joinSweep=*/false);
+        // (take-3 order fix 2026-07-11) The IDENTITY reconcile already ran at the quiescence fire edge,
+        // BEFORE this sweep (TickClientReconcile calls RunReconcile pre-adjudication) -- the 2026-06-27
+        // "run it on abort too" call that lived here is gone with it (RULE 2: one call, one order).
+        // (The deferred twins/corrections/destroys SURVIVE this bracket -- late arms drain at the
+        // steady-state tick; only the spawn-time index is reset here. Anti-smear split 2026-06-30.)
         g_claimedActors.clear();
         g_claimTrackingActive = false;
         coop::pile_spawn_bind::Reset();
@@ -480,22 +477,19 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // seeded 8 orphans. So re-enumerate live native chipPiles with FRESH indices: the burst's 1cm twin-
     // destroy already removed every MATCHED native, so the live survivors ARE the orphan set directly.
     // One GUObjectArray walk, once per join (cold path), pointer-compare class filter before any read.
-    // v86 Path 1c: retry the save-time twin-destroys that MISSED at the world-ready burst (the moved
-    // pile's native@old had not async-loaded yet). We are now post-quiescence (this whole sweep is gated
-    // by TickClientReconcile on kSweepQuiesceScans stable scans) + past the >50%% valve above, so the late
-    // natives are present (the census below SEES them). Keyed by save-time position (not blind proximity),
-    // with its own >50% abort-valve. Runs BEFORE the census so the census reflects the removals.
-    // The join-window reconcile (twin-retire -> re-bind -> kerfur-retire -> deferred-destroy -> b3 pos-correction
-    // -> census) is the ONE order owner coop::element::quiescence_drain::RunReconcile, driven HERE at the join-window
-    // quiescence sweep AND by the steady-state coop::element::quiescence_drain::OnTick (the D1 structural fix: the
-    // mechanisms were join-window-one-shot, so a save-pile grabbed/moved AFTER this sweep armed a twin nothing
-    // consumed = the 15:01:49 ghost). joinSweep=true logs the one-shot orphan census. See coop/element/quiescence_drain.h.
-    coop::element::quiescence_drain::RunReconcile(/*joinSweep=*/true);
-    // NOTE: the kerfur off->active retire sweep (scope A) IS driven here now -- it is step 3 of RunReconcile
-    // (anti-smear 2026-06-30; it used to be a separate driver in kerfur_convert::PollKerfurConversions = a 3rd
-    // parallel order owner, now removed). The bracket-not-armed case (SnapshotBegin-lost flake leaves
-    // g_sweepPending false) is covered by quiescence_drain::OnTick, which runs every client tick before the
-    // g_sweepPending gate and ORs kerfur_reconcile::HasPendingRetire into its HasPendingWork. [[feedback-one-owner-order-axis]]
+    // The join-window reconcile (twin-retire -> re-bind -> kerfur-retire -> spawn-revalidation ->
+    // deferred-destroy -> b3 pos-correction) is the ONE order owner coop::element::quiescence_drain::
+    // RunReconcile -- since the take-3 order fix (2026-07-11) it runs at the quiescence FIRE EDGE in
+    // TickClientReconcile, BEFORE this sweep, so the revalidated spawns converge-CLAIM their loadObjects
+    // re-creates before membership is adjudicated (the shipped take-2 order ran it after the doom: 232
+    // doomed + 230 re-expressed into occupied positions = the 2.5 fps physics storm). Only the one-shot
+    // L1 orphan census stays HERE, at the sweep tail -- it must reflect the doom removals above.
+    coop::pile_spawn_bind::LogCensus();
+    // NOTE: the kerfur off->active retire sweep (scope A) is step 3 of RunReconcile (anti-smear
+    // 2026-06-30; its separate driver in kerfur_convert::PollKerfurConversions was removed). The
+    // bracket-not-armed case (SnapshotBegin-lost flake leaves g_sweepPending false) is covered by
+    // quiescence_drain::OnTick, which runs every client tick before the g_sweepPending gate and ORs
+    // kerfur_reconcile::HasPendingRetire into its HasPendingWork. [[feedback-one-owner-order-axis]]
 
     g_claimedActors.clear();
     g_claimTrackingActive = false;
@@ -680,6 +674,16 @@ void TickClientReconcile() {
     // episode can never outlive the load. See coop/props/world_load_episode.h.
     coop::world_load_episode::NotifyQuiesced();
     coop::save_identity_bind::ForceSaveChurnForTest();  // [dev] force_save_churn: synthetic unbind so variant-1 runs N>0 (verify probe)
+    // ORDER FIX (take-3, 2026-07-11): the deferred reconcile -- above all its spawn-revalidation
+    // step (ApplyPendingSpawns) -- runs BEFORE the membership doom adjudication. The episode just
+    // closed (NotifyQuiesced above), so the re-run OnSpawns execute fully; claim tracking is still
+    // ARMED, so a re-run that converge-binds a loadObjects re-create (the wire expression that
+    // raced the recreate now finds it by exact key) CLAIMS it and the sweep spares it. The shipped
+    // take-2 order ran this a tick AFTER the doom: the sweep destroyed the unclaimed racers, the
+    // drain then fresh-spawned awake replacements INTO the settled world (232 doomed + 230
+    // re-expressed, ~75 interpenetrating pairs at the clone-key sites = the 2.5 fps physics storm
+    // + scattered props). One order owner, doom judges LAST. [[feedback-one-owner-order-axis]]
+    coop::element::quiescence_drain::RunReconcile();
     RunDivergenceSweep_(localPlayer);
     // Phase 1 step 1A probe: load tail has quiesced -> emit the keyless-spawn coverage verdict (read-only).
     coop::dev::spawn_order_probe::EmitVerdictAtQuiescence();

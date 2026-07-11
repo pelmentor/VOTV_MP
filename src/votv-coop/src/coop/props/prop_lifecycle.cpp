@@ -237,7 +237,10 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     // the Init POST broadcast site so it has the resolved Key (m_name) +
     // class (m_typeName). Idempotent w.r.t. the seed-scan creation path
     // (early-out if g_actorToPropElementId already has this actor).
-    PT::MarkPropElement(self, keyStr, cls);
+    // KEY-UNIQUENESS (2026-07-11): Mark may RE-KEY a duplicate (host key
+    // authority) -- the payload below must carry the enrolled key, not the
+    // pre-rekey one.
+    keyStr = PT::MarkPropElement(self, keyStr, cls);
     p.key.len = 0;
     for (size_t i = 0; i < keyStr.size() && i < 31; ++i) {
         p.key.data[p.key.len++] = static_cast<char>(keyStr[i]);
