@@ -801,15 +801,29 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // (via the BP-callable setKey UFunction) skips that overwrite branch and
     // the prop ends up with our wire Key + registered in
     // mainGamemode.keyObj_key/obj cross-peer.
-    // Audit Fix 4 (2026-05-27): resolve setKey ON THE ACTUAL SPAWNED CLASS,
-    // not the cached Aprop_C.setKey UFunction*. ChipPile/clump/trashBits
-    // have their OWN setKey UFunctions on different UClasses with possibly
-    // different parameter layouts (per UE4 ProcessEvent, dispatching a
-    // foreign-class UFunction* on an actor of a different class can
-    // silently corrupt memory or crash). Per-class FindFunction is one
-    // GUObjectArray walk per CLASS (not per actor); the result is cached
-    // here ad-hoc since we only have ~10 keyed-interactable leaf classes.
+    // Audit Fix 4 (2026-05-27): resolve setKey ON THE ACTUAL SPAWNED CLASS
+    // first -- ChipPile/clump/trashBits have their OWN setKey UFunctions on
+    // different UClasses with possibly different parameter layouts (per UE4
+    // ProcessEvent, dispatching a foreign-class UFunction* on an actor of a
+    // different class can silently corrupt memory or crash).
+    // 2026-07-11 crowbar-dupe RCA: FindFunction is EXACT-OWNER (no SuperStruct
+    // climb, [[lesson-findfunction-exact-owner-no-superstruct-climb]]), so the
+    // leaf-only resolve MISSED every Aprop_C subclass that does not redeclare
+    // setKey (prop_crowbar_C): the mirror spawned keyless -> Init minted a
+    // NewGuid -> the actor's FIELD key diverged from its wire binding -> the
+    // client's later pickup-destroy broadcast carried the minted key -> the
+    // host found no match -> its authoritative copy survived = the host-side
+    // dupe. Fall back to the base-resolved g_propSetKeyFn for Aprop_C
+    // descendants (its declaring class; the fuzzy-rekey path already calls it
+    // on leaf instances -- proven safe live at 11:54:45 in the RCA logs). See
+    // research/findings/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md.
     void* setKeyFn = R::FindFunction(actorClass, P::name::PropSetKeyFn);
+    if (!setKeyFn && ue_wrap::prop::IsClassDescendantOfProp(actorClass)) {
+        setKeyFn = g_propSetKeyFn;
+        if (setKeyFn)
+            UE_LOGI("remote_prop::OnSpawn: setKey resolved on the Aprop_C base for leaf '%ls'",
+                    classW.c_str());
+    }
     if (!setKeyFn) {
         UE_LOGW("remote_prop::OnSpawn: setKey UFunction not found on class '%ls' -- spawn will use auto-generated Key",
                 classW.c_str());

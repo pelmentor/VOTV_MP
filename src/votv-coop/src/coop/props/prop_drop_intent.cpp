@@ -137,8 +137,19 @@ void* HostSpawnPlacedProp(const coop::net::PropDropIntentPayload& p, const std::
     }
     // setKey BEFORE Finish -- Init() (inside FinishSpawningActor's UCS) mints a NewGuid Key unless one
     // is already set; writing our wire Key first keeps the cross-peer identity. Resolve setKey on the
-    // ACTUAL spawned class (per-class UFunction; a foreign-class setKey* can corrupt/crash).
-    void* setKeyFn = R::FindFunction(clsObj, P::name::PropSetKeyFn);
+    // Aprop_C BASE (its declaring class), cached -- exactly like remote_prop_spawn::ResolveSpawnFns:
+    // FindFunction is EXACT-OWNER, no SuperStruct climb ([[lesson-findfunction-exact-owner-no-
+    // superstruct-climb]]), so the previous leaf-class resolve missed every subclass that does not
+    // redeclare setKey (live 2026-07-11: prop_crowbar_C -> "setKey UFunction not found" -> the host
+    // spawn auto-minted a key != the client's local copy -> identity split -> host-side crowbar dupe).
+    // Every wire class reaching here is Aprop_C lineage (the intent author gates IsDescendantOfProp),
+    // so the base's setKey is a valid member call on the spawned actor.
+    static void* s_setKeyFn = nullptr;
+    if (!s_setKeyFn) {
+        if (void* propBase = R::FindClass(P::name::PropClass))
+            s_setKeyFn = R::FindFunction(propBase, P::name::PropSetKeyFn);
+    }
+    void* setKeyFn = s_setKeyFn;
     if (setKeyFn) {
         const R::FName kf = ue_wrap::fname_utils::StringToFName(key);
         if (kf.ComparisonIndex != 0) {
