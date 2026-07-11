@@ -11,10 +11,14 @@
 //                                                       distinct module the sequence CALLS, not absorbed)
 //   3. kerfur_reconcile::SweepReconcileSaveTimeKerfurs() -- retire a stale kerfur off-prop (kerfur retire
 //                                                       MECHANISM; another distinct module the sequence CALLS)
-//   4. ApplyPendingDestroys()                        -- apply a destroy that raced ahead of the bind
+//   4. ApplyPendingSpawns()                          -- re-run a fresh-mirror spawn deferred out of the
+//                                                       world-load episode (spawn-before-quiescence), AFTER the
+//                                                       rebind (a late save twin resolves by exact key) and
+//                                                       BEFORE the destroys (a spawn+destroy pair nets to zero)
+//   5. ApplyPendingDestroys()                        -- apply a destroy that raced ahead of the bind
 //                                                       (destroy-before-load), AFTER the rebind so it resolves
-//   5. ApplyPendingPosCorrections()                  -- snap a window-moved save-pile to the host pos (b3)
-//   6. (joinSweep only) LogCensus()                  -- the one-shot L1 orphan census
+//   6. ApplyPendingPosCorrections()                  -- snap a window-moved save-pile to the host pos (b3)
+//   7. (joinSweep only) LogCensus()                  -- the one-shot L1 orphan census
 //
 // TWO TRIGGERS, both at/after quiescence:
 //   - the join-window quiescence sweep (join_membership_sweep::RunDivergenceSweep_, joinSweep=true), and
@@ -101,6 +105,18 @@ void CancelPendingSaveTimeTwin(coop::element::ElementId eid);
 // it (-> the prop later loads unopposed = a dup, the 5-vs-7 race). The sequence re-applies it AFTER the bind
 // via remote_prop::TryApplyDestroy, so destroy delivery becomes order-independent.
 void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload);
+
+// SPAWN-BEFORE-QUIESCENCE (2026-07-11): a PropSpawn whose target does NOT resolve to any local actor,
+// arriving while THIS client is inside its own world-load episode. Fresh-spawning the mirror NOW hands it
+// to loadObjects' keyed churn (measured: host-placed cblocks spawned 12:20:37, churn-destroyed 12:20:39,
+// eids unbound for the session = permanently invisible props). remote_prop_spawn::OnSpawn ARMS the payload
+// here instead of spawning; the sequence re-runs the full OnSpawn at the quiescence drain (exact-key
+// resolve first -- a late-loading save twin wins -- else a fresh spawn into the settled world). Dedup by
+// eid (key bytes when eid==0), latest payload wins. `deferKerfur` is the caller's OnSpawn flag, replayed
+// VERBATIM at the drain (a kerfur adoption/convert one-shot passes false; replaying the default true
+// would re-route it into the K-6 adopter -- the OBS-2/ROOT-1 arg-slot mis-adopt class). The destroy
+// sibling is ArmPendingDestroy. [[feedback-snapshot-before-state-ready]]
+void ArmPendingSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot, bool deferKerfur);
 
 // True iff there is armed-but-unconsumed reconcile work (a pending save-time twin OR a pending b3 position
 // correction OR a pending destroy OR a pending kerfur retire). OnTick polls this so it only walks when there

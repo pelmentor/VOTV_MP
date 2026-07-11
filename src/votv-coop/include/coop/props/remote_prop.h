@@ -100,7 +100,14 @@ void RegisterPropMirror(coop::element::ElementId eid,
 // Snapshot-walk reached ONLY on the rare grab edge AFTER the forward map missed, never a hot path.
 // Game-thread only (Snapshot takes the MirrorManager lock). Used by trash_collect_sync's pile-grab
 // observer to resolve a shared pile eid from the actor under the crosshair.
-coop::element::ElementId ResolveMirrorEidByActor(void* actor);
+//
+// `wireMirrorOnly` (2026-07-11, the identity-steal gate): MirrorManager<Prop> is the ONE manager that
+// MIXES AllocAndInstall'd LOCAL elements (IsMirror()==false -- every keyed interactable enters at the
+// census walk) with Install'd WIRE mirrors (IsMirror()==true). The default scan matches EITHER kind
+// (the historical behavior every existing caller relies on); pass true to match ONLY a wire-mirror row
+// -- the caller that must distinguish "an established cross-peer identity" from "a save-loaded local
+// awaiting adjudication" (remote_prop_spawn's fuzzy steal gate; audit CRITICAL 2026-07-11).
+coop::element::ElementId ResolveMirrorEidByActor(void* actor, bool wireMirrorOnly = false);
 
 // Extract null-terminated wstring from a WireKey. Shared utility used
 // by both the drive subsystem (FindSlotByKey, OnRelease, OnDestroy)

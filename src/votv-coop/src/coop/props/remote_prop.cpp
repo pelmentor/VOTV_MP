@@ -745,12 +745,18 @@ void RegisterPropMirror(coop::element::ElementId eid,
 // forward map missed. Snapshot copies the raw pointers under the manager lock, then we iterate
 // lock-free (a concurrently-dropped element would just fail the GetActor compare -- never a UAF here
 // since we only read GetActor/GetId, not the engine actor).
-coop::element::ElementId ResolveMirrorEidByActor(void* actor) {
+coop::element::ElementId ResolveMirrorEidByActor(void* actor, bool wireMirrorOnly) {
     if (!actor) return coop::element::kInvalidId;
     std::vector<coop::element::Prop*> snap;
     PropMirrors().Snapshot(snap);
     for (coop::element::Prop* p : snap) {
-        if (p && p->GetActor() == actor) return p->GetId();
+        if (!p || p->GetActor() != actor) continue;
+        // wireMirrorOnly: skip the AllocAndInstall'd LOCAL rows (IsMirror()==false) that share this
+        // manager -- an actor can carry BOTH a census-walk local row and a RegisterPropMirror wire row,
+        // and the unordered iteration order made the un-filtered scan nondeterministic between them
+        // (audit CRITICAL 2026-07-11). IsMirror() is GT-disciplined; this fn is GT-only by contract.
+        if (wireMirrorOnly && !p->IsMirror()) continue;
+        return p->GetId();
     }
     return coop::element::kInvalidId;
 }

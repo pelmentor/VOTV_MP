@@ -106,6 +106,24 @@ struct PendingDestroy {
 std::vector<PendingDestroy> g_pendingDestroy;
 constexpr int kMaxDeferApplies = 8;  // ~2s at the 250ms reconcile debounce -- grace for a late bind, then drop
 
+// SPAWN-BEFORE-QUIESCENCE (2026-07-11): fresh-mirror PropSpawns deferred out of the client world-load
+// episode (loadObjects' keyed churn destroys a mirror spawned mid-episode -- the invisible host-placed-
+// during-join props). Applied by re-running the FULL remote_prop_spawn::OnSpawn at the drain: exact-key
+// resolve first (a save twin that finished loading wins), fresh-spawn into the settled world otherwise.
+// One apply per entry, no retry counter: OnSpawn is terminal (it spawns, resolves, or logs a structural
+// drop); an apply that re-enters a re-armed episode (world reload mid-drain) re-arms here idempotently.
+// The queue is the post-save delta the host created during THIS join window -- a handful; the cap is a
+// runaway backstop, dropped LOUD (a dropped entry is a permanently-invisible prop, the exact bug class).
+struct PendingSpawn {
+    coop::net::PropSpawnPayload payload;
+    int  senderSlot = 0;
+    bool deferKerfur = true;  // the caller's OnSpawn flag, replayed verbatim (audit HIGH 2026-07-11).
+                              // fromConvert is NOT stored: the arm gate excludes it structurally
+                              // (a convert's spawn stays synchronous inside OnConvert's swap).
+};
+std::vector<PendingSpawn> g_pendingSpawn;
+constexpr size_t kMaxPendingSpawns = 512;
+
 // ---- Trigger timing (the steady-state reconcile) ----
 
 // Debounce for the steady-state reconcile: when work is pending we want to retire the stale twin promptly
@@ -292,6 +310,23 @@ void ApplyPendingDestroys() {
     }
 }
 
+void ApplyPendingSpawns() {
+    if (g_pendingSpawn.empty()) return;
+    // Swap-out before applying: OnSpawn re-ARMS into g_pendingSpawn if a world reload re-opened the episode
+    // mid-drain -- appending to the vector we iterate would be UB. The swapped-out batch applies; re-arms
+    // land in the (now empty) member and wait for the next drain.
+    std::vector<PendingSpawn> batch;
+    batch.swap(g_pendingSpawn);
+    void* localPlayer = coop::players::Registry::Get().Local();
+    UE_LOGI("[SPAWN-DEFER] CLIENT applying %zu deferred spawn(s) at the quiescence drain -- the load-tail "
+            "churn is over; exact-key resolve first, fresh-spawn into the settled world otherwise",
+            batch.size());
+    for (const PendingSpawn& p : batch) {
+        coop::remote_prop_spawn::OnSpawn(p.payload, p.senderSlot, localPlayer,
+                                         /*fromConvert=*/false, p.deferKerfur);
+    }
+}
+
 }  // namespace
 
 // ---- Queue ARM entry points (event handlers CAPTURE here; they never apply) ----
@@ -437,6 +472,35 @@ void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload) {
             coop::remote_prop::KeyToWString(payload.key).c_str(), payload.elementId);
 }
 
+void ArmPendingSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot, bool deferKerfur) {
+    // Dedup: a re-express of the same prop (host re-bracket / re-send) supersedes the queued payload --
+    // latest transform wins. Match by eid; a keyed legacy payload with eid==0 matches by key bytes.
+    for (PendingSpawn& p : g_pendingSpawn) {
+        const bool same = (payload.elementId != 0)
+                              ? (p.payload.elementId == payload.elementId)
+                              : (std::memcmp(&p.payload.key, &payload.key, sizeof(payload.key)) == 0);
+        if (same) {
+            p.payload     = payload;
+            p.senderSlot  = senderSlot;
+            p.deferKerfur = deferKerfur;
+            return;
+        }
+    }
+    if (g_pendingSpawn.size() >= kMaxPendingSpawns) {
+        UE_LOGW("[SPAWN-DEFER] CLIENT pending-spawn cap %zu hit -- dropping OLDEST eid=%u to admit eid=%u "
+                "(a dropped entry is a permanently-invisible prop; a >%zu post-save delta means something "
+                "upstream is misrouting spawns into the episode window)",
+                kMaxPendingSpawns, g_pendingSpawn.front().payload.elementId, payload.elementId,
+                kMaxPendingSpawns);
+        g_pendingSpawn.erase(g_pendingSpawn.begin());
+    }
+    g_pendingSpawn.push_back({payload, senderSlot, deferKerfur});
+    UE_LOGI("[SPAWN-DEFER] CLIENT armed deferred spawn cls-eid=%u key='%ls' -- fresh mirror requested INSIDE "
+            "the world-load episode; spawning now would feed it to the loadObjects keyed churn (the invisible-"
+            "placed-prop kill). The quiescence drain re-runs the full OnSpawn (spawn-before-quiescence fix)",
+            payload.elementId, coop::remote_prop::KeyToWString(payload.key).c_str());
+}
+
 // ---- HasPendingWork / the sequence / the triggers / Reset ----
 
 // v106b GHOST-SWEEP arm (2026-07-07, the wholesale "bring the client world to the host's at
@@ -456,7 +520,7 @@ void ArmGhostSweep() {
 
 bool HasPendingWork() {
     return !g_pendingSaveTimeTwin.empty() || !g_pendingPosCorrection.empty() || !g_pendingDestroy.empty() ||
-           coop::kerfur_reconcile::HasPendingRetire() || g_ghostSweepArmed;
+           !g_pendingSpawn.empty() || coop::kerfur_reconcile::HasPendingRetire() || g_ghostSweepArmed;
 }
 
 void RunReconcile(bool joinSweep) {
@@ -475,9 +539,11 @@ void RunReconcile(bool joinSweep) {
     if (ghostDrained) g_ghostSweepArmed = false;
     else UE_LOGI("quiescence_drain: GHOST-SWEEP kept armed (retire tail capped/valved this pass)");
     coop::kerfur_reconcile::SweepReconcileSaveTimeKerfurs();     // 3: retire stale kerfur off-prop (eid-keyed; the folded-in 3rd owner)
-    ApplyPendingDestroys();                                      // 4: destroy-before-load -- apply destroys that raced the bind, post-bind
-    ApplyPendingPosCorrections();                               // 5: b3 -- snap window-moved piles
-    if (joinSweep) coop::pile_spawn_bind::LogCensus();           // 6: one-shot L1 orphan census (join only)
+    ApplyPendingSpawns();                                        // 4: spawn-before-quiescence -- re-run episode-deferred fresh spawns,
+                                                                 //    post-bind (exact key wins) + BEFORE the destroys (spawn+destroy nets 0)
+    ApplyPendingDestroys();                                      // 5: destroy-before-load -- apply destroys that raced the bind, post-bind
+    ApplyPendingPosCorrections();                               // 6: b3 -- snap window-moved piles
+    if (joinSweep) coop::pile_spawn_bind::LogCensus();           // 7: one-shot L1 orphan census (join only)
 }
 
 void OnTick() {
@@ -519,6 +585,10 @@ void Reset() {
         UE_LOGI("[DESTROY-DEFER] session teardown dropping %zu unresolved deferred destroy(s) -- target never "
                 "loaded here (host-removed before our copy materialized; benign)", g_pendingDestroy.size());
     g_pendingDestroy.clear();
+    if (!g_pendingSpawn.empty())
+        UE_LOGI("[SPAWN-DEFER] session teardown dropping %zu undrained deferred spawn(s) -- the session ended "
+                "before the load tail quiesced (benign at teardown)", g_pendingSpawn.size());
+    g_pendingSpawn.clear();
 }
 
 }  // namespace coop::element::quiescence_drain

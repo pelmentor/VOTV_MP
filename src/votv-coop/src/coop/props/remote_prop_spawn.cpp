@@ -29,6 +29,7 @@
 #include "coop/dev/join_window_pos_trace.h"  // F1: keyed-prop join-window position root discrimination (read-only, point A)
 #include "coop/props/save_identity_bind.h"     // Phase 1 step 2b: eid-range bind summary at quiescence
 #include "coop/element/quiescence_drain.h"    // anti-smear 2026-06-30: the join-window order owner (sequence + steady triggers + deferred queues)
+#include "coop/props/world_load_episode.h"    // spawn-before-quiescence 2026-07-11: defer a fresh mirror out of the loadObjects churn window
 #include "coop/props/snapshot_census.h"  // Phase 0: per-class completeness floor for the claim sweep
 #include "coop/dev/force_overdestroy_test.h"  // dev-only: floor-disable toggle for the controlled proof
 #include "coop/props/prop_echo_suppress.h"
@@ -627,6 +628,31 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
             fuzzy = nullptr;
         }
     }
+    // IDENTITY-STEAL GATE (2026-07-11, the N-simultaneous-same-spot-placements race). A fuzzy match that is
+    // already MIRROR-BOUND to a DIFFERENT eid is an established cross-peer identity -- a different prop that
+    // happens to sit within 30 cm (four crowbars R-placed on one spot arrive back-to-back; the quiescence
+    // drain applies deferred same-class spawns in one batch at one location). Rekey-stealing it would chain
+    // N same-spot placements onto ONE actor: #2's rekey steals #1's mirror, #3 steals the re-keyed result --
+    // N-1 eids left dangling on this receiver, every dangling eid a host prop permanently invisible here.
+    // The Gap-I-1 steal is only ever correct against a LOCAL actor with no cross-peer identity yet (the
+    // per-peer-divergent spawner twin -- mushrooms/garbage -- which is never WIRE-mirror-bound), so the
+    // gate reads the WIRE-MIRROR rows only (wireMirrorOnly=true): MirrorManager<Prop> mixes census-walk
+    // LOCAL rows (every keyed interactable, IsMirror()==false) with RegisterPropMirror wire rows
+    // (IsMirror()==true), and an un-filtered scan would resolve a save-loaded mushroom's client-minted
+    // LOCAL eid and kill the legitimate divergent-key dedup (audit CRITICAL 2026-07-11). A same-eid
+    // re-express keeps the fuzzy converge (stale-key-index fallback for the prop's own mirror).
+    if (fuzzy) {
+        const coop::element::ElementId mirrorEid =
+            coop::remote_prop::ResolveMirrorEidByActor(fuzzy, /*wireMirrorOnly=*/true);
+        if (mirrorEid != coop::element::kInvalidId &&
+            static_cast<uint32_t>(mirrorEid) != payload.elementId) {
+            UE_LOGI("remote_prop::OnSpawn: fuzzy match %p for wire key '%ls' is already mirror-bound to "
+                    "eid=%u (wire eid=%u) -- an established identity is never position-stolen; "
+                    "fresh-spawning instead",
+                    fuzzy, keyW.c_str(), static_cast<unsigned>(mirrorEid), payload.elementId);
+            fuzzy = nullptr;
+        }
+    }
     if (fuzzy) {
         // P2 claim: same as the exact-key path -- the fuzzy match binds this
         // pre-existing client actor to the host's prop; protect it from the
@@ -732,6 +758,26 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // materialize, so neither re-defers here. Keyed by class name (cheap; matches prop_kerfurOmega + skins).
     if (deferKerfur && classW.find(L"prop_kerfurOmega") != std::wstring::npos) {
         coop::kerfur_prop_adoption::Arm(payload);
+        return;
+    }
+    // SPAWN-BEFORE-QUIESCENCE defer (2026-07-11, the invisible join-window placed props). We reached the
+    // FRESH-spawn tail: no local actor answers for this prop. While THIS client is inside its own world-load
+    // episode, a mirror spawned NOW is handed straight to loadObjects' keyed churn -- measured 2026-07-11:
+    // two host-placed cblocks spawned at 12:20:37, churn-destroyed at 12:20:39 (the destroy-seam suppressed
+    // only the BROADCAST), eids left unbound for the session = the props were permanently invisible here.
+    // The resolve/converge paths above are churn-safe (their actors are save-loaded; the game re-creates
+    // them same-key and the join machinery re-binds) -- only a fresh mirror is a churn victim. CAPTURE the
+    // payload in the join-window order owner; its quiescence drain re-runs this full OnSpawn once the load
+    // tail settles (exact-key resolve first -- a late-loading save twin wins -- else a fresh spawn into the
+    // settled world). fromConvert stays synchronous: a convert's spawn is half of OnConvert's atomic
+    // old->new swap, and deferring it would strand the swap (the old rendering is destroyed by OnConvert).
+    // [[feedback-snapshot-before-state-ready]]; the destroy sibling is ArmPendingDestroy. deferKerfur is
+    // threaded through the queue and replayed VERBATIM (audit HIGH 2026-07-11): the kerfur adoption
+    // fallback + the convert materialize pass deferKerfur=false ("adopt/spawn NOW, no K-6 re-defer"), and
+    // replaying with the default true would route their payloads back into kerfur_prop_adoption::Arm --
+    // the exact arg-slot mis-adopt class the OBS-2/ROOT-1 fixes closed.
+    if (!fromConvert && coop::world_load_episode::InEpisode()) {
+        coop::element::quiescence_drain::ArmPendingSpawn(payload, senderSlot, deferKerfur);
         return;
     }
     if (!ResolveSpawnFns()) {
