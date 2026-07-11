@@ -1,19 +1,22 @@
-// ue_wrap/save_browser.h -- native VOTV save enumeration + creation.
+// ue_wrap/save_browser.h -- VOTV save enumeration + creation.
 //
-// Engine-wrapper layer (principle 7): drives VOTV's OWN save functions and reads
-// UsaveSlot_C metadata. NO coop / network / gameplay state lives here.
-//   - EnumerateSaves drives Uui_saveSlots_C::loadSlots (VOTV's own list builder) and
-//     harvests its result arrays -- so the picker shows EXACTLY the saves VOTV's menu
-//     would, with VOTV's own filtering, and the engine owns/frees loadSlots' transient
-//     allocations (no manual TArray<FString> free on our side). RULE 2026-05-28
-//     (follow the native shape) + RULE 1 (leak-free by construction).
+// Engine-wrapper layer (principle 7): NO coop / network / gameplay state lives here.
+//   - EnumerateSaves (2026-07-11 rework): lists <SavedDir>/SaveGames/*.sav (dir via
+//     the native GetProjectSavedDirectory; subsaves excluded via VOTV's own
+//     lib_C::processSaveNameIntoSubsave) and reads each row's metadata DIRECTLY from
+//     the file's GVAS tag stream (ue_wrap/gvas_meta) with saveSlot_C CDO defaults for
+//     delta-omitted properties. The prior loadSlots drive did N x LoadGameFromSlot --
+//     a full 15-20 MB deserialize per save ON THE GAME THREAD = a multi-second
+//     picker-open freeze once real saves accumulated. Filter parity ground-truthed
+//     against the native list 2026-07-11 (subsaves + non-saveSlot_C excluded; b_* is
+//     the SANDBOX prefix, never filtered).
 //   - CreateNamedSave mirrors VOTV's create primitive: CreateSaveGameObject(saveSlot_C)
 //     + SaveGameToSlot(obj, "<prefix><name>", 0) -> a persisted-at-creation blank save.
 //
-// The ImGui Host-Game save picker (ui/host_save_picker) sits on top of this. All the
-// enumerate/create calls invoke UFunctions -> GAME THREAD ONLY. The async
-// RefreshAsync/CopySaves/Status trio lets the render-thread picker trigger a scan +
-// read a cached snapshot without blocking (mirrors coop/net/lobby_client's pattern).
+// The ImGui Host-Game save picker (ui/host_save_picker) sits on top of this. The
+// UFunction-driven parts (create/exists + the scan's stage A) are GAME THREAD ONLY.
+// The async RefreshAsync/CopySaves/Status trio lets the render-thread picker trigger
+// a scan + read a cached snapshot without blocking (mirrors coop/net/lobby_client).
 //
 // RE: research/findings/votv-save-picker-{enumerate-load,create-new}-RE-2026-06-06.md.
 
@@ -39,9 +42,10 @@ struct SaveInfo {
     int64_t      lastPlayedTicks = 0;  // UsaveSlot_C::lastDate (FDateTime ticks, 100ns)
 };
 
-// Enumerate all existing top-level saves with metadata by driving VOTV's native
-// loadSlots. `out` is replaced. Returns false if the save system can't be resolved
-// (the save-slots widget isn't loaded yet) -- `out` is then left empty. Game thread.
+// Enumerate all existing top-level saves with metadata (synchronous convenience
+// path -- the picker uses RefreshAsync instead). `out` is replaced, sorted
+// newest-first. Returns false if the save system can't be resolved yet (saveSlot_C
+// not loaded / dir unresolved) -- `out` is then left empty. Game thread.
 bool EnumerateSaves(std::vector<SaveInfo>& out);
 
 // Create a brand-new, NAMED, mode-correct, PERSISTED save and return its full slot
@@ -57,13 +61,12 @@ bool SlotExists(const std::wstring& slot);
 
 // --- async cache for the render-thread picker (mirrors lobby_client) -------------
 
-// Post an EnumerateSaves onto the game thread; the result is cached for CopySaves.
-// Non-blocking, safe from the render thread. Coalesces (no overlapping scans).
-//
-// CALL ON PICKER-OPEN / an explicit refresh / after CreateNamedSave ONLY -- NEVER from
-// the per-frame ImGui draw. Each scan drives VOTV's loadSlots = N x LoadGameFromSlot,
-// each parsing a .sav up to ~19 MB synchronously on the game thread. The internal
-// coalesce prevents OVERLAPPING scans but NOT a re-post-every-frame hitch storm.
+// Kick a scan: stage A (dir/classify/CDO defaults) on the game thread, stage B
+// (per-file GVAS metadata reads, mtime-cached) on a worker thread; the result is
+// cached for CopySaves. Non-blocking, safe from the render thread. Coalesces (no
+// overlapping scans). Call on picker-open / explicit refresh / after
+// CreateNamedSave -- not from the per-frame ImGui draw (the coalesce prevents
+// OVERLAP, not a re-post-every-frame churn).
 void RefreshAsync();
 
 // Copy the cached save list (render thread). Returns a revision counter that bumps

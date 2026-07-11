@@ -3,17 +3,24 @@
 #include "ue_wrap/save_browser.h"
 
 #include "ue_wrap/call.h"
-#include "ue_wrap/engine.h"        // GetSavePrefix / DeriveModeFromSlot / GetWorldContext
+#include "ue_wrap/engine.h"        // GetSavePrefix / DeriveModeFromSlot
 #include "ue_wrap/game_thread.h"
+#include "ue_wrap/gvas_meta.h"     // worker-thread .sav metadata reads (no LoadGameFromSlot)
 #include "ue_wrap/log.h"
 #include "ue_wrap/reflection.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwctype>
+#include <filesystem>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ue_wrap::save_browser {
@@ -21,13 +28,6 @@ namespace {
 
 namespace R = reflection;
 namespace GT = game_thread;
-
-// UE4 TArray header: { T* Data; int32 Num; int32 Max }. Same shape as R::FString.
-struct TArrayHeader {
-    void*   Data;
-    int32_t Num;
-    int32_t Max;
-};
 
 std::wstring FStrToW(const R::FString& s) {
     // FString::Num counts the null terminator.
@@ -119,118 +119,215 @@ T ReadField(void* obj, int32_t off, T fallback = T{}) {
     return *reinterpret_cast<T*>(reinterpret_cast<uint8_t*>(obj) + off);
 }
 
-// Resolve the live Uui_saveSlots_C the menu owns. VOTV constructs umg_saveSlots as a
-// member of the live ui_menu_C; the save_enum probe proved it is LIVE at the menu
-// (offset 0x488), which is the only context the picker enumerates from (opened from the
-// MULTIPLAYER button at the main menu). We do NOT spawn a bare ui_saveSlots_C as a
-// fallback: driving loadSlots on an un-Constructed widget is an untested speculative
-// path (RULE 1/3). If umg_saveSlots is ever null (not the picker's context), enumerate
-// returns false -> the picker shows "save system not ready" and a later RefreshAsync
-// retries. Game thread.
-void* ResolveSaveSlotsWidget() {
-    void* menu = R::FindObjectByClass(L"ui_menu_C");
-    if (!menu) {
-        UE_LOGW("save_browser: no live ui_menu_C -- cannot enumerate (not at the menu?)");
-        return nullptr;
-    }
-    static int32_t umgOff = -1;
-    if (umgOff < 0) {
-        const int32_t v = R::FindPropertyOffset(R::ClassOf(menu), L"umg_saveSlots");
-        if (v >= 0) { umgOff = v; UE_LOGI("save_browser: ui_menu_C.umg_saveSlots offset = %d", v); }
-    }
-    if (umgOff < 0) return nullptr;  // property not resolved yet -- retry next call
-    void* w = ReadField<void*>(menu, umgOff, nullptr);
-    if (!w || !R::IsLive(w)) {
-        UE_LOGW("save_browser: umg_saveSlots not constructed yet (null) -- open the menu / retry");
-        return nullptr;
-    }
-    return w;
+// ---- the scan pipeline (2026-07-11 rework) ---------------------------------------
+// The old scan drove VOTV's Uui_saveSlots_C::loadSlots, which LoadGameFromSlot's
+// EVERY save -- each a full synchronous GVAS deserialize of a 15-20 MB world file ON
+// THE GAME THREAD (measured 2026-07-11: 15 saves = a multi-second picker-open freeze
+// + 15 transient UsaveSlot_C object graphs for GC). The picker only needs a handful
+// of scalars per row, so the scan is now two stages:
+//   STAGE A (game thread, cheap): resolve the SaveGames dir (native
+//     GetProjectSavedDirectory -- honors -saveddirsuffix), list *.sav, classify
+//     subsaves via VOTV's own lib_C::processSaveNameIntoSubsave (native filter
+//     parity), derive mode/displayName from the slot prefix, and read the
+//     saveSlot_C CDO defaults (delta-vs-CDO serialization omits default-valued
+//     properties from the file -- the CDO supplies them, LoadGameFromSlot parity).
+//   STAGE B (worker thread): stat + gvas_meta::ReadSlotMeta each file (tag-walk,
+//     payload-skip -- no full deserialize), mtime-keyed cache so re-opens only
+//     re-parse changed files, sort newest-first, publish.
+// Filter parity with the native loadSlots list (ground-truthed against its logged
+// output 2026-07-11): everything except subsaves and non-saveSlot_C classes
+// (data.sav fails the native DynamicCast; here it fails the GVAS class check).
+// b_* files are SANDBOX saves (the 'b_' SAVE PREFIX), not backups -- never filter
+// by name. The gvas_meta.h header documents the format evidence.
+
+struct ScanItem {
+    SaveInfo     base;   // slot/mode/modeLabel/displayName pre-filled (stage A)
+    std::wstring path;   // full path to the .sav
+};
+
+// saveSlot_C CDO defaults for properties the delta serializer omitted.
+struct SlotCdoDefaults {
+    bool    valid = false;
+    int32_t savedTimeZ = 0;
+    int32_t points = 0;
+    float   health = 0.f;
+    float   maxHealth = 0.f;
+    std::wstring version;
+};
+
+// Resolve <ProjectSavedDir>/SaveGames/ once via the native UFunction (the engine
+// honors -saveddirsuffix, so never rebuild this from the environment). The returned
+// FString's engine-side buffer is read once and pinned (the fstring_utils pin/leak
+// doctrine; one small allocation per process).
+std::wstring ResolveSaveGamesDir() {
+    static std::wstring s_dir;
+    if (!s_dir.empty()) return s_dir;
+    void* ksl = R::FindClassDefaultObject(L"KismetSystemLibrary");
+    void* fn  = ksl ? R::FindFunction(R::ClassOf(ksl), L"GetProjectSavedDirectory") : nullptr;
+    if (!fn) { UE_LOGW("save_browser: GetProjectSavedDirectory unresolved"); return {}; }
+    ParamFrame f(fn);
+    if (!Call(ksl, f)) return {};
+    R::FString ret{};
+    f.GetRaw(L"ReturnValue", &ret, static_cast<int32_t>(sizeof(ret)));
+    std::wstring dir = FStrToW(ret);
+    if (dir.empty()) return {};
+    if (dir.back() != L'/' && dir.back() != L'\\') dir += L'/';
+    dir += L"SaveGames/";
+    s_dir = dir;
+    UE_LOGI("save_browser: SaveGames dir = '%ls'", s_dir.c_str());
+    return s_dir;
 }
 
-// ---- async cache (render thread reads; game thread fills) -----------------------
+// VOTV's own subsave classifier (lib_C CDO; pure string logic). False on resolve
+// failure = list rather than hide. The out mainSaveName FString is engine-minted
+// into the frame and abandoned (pin doctrine; bytes per call, scans are on-demand).
+bool IsSubsaveName(const std::wstring& slot) {
+    static void* s_lib = nullptr;
+    static void* s_fn  = nullptr;
+    if (!s_lib) s_lib = R::FindClassDefaultObject(L"lib_C");
+    if (s_lib && !s_fn) s_fn = R::FindFunction(R::ClassOf(s_lib), L"processSaveNameIntoSubsave");
+    if (!s_lib || !s_fn) return false;
+    std::wstring buf = slot;
+    R::FString fs = MakeFStr(buf);
+    ParamFrame f(s_fn);
+    f.SetRaw(L"saveSlotName", &fs, static_cast<int32_t>(sizeof(fs)));
+    f.Set<void*>(L"__WorldContext", s_lib);
+    if (!Call(s_lib, f)) return false;
+    return f.Get<bool>(L"isSubsave");
+}
+
+// STAGE A. Game thread. False = save system not resolvable yet (retry later).
+bool BuildScanList(std::vector<ScanItem>& items, SlotCdoDefaults& def) {
+    items.clear();
+    const std::wstring dir = ResolveSaveGamesDir();
+    if (dir.empty()) return false;
+
+    ResolveSlotOffsets();
+    void* cdo = R::FindClassDefaultObject(L"saveSlot_C");
+    if (!cdo || g_off.savedtime < 0) {
+        UE_LOGW("save_browser: saveSlot_C CDO/offsets unresolved -- cannot scan yet");
+        return false;
+    }
+    def.valid      = true;
+    def.savedTimeZ = ReadField<int32_t>(cdo, g_off.savedtime + 8);
+    def.points     = ReadField<int32_t>(cdo, g_off.points);
+    def.health     = ReadField<float>(cdo, g_off.health);
+    def.maxHealth  = ReadField<float>(cdo, g_off.maxHealth);
+    def.version    = FStrToW(ReadField<R::FString>(cdo, g_off.version));
+
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it{std::filesystem::path(dir), ec}, end;
+         !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::wstring ext = it->path().extension().wstring();
+        for (wchar_t& c : ext) c = static_cast<wchar_t>(::towlower(c));
+        if (ext != L".sav") continue;
+        const std::wstring slot = it->path().stem().wstring();
+        if (slot.empty()) continue;
+        if (IsSubsaveName(slot)) continue;  // native parity: subsaves never top-level
+
+        ScanItem item;
+        item.path = it->path().wstring();
+        item.base.slot = slot;
+        item.base.mode = engine::DeriveModeFromSlot(slot.c_str());
+        item.base.modeLabel = ModeLabel(item.base.mode);
+        std::wstring prefix;  // displayName = slot minus the mode prefix (cosmetic)
+        if (item.base.mode >= 0 &&
+            engine::GetSavePrefix(static_cast<uint8_t>(item.base.mode), prefix) &&
+            !prefix.empty() && slot.rfind(prefix, 0) == 0) {
+            item.base.displayName = slot.substr(prefix.size());
+        } else {
+            item.base.displayName = slot;
+        }
+        items.push_back(std::move(item));
+    }
+    if (ec) {
+        UE_LOGW("save_browser: SaveGames listing failed (%s)", ec.message().c_str());
+        return false;
+    }
+    return true;
+}
+
+// ---- async cache (render thread reads; stage B fills) ---------------------------
 std::mutex g_mu;
 std::vector<SaveInfo> g_cache;
 uint64_t g_rev = 0;
 std::string g_status = "No save scan yet";
 std::atomic<bool> g_scanning{false};
 
+// mtime-keyed per-slot metadata cache: an unchanged file's row is reused without
+// re-opening it, so re-opening the picker is ~free. Guarded by g_metaMu (stage B
+// runs on a worker; the synchronous EnumerateSaves path runs on the game thread).
+struct CachedMeta {
+    int64_t  mtime = 0;
+    uint64_t size = 0;
+    SaveInfo info;
+};
+std::mutex g_metaMu;
+std::map<std::wstring, CachedMeta> g_metaCache;
+
+// STAGE B. Any thread (pure file I/O). Fills `out` sorted newest-first.
+void ParseScanList(const std::vector<ScanItem>& items, const SlotCdoDefaults& def,
+                   std::vector<SaveInfo>& out) {
+    struct Row { int64_t mtime; SaveInfo info; };
+    std::vector<Row> rows;
+    rows.reserve(items.size());
+    for (const ScanItem& it : items) {
+        std::error_code ec;
+        const std::filesystem::path p{it.path};
+        const uint64_t sz = std::filesystem::file_size(p, ec);
+        if (ec) continue;
+        const int64_t mt = std::filesystem::last_write_time(p, ec).time_since_epoch().count();
+        if (ec) continue;
+        {
+            std::lock_guard<std::mutex> lk(g_metaMu);
+            auto c = g_metaCache.find(it.base.slot);
+            if (c != g_metaCache.end() && c->second.mtime == mt && c->second.size == sz) {
+                rows.push_back({mt, c->second.info});
+                continue;
+            }
+        }
+        gvas_meta::GvasSlotMeta m;
+        if (!gvas_meta::ReadSlotMeta(it.path, m) || !m.isSaveSlotClass)
+            continue;  // unreadable / not a saveSlot_C (data.sav): native-parity skip
+        SaveInfo info = it.base;
+        // Display formula parity (uicomp_saveSlot::upd): day = savedtime.Z + 1.
+        info.day       = (m.hasSavedTimeZ ? m.savedTimeZ : def.savedTimeZ) + 1;
+        info.points    = m.hasPoints ? m.points : def.points;
+        info.health    = m.hasHealth ? m.health : def.health;
+        info.maxHealth = m.hasMaxHealth ? m.maxHealth : def.maxHealth;
+        info.version   = m.hasVersion ? m.version : def.version;
+        info.lastPlayedTicks = m.hasLastSavedDate ? m.lastSavedDateTicks : 0;
+        {
+            std::lock_guard<std::mutex> lk(g_metaMu);
+            g_metaCache[it.base.slot] = {mt, sz, info};
+        }
+        rows.push_back({mt, std::move(info)});
+    }
+    // Newest-first by file mtime. Deliberate divergence from loadSlots'
+    // MaxOfDateTimeArray-over-save-dates: mtime is stamped by the same
+    // SaveGameToSlot write those dates describe, gives the same ordering, and
+    // costs zero extra parsing (lastSavedDate is delta-omitted on fresh slots).
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const Row& a, const Row& b) { return a.mtime > b.mtime; });
+    out.clear();
+    out.reserve(rows.size());
+    for (Row& r : rows) {
+        UE_LOGI("save_browser:   '%ls' mode=%d(%ls) day=%d pts=%d hp=%.0f/%.0f ver='%ls'",
+                r.info.slot.c_str(), r.info.mode, r.info.modeLabel.c_str(), r.info.day,
+                r.info.points, r.info.health, r.info.maxHealth, r.info.version.c_str());
+        out.push_back(std::move(r.info));
+    }
+}
+
 }  // namespace
 
 bool EnumerateSaves(std::vector<SaveInfo>& out) {
     out.clear();
-    ResolveSlotOffsets();
-    void* widget = ResolveSaveSlotsWidget();
-    if (!widget) { UE_LOGW("save_browser: EnumerateSaves -- no save-slots widget"); return false; }
-
-    void* cls = R::ClassOf(widget);
-    void* loadSlotsFn = cls ? R::FindFunction(cls, L"loadSlots") : nullptr;
-    if (!loadSlotsFn) { UE_LOGW("save_browser: loadSlots UFunction not found"); return false; }
-
-    // Resolve the two array offsets, RETRYING while unresolved: only COMMIT a
-    // successful (>=0) result, so a transient -1 (class loaded but property not yet
-    // resolvable / a recook) doesn't latch and suppress every future call (audit I-1).
-    static int32_t savesOff = -1, namesOff = -1;
-    if (savesOff < 0) { const int32_t v = R::FindPropertyOffset(cls, L"saves");            if (v >= 0) savesOff = v; }
-    if (namesOff < 0) { const int32_t v = R::FindPropertyOffset(cls, L"valid_savesNames"); if (v >= 0) namesOff = v; }
-    if (savesOff < 0 || namesOff < 0) {
-        UE_LOGW("save_browser: saves@%d / valid_savesNames@%d offset unresolved (will retry)", savesOff, namesOff);
-        return false;
-    }
-
-    // Drive VOTV's own list builder (no params). It file-lists SaveGames, LoadGameFromSlot's
-    // each, casts to saveSlot_C, filters subsaves/backups, sorts newest-first -- and the
-    // engine frees that UFunction's transient frame (no manual TArray<FString> free for us).
-    {
-        ParamFrame f(loadSlotsFn);
-        Call(widget, f);
-    }
-
-    const TArrayHeader saves = ReadField<TArrayHeader>(widget, savesOff);
-    const TArrayHeader names = ReadField<TArrayHeader>(widget, namesOff);
-    const int32_t n = (saves.Num < names.Num) ? saves.Num : names.Num;
-    UE_LOGI("save_browser: loadSlots -> saves.Num=%d valid_savesNames.Num=%d (using %d)",
-            saves.Num, names.Num, n);
-    if (n <= 0 || !saves.Data || !names.Data) return true;  // resolved, just no saves
-
-    auto* saveArr = reinterpret_cast<void**>(saves.Data);
-    auto* nameArr = reinterpret_cast<R::FString*>(names.Data);
-    out.reserve(static_cast<size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
-        void* so = saveArr[i];
-        const std::wstring slot = FStrToW(nameArr[i]);
-        if (slot.empty()) continue;
-
-        SaveInfo info;
-        info.slot = slot;
-        info.mode = engine::DeriveModeFromSlot(slot.c_str());
-        info.modeLabel = ModeLabel(info.mode);
-        // displayName = slot minus the mode prefix (cosmetic).
-        std::wstring prefix;
-        if (info.mode >= 0 && engine::GetSavePrefix(static_cast<uint8_t>(info.mode), prefix) &&
-            !prefix.empty() && slot.rfind(prefix, 0) == 0) {
-            info.displayName = slot.substr(prefix.size());
-        } else {
-            info.displayName = slot;
-        }
-        if (so && R::IsLive(so)) {
-            // The game's own display formula (uicomp_saveSlot::upd bytecode):
-            // day = savedtime.Z + 1. savedtime is an FIntVector {X, Y, Z=day}; Z
-            // sits at +8 within the 12-byte struct.
-            if (g_off.savedtime >= 0) {
-                info.day = ReadField<int32_t>(so, g_off.savedtime + 8) + 1;
-            }
-            info.points         = ReadField<int32_t>(so, g_off.points);
-            info.health         = ReadField<float>(so, g_off.health);
-            info.maxHealth      = ReadField<float>(so, g_off.maxHealth);
-            info.lastPlayedTicks = ReadField<int64_t>(so, g_off.lastDate);
-            if (g_off.version >= 0)
-                info.version = FStrToW(ReadField<R::FString>(so, g_off.version));
-        }
-        UE_LOGI("save_browser:   [%d] '%ls' mode=%d(%ls) day=%d pts=%d hp=%.0f/%.0f ver='%ls'",
-                i, info.slot.c_str(), info.mode, info.modeLabel.c_str(), info.day,
-                info.points, info.health, info.maxHealth, info.version.c_str());
-        out.push_back(std::move(info));
-    }
+    std::vector<ScanItem> items;
+    SlotCdoDefaults def;
+    if (!BuildScanList(items, def)) return false;
+    ParseScanList(items, def, out);  // synchronous convenience path (dev probe)
     return true;
 }
 
@@ -340,24 +437,37 @@ void RefreshAsync() {
         g_status = "Scanning saves...";
     }
     GT::Post([] {
-        std::vector<SaveInfo> v;
-        const bool ok = EnumerateSaves(v);
-        std::lock_guard<std::mutex> lk(g_mu);
-        if (ok) {
+        // STAGE A on the game thread (native dir resolve + subsave classify + CDO
+        // defaults -- all cheap); STAGE B (file stat + GVAS tag-walk) on a worker so
+        // no disk I/O ever runs under the game tick. The worker is detached: it only
+        // touches the leak-safe pipeline statics above, runs for tens of ms, and a
+        // scan can only be in flight while the picker is open (never during process
+        // exit teardown).
+        auto items = std::make_shared<std::vector<ScanItem>>();
+        auto def   = std::make_shared<SlotCdoDefaults>();
+        const bool ok = BuildScanList(*items, *def);
+        if (!ok) {
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_status = "Save system not ready (try again)";
+            ++g_rev;
+            // Clear the coalescing flag INSIDE the lock, after the rev/cache/status
+            // are coherent -- so a render-thread RefreshAsync that observes
+            // g_scanning==false also sees the completed scan's data (audit C-1).
+            g_scanning.store(false, std::memory_order_release);
+            return;
+        }
+        std::thread([items, def] {
+            std::vector<SaveInfo> v;
+            ParseScanList(*items, *def, v);
+            std::lock_guard<std::mutex> lk(g_mu);
             g_cache.swap(v);
             char buf[64];
             std::snprintf(buf, sizeof(buf), "%zu save%s", g_cache.size(),
                           g_cache.size() == 1 ? "" : "s");
             g_status = buf;
-        } else {
-            g_status = "Save system not ready (try again)";
-        }
-        ++g_rev;
-        // Clear the coalescing flag INSIDE the lock, after the rev/cache/status are
-        // coherent -- so a render-thread RefreshAsync that observes g_scanning==false
-        // also sees the completed scan's data (audit C-1: clearing it outside the lock
-        // left a window where g_rev bumped but a concurrent caller still saw scanning).
-        g_scanning.store(false, std::memory_order_release);
+            ++g_rev;
+            g_scanning.store(false, std::memory_order_release);  // audit C-1: inside the lock
+        }).detach();
     });
 }
 

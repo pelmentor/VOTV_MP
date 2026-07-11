@@ -217,6 +217,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/engine_pawn.cpp
     src/ue_wrap/engine_widget.cpp
     src/ue_wrap/save_browser.cpp
+    src/ue_wrap/gvas_meta.cpp
     src/ue_wrap/reflected_offset.cpp
     src/ue_wrap/call.cpp
     src/ue_wrap/fname_utils.cpp
