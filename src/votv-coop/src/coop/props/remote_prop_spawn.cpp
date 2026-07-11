@@ -358,6 +358,22 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
         }
         return;
     }
+    // SPAWN REVALIDATION CAPTURE (take 2, 2026-07-11 -- the invisible hotbar-moved rock). While THIS
+    // client is inside its world-load episode, EVERY wire prop expression below is PROVISIONAL: the
+    // exact-key/fuzzy target it converges onto is a save/level LOCAL that loadObjects' churn will
+    // destroy, and the same-key recreate the sweep's RE-BIND pass expects exists ONLY IF the prop was
+    // still a WORLD prop in the transferred save. Measured (take-2 13:20): the host hotbar'd a rock
+    // BEFORE save-capture and placed it after -> no world record -> no recreate -> the converge-bound
+    // mirror row (eid=5384) held a dead actor forever = a permanently invisible host prop. CAPTURE the
+    // payload here (dedup by eid, latest wins); the quiescence drain re-runs the full OnSpawn ONLY for
+    // rows still dead/absent (survivors and RE-BOUND recreates are skipped O(1)). The FRESH-spawn tail
+    // below returns early on this same latch (a mid-episode fresh mirror feeds the churn -- take 1).
+    // A convert stays synchronous (OnConvert owns an atomic old->new swap); trash/pile classes never
+    // reach here (their join reconcile is the proven pile machinery above).
+    // [[feedback-snapshot-before-state-ready]]
+    if (!fromConvert && coop::world_load_episode::InEpisode()) {
+        coop::element::quiescence_drain::ArmPendingSpawn(payload, senderSlot, deferKerfur);
+    }
     // Phase 5S0 de-dupe: if a local Aprop_C derivative with the same Key
     // already exists (e.g. both peers loaded the same save and both already
     // have this prop, OR a prior PropSpawn already created it), don't
@@ -760,24 +776,11 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
         coop::kerfur_prop_adoption::Arm(payload);
         return;
     }
-    // SPAWN-BEFORE-QUIESCENCE defer (2026-07-11, the invisible join-window placed props). We reached the
-    // FRESH-spawn tail: no local actor answers for this prop. While THIS client is inside its own world-load
-    // episode, a mirror spawned NOW is handed straight to loadObjects' keyed churn -- measured 2026-07-11:
-    // two host-placed cblocks spawned at 12:20:37, churn-destroyed at 12:20:39 (the destroy-seam suppressed
-    // only the BROADCAST), eids left unbound for the session = the props were permanently invisible here.
-    // The resolve/converge paths above are churn-safe (their actors are save-loaded; the game re-creates
-    // them same-key and the join machinery re-binds) -- only a fresh mirror is a churn victim. CAPTURE the
-    // payload in the join-window order owner; its quiescence drain re-runs this full OnSpawn once the load
-    // tail settles (exact-key resolve first -- a late-loading save twin wins -- else a fresh spawn into the
-    // settled world). fromConvert stays synchronous: a convert's spawn is half of OnConvert's atomic
-    // old->new swap, and deferring it would strand the swap (the old rendering is destroyed by OnConvert).
-    // [[feedback-snapshot-before-state-ready]]; the destroy sibling is ArmPendingDestroy. deferKerfur is
-    // threaded through the queue and replayed VERBATIM (audit HIGH 2026-07-11): the kerfur adoption
-    // fallback + the convert materialize pass deferKerfur=false ("adopt/spawn NOW, no K-6 re-defer"), and
-    // replaying with the default true would route their payloads back into kerfur_prop_adoption::Arm --
-    // the exact arg-slot mis-adopt class the OBS-2/ROOT-1 fixes closed.
+    // SPAWN-BEFORE-QUIESCENCE (take 1, 2026-07-11): a FRESH mirror spawned mid-episode is handed straight
+    // to loadObjects' keyed churn (measured: spawned 12:20:37, churn-destroyed 12:20:39, eid unbound for
+    // the session). The payload was already CAPTURED by the revalidation arm above -- just don't spawn
+    // now; the quiescence drain re-runs this full OnSpawn into the settled world.
     if (!fromConvert && coop::world_load_episode::InEpisode()) {
-        coop::element::quiescence_drain::ArmPendingSpawn(payload, senderSlot, deferKerfur);
         return;
     }
     if (!ResolveSpawnFns()) {

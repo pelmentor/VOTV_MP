@@ -106,14 +106,19 @@ struct PendingDestroy {
 std::vector<PendingDestroy> g_pendingDestroy;
 constexpr int kMaxDeferApplies = 8;  // ~2s at the 250ms reconcile debounce -- grace for a late bind, then drop
 
-// SPAWN-BEFORE-QUIESCENCE (2026-07-11): fresh-mirror PropSpawns deferred out of the client world-load
-// episode (loadObjects' keyed churn destroys a mirror spawned mid-episode -- the invisible host-placed-
-// during-join props). Applied by re-running the FULL remote_prop_spawn::OnSpawn at the drain: exact-key
-// resolve first (a save twin that finished loading wins), fresh-spawn into the settled world otherwise.
-// One apply per entry, no retry counter: OnSpawn is terminal (it spawns, resolves, or logs a structural
-// drop); an apply that re-enters a re-armed episode (world reload mid-drain) re-arms here idempotently.
-// The queue is the post-save delta the host created during THIS join window -- a handful; the cap is a
-// runaway backstop, dropped LOUD (a dropped entry is a permanently-invisible prop, the exact bug class).
+// SPAWN REVALIDATION (take 2, 2026-07-11; supersedes the take-1 fresh-only defer). EVERY wire prop
+// expression a client processes INSIDE its world-load episode is provisional: a converge target is a
+// save/level local that loadObjects' churn destroys, and its same-key recreate exists only if the prop
+// was still a WORLD prop in the transferred save (a prop the host hotbar'd before save-capture and
+// placed after has NO recreate -> its mirror row holds a dead actor forever = a permanently invisible
+// host prop -- the take-2 rock). remote_prop_spawn::OnSpawn CAPTURES every in-episode payload here
+// (dedup by eid, latest wins); the drain re-runs the FULL OnSpawn ONLY for entries whose Registry row
+// is still dead/absent -- churn survivors and sweep-RE-BOUND recreates are skipped O(1), so the re-run
+// set is exactly the residual the RE-BIND pass could not heal (dead row, no recreate) plus the take-1
+// fresh-tail set (never bound). One apply per entry, no retry counter: OnSpawn is terminal; an apply
+// that re-enters a re-armed episode (world reload mid-drain) re-arms here idempotently. The cap is a
+// runaway backstop, dropped LOUD (a dropped entry is a permanently-invisible prop, the exact bug class);
+// a full join expresses ~2-3k keyed props, so the cap sits above that.
 struct PendingSpawn {
     coop::net::PropSpawnPayload payload;
     int  senderSlot = 0;
@@ -122,7 +127,11 @@ struct PendingSpawn {
                               // (a convert's spawn stays synchronous inside OnConvert's swap).
 };
 std::vector<PendingSpawn> g_pendingSpawn;
-constexpr size_t kMaxPendingSpawns = 512;
+// O(1) dedup index for eid != 0 entries (the arm now fires for every in-episode expression -- a linear
+// scan would be O(n^2) across a ~2-3k join burst). Parallel to g_pendingSpawn; rebuilt-by-clear on the
+// drain swap / Reset. eid==0 keyed-legacy entries (rare) still dedup by a linear key-bytes scan.
+std::unordered_map<uint32_t, size_t> g_pendingSpawnIdx;
+constexpr size_t kMaxPendingSpawns = 4096;
 
 // ---- Trigger timing (the steady-state reconcile) ----
 
@@ -317,14 +326,32 @@ void ApplyPendingSpawns() {
     // land in the (now empty) member and wait for the next drain.
     std::vector<PendingSpawn> batch;
     batch.swap(g_pendingSpawn);
+    g_pendingSpawnIdx.clear();
     void* localPlayer = coop::players::Registry::Get().Local();
-    UE_LOGI("[SPAWN-DEFER] CLIENT applying %zu deferred spawn(s) at the quiescence drain -- the load-tail "
-            "churn is over; exact-key resolve first, fresh-spawn into the settled world otherwise",
-            batch.size());
+    // LIVENESS FILTER (take 2): re-run ONLY entries whose Registry row is dead/absent. A churn survivor
+    // or a sweep-RE-BOUND recreate holds a LIVE row -> the world is already coherent for it; re-running
+    // ~2-3k no-op converges in one tick would be a pointless quiescence hitch. IsLiveByIndex, never raw
+    // IsLive (a purge frees the row-held actor while the row lingers).
+    size_t applied = 0, skippedLive = 0;
     for (const PendingSpawn& p : batch) {
+        if (p.payload.elementId != 0) {
+            if (auto* el = coop::element::Registry::Get().Get(
+                    static_cast<coop::element::ElementId>(p.payload.elementId))) {
+                void* a = el->GetActor();
+                if (a && R::IsLiveByIndex(a, el->GetInternalIdx())) { ++skippedLive; continue; }
+            }
+        }
+        ++applied;
+        UE_LOGI("[SPAWN-DEFER] re-expressing eid=%u key='%ls' loc=(%.1f,%.1f,%.1f) -- row dead/absent at "
+                "the drain (churn victim with no recreate, or a take-1 deferred fresh spawn)",
+                p.payload.elementId, coop::remote_prop::KeyToWString(p.payload.key).c_str(),
+                p.payload.locX, p.payload.locY, p.payload.locZ);
         coop::remote_prop_spawn::OnSpawn(p.payload, p.senderSlot, localPlayer,
                                          /*fromConvert=*/false, p.deferKerfur);
     }
+    UE_LOGI("[SPAWN-DEFER] CLIENT quiescence drain -- %zu in-episode expression(s) revalidated: "
+            "%zu rows live (skipped), %zu re-expressed into the settled world",
+            batch.size(), skippedLive, applied);
 }
 
 }  // namespace
@@ -474,31 +501,53 @@ void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload) {
 
 void ArmPendingSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot, bool deferKerfur) {
     // Dedup: a re-express of the same prop (host re-bracket / re-send) supersedes the queued payload --
-    // latest transform wins. Match by eid; a keyed legacy payload with eid==0 matches by key bytes.
-    for (PendingSpawn& p : g_pendingSpawn) {
-        const bool same = (payload.elementId != 0)
-                              ? (p.payload.elementId == payload.elementId)
-                              : (std::memcmp(&p.payload.key, &payload.key, sizeof(payload.key)) == 0);
-        if (same) {
+    // latest transform wins. O(1) by eid via the index; a keyed legacy payload with eid==0 (rare) falls
+    // back to a linear key-bytes scan.
+    if (payload.elementId != 0) {
+        if (auto it = g_pendingSpawnIdx.find(payload.elementId); it != g_pendingSpawnIdx.end()) {
+            PendingSpawn& p = g_pendingSpawn[it->second];
             p.payload     = payload;
             p.senderSlot  = senderSlot;
             p.deferKerfur = deferKerfur;
             return;
         }
+    } else {
+        for (PendingSpawn& p : g_pendingSpawn) {
+            if (p.payload.elementId == 0 &&
+                std::memcmp(&p.payload.key, &payload.key, sizeof(payload.key)) == 0) {
+                p.payload     = payload;
+                p.senderSlot  = senderSlot;
+                p.deferKerfur = deferKerfur;
+                return;
+            }
+        }
     }
     if (g_pendingSpawn.size() >= kMaxPendingSpawns) {
         UE_LOGW("[SPAWN-DEFER] CLIENT pending-spawn cap %zu hit -- dropping OLDEST eid=%u to admit eid=%u "
-                "(a dropped entry is a permanently-invisible prop; a >%zu post-save delta means something "
-                "upstream is misrouting spawns into the episode window)",
+                "(a dropped entry is a potentially-invisible prop; a >%zu in-episode burst means something "
+                "upstream is misrouting expressions into the episode window)",
                 kMaxPendingSpawns, g_pendingSpawn.front().payload.elementId, payload.elementId,
                 kMaxPendingSpawns);
+        if (g_pendingSpawn.front().payload.elementId != 0)
+            g_pendingSpawnIdx.erase(g_pendingSpawn.front().payload.elementId);
         g_pendingSpawn.erase(g_pendingSpawn.begin());
+        // The erase shifted every index by one -- rebuild (cap overflow is a pathological one-off, not a path).
+        g_pendingSpawnIdx.clear();
+        for (size_t i = 0; i < g_pendingSpawn.size(); ++i)
+            if (g_pendingSpawn[i].payload.elementId != 0)
+                g_pendingSpawnIdx[g_pendingSpawn[i].payload.elementId] = i;
     }
+    if (payload.elementId != 0) g_pendingSpawnIdx[payload.elementId] = g_pendingSpawn.size();
     g_pendingSpawn.push_back({payload, senderSlot, deferKerfur});
-    UE_LOGI("[SPAWN-DEFER] CLIENT armed deferred spawn cls-eid=%u key='%ls' -- fresh mirror requested INSIDE "
-            "the world-load episode; spawning now would feed it to the loadObjects keyed churn (the invisible-"
-            "placed-prop kill). The quiescence drain re-runs the full OnSpawn (spawn-before-quiescence fix)",
-            payload.elementId, coop::remote_prop::KeyToWString(payload.key).c_str());
+    // Every in-episode expression is captured (take 2) -- ~2-3k per join. Log the first few + a heartbeat,
+    // not all of them; the drain summary reports the exact totals + every actual re-expression with loc.
+    const size_t n = g_pendingSpawn.size();
+    if (n <= 3 || (n % 500) == 0) {
+        UE_LOGI("[SPAWN-DEFER] CLIENT captured in-episode expression #%zu (eid=%u key='%ls' "
+                "loc=(%.1f,%.1f,%.1f)) -- revalidated at the quiescence drain (dead rows re-expressed)",
+                n, payload.elementId, coop::remote_prop::KeyToWString(payload.key).c_str(),
+                payload.locX, payload.locY, payload.locZ);
+    }
 }
 
 // ---- HasPendingWork / the sequence / the triggers / Reset ----
@@ -589,6 +638,7 @@ void Reset() {
         UE_LOGI("[SPAWN-DEFER] session teardown dropping %zu undrained deferred spawn(s) -- the session ended "
                 "before the load tail quiesced (benign at teardown)", g_pendingSpawn.size());
     g_pendingSpawn.clear();
+    g_pendingSpawnIdx.clear();
 }
 
 }  // namespace coop::element::quiescence_drain

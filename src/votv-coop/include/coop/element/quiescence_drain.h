@@ -106,12 +106,14 @@ void CancelPendingSaveTimeTwin(coop::element::ElementId eid);
 // via remote_prop::TryApplyDestroy, so destroy delivery becomes order-independent.
 void ArmPendingDestroy(const coop::net::PropDestroyPayload& payload);
 
-// SPAWN-BEFORE-QUIESCENCE (2026-07-11): a PropSpawn whose target does NOT resolve to any local actor,
-// arriving while THIS client is inside its own world-load episode. Fresh-spawning the mirror NOW hands it
-// to loadObjects' keyed churn (measured: host-placed cblocks spawned 12:20:37, churn-destroyed 12:20:39,
-// eids unbound for the session = permanently invisible props). remote_prop_spawn::OnSpawn ARMS the payload
-// here instead of spawning; the sequence re-runs the full OnSpawn at the quiescence drain (exact-key
-// resolve first -- a late-loading save twin wins -- else a fresh spawn into the settled world). Dedup by
+// SPAWN REVALIDATION (take 2, 2026-07-11): EVERY wire prop expression processed while THIS client is
+// inside its own world-load episode is provisional -- a converge target is a save/level local that
+// loadObjects' churn destroys, and its same-key recreate exists only if the prop was still a WORLD prop
+// in the transferred save (a prop the host hotbar'd before save-capture and placed after has NO recreate
+// -> dead mirror row forever = a permanently invisible host prop; a FRESH mid-episode mirror is churn-
+// killed outright -- take 1). remote_prop_spawn::OnSpawn CAPTURES every in-episode payload here (the
+// fresh tail also returns without spawning); the drain re-runs the full OnSpawn ONLY for entries whose
+// Registry row is still dead/absent -- churn survivors and sweep-RE-BOUND recreates skip O(1). Dedup by
 // eid (key bytes when eid==0), latest payload wins. `deferKerfur` is the caller's OnSpawn flag, replayed
 // VERBATIM at the drain (a kerfur adoption/convert one-shot passes false; replaying the default true
 // would re-route it into the K-6 adopter -- the OBS-2/ROOT-1 arg-slot mis-adopt class). The destroy

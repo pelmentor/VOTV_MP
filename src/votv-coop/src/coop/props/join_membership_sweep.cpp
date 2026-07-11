@@ -266,10 +266,12 @@ static void RunDivergenceSweep_(void* localPlayer) {
                 coop::dev::join_window_pos_trace::NoteRecreateRebind(key, static_cast<uint32_t>(dr->second), a);
                 coop::remote_prop::RegisterPropMirror(dr->second, a, key, acls, /*senderSlot*/ 0,
                                                       /*rebindInPlace*/ true);
-                UE_LOGW("join_membership_sweep: keyed churn RE-BIND -- unclaimed '%ls' key='%ls' is the "
-                        "re-create of already-expressed eid=%u (mirror row held a dead actor) -> row rebound, "
-                        "actor claimed, NOT doomed (docs/piles/12 eid=2947 upstream)",
-                        acls.c_str(), key.c_str(), static_cast<unsigned>(dr->second));
+                const ue_wrap::FVector rbLoc = ue_wrap::engine::GetActorLocation(a);
+                UE_LOGW("join_membership_sweep: keyed churn RE-BIND -- unclaimed '%ls' key='%ls' "
+                        "loc=(%.1f,%.1f,%.1f) is the re-create of already-expressed eid=%u (mirror row held "
+                        "a dead actor) -> row rebound, actor claimed, NOT doomed (docs/piles/12 eid=2947 upstream)",
+                        acls.c_str(), key.c_str(), rbLoc.X, rbLoc.Y, rbLoc.Z,
+                        static_cast<unsigned>(dr->second));
                 deadKeyedRows.erase(dr);
                 ++claimedCount;
                 ++claimedByClass[acls];
@@ -287,6 +289,17 @@ static void RunDivergenceSweep_(void* localPlayer) {
         doomed.push_back(a);
         doomedClass.push_back(acls);
         ++doomedByClass[acls];
+    }
+    // TRIPWIRE (take 2, 2026-07-11): rows still in deadKeyedRows = wire identities whose actor churn-died
+    // and NO same-key recreate materialized (the prop was not a WORLD prop in the transferred save --
+    // e.g. hotbar'd before save-capture and placed after). The spawn-revalidation drain (quiescence_drain
+    // step 4, runs right after this sweep) re-expresses them from the captured in-episode payloads. Named
+    // here per-key so a log read localizes the residual instantly (the take-2 invisible rock left ZERO
+    // trace before this line existed).
+    for (const auto& [dkey, deid] : deadKeyedRows) {
+        UE_LOGW("join_membership_sweep: dead keyed mirror row SURVIVED the re-bind pass -- eid=%u key='%s' "
+                "has no churn re-create (not a world prop in the transferred save); the spawn-revalidation "
+                "drain re-expresses it", static_cast<unsigned>(deid), dkey.c_str());
     }
     if (!keylessSkippedByClass.empty()) {
         size_t skippedTotal = 0;
@@ -392,6 +405,15 @@ static void RunDivergenceSweep_(void* localPlayer) {
     // broadcast these local-only teardowns. deferred=false: we run from the
     // event_feed drain on the game thread, not inside a BP graph.
     for (void* a : doomed) {
+        // Per-doom identity line (user ask 2026-07-11: positions in identity-critical logs). The class
+        // histogram below says WHAT died; this says WHICH and WHERE -- the take-2 RCA burned an hour
+        // because a doomed rock left no per-actor trace. Cold path, once per join.
+        {
+            const std::wstring dk = ue_wrap::prop::GetInteractableKeyString(a);
+            const ue_wrap::FVector dl = ue_wrap::engine::GetActorLocation(a);
+            UE_LOGI("join_membership_sweep:   dooming '%ls' key='%ls' loc=(%.1f,%.1f,%.1f)",
+                    R::ClassNameOf(a).c_str(), dk.c_str(), dl.X, dl.Y, dl.Z);
+        }
         coop::remote_prop::ClearAnyDriveFor(a);
         ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, a);
         coop::prop_lifecycle::DestroyLocalProp(a, /*deferred=*/false);
