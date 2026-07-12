@@ -37,9 +37,14 @@
 // (the probe is client-local), and the lost-bracket flake is covered by the sweep's own
 // post-announce bracket timeout (join_membership_sweep.cpp).
 //
-// LIFECYCLE (game-thread only; g_inEpisode atomic ONLY for the rng_roll_census worker-thread tag read):
-//   Arm()             -- harness, immediately before BootStorySaveBlocking (client join path).
-//                        Arms the episode AND opens the join quiescence-probe session.
+// LIFECYCLE (game-thread only EXCEPT Arm; the episode flag + the join-probe request are atomics):
+//   Arm()             -- harness TimelineThread, immediately before BootStorySaveBlocking (client
+//                        join path). OFF-GT SAFE BY CONTRACT: touches only atomics -- it arms the
+//                        episode and RAISES the join probe-session request; the session itself
+//                        opens on the next GT TickQuiesceProbe (audit CRITICAL 2026-07-12: opening
+//                        it inline raced the GT ticker on the plain probe fields). HasQuiesced()
+//                        reads false while the request is pending, so the handoff window cannot
+//                        leak an early announce.
 //   ArmQuiesceProbe() -- (re)open a probe session without arming the episode (travel re-announce,
 //                        post-snapshot sweep gate). Resets the latch.
 //   TickQuiesceProbe()-- drive per client tick (net_pump + the sweep both call it; internal 5 Hz
@@ -57,8 +62,9 @@
 
 namespace coop::world_load_episode {
 
-// The client join world-load has started (harness, before BootStorySaveBlocking). Arms the episode
-// latch and opens the join quiescence-probe session. Idempotent. Game thread.
+// The client join world-load has started (harness TimelineThread, before BootStorySaveBlocking).
+// Arms the episode latch and raises the join probe-session request (the session opens on the next
+// GT TickQuiesceProbe). Idempotent. ANY thread (atomics only).
 void Arm();
 
 // (Re)open a quiescence-probe session WITHOUT arming the episode: the travel re-announce

@@ -8,6 +8,7 @@
 #include "coop/creatures/npc_sync.h"          // IsAllowlistedClass (the NPC load tail)
 #include "coop/props/prop_element_tracker.h"  // HasSeededOnce / InPurgeEpisode (purge-aware progress)
 #include "coop/props/prop_lifecycle.h"        // IsPerPlayerPropClass
+#include "ue_wrap/hot_path_guard.h"           // UE_ASSERT_GAME_THREAD (probe fields are GT-owned)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
@@ -22,11 +23,19 @@ namespace R = ue_wrap::reflection;
 
 namespace {
 
-// WRITES are game-thread only (armed on the join bringup thread's Post to the game thread; cleared
-// on the probe latch / Reset; the destroy seam reads on the GT). Atomic (relaxed) so the
-// rng_roll_census probe may TAG records with the episode flag from the ProcessEvent-dispatching
-// worker threads without a data race -- the tag is advisory, staleness is fine.
+// g_inEpisode is atomic (relaxed): Arm() runs on the harness TimelineThread (the client join
+// bringup, harness.cpp DriveMenuModeJoinWorldBoot), the destroy seam reads on the GT, and the
+// rng_roll_census probe TAGS records from ProcessEvent-dispatching worker threads (advisory,
+// staleness fine).
 std::atomic<bool> g_inEpisode{false};
+
+// The join probe-session OPEN request (audit CRITICAL 2026-07-12): Arm() itself may NOT touch the
+// plain probe-session fields below -- it runs OFF the game thread (TimelineThread), and the fields
+// race the GT-driven TickQuiesceProbe (incl. a std::string = UB). Arm only raises this atomic
+// request; the GT ticker consumes it and opens the session ON the GT. HasQuiesced() treats a
+// pending request as "session open" (false) so the vacuous-true window between the off-GT Arm and
+// the first GT tick cannot leak an early announce (belt on top of the worldUp/seed gates).
+std::atomic<bool> g_joinProbeRequested{false};
 
 // ---- Quiescence-probe session state (game-thread only; no mutex) ----
 bool g_probeOpen  = false;     // a session is open (probing)
@@ -130,18 +139,28 @@ void Latch_(const char* how) {
 }  // namespace
 
 void Arm() {
+    // OFF-GT SAFE (TimelineThread): touches ONLY the two atomics. The probe session opens on the
+    // next GT TickQuiesceProbe via g_joinProbeRequested (audit CRITICAL 2026-07-12 -- the first cut
+    // opened it inline and raced the GT ticker on eight plain fields incl. a std::string).
     if (g_inEpisode.load(std::memory_order_relaxed)) return;  // idempotent -- one arm per world-load
     g_inEpisode.store(true, std::memory_order_relaxed);
+    g_joinProbeRequested.store(true, std::memory_order_release);
     UE_LOGI("world_load_episode: ARMED -- client world-load starting; KEYED-prop destroy broadcasts "
-            "suppressed until load-tail quiescence (host-wipe root fix)");
-    OpenProbeSession_("join world-load");
+            "suppressed until load-tail quiescence (host-wipe root fix); probe session opens on the "
+            "next game-thread tick");
 }
 
 void ArmQuiesceProbe(const char* reason) {
+    UE_ASSERT_GAME_THREAD("world_load_episode::ArmQuiesceProbe");
     OpenProbeSession_(reason);
 }
 
 bool TickQuiesceProbe() {
+    UE_ASSERT_GAME_THREAD("world_load_episode::TickQuiesceProbe");
+    // Consume a pending join-session request (raised off-GT by Arm) -- the session opens HERE, on
+    // the GT, so the plain probe fields below are single-thread-owned.
+    if (g_joinProbeRequested.exchange(false, std::memory_order_acq_rel))
+        OpenProbeSession_("join world-load");
     if (!g_probeOpen) return HasQuiesced();  // steady state / latched / vacuous: bool reads only
     const auto now = std::chrono::steady_clock::now();
     const auto msSince = [now](std::chrono::steady_clock::time_point t) {
@@ -193,6 +212,7 @@ bool TickQuiesceProbe() {
 }
 
 bool HasQuiesced() {
+    if (g_joinProbeRequested.load(std::memory_order_acquire)) return false;  // arm raised, session not yet open
     if (g_probeOpen) return false;    // mid-load: a session is probing
     if (!g_everOpened) return true;   // vacuous: no world-load observed since Reset -- nothing to wait for
     return g_quiesced;
@@ -206,6 +226,7 @@ long long MsSinceQuiesced() {
 
 void Reset() {
     g_inEpisode.store(false, std::memory_order_relaxed);
+    g_joinProbeRequested.store(false, std::memory_order_relaxed);
     g_probeOpen = false;
     g_everOpened = false;  // back to the vacuous state -- a reconnect without a world change announces freely
     g_quiesced = false;
