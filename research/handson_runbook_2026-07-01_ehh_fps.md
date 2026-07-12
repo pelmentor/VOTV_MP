@@ -15,7 +15,7 @@ Context: the mass-move DUP is already VERIFIED (19:06 "всё на своих м
 RE: the "use" action has THREE delegate bindings (`_41` IE_Pressed hooked, `_38` a 2nd IE_Pressed + `_42`
 IE_Released UNHOOKED). `_38` fired on every E-press → native `useAction` → deny, in parallel with our cancelled
 `_41`. Fix: side-effect-free deny-suppressor on `_38`+`_42` (client-only, cancel-if-pile, no intent/no throw).
-Finding: `research/findings/votv-use-action-three-bindings-RE-2026-07-01.md`.
+Finding: `research/findings/props-lifecycle/votv-use-action-three-bindings-RE-2026-07-01.md`.
 
 ### T1 — EHH gone on client pile grab/release
 1. Client: aim at a pile (hover GUI prompt showing), press E to grab, press E again (or LMB) to throw/drop.

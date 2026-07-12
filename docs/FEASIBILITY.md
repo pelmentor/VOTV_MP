@@ -90,7 +90,7 @@ VOTV uses UE's `USaveGame` serialization (per-slot save files, typically
 under the game's `Saved/SaveGames/`). **RESOLVED:** root
 `%LOCALAPPDATA%\VotV\Saved\SaveGames\`, flat GVAS/UE4.27 `<slot>.sav`
 (unencrypted, ~19.6 MB, photos inline), non-atomic 4-in-place-write gap — see
-`research/findings/votv-save-path-RE-2026-05-30.md`. Coop is host-authoritative:
+`research/findings/saves/votv-save-path-RE-2026-05-30.md`. Coop is host-authoritative:
 host loads their save; client's world is synced from host state. Loading a
 save programmatically is done via the game's own load `UFunction` (callable
 through reflection) — entry point RE'd + shipped (`ue_wrap/save_browser.cpp`
@@ -139,7 +139,7 @@ skeleton commit and never updated as Phase 1 closed each item).
    `%LOCALAPPDATA%\VotV\Saved\SaveGames\`; flat GVAS/UE4.27 `<slot>.sav`
    (unencrypted, ~19.6 MB, photos inline), `data.sav` meta, `b_*`/subsave
    files; non-atomic 4-in-place-write gap. See
-   `research/findings/votv-save-path-RE-2026-05-30.md` (commit 88a8a1f8);
+   `research/findings/saves/votv-save-path-RE-2026-05-30.md` (commit 88a8a1f8);
    exploited in `coop/save_transfer.cpp`, `coop/save_block.cpp`,
    `ue_wrap/save_capture.cpp`, `ue_wrap/save_browser.cpp`.
 4. [RESOLVED] Blueprint-vs-C++ split of gameplay logic. VOTV gameplay is

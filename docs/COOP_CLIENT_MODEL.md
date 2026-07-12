@@ -194,7 +194,7 @@ LogicMods/votv-coop on EVERY peer and it appears in everyone's F1 browser.
 > modes per bytecode — REPLACE (mynet: default step muted at volume 0, boltrix@1 at actor
 > loc) / ADDITIVE (keljoy squeak, scaled/4 vol + scaled/2+1 pitch); own-body REPLACE sound
 > skipped (native local step unmutable — would double). Receiver-local, nothing on the
-> wire. RE: research/findings/votv-kerfur-variant-effects-RE-2026-07-03.md; smoke PASS
+> wire. RE: research/findings/kerfur/votv-kerfur-variant-effects-RE-2026-07-03.md; smoke PASS
 > (omega rig 0 comps + face, mynet 31); hands-on pending (runbook 2026-07-03 take 3,
 > DLL `6646128B7172620C`).
 >
@@ -204,7 +204,7 @@ LogicMods/votv-coop on EVERY peer and it appears in everyone's F1 browser.
 > PASSED [V hands-on 2026-07-02 "Работает amazing"]: host+client facing each other, client
 > puppet = textured scientist on the host's screen, host puppet = kel on the client's.
 
-Prior RE: `research/findings/votv-mp-pak-mount-feasibility-2026-05-25.md`.
+Prior RE: `research/findings/architecture-audits/votv-mp-pak-mount-feasibility-2026-05-25.md`.
 
 ### 3A. Load the cooked mesh (reflection only, no UE4SS)
 VOTV ships reflection-callable pak plugins (call via the mod's `R::FindClass` /
@@ -491,7 +491,7 @@ originally deferred.
 ## 10. References
 - `tools/client_model/README.md` + `SPEC.md` — pipeline/tools + byte-exact cook spec.
 - `tools/client_model/repose.py` + `profiles/` (library; v2 wide = default) — repose automation (§5).
-- `research/findings/votv-mp-pak-mount-feasibility-2026-05-25.md` — pak plugins, auto-mount,
+- `research/findings/architecture-audits/votv-mp-pak-mount-feasibility-2026-05-25.md` — pak plugins, auto-mount,
   the LoadObject POC (basis for §3A).
 - Code seams: `coop/player/remote_player.cpp:87/92/158`, `ue_wrap/puppet.cpp:341-680,525`,
   `ue_wrap/engine_component.cpp:212-222,241-250`.

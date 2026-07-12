@@ -2,7 +2,7 @@
 // players' grabs and throws (receiver-side synthesis).
 //
 // WHY (hands-on 2026-06-11 "object pick up / throw -- no sounds from puppet"
-// + research/findings/votv-puppet-sounds-RE-2026-06-11.md): the native
+// + research/findings/player-puppet/votv-puppet-sounds-RE-2026-06-11.md): the native
 // sounds run ONLY inside the local actor's input chain, so a remote peer
 // never hears them:
 //   E-GRAB CLICK (hands-on round 2, "always the same unique single sound"):

@@ -1,6 +1,6 @@
 # Phase 5G garbage/trash sync — Inc 2 + Inc 3 concrete design — 2026-05-27
 
-Builds on `research/findings/votv-garbage-trash-interaction-RE-2026-05-27.md`
+Builds on `research/findings/piles-trash/votv-garbage-trash-interaction-RE-2026-05-27.md`
 (class hierarchy + crash hypothesis) and the shipped Inc 1
 (`src/votv-coop/src/coop/garbage_sync.cpp`: client-side PRE-cancel of
 `Aprop_openContainer_C::ReceiveTick` + `::checkPickup` for
@@ -35,7 +35,7 @@ by the existing/new entity-spawn observers.
 For #2 the very long UFunction name is the canonical name in the dump;
 resolution via `R::FindFunction(cls, L"BndEvt__...")` works as-is (an
 identical pattern is already in use for other BndEvt hooks; see
-`research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md`).
+`research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md`).
 
 ---
 

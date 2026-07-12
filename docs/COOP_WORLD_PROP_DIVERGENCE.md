@@ -80,7 +80,7 @@ toggles): the runtime authority is the per-peer `mainGameInstance.gameRules`, bu
 boots from the host's live-captured save so the host's rules populate the client's copy, and there's
 no mid-session rule editor to mutate it. So world-rules sync needed **no build** — it's host-authoritative
 for free via the same save-load spine. **CONFIRMED** on a 2-peer smoke (client == host, 36 rules;
-`research/findings/votv-gamerules-settings-RE-2026-07-09.md` §4). The knob is: *static per-peer copy
+`research/findings/world-systems/votv-gamerules-settings-RE-2026-07-09.md` §4). The knob is: *static per-peer copy
 seeded from the host save = fine; **mutating** autonomous per-peer copy (a local accumulator) = the
 divergence class.*
 

@@ -1,7 +1,7 @@
 // coop/garbage_sync.cpp -- Phase 5G Inc 1: stop the open-container per-tick
 // AV when picking up a garbage pile on the client.
 //
-// Root cause (research/findings/votv-garbage-trash-interaction-RE-2026-05-27.md):
+// Root cause (research/findings/piles-trash/votv-garbage-trash-interaction-RE-2026-05-27.md):
 // Aprop_openContainer_C::ReceiveTick + checkPickup walk a TArray<AActor*>
 // itemsInside at +0x378 every tick. On the client, after a save-load + the
 // per-peer-divergent undergroundGarbageSpawner has run, the array holds

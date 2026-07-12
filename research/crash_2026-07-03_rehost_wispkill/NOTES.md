@@ -79,7 +79,7 @@ injections / CreateNamedSave / re-Install pointers / ElementDeleter) was superse
 register-level proof: the culprit was the save registration path (g_storySave), pinpointed
 WITHOUT a repro probe because the dump's RDI landed exactly on gameInstance+0x1A8. The related
 LATENT class (every other process-latched BP pointer) is cataloged in
-`research/findings/votv-bp-pointer-cache-staleness-audit-2026-07-04.md` (probe-gated next thread).
+`research/findings/architecture-audits/votv-bp-pointer-cache-staleness-audit-2026-07-04.md` (probe-gated next thread).
 
 **Instance-2 artifacts:** `UE4CC-Windows-D06163EF49E939FBC2DF83A565BC5F76_0000/` (dump + context),
 `host_votv-coop_2026-07-04_rehost_plain.log` (full host log; AV spam at the tail).

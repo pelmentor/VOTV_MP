@@ -379,7 +379,7 @@ bool HandleWorldEvent(net::Session& session,
         // Sender = host. Receiver looks up local AdaynightCycle_C and
         // invokes the cycle's mutator UFunctions to apply each delta.
         // See coop/weather_sync.cpp::ApplyFromHost for the full apply
-        // logic + research/findings/votv-weather-DESIGN-2026-05-26.md.
+        // logic + research/findings/weather-wind/votv-weather-DESIGN-2026-05-26.md.
         if (msg.payloadLen < sizeof(net::WeatherStatePayload)) {
             UE_LOGW("event_feed: WeatherState payload too short (%zu < %zu)",
                     static_cast<size_t>(msg.payloadLen), sizeof(net::WeatherStatePayload));

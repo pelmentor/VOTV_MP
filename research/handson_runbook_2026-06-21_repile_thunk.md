@@ -61,7 +61,7 @@ The **client mirror-staleness dup**: on the client, a join-mirror of a pile can 
 within ~10 s; then a convert for that eid logs **`mirror NOT-FOUND`** → the client spawns a fresh clump and
 the original lingers = a visible dup. **This is NOT fixed by the thunk** (it is client-side staleness, not
 the host-side mis-bind the thunk fixes) — design in
-`research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`. If you see a dup, grab the
+`research/findings/piles-trash/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`. If you see a dup, grab the
 `mirror NOT-FOUND` lines from the CLIENT log and note the eid + roughly how long after join — that feeds the
 robustness track, not this runbook.
 

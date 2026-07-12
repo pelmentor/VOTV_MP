@@ -102,7 +102,7 @@ namespace {  // [drive helpers part 2]
 //
 // v5 design (post-RE 2026-05-24): the launch energy is the body's inherited
 // PhysX tracking velocity captured by the HOST at the release edge (see
-// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md). Receiver
+// research/findings/physics-grab/votv-throw-release-pipeline-RE-2026-05-24.md). Receiver
 // applies linear + angular velocity AFTER SetSimulatePhysics(true) so the
 // body resumes dynamic sim with the matching launch state. No AddImpulse
 // (the impulse was the v4 partial fix; replaced cleanly per RULE 2).
@@ -419,7 +419,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     // zero (struct default); the stream-stop timeout at Tick() compares
     // (NowMs() - lastApplyMs > 500) and fires immediately, releasing the
     // grab on the very first packet drop / late-arrival after a fresh
-    // grab. See research/findings/votv-coop-audit-post-pr4-7-2026-05-28.md.
+    // grab. See research/findings/architecture-audits/votv-coop-audit-post-pr4-7-2026-05-28.md.
     g_drives[slot].lastApplyMs = NowMs();
 }
 
@@ -629,7 +629,7 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         // never through here) and keeps BP-default QueryAndPhysics, so both peers can still grab
         // the final pile. (We also do NOT prime the mirror to self-convert: the BP impulse/slope
         // gates made that unreliable ~3/10.) [[project-bug-trash-chippile-uaf-crash]] +
-        // research/findings/votv-clump-mirror-grab-RE-2026-06-08.md
+        // research/findings/piles-trash/votv-clump-mirror-grab-RE-2026-06-08.md
         ue_wrap::engine::SetActorRootCollisionEnabled(propActor, 2 /*PhysicsOnly -- lands but ungrabbable*/);
         ue_wrap::engine::SetActorSimulatePhysics(propActor, true);
         ue_wrap::engine::SetActorRootPhysicsVelocity(

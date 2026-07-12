@@ -72,7 +72,7 @@ inline constexpr const wchar_t* GameplayStaticsClass = L"GameplayStatics";
 // Intercepting it gives us ONE engine-level hook for all NPC + spawner
 // classes; replaces the 14-per-spawner-observer plan (architecture-doc
 // Hook surface table line 222) with 1 observer. See
-// research/findings/votv-npc-sync-prereqs-RE-2026-05-24.md section 4.
+// research/findings/npc-creatures/votv-npc-sync-prereqs-RE-2026-05-24.md section 4.
 // The constant for this UFunction is `BeginDeferredSpawnFn` (declared
 // further down in this file, alongside the engine-side reuse from
 // remote_prop.cpp + engine.cpp -- RULE 2: one name across all callers).
@@ -191,7 +191,7 @@ inline constexpr size_t kNpcAllowlistSize = sizeof(kNpcAllowlist) / sizeof(kNpcA
 // list; it is DISJOINT from kNpcAllowlist (a class is one or the other), so the two interceptors are
 // conflict-free (game_thread.h multi-interceptor support). VERIFIED : AActor/APawn in the SDK
 // CXXHeaderDump ([[feedback-verify-game-domain-facts]]) -- agent ac176fda + the design doc
-// research/findings/votv-b3b-worldactor-mirror-design-2026-06-17.md. Matched by name (no host-allocated
+// research/findings/props-lifecycle/votv-b3b-worldactor-mirror-design-2026-06-17.md. Matched by name (no host-allocated
 // wire id), but kept curated. v1 ships the high-value subset live + the rest behind smoke confirmation
 // of their spawn path (kavotia/piramidTest possession-risk classes are NOT here -- they go to B3a/verify).
 inline constexpr const wchar_t* kWorldActorAllowlist[] = {
@@ -456,7 +456,7 @@ inline constexpr const wchar_t* GetBoneNameFn = L"GetBoneName";              // 
 // We hook the engine-native UFunctions (universal -- captures light grab
 // AND heavy drag), with the BP-Timeline ones as secondary diagnostic.
 // IDA decompile + log analysis written up in
-// research/findings/votv-physics-interaction-deep-re-2026-05-23.md.
+// research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md.
 
 // Engine UPhysicsHandleComponent UFunctions (light-grab path; ProcessEvent-
 // dispatched -- the exec thunks at rva 0x1430C64B0 / 0x1430C65D0 / 0x1430C6AD0 /
@@ -664,7 +664,7 @@ inline constexpr const wchar_t* SpotLightComponentClass = L"SpotLightComponent";
 // AmainPlayer_C::addPropToPlayer(FName prop) -- cheat-menu-equivalent
 // path. Spawns the actor + adds to player inventory + (per F-INV-2
 // open flag) MAY auto-equip when it's an equipment item.
-// See research/findings/votv-inventory-equip-battery-RE-2026-05-26.md.
+// See research/findings/inventory-items/votv-inventory-equip-battery-RE-2026-05-26.md.
 inline constexpr const wchar_t* MainPlayerAddPropToPlayerFn = L"addPropToPlayer";
 
 // Battery item class for the standard flashlight (Aprop_batts_C).
@@ -718,7 +718,7 @@ inline constexpr const wchar_t* PropInitFn            = L"Init";
 inline constexpr const wchar_t* PropMushroomGrowingClass = L"prop_food_mushroom7_C";
 
 // v5 Bug C (inventory drop): the BP function that all 4 drop paths funnel
-// through (per research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md).
+// through (per research/findings/inventory-items/votv-inventory-drop-spawn-RE-2026-05-24.md).
 // We POST-hook this on UpropInventory_C and read the out-params to broadcast
 // PropSpawn. ON the receiver, Aprop_C.setKey is dispatched between Begin and
 // Finish spawning so the prop's Init() doesn't overwrite Key with NewGuid.
@@ -742,7 +742,7 @@ inline constexpr const wchar_t* ConvStringToNameFn       = L"Conv_StringToName";
 // SetPhysicsAngularVelocityInDegrees @ 0x1430DF7B0,
 // GetPhysicsLinearVelocity @ 0x1430DC550,
 // GetPhysicsAngularVelocityInDegrees @ 0x1430DC320 -- see
-// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md). Host reads
+// research/findings/physics-grab/votv-throw-release-pipeline-RE-2026-05-24.md). Host reads
 // GetPhysics* on the held mesh AT THE RELEASE EDGE to capture the body's
 // inherited tracking velocity; receiver writes the matching SetPhysics*
 // AFTER SetSimulatePhysics(true) so the body re-enters dynamic sim with the
@@ -756,7 +756,7 @@ inline constexpr const wchar_t* SetPhysicsAngularVelocityInDegreesFn = L"SetPhys
 // Phase 5W (2026-05-26) weather. AdaynightCycle_C is the singleton weather
 // authority -- owns all scheduler timers + state fields + mutator UFunctions.
 // Resolved on the receiver via R::FindObjectByClass since it's the only
-// instance per session. See research/findings/votv-weather-DESIGN-2026-05-26.md.
+// instance per session. See research/findings/weather-wind/votv-weather-DESIGN-2026-05-26.md.
 inline constexpr const wchar_t* DaynightCycleClass = L"daynightCycle_C";
 
 // Phase 5W Inc2 (2026-05-27) lightning: AlightningStrike_C is the discrete
@@ -775,7 +775,7 @@ inline constexpr const wchar_t* SuperFogClass = L"superFog_C";
 
 // AdirectionalWind_C -- the wind actor (singleton). Resolved by class like the cycle
 // (FindObjectByClass) for the host-authoritative wind sync (coop/weather_sync via
-// ue_wrap/directionalwind). RE: research/findings/votv-wind-basefog-RE-2026-06-08.md.
+// ue_wrap/directionalwind). RE: research/findings/weather-wind/votv-wind-basefog-RE-2026-06-08.md.
 inline constexpr const wchar_t* DirectionalWindClass = L"directionalWind_C";
 
 // Scheduler UFunctions -- client INTERCEPTS these (PRE-cancel via the
@@ -815,7 +815,7 @@ inline constexpr const wchar_t* DaynightCycle_setRainParticlesFn   = L"setRainPa
 
 // Phase 5W Inc-fix-1 (2026-05-27): direct UParticleSystemComponent::Activate
 // path on the cycle's eff_rain component. Per
-// research/findings/votv-weather-RE-rendering-2026-05-27.md the previous
+// research/findings/weather-wind/votv-weather-RE-rendering-2026-05-27.md the previous
 // receiver chain (causeRain UFunction) does NOT reliably activate eff_rain
 // on the client because causeRain's BP body is a Random-roll function, not
 // a particle-Activate dispatcher. Bypass it entirely: direct memory writes
@@ -844,7 +844,7 @@ inline constexpr const wchar_t* SetCollisionEnabledFn                = L"SetColl
 // The class that overrides Aprop_C::Init AND triggers spawnedNaturally() ->
 // NoCollision on its StaticMesh in the natural-spawn path
 // (AmushroomSpawner_C::Spawn). 2026-05-25 RE
-// (research/findings/votv-mushroom-fall-through-RE-2026-05-25.md): this is
+// (research/findings/world-systems/votv-mushroom-state-RE-2026-05-24.md (the standalone fall-through finding was never filed)): this is
 // the actual cap-mushroom class. mushroom7_C (PropMushroomGrowingClass) grows
 // into prop_puffballMature_C, NOT this -- separate species.
 inline constexpr const wchar_t* PropFoodMushroomClass                = L"prop_food_mushroom_C";

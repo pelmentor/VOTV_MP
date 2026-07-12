@@ -53,7 +53,7 @@ bool HandleStateEvent(net::Session& session,
         // interactable_sync routes by kind to the right channel, resolves the
         // instance by Key, + idempotently applies on the GT (echo-suppressed).
         // (KeypadState is NOT here -- it carries a richer payload, its own case below.)
-        // RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+        // RE: research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md.
         if (msg.payloadLen < sizeof(net::KeyedTogglePayload)) {
             UE_LOGW("event_feed: %d payload too short (%zu < %zu)",
                     static_cast<int>(msg.kind),

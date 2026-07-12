@@ -17,7 +17,7 @@
 // identity. (Runtime projectile-splatter grime, whose spawn position is non-deterministic, is
 // out of scope for that model and deferred.)
 //
-// RE: research/findings/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
+// RE: research/findings/world-systems/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
 
 #pragma once
 

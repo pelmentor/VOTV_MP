@@ -71,7 +71,7 @@ the receiver already guards `keyW != "None"` -> eid; the log showed a clean 60 f
 - Built CLEAN (Release, 0 compile errors), deployed `f82943bcd7560724` to all 4 copies (hash MATCH x4),
   proto v83. Two audits (perf/hot-path + interp correctness) were spawned at deploy; fold their verdicts
   before relying on this. **NOT verified** — no autonomous smoke (you're on the PC); your hands-on is the test.
-- Root + design: `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md` (the jank-root
+- Root + design: `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md` (the jank-root
   correction + the interp-stall + scale).
 - After your run, tell me: (1) is the carry smooth like a normal object? (2) is the pile host-size? (3) any
   dup -> the `isProxy=0` lines. Then I flip the `simulateDrop` thunk (throw velocity) or crack #3b.

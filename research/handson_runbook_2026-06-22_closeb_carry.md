@@ -88,6 +88,6 @@ The churn only fires while the held clump touches other piles, so **test in a de
 ## Honest status
 - CLOSE-B v1: **built CLEAN, audit CLEAN, deployed `65AD883A` to all 4 copies, proto v82**. **NOT verified** —
   no autonomous smoke (you're on the PC); your hands-on is the test. Root + design:
-  `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+  `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 - After your run: tell me (a) GREEN or which failure mode, (b) the `gap=N` values to tune K, (c) whether the
   grab spot empties. Then I tune K / fix, commit-verified, and queue v2 (throw-arc + safety hook).

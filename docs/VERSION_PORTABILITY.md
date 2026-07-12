@@ -74,7 +74,7 @@ On a new build, a `[FAIL]` line names the broken primitive and the verdict says
    game renamed the class/function — update `profile::name`.
 5. Re-run; iterate until `HEALTH: PASS`.
 
-Reference: `research/findings/ue-wrap-reflection-2026-05-22.md` (AOBs, RVAs,
+Reference: `research/findings/phase0-bootstrap/ue-wrap-reflection-2026-05-22.md` (AOBs, RVAs,
 offsets, and the discovery method for all three primitives).
 
 ## Adaptation toolchain (shipped 2026-05-25)

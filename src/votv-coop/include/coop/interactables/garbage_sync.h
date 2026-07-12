@@ -33,7 +33,7 @@
 //            suppression deleted the client's per-peer loot mounds with
 //            no host replacement; dirtholes are per-peer LOCAL by doctrine.
 //
-// RE source: research/findings/votv-garbage-trash-interaction-RE-2026-05-27.md
+// RE source: research/findings/piles-trash/votv-garbage-trash-interaction-RE-2026-05-27.md
 
 #pragma once
 

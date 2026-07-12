@@ -1,6 +1,6 @@
 // coop/wisp_attack_sync.h -- Killer Wisp coop, HOST side (Inc2, parts A + E).
 //
-// See research/findings/votv-killerwisp-coop-design-2026-06-13.md. The host's killerwisp_C
+// See research/findings/npc-creatures/votv-killerwisp-coop-design-2026-06-13.md. The host's killerwisp_C
 // always physically grabs + kills the LOCAL host (its BP verbs hit getMainPlayer(), never
 // its acquired `Target`). This module makes the wisp lethal to the player it ACTUALLY
 // targeted (incl. a client) and mirrors the tear:

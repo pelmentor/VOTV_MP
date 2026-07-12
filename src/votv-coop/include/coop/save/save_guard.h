@@ -4,7 +4,7 @@
 // NON-ATOMICALLY: stock GameplayStatics::SaveGameToSlot truncates + overwrites
 // the .sav in place (4 in-place writes per save via saveSlot_C:saveToSlot, no
 // temp+rename), so a crash or a bad coop-era write leaves a corrupt save with
-// NO engine-side recovery (RE: research/findings/votv-save-path-RE-2026-05-30.md).
+// NO engine-side recovery (RE: research/findings/saves/votv-save-path-RE-2026-05-30.md).
 // A pre-session snapshot is therefore the ONLY recovery path.
 //
 // Policy (host-only persistence, user decision 2026-05-30): the HOST's save is

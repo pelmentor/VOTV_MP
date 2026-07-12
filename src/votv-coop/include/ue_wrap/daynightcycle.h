@@ -13,7 +13,7 @@
 // just `totalTime=...; if(!skipDaySet) Day=...` (no fan-out), so a direct field write is
 // the equivalent, unconditional, UFunction-free drive.
 //
-// RE: research/findings/votv-coop-class-clone-migration-roadmap-2026-06-06.md §2.
+// RE: research/findings/architecture-audits/votv-coop-class-clone-migration-roadmap-2026-06-06.md §2.
 
 #pragma once
 

@@ -10,7 +10,7 @@
 // runTrigger -> the garage toggles Open; we sync the garage's resulting Open (which
 // catches every activation source), never the button.
 //
-// RE: research/findings/votv-garage-door-button-sync-RE-2026-06-08.md.
+// RE: research/findings/computers-devices/votv-garage-door-button-sync-RE-2026-06-08.md.
 
 #pragma once
 

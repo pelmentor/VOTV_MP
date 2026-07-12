@@ -42,7 +42,7 @@ bool g_observerRegistered = false;
 // deferred spawn (also drives NPC spawns / prop spawns); filtered by
 // ActorClass == lightningStrike_C. The strike's actor location IS the
 // SpawnTransform translation per
-// research/findings/votv-weather-RE-effect-actors-2026-05-26.md.
+// research/findings/weather-wind/votv-weather-RE-effect-actors-2026-05-26.md.
 void OnSpawnPostLightning(void* /*self*/, void* /*function*/, void* params) {
     if (!GT::IsGameThread()) return;       // defensive
     if (!params) return;

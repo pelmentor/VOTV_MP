@@ -56,7 +56,7 @@ void* GetComponentSkeletalMeshAsset(void* skinnedComponent);
 // the AnimBP. useLegIK stays TRUE (real ACharacter has the floor-trace
 // context the IK needs).
 //
-// Per research/findings/votv-puppet-mainplayer-body-RE-2026-05-25.md.
+// Per research/findings/player-puppet/body-visible-f12-and-pose-mirroring-2026-05-22.md (the dedicated mainplayer-body finding was never filed).
 // Audit H9 (2026-05-27): the SkeletalMeshActor backup path was retired
 // (RULE 2). mainPlayer_C path is hands-on-verified working (commit
 // b100e8e); the env-var-gated `SpawnPuppetSkelMesh` + `IsMainPlayerPuppetKind`
@@ -89,7 +89,7 @@ void* GetSkeletalMeshComponent(void* puppetActor);
 // streamed camera yaw/pitch anchored at the puppet's head; the body-relative
 // LookAt clamps + RemotePlayer::UpdateBodyYaw's hold give "head leads, body
 // turns at the threshold". No-op if no live AnimInstance is resolved yet.
-// RE: research/findings/votv-puppet-head-look-RE-2026-06-11.md.
+// RE: research/findings/player-puppet/votv-puppet-head-look-RE-2026-06-11.md.
 void DriveHeadLookAtWorld(void* puppetActor, const FVector& worldTarget);
 
 // PROBE support (puppet-head-freeze, 2026-06-24; root NAMED + fixed 2026-07-02): read the
@@ -182,7 +182,7 @@ bool ReadCharacterIsFalling(void* actor);
 // member `lookAt` (FVector @0x2D90, WORLD). BUA recomputes `lookAt` each tick from the
 // LOCAL player camera UNLESS `customLookAt` (bool @0x2E49) is set. So head-look is
 // per-peer by default -- the desync the coop NPC sync fixes by streaming the host's
-// resolved lookAt. RE: research/findings/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md.
+// resolved lookAt. RE: research/findings/kerfur/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md.
 // Both are guarded by a kerfur-family-AnimBP class check, so calling them on a non-kerfur
 // actor is a safe no-op (never writes a foreign offset). Game thread only.
 

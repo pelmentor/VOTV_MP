@@ -4,7 +4,7 @@
 // LoadObject(FString) synchronously loads + returns a UObject by its /Game/...
 // object path. UE4 auto-mounts every .pak under Content/Paks/ at startup, so a
 // pak we drop under Content/Paks/LogicMods/ is resident by the time the world is
-// up (research/findings/votv-mp-pak-mount-feasibility-2026-05-25.md). This wraps
+// up (research/findings/architecture-audits/votv-mp-pak-mount-feasibility-2026-05-25.md). This wraps
 // that reflected call -- pure engine access, no coop/gameplay logic (principle
 // 7). RULE 3: no UE4SS, no native pak API; the game's own plugin does the mount.
 //

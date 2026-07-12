@@ -16,7 +16,7 @@
 // THEIR OWN channels, so the apply does not re-drive them. The host relays a client edge
 // (IsClientRelayableReliableKind).
 //
-// RE: research/findings/votv-powerControl-panel-sync-RE-2026-06-08.md.
+// RE: research/findings/computers-devices/votv-powerControl-panel-sync-RE-2026-06-08.md.
 
 #pragma once
 

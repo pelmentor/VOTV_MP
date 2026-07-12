@@ -3,7 +3,7 @@
 // The game keeps its own in-flight event registry on mainGamemode_C: `activeEvents` (int
 // refcount) + `activeEvents_senders` (TArray<UObject*> of the live event actors), single writer
 // lib_C::setEvent (RAII-style self-registration by ~95 event classes; bytecode-verified,
-// research/findings/votv-active-events-registry-RE-2026-07-04.md). setEvent itself is a lib_C CDO
+// research/findings/events/votv-active-events-registry-RE-2026-07-04.md). setEvent itself is a lib_C CDO
 // call from BP internals (EX-dispatch, hook-invisible) -- but the poll reads the RESULT, so no
 // hook is needed (the passEvents-poll shape from event_fire_sync, proven at v95).
 //

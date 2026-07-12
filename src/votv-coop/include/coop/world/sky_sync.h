@@ -4,7 +4,7 @@
 // orientation + save-derived moon phase that TimeSync(29) does NOT cover (TimeSync syncs the
 // clock-derived sun/moon orbit + brightness, not the random dome yaw / save moonPhase).
 //
-// RE: research/findings/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
+// RE: research/findings/weather-wind/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
 
 #pragma once
 

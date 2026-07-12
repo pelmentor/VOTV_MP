@@ -71,7 +71,7 @@ stays from `srcObj` (you confirmed position is correct).
 ## Honest status
 - Built CLEAN (Release, 0 errors), deployed `778BC35F706A16B7` all 4 copies (MATCH x4), proto v83 (no wire
   change). Adversarial audit was running at deploy. **NOT verified** — your hands-on is the test. Roots:
-  `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+  `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 - After your run, tell me: (1) pile rotation correct, (2) throw silent (no doubled pickup), (3) carry smooth,
   (4) clean landing. Then NEXT: throw whoosh cue (wire) · the ~4s FPS re-seed perf pass · the level-pile DESTROY
   fix (probe-greenlit at `1cm=1`).

@@ -8,7 +8,7 @@
 // DUPLICATE beside the still-loading twin. The orphaned untracked local then (a) gets over-claimed +
 // destroyed by kerfur_convert::ClaimConversionGhosts and (b) is invisible to the conversion poll (only
 // MirrorManager<Prop> is scanned) -> a client turn-on of it never reaches the host. (Full RCA:
-// research/findings/votv-kerfur-prop-join-adoption-RCA-AND-DESIGN-2026-06-16.md.)
+// research/findings/kerfur/votv-kerfur-prop-join-adoption-RCA-AND-DESIGN-2026-06-16.md.)
 //
 // This module is the PROP-form analogue of coop/npc_adoption.{h,cpp} (the WORKING template the NPC
 // form already uses): instead of fresh-spawning on a fuzzy miss, OnSpawn ARMS a pending adoption here;

@@ -22,7 +22,7 @@
 // edge the HOST snapshots the FULL current state (open AND closed) of every indexed
 // instance, so a joiner that loaded its own save converges to the host.
 //
-// RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+// RE: research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md.
 
 #pragma once
 

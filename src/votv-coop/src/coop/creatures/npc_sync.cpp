@@ -1,7 +1,7 @@
 // coop/npc_sync.cpp -- Phase 5N1 NPC sync foundation (extracted 2026-05-25).
 //
 // See coop/npc_sync.h for the public interface.
-// Architecture findings: research/findings/votv-npc-sync-prereqs-RE-2026-05-24.md.
+// Architecture findings: research/findings/npc-creatures/votv-npc-sync-prereqs-RE-2026-05-24.md.
 //
 // SPLIT (M-1 2026-05-29): the client-side receivers (OnEntitySpawn /
 // OnEntityDestroy / DrainClientMirrors) moved to coop/npc_mirror.cpp.
@@ -427,7 +427,7 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
             p.className.data[p.className.len++] = static_cast<char>(cls[i]);
         }
         // Tier 3 PoC (2026-05-28, per
-        // research/findings/votv-mta-cclientelement-audit-2026-05-28.md):
+        // research/findings/mta/votv-mta-cclientelement-audit-2026-05-28.md):
         // allocate an Npc Element via the unified Registry instead of the
         // retired g_nextNpcSessionId atomic. The wire field `sessionId` keeps
         // its name through this PoC (rename to `elementId` lands at the v12
@@ -511,7 +511,7 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         // and bails. UE4's K2Node_SpawnActorFromClass emits a null-check
         // before the FinishSpawningActor call per UE4 engine convention --
         // NOT YET IDA-confirmed on VOTV spawners; the RE TODO in
-        // research/findings/votv-npc-sync-prereqs-RE-2026-05-24.md
+        // research/findings/npc-creatures/votv-npc-sync-prereqs-RE-2026-05-24.md
         // section 4 (lines 559-563) tracks this. Per UE4 standard
         // emission patterns the risk is low, but if a specific VOTV
         // spawner BP emits non-null-checking code, we'd see a

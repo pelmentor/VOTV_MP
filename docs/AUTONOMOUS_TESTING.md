@@ -62,7 +62,7 @@ override per-run config without editing the ini:
   `mainPlayer_C`, `GetController()==null`) and asserts whether the puppet holds
   + tracks the clump. Verdict (2026-06-22): ENGAGED+HELD but NOT tracked — the
   puppet's tick doesn't drive the PHC, so Increment 2 must drive the hold pose
-  host-side. Finding: `research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md`.
+  host-side. Finding: `research/findings/player-puppet/votv-puppet-grab-feasibility-RE-2026-06-22.md`.
 - `VOTVCOOP_RUN_GRAB_INTENT_TEST=1` — the Increment-2 CLIENT-grab FULL-CHAIN test. The
   CLIENT picks a mirrored pile proxy, teleports facing it, and injects a REAL
   `InpActEvt_use` (E-press) so `OnPileGrabPre`'s camera-ray cone recognizes the pile →

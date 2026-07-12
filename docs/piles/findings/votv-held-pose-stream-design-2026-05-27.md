@@ -2,10 +2,10 @@
 
 Follow-up to:
 
-- `research/findings/votv-chippile-clump-morph-RE-2026-05-27.md` (the morph
+- `research/findings/piles-trash/votv-chippile-clump-morph-RE-2026-05-27.md` (the morph
   round-trip RE — open question C was "what drives the held clump's
   per-tick world transform on the owning peer?").
-- `research/findings/votv-garbage-trash-Inc2-Inc3-design-2026-05-27.md`
+- `research/findings/piles-trash/votv-garbage-trash-Inc2-Inc3-design-2026-05-27.md`
   (the Phase 5G STAGE 2 wire packet shape that this design extends).
 
 Scope. Phase 5G STAGE 2 already replicates the SPAWN and DESTROY of the

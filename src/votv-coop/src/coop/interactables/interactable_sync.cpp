@@ -109,7 +109,7 @@ const Adapter g_containerAdapter = {
 // unnecessary (RULE 1 -- don't carry door complexity the garage doesn't need). Key =
 // AtriggerBase_C::Key; state = Open; apply = settime(open) snap-to-state. The wall button
 // just toggles Open, which the poll catches -- we never observe the button.
-// RE: research/findings/votv-garage-door-button-sync-RE-2026-06-08.md.
+// RE: research/findings/computers-devices/votv-garage-door-button-sync-RE-2026-06-08.md.
 const Adapter g_garageAdapter = {
     "garage", coop::net::ReliableKind::GarageDoorState,
     &ue_wrap::garage::EnsureResolved,
@@ -125,7 +125,7 @@ const Adapter g_garageAdapter = {
 // dispatches by class to the right bool offset + refresh verb (upd/updIsOn/SetActive) so the
 // peer's mesh/FX/audio repaint, not just the field. Key = Aactor_save_C::Key @0x0230. The
 // wall switches/breakers that drive these just flip the bool, which the poll catches -- we
-// never observe the switch. RE: research/findings/votv-all-interactables-sweep-catalog-2026-06-08.md.
+// never observe the switch. RE: research/findings/props-lifecycle/votv-all-interactables-sweep-catalog-2026-06-08.md.
 const Adapter g_applianceAdapter = {
     "appliance", coop::net::ReliableKind::ApplianceState,
     &ue_wrap::appliance::EnsureResolved,
@@ -143,7 +143,7 @@ const Adapter g_applianceAdapter = {
 // placed-actor names are deterministic cross-peer). Apply = the native verb /
 // write+refresh per class, with the door.cpp verify+force-snap inside the
 // wrapper (the 0.5 s swing Timeline freezes outside tick range).
-// RE: research/findings/votv-lockers-boxes-door-RE-2026-06-11.md.
+// RE: research/findings/computers-devices/votv-lockers-boxes-door-RE-2026-06-11.md.
 const Adapter g_doorBoxAdapter = {
     "doorbox", coop::net::ReliableKind::LockerDoorState,
     &ue_wrap::door_box::EnsureResolved,

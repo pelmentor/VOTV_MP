@@ -1,6 +1,6 @@
 // coop/piramid_sync.h -- the walking-pyramid (piramid2_C) event mirror lane.
 //
-// Ground truth: research/findings/votv-piramid2-RE-2026-07-04.md; design: docs/events/piramid.md.
+// Ground truth: research/findings/props-lifecycle/votv-piramid2-RE-2026-07-04.md; design: docs/events/piramid.md.
 // The pyramid rides the GENERIC rails for four of its five axes -- spawn/pose/despawn =
 // world_actor_sync (piramid2_C on kWorldActorAllowlist), the 4 killerwisps + their deaths =
 // npc lane, event identity = event_fire_sync verdict ('piramid' no-replay), registry parity =

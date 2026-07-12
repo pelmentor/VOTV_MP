@@ -4,7 +4,7 @@
 // from coop/session state -- "X joined", "X left the game", connection errors. It
 // surfaces them via coop::chat_feed::Push -- the ImGui HUD (ui::hud) draws the feed.
 //
-// Mirrors MTA (research/findings/mta-chat-joinquit-reliability-2026-05-23.md): joins
+// Mirrors MTA (research/findings/mta/mta-chat-joinquit-reliability-2026-05-23.md): joins
 // announce a nickname over the RELIABLE channel; the disconnect message is generated
 // LOCALLY from the cause (MTA's quit-reason-enum pattern), not sent as a string.
 //

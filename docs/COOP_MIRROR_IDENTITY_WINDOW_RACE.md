@@ -40,7 +40,7 @@ separate `docs/piles/10` mass-unclaim over-destroy root).
 > — VERIFIED real log 16:06 2026-06-28 (242 RE-BIND + 13 post-purge fires, world clean). STILL BUILDING (STAGE 3):
 > SyncRouter / convert-pipeline / SyncDestroyQueue / SyncAuthority (D2 kerfur predict→relay) / residue — then
 > hands-on the whole + push. The bug-class closes in ONE place (CreateOrAdopt + SyncAuthority), as designed.
-> Detail: `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md` + [[project-sync-module-refactor-2026-06-27]].
+> Detail: `research/findings/architecture-audits/sync-consolidation-refactor-PLAN-2026-06-27.md` + [[project-sync-module-refactor-2026-06-27]].
 
 > **DELIVERY-OWNERSHIP facet 2026-06-30 (the INVERSE axis; fix SHIPPED in code, hands-on PENDING).** The
 > instances below are the IDENTITY-COLLISION axis: an entity reaches the joiner via **two** channels at once

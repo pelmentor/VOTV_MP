@@ -26,7 +26,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 | garbageClump (the carried "ball" — HOST authoring) | `chipPile.playerGrabbed` on grab (EX_LocalVirtualFunction); the clump-spawn + re-pile pile-spawn are `EX_CallMath` (INVISIBLE to PE, Func-thunk-VISIBLE) | **host-auth trash channel (08), BOTH morph directions at the ONE BeginDeferred Func thunk:** grab = **birth certificate** `NoteClumpBorn(clump, pile eid)` **+ MIGRATION-FIRST rebind of E onto the clump AT BIRTH** (v106b `4a280375`: the pile husk then dies eid-less, so the K2_DestroyActor Func seam naturally no-ops on it — pre-v106b the husk death broadcast DESTROY(E) + drained the row = the 11:43 grab regression); the certificate is consumed by the held-edge (`TakeClumpBorn`→carrying? `OnHostRegrab` : `AdoptBornClump`) or by `OnGrabIntent` (puppet hand); an EXPIRING certificate with a live untouched clump broadcasts the ToClump itself (BIRTH-ORPHAN express — a denied grab still converted the world). Re-pile = the same thunk converts E onto the spawned pile the same tick [V]. *(InpActEvt-PRE hand-off RETIRED v106 — use-HOLD grabs bypass press seams; death-watch RETIRED `d19ae4d4`.)* | **host eid only** (E migrates pile→clump→pile; a morph HUSK never owns E at death) | trash_channel, trash_collect_sync, local_streams, ue_wrap/ufunction_hook (08) `[V hands-on 2026-07-07 0ae: client grab/throw lane live-verified after v106b]` |
 | Held items — physics GRAB (Aprop_C in `grabbing_actor`, the E-drag of a WORLD prop) | grabbed | `EnsureHeldItemBroadcast` new-held edge (self-heal for untracked; the PRE-QUIESCENCE guard is **CLIENT-only** since v105 — on the host it never lifted and silenced expression forever [V log 2026-07-06 12:40]) + the held-pose stream | the item's Key/eid | trash_collect_sync, local_streams |
 | Held items — HOTBAR hand (Aprop_C in `holding_actor`; `updateHold` DESTROYS+RESPAWNS the actor per quick-slot switch) | **NOT a world entity** (v105, RULE 2): routed OUT of the prop pipeline entirely, **AND excluded from the SeedWalk_ census** (v105b: without the boundary the ~20s safety census adopted the recycled-slot hand actor → PropSpawn → frozen dupe at the puppet [V log 2026-07-06 13:44:00 eid=5377]) | owner announces `HandItem{class,name}` on change; peers keep a DISPLAY-ONLY mirror (physics/collision off, `prop_echo_suppress` Mark* so spawn/destroy watchers skip it) **re-driven per tick at the puppet's view-space hold** (head + synced-aim basis; NO attach — the FP-arms rig never anim-ticks on a puppet, a ref-pose socket attach rendered on the BACK [V hands-on 14:2x]) | **no eid, no Key on the wire** — player-slot addressed (player expression, like skin) | coop/player/hand_item (v105b AS-BUILT 2026-07-06, DLL 7EEA4488; mirror look USER-APPROVED live) |
-| R-pickup vanish / R-drop appear (the WORLD prop side of a hand transition) | pickup destroy + drop release are EX_CallMath / recycled-actor paths a PE observer + the census high-water guard cannot see | **v106 SEAM-DRIVEN (2026-07-07, replaces the v105b forced-reconcile per RULE 2)**: the pickup destroy broadcasts at the **K2_DestroyActor Func seam** (fires for EVERY dispatch route); an R-drop/place **IS a fresh spawn** (`simulateDrop`→`FinishSpawningActor`@117551, `loadData` restores the Key — **RE 2026-07-08 REFUTES the earlier "NOT a spawn" model**); a SURVIVING ex-hand actor is expressed at the **hand edge** (hand_item), inventory/Q-menu/stack-drop spawns adopt via the **FinishSpawningActor Func seam** (+1 tick, key restored) — BUT a **CLIENT's** fresh R-drop spawn of a pre-existing world rock is UNAUTHORED (`prop_lifecycle:195` host-auth skip) → **host can't see a client-placed rock = OPEN** (as of `13a372a3`). **RE-ROOTED 2026-07-09 (`/qf 15`): the SEAM-catching fixes (v2 FinishSpawn author, v3 destroy-suppress, v4 exclude-hand) are ALL crutches on the wrong layer — a MISSING SINGLE OWNER — and were REVERTED (they duped on grab). Proper fix = the host-authoritative INTENT lane (extend `GrabIntent=78`): `research/findings/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md` + `[[reference-votv-prop-interaction-buttons]]` (E=physics-grab; hold-R=pick into hand / place on ground; R-tap=hotbar). The 0ae [V] below is HOST Q-menu spawns + the grab lane, NOT this client-R-drop case.** The 4s reap + 20s census remain the safety net only | (accelerates the existing per-delta PropDestroy / PropSpawn lanes) | prop_lifecycle (destroy seam) + host_spawn_watcher (spawn seam) + hand_item (release edge); the K2 seam is BIDIRECTIONAL → the formerly-OPEN client-pickup destroy lane is closed by construction `[V hands-on 2026-07-07 0ae: Q-menu spawns appear INSTANTLY on clients — the FinishSpawn drain live-verified; grab lane PASS after v106b migration-first]` |
+| R-pickup vanish / R-drop appear (the WORLD prop side of a hand transition) | pickup destroy + drop release are EX_CallMath / recycled-actor paths a PE observer + the census high-water guard cannot see | **v106 SEAM-DRIVEN (2026-07-07, replaces the v105b forced-reconcile per RULE 2)**: the pickup destroy broadcasts at the **K2_DestroyActor Func seam** (fires for EVERY dispatch route); an R-drop/place **IS a fresh spawn** (`simulateDrop`→`FinishSpawningActor`@117551, `loadData` restores the Key — **RE 2026-07-08 REFUTES the earlier "NOT a spawn" model**); a SURVIVING ex-hand actor is expressed at the **hand edge** (hand_item), inventory/Q-menu/stack-drop spawns adopt via the **FinishSpawningActor Func seam** (+1 tick, key restored) — BUT a **CLIENT's** fresh R-drop spawn of a pre-existing world rock is UNAUTHORED (`prop_lifecycle:195` host-auth skip) → **host can't see a client-placed rock = OPEN** (as of `13a372a3`). **RE-ROOTED 2026-07-09 (`/qf 15`): the SEAM-catching fixes (v2 FinishSpawn author, v3 destroy-suppress, v4 exclude-hand) are ALL crutches on the wrong layer — a MISSING SINGLE OWNER — and were REVERTED (they duped on grab). Proper fix = the host-authoritative INTENT lane (extend `GrabIntent=78`): `research/findings/join-identity/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md` + `[[reference-votv-prop-interaction-buttons]]` (E=physics-grab; hold-R=pick into hand / place on ground; R-tap=hotbar). The 0ae [V] below is HOST Q-menu spawns + the grab lane, NOT this client-R-drop case.** The 4s reap + 20s census remain the safety net only | (accelerates the existing per-delta PropDestroy / PropSpawn lanes) | prop_lifecycle (destroy seam) + host_spawn_watcher (spawn seam) + hand_item (release edge); the K2 seam is BIDIRECTIONAL → the formerly-OPEN client-pickup destroy lane is closed by construction `[V hands-on 2026-07-07 0ae: Q-menu spawns appear INSTANTLY on clients — the FinishSpawn drain live-verified; grab lane PASS after v106b migration-first]` |
 | NPCs / Characters | BeginDeferred (VISIBLE) | host `BeginDeferred` interceptor + POST; save-loaded via `RegisterExistingWorldNpcs` walk | host eid (no BP key) | npc_sync, npc_mirror, npc_world_enum, npc_adoption |
 | wisp_C (wispSwarm event) | BeginDeferred **as `EX_CallMath`** from trigger_wispSwarm's ubergraph (INVISIBLE to PE) | **`ufunction_hook` Func-thunk, SOURCE-GATED** (FFrame::Object class == trigger_wispSwarm_C) → queue → pose-tick drain enroll; **ambient ticker sky wisps host-mirrored too since 2026-07-10 eve** (`ticker_wispSpawner_C` added as an EX-catch source row + the 8 color variants allowlisted; the client's ticker tick is a spawn_authority t3 cancel -- the old per-peer call assumed player-anchoring the dump refutes); PE-invisible self-despawn caught by the **pose-walk dead-retire** | host eid (no BP key) | npc_world_enum (EX-catch + enroll), npc_sync (SyncDestroyedNpcByEid), npc_pose_drive + ue_wrap/wisp (landing edge) |
 | WorldActors (event actors) | BeginDeferred (VISIBLE for most; `piramidSpawner_C` = EX_CallMath INVISIBLE) | 2nd `BeginDeferred` interceptor (disjoint, NAME-matched allowlist) + EX Func-thunk drain -> `HostEnrollExSpawn`; destroy = PRE observer + pose-walk dead-retire (SELF-destroys invisible) | host eid | world_actor_sync, npc_world_enum (EX catch), piramid_sync (choreography) |
@@ -129,7 +129,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 > -- was `identity_reconcile`, consolidated 2026-06-30; VERIFIED real log 16:06 2026-06-28 — `RE-BIND by position` x242 on the valve-abort
 > path, world ended clean) re-binds them at quiescence by an authoritative host-sent save-position (1cm,
 > ambiguous-skip) — the bind seam can't supply the position itself (BeginDeferred POST = `(0,0,0)`, below). See
-> `research/findings/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md` + `docs/COOP_STABLE_ID_SIDECAR.md`.
+> `research/findings/join-identity/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md` + `docs/COOP_STABLE_ID_SIDECAR.md`.
 >
 > **IDENTITY UPDATE 2026-07-03 [AS-BUILT `2ab718d5`, smoke-V] — identity survives actor churn (the re-bind
 > thread; docs/piles/12 status block is canonical).** (1) The chip entry's savePos is IMMUTABLE (a purge
@@ -158,7 +158,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 > re-pile. The GRAB syncs via the VISIBLE InpActEvt-PRE seam; the RE-PILE deterministic zero-proximity catch
 > is now the **`UFunction::Func` thunk patch — AS-BUILT** (commit `d19ae4d4`, `ue_wrap/ufunction_hook`;
 > detection verified read-only `B7EEB1BF`, convert deployed-pending-hands-on). See
-> `research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md` + COOP_DISPATCH_VISIBILITY
+> `research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md` + COOP_DISPATCH_VISIBILITY
 > "Catching an EX_CallMath call".
 >
 > **⚠⚠⚠ The CLIENT MIRROR of trash is NO LONGER a real `actorChipPile_C`/`prop_garbageClump_C` BP — it is a
@@ -201,7 +201,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 > STILL OPEN: the WHOOSH throw sound (no ReliableKind in `protocol.h`; user-deprioritized). (The dead
 > `dropGrabObject` thunk: RETIRED 2026-07-10 `fb490e36`.) The autonomous harness:
 > `[[reference-pile-test-harness]]`. See the proxy bullet under "The design (08…)" below + the new canonical
-> finding `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+> finding `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 
 **Durable facts (survive the redesign):**
 - **chipPile is KEYLESS** — `setKey` is a no-op; the only identity is the host-minted eid. **[V/RD]**
@@ -240,7 +240,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
   transitions; it is READ via a `UFunction::Func` thunk patch (AS-BUILT, `ue_wrap/ufunction_hook`, commit
   `d19ae4d4` — the thunk reads `FFrame::Object`@0x18 = `EX_Self`), NOT a ProcessEvent observer.
   **[V: COOP_DISPATCH_VISIBILITY.md "Catching an EX_CallMath call"; host_spawn_watcher.cpp:118-122;
-  research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md]**
+  research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md]**
 
 **The design (08, host-authoritative state machine):** the eid is a host-minted life-stable logical trash
 entity (state PILED/HELD_BY(N)/FLYING; **position is NEVER identity for the GRAB** → the cluster mis-bind is
@@ -264,7 +264,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   proximity death-watch (`WatchClumpForRepile` /
   `FindNearestUntrackedChipPile_`) is RETIRED (RULE 2). **Former known-minor [RESOLVED]:** the ~5s
   vanish-return (reaper-vs-rebind) is gone by construction (the convert lands the new pile under E the same
-  tick the clump dies). RE: `research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md` §3/§6.
+  tick the clump dies). RE: `research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md` §3/§6.
 - **GRAB-via-thunk + the eid=0 adopt-miss close — [DESIGN], NOT built:** move the grab (pile→clump) to the
   same thunk (srcObj = tracked chipPile → kToClump), retiring the InpActEvt-PRE + held-edge adopt and
   catching the grab even when the PRE missed (an UNTRACKED clump currently skips the converter). A tightening.
@@ -290,7 +290,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
     so clients retire the frozen proxy + `ClearClientCarry` (else the client was stuck in throw-mode forever).
   - The interp was EXTRACTED to `coop/active_drive.h` (remote_prop 1375→1222, RULE 2026-05-25; carry
     regression confirms zero behaviour change). Finding:
-    `research/findings/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`. **NEXT (greenlight):**
+    `research/findings/physics-grab/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`. **NEXT (greenlight):**
     a `garbageCollider`-analog SHAPE component on the proxy for occlusion-correct aim + movement-block (the
     cone ignores walls; the proxy is still walk-through).
 - **CLIENT MIRROR of trash = a host-authoritative `AStaticMeshActor` PROXY — DUP-FIX (derived) + VISIBILITY +
@@ -368,8 +368,8 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   NEVER cleared in any BP, so it cannot mark "released." (CLOSE-B latch + land-settle SHIPPED `65AD883A` —
   correct, not the freeze cause.) **Phase 1 = visual + position + re-skin, EXPLICIT NoCollision**; collision
   (the `garbageCollider` hull) is PHASE 2 with Increment 2. Design + AS-BUILT:
-  `research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`; the carry root + fix (the
-  canonical doc): `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`; the autonomous
+  `research/findings/piles-trash/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`; the carry root + fix (the
+  canonical doc): `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`; the autonomous
   harness: `[[reference-pile-test-harness]]`. **STILL OPEN (NEXT):** a `garbageCollider`-analog SHAPE component
   on the proxy (occlusion-correct aim + movement-block — the client-grab camera cone ignores walls, the proxy
   is walk-through); the WHOOSH throw sound (no ReliableKind; user-deprioritized, best confirmed by hearing);
@@ -459,7 +459,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   `SendReliable(KerfurConvert)` can FAIL with no retry → 5-of-6 (kerfur FORM is not in the join snapshot, so
   nothing reconciles a dropped convert). Fix design (live-fix + the `coop/sync`-single-authority refactor that
   ends this whole dupe class):
-  `research/findings/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`.
+  `research/findings/kerfur/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`.
 
 ## Dupe matrix (every two-seam overlap + its dedup) — the high-value reference
 
@@ -491,7 +491,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   probe `VOTVCOOP_RUN_PUPPET_GRAB_PROBE`, commit `32ccd1bc`). **BUT the puppet's tick does NOT drive the
   per-tick PHC** (the clump floats at the spawn spot, `TRACKED=0`), so the host kinematically drives the
   held-clump pose (`coop/puppet_carry_drive`, `81e8e687`). Finding:
-  `research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md`. This is the Increment-2 gate, now
+  `research/findings/player-puppet/votv-puppet-grab-feasibility-RE-2026-06-22.md`. This is the Increment-2 gate, now
   RESOLVED + the host-side BUILT [V harness].
 - **[ANSWERED — NO, 2026-06-21]** does the `BeginDeferred`/`FinishSpawning` POST fire for the clump↔pile
   convert? **It does NOT** — the chipPile/clump caller issues it `EX_CallMath` (0 fires, 870 piles + every

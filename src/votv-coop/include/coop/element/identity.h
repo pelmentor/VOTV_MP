@@ -1,7 +1,7 @@
 // coop/element/identity.h -- the entity-identity authority facade (coop::element).
 //
 // THE single conceptual sync engine (sync-consolidation refactor 2026-06-27,
-// research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md). One module,
+// research/findings/architecture-audits/sync-consolidation-refactor-PLAN-2026-06-27.md). One module,
 // one identity owner, one create-or-adopt, one reconcile, one destroy funnel,
 // one authority model -- behind this clean API. Callers (event dispatch, net
 // pump, the engine hooks) talk to sync THROUGH this surface; the eid-bind /

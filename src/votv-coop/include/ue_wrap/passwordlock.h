@@ -9,7 +9,7 @@
 // persistent; v31 proved it stable, keysHash 0xF75D.../14).
 //
 // HOW THE MIRROR WORKS (RE-and-probe-proven 2026-06-04; refined by the BP disassembly
-// 2026-06-06 -- research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md):
+// 2026-06-06 -- research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md):
 //   * Every keypad verb (Open / inputNumber / focusOn / SetActive) dispatches BP-internally
 //     (CallFunction -> ProcessInternal, bypassing our ProcessEvent detour), so a POST observer
 //     NEVER fires on them -> the sync POLLS state, it cannot observe verbs.
@@ -35,7 +35,7 @@
 //     inPassword digit replay (the host's native open(false) fires); this closes the EXPLICIT cancel
 //     button gap (a cancel types no digit, so the buffer mirror alone misses it).
 //
-// RE: research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md.
+// RE: research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md.
 
 #pragma once
 

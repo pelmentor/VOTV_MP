@@ -6,7 +6,7 @@
 > all 870" model is FALSE). Lever (a) reaper-escalation (`bfe9182a`, drain 37s->1s, VERIFIED 11:32) + VARIANT 1
 > host-wire position re-bind (`54ee4b06`, sidecar v2, audit SHIP, HANDS-ON PENDING). A `cursor-reset` attempt was
 > built, REFUTED (mis-bind), and REVERTED (`86bca8cb`). Full:
-> `research/findings/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md` + `[[project-grab-throw-joinwindow-2026-06-26]]`.
+> `research/findings/join-identity/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md` + `[[project-grab-throw-joinwindow-2026-06-26]]`.
 
 **Status: ROOT PINNED (a RACE — sweep fires mid-purge) + BOTH-LAYER FIX BUILT + PROVEN by a deterministic
 controlled A/B (2026-06-25, binary `BCDD46DA`). Root fix = the purge-aware quiescence gate (commit
@@ -37,7 +37,7 @@ PROVES: (1) the timing fix made the catastrophe DETERMINISTIC (both runs fired a
 `load tail quiesced`, never a deadline/ceiling, never the 88-trough); (2) the floor is the NET that flips
 WIPE-870 -> KEEP-870 with everything else identical. The PATH B that was INCONCLUSIVE on 14:11 (host-skip
 alone, sweep landed in the trough) is now CONCLUSIVE because the timing fix removed the race -- exactly as
-designed (`research/findings/sweep-quiescence-purge-gate-DESIGN-2026-06-25.md` S6).
+designed (`research/findings/join-identity/sweep-quiescence-purge-gate-DESIGN-2026-06-25.md` S6).
 
 NOTE (separate, NOT a regression): Run B still destroyed 105 non-chipPile unclaimed locals (80 trashBitsPile
 + 1 mushroom7 + ~24 others) -- the floor's census covers chipPile (the mass catastrophe class) only. Whether

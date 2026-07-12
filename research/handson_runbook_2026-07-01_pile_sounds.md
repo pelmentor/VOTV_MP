@@ -5,7 +5,7 @@ Game_0.9.0n, _copy, _copy2, _dev). Built Release. HEAD after commit will be the 
 increment (1 commit ahead of the pushed `de492af8`).
 
 ## What changed
-Receiver-side pile sounds, per rule 1. RE (`research/findings/votv-pile-pickup-land-sound-RE-2026-07-01.md`):
+Receiver-side pile sounds, per rule 1. RE (`research/findings/piles-trash/votv-pile-pickup-land-sound-RE-2026-07-01.md`):
 the chipPile/clump BP has NO dedicated pickup/land sound — the native sounds are the physics-material
 `physSound` table (`.soft` = grab cue, `.impact` = land thud) + the `use` click.
 

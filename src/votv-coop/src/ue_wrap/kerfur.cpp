@@ -1,5 +1,5 @@
 // ue_wrap/kerfur.cpp -- see ue_wrap/kerfur.h for the contract + the RE ground truth
-// (research/findings/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md).
+// (research/findings/kerfur/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md).
 
 #include "ue_wrap/kerfur.h"
 

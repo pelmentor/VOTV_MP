@@ -208,7 +208,7 @@ ue_wrap/inventory.h).
 Open-top containers (fridge shelves, plates, bowls, scrapbox, wastebasket, garbage container) keep
 their contents as **live actors glued inside**: `itemsInside : TArray<AActor*> @0x378`, maintained
 by `ReceiveTick` → `checkPickup` / `doStuff` / `glueInside` walking the array every tick
-[prop_openContainer.hpp; research/findings/votv-garbage-trash-interaction-RE-2026-05-27.md §(a)].
+[prop_openContainer.hpp; research/findings/piles-trash/votv-garbage-trash-interaction-RE-2026-05-27.md §(a)].
 `playerHoldPre`/`isHolding` handle carrying the whole assembly. No propInventory, no GObjStack slot,
 no loot roll, no UI. **No bytecode dump exists for this class** — the mutator set ("likely
 putObjectIn_overlap-equivalent + propAwoken/doStuff") was left probe-TBD by the 2026-05-27 finding

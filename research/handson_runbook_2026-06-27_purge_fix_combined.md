@@ -1,7 +1,7 @@
 > **SUPERSEDED (2026-06-27).** This verified the (a)+(b) cursor-reset, which 12:29 REFUTED (mis-bind) and which
 > was REVERTED (`86bca8cb`). The RESET-FOR-RESEED / reseed-rebind machinery this runbook reads no longer exists.
 > Do NOT run it. CURRENT runbook: `research/handson_runbook_2026-06-27_purge_v1_combined.md` (variant-1 host-wire).
-> Saga: `research/findings/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`.
+> Saga: `research/findings/join-identity/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`.
 
 # Hands-on runbook — purge-timing fix COMBINED (a)+(b): kill the join-window ghost
 

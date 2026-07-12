@@ -18,7 +18,7 @@
 // The async RefreshAsync/CopySaves/Status trio lets the render-thread picker trigger
 // a scan + read a cached snapshot without blocking (mirrors coop/net/lobby_client).
 //
-// RE: research/findings/votv-save-picker-{enumerate-load,create-new}-RE-2026-06-06.md.
+// RE: research/findings/saves/votv-save-picker-{enumerate-load,create-new}-RE-2026-06-06.md.
 
 #pragma once
 

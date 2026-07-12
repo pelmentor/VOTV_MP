@@ -51,7 +51,7 @@ Take-4 fixes (both root-level):
 
 ## KNOWN-OPEN (do not re-report; lanes designed/queued)
 - CLIENT melee damage = local-only (no cross-peer damage; silent crowbar door hits; door hit-open
-  nudge unsynced). RE DONE: research/findings/votv-melee-damage-path-RE-2026-07-11.md — the
+  nudge unsynced). RE DONE: research/findings/player-puppet/votv-melee-damage-path-RE-2026-07-11.md — the
   damage-intent lane is the next build (design pass first; hook candidates ranked there).
 - Container contents divergence (take-out ghosts / put-in losses / per-peer loot):
   docs/items/container.md §3 DESIGN ready — Inc-1 build queued.

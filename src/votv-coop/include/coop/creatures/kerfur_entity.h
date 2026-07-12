@@ -8,7 +8,7 @@
 // every conversion across two disjoint eid spaces -> the dupe-and-drop loop (7 failures, 1 root).
 //
 // FIX (MTA CElementRPCs SetElementModel shape): ONE host-allocated, host-range KerfurId per LOGICAL
-// kerfur, spanning BOTH forms. See research/findings/votv-kerfur-sync-REDESIGN-2026-06-16.md, esp.
+// kerfur, spanning BOTH forms. See research/findings/kerfur/votv-kerfur-sync-REDESIGN-2026-06-16.md, esp.
 // the CORRECTED design in section 10 (post-RE: the radial-menu conversion is PE-invisible, so the
 // client's local conversion is UNAVOIDABLE -> claim/adopt STAYS, anchored to this stable id; clients
 // NEVER mint a kerfur eid).

@@ -11,7 +11,7 @@
 // This wrapper reads/writes the sky component's WORLD rotation + moonPhase_mirror so the host
 // can snapshot them (host-authoritative, the same shape as the clock in daynightcycle).
 //
-// RE: research/findings/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
+// RE: research/findings/weather-wind/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
 
 #pragma once
 

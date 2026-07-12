@@ -4,7 +4,7 @@
 native.** Committed `abfaaed8` (inc 1) · `dabf84de` (inc 2 + chipType) · `3b72aba0` (rotation) · `fa8bc344`
 (join-dup fix) — all pushed to `origin/main` (`de492af8`). Follow-on threads (2026-07-01, local, NOT pushed):
 SOUND-events (VERIFIED, below), and the JOIN-WINDOW MASS-MOVE dup (a SEPARATE class, still under hands-on —
-see **`docs/piles/12`** + `research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md`).
+see **`docs/piles/12`** + `research/findings/join-identity/votv-joinwindow-massmove-dup-RE-2026-07-01.md`).
 [[project-pile-nativization-2026-06-30]]
 
 ## The decision (root-cause, user-driven)
@@ -118,7 +118,7 @@ was converted from a pre-OBSERVER to a pre-INTERCEPTOR on `InpActEvt_use` (retur
 dispatch, incl. `useAction`'s `use_deny`, is cancelled), retiring the `lookAtActor`-null half-suppression (RULE 2).
 [V: EHHH gone on RECOGNIZED piles. NOTE: EHHH still fires on UNRECOGNIZED host-moved piles — that's a SYMPTOM of
 the mass-move dup (unbound → interceptor returns false → native denies), NOT a sound bug; it resolves when
-`docs/piles/12` lands.] **RE (`research/findings/votv-pile-pickup-land-sound-RE-2026-07-01.md`):
+`docs/piles/12` lands.] **RE (`research/findings/piles-trash/votv-pile-pickup-land-sound-RE-2026-07-01.md`):
 the chipPile/clump BP plays NO dedicated pickup or land sound** — `shovelDig_Cue` is the recycle-to-scrap
 action, `flesh_impact_Cue` is a damage/hit reaction, and the clump→pile conversion + the pile's BeginPlay/init
 are silent. The native sounds are the physics-material `lib_C::physSound` table: `.soft` = the grab pickup cue

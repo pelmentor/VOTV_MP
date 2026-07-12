@@ -2,7 +2,7 @@
 //
 // Gameplay/dev layer (principle 7). VOTV's prop-spawn menu (the "Q" menu) is a
 // sandbox-mode tool. By the BP code its OPEN path is NOT gamemode-gated (see
-// research/findings/votv-spawnmenu-storymode-RE-2026-06-14.md); the restriction
+// research/findings/world-systems/votv-spawnmenu-storymode-RE-2026-06-14.md); the restriction
 // to sandbox lives in the input MAPPING (the Q->"spawnmenu" action binding), not
 // in any enum check on the open. So this dev feature does not fight any gate or
 // edit any asset (RULE 3) and does not flip GameMode (which drives unrelated

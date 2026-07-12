@@ -67,7 +67,7 @@ DESTROY fix is the NEXT build, gated on this run's numbers.
 ## Honest status
 - Built CLEAN (Release, 0 errors), deployed `c2a5f49cc98add31` all 4 copies (MATCH x4), proto v83, audit
   zero-CRITICAL. **NOT verified** — your hands-on is the test. Root + design:
-  `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+  `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 - After your run, tell me: (1) does the throw fly an arc (MAIN), (2) carry still smooth, (3) clean landing, (4)
   the `[PILE-PROBE]` 1cm/10cm numbers. Then: throw verified → retire the dead `dropGrabObject` thunk + build
   the level-pile DESTROY fix with the probe data.

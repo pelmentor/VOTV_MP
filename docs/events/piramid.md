@@ -2,7 +2,7 @@
 
 The devs'-gauntlet acceptance case (docs/DEVS_GAUNTLET.md; docs/COOP_EVENT_JOIN.md Phase 1
 names "pyramid mid-join" as the acceptance test). Ground truth:
-`research/findings/votv-piramid2-RE-2026-07-04.md` (bytecode, 113 exports decoded) + the
+`research/findings/props-lifecycle/votv-piramid2-RE-2026-07-04.md` (bytecode, 113 exports decoded) + the
 wiki sweep (voicesofthevoid.wiki.gg /Events/Story_Mode + eternitydev.wiki.gg /Pyramid_Tripod,
 2026-07-04).
 

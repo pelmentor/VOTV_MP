@@ -1,6 +1,6 @@
 // coop/npc_adoption.h -- v75 deferred CLASS-MATCH adoption of save-persisted NPCs (the kerfur) +
 // the post-snapshot ghost sweep. Ground truth:
-// research/findings/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md (sec "CORRECTION" + 11).
+// research/findings/kerfur/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md (sec "CORRECTION" + 11).
 //
 // PROBLEM: a save-persisted NPC (the kerfur) is materialized on a save-transfer joining client by
 // the game's native EX_CallMath save-load spawn -- invisible to our PE suppressor, at an

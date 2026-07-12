@@ -3,7 +3,7 @@
 // (timer neutralize) and deterministic owned-child teardown. Pure reflection /
 // UFunction access; NO net / gameplay logic (Principle 7).
 //
-// Ground truth: research/findings/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md.
+// Ground truth: research/findings/kerfur/votv-kerfurOmega-coop-double-and-camera-RE-2026-06-14.md.
 // The kerfur pet NPC is kerfurOmega_C (+ ~20 skin subclasses; the "base/less-intelligent"
 // vs "upgraded" tiers are the same class's sentient/Type/upgrade flags, NOT a separate
 // class -- so the kerfurOmega_C class gate + the subclass walk cover every tier/skin).

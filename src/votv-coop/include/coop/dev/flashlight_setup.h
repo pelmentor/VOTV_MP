@@ -3,7 +3,7 @@
 // Phase 5F autotest needs to programmatically give the player a flashlight,
 // install a charged battery, and (if needed) equip the item so that calls
 // to AmainPlayer_C::updateFlashlight() actually toggle the world light.
-// RE: research/findings/votv-inventory-equip-battery-RE-2026-05-26.md.
+// RE: research/findings/inventory-items/votv-inventory-equip-battery-RE-2026-05-26.md.
 //
 // These helpers are autotest-only. The shipping coop sync does NOT call
 // them -- the user's save already has the flashlight equipped in normal

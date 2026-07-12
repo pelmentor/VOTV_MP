@@ -4,7 +4,7 @@
 // PyramidGather relay. Everything else about the pyramid rides the generic rails
 // (world_actor_sync pose mirror, npc lane wisps, event_fire_sync no-replay verdict, native
 // setEvent registry parity). Ground truth for every offset/branch cited below:
-// research/findings/votv-piramid2-RE-2026-07-04.md.
+// research/findings/props-lifecycle/votv-piramid2-RE-2026-07-04.md.
 
 #include "coop/creatures/piramid_sync.h"
 

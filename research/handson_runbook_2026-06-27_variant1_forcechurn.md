@@ -6,7 +6,7 @@
 > let the real save-transfer-join purge churn the natives, and verify the reconcile (now non-one-shot + valve-abort-
 > safe + post-purge-triggered) re-binds them. **The probe + GATE diag stay in the tree (gated, RULE-2-exempt).**
 > The variant-1 verify is now folded into the refactor arc -- see the AS-BUILT ledger in
-> `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md` (step 4b+/7) and
+> `research/findings/architecture-audits/sync-consolidation-refactor-PLAN-2026-06-27.md` (step 4b+/7) and
 > [[project-sync-module-refactor-2026-06-27]]. 15:44 result: fix #1 (reconcile-on-valve-abort) VERIFIED in the
 > log; world ended CLEAN (870 piles, 0 orphans); variant-1 N=0 = no churn left anything unbound = a pass.
 

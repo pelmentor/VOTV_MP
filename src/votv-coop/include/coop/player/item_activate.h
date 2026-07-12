@@ -1,7 +1,7 @@
 // coop/item_activate.h -- unified item-activation sync (Phase 5F).
 //
 // First instance: flashlight on/off. Architecture per the RE doc
-// (research/findings/votv-flashlight-RE-2026-05-25.md) -- Case b: the
+// (research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md) -- Case b: the
 // world light cone is mainPlayer_C::light_R, not a component on the
 // flashlight item actor. The puppet (also a mainPlayer_C orphan) has
 // the same light_R at the same offset; toggling its visibility is the

@@ -276,7 +276,7 @@ void* FindByKeyString(const std::wstring& keyString);
 // UFunctions on the prop's StaticMesh component. Used by the host's
 // release-edge to capture the body's INHERITED tracking velocity (the
 // dominant "вжух" launch energy per
-// research/findings/votv-throw-release-pipeline-RE-2026-05-24.md, Bug B).
+// research/findings/physics-grab/votv-throw-release-pipeline-RE-2026-05-24.md, Bug B).
 // linear in cm/s, angular in deg/s. ok=false if the prop / mesh / UFunctions
 // can't be resolved or if the read fails. Game-thread only. One-shot
 // reflection lookup cached internally; subsequent calls are 2 ProcessEvent
@@ -340,7 +340,8 @@ void* FindNearestChipPile(const FVector& anchor, float radiusCm, float* outDist 
 // AmushroomSpawner_C::Spawn calls spawnedNaturally() on every fresh spawn,
 // disabling collision until the BP graph would later restore it — but our
 // fuzzy-match rekey hijacks the actor before that completes).
-// 2026-05-25 RE: research/findings/votv-mushroom-fall-through-RE-2026-05-25.md.
+// 2026-05-25 RE (the standalone fall-through finding was never filed; nearest:
+// research/findings/world-systems/votv-mushroom-state-RE-2026-05-24.md).
 //
 // Returns true on successful SetCollisionEnabled dispatch, false if any
 // reflection lookup fails (StaticMesh null, PrimitiveComponent class missing,

@@ -21,7 +21,7 @@ User: "Documentize, prepare for compact. We tackle this in next session."** Prot
 3. Then the RULE-2 cleanup: stop eid-binding static piles entirely (the MTA static-object model).
 
 ## THE ARCHITECTURAL TRUTH (the user pointed me to the docs -- I'd been reinventing)
-`research/findings/mta-npc-entity-sync-2026-05-24.md:430`: MTA **does NOT sync static, unbreakable world
+`research/findings/mta/mta-npc-entity-sync-2026-05-24.md:430`: MTA **does NOT sync static, unbreakable world
 objects** -- `if (!pObject->IsSyncable() || (pObject->IsStatic() && !pObject->IsBreakable())) [skip]`. They
 exist IDENTICALLY on every client from the map load. Only MOVING/breaking objects get synced.
 - VOTV's resting ambient `actorChipPile_C` are exactly that: both peers load the SAME save -> IDENTICAL piles
@@ -30,7 +30,7 @@ exist IDENTICALLY on every client from the map load. Only MOVING/breaking object
   `PropDestroy(eid)` can't find the client's co-located pile. Identity for a STATIC object = position at the
   instant it's touched (co-located until grabbed), NOT a fragile runtime eid binding.
 - See `docs/AUTHORITATIVE_INTERACTABLE_MIGRATION.md` (the host-authoritative pattern) +
-  `research/findings/mta-object-pickup-sync-2026-05-23.md` (how MTA conveys "player A grabs object X").
+  `research/findings/mta/mta-object-pickup-sync-2026-05-23.md` (how MTA conveys "player A grabs object X").
 
 ## WHAT WAS FIXED THIS SESSION (all in D3E5F530AF5D, all verified-by-log or audited)
 1. **THE FREEZE** (38s GT block) = an `email_sync` PRIME-RACE flood (~2056-email save loads async, primed at

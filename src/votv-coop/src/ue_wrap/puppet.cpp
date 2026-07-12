@@ -48,7 +48,7 @@ std::unordered_map<void*, void*> g_meshComp;
 
 // Plan B1 (BUA interceptor) and Plan B2 (satellite ACharacter feeding the
 // AnimBP's Pawn pointer) are both retired. v2 (2026-05-27, see
-// research/findings/votv-local-anim-drive-RE-2026-05-27.md) writes
+// research/findings/player-puppet/votv-local-anim-drive-RE-2026-05-27.md) writes
 // Velocity + MovementMode directly on the puppet's OWN CMC each tick
 // (CMC tick is parked, so we own those fields). BUA reads them naturally
 // via Pawn=orphan -> CMC=orphan.CMC, exactly like the LOCAL player's
@@ -119,7 +119,7 @@ void WriteLookAtOnAnim(void* anim, const FVector& target) {
 
 // ---- head-look STATE-GATE defeat (2026-07-02, puppet-only) -----------------
 // TOPOLOGY (statically proven from the cooked BakedStateMachines + pose-link
-// trace; research/findings/votv-puppet-head-freeze-backturned-RE-2026-06-24.md
+// trace; research/findings/player-puppet/votv-puppet-head-freeze-backturned-RE-2026-06-24.md
 // top update): the two FAnimNode_LookAt nodes do NOT sit on the anim-graph
 // trunk -- they are the whole sub-graph of state `lookAtPlayer` in the trunk
 // state machine "New State Machine_1" (states: zombieRise / lookAtPlayer /
@@ -415,7 +415,7 @@ float GetSpawnMeshOffsetZ(void* /*localPlayer*/) {
 // class defaults. We neuter the per-screen systems (PostProcess components
 // affect the local view; FP arms are camera-space attached) and flip a few
 // AnimBP flags. 2026-05-25 per
-// research/findings/votv-puppet-mainplayer-body-RE-2026-05-25.md.
+// research/findings/player-puppet/body-visible-f12-and-pose-mirroring-2026-05-22.md (the dedicated mainplayer-body finding was never filed).
 //
 // 2026-05-25 v2 hands-on fix: user reported "remote player has no visible
 // model applied to him". Diagnosis: VOTV's mainPlayer_C class default may

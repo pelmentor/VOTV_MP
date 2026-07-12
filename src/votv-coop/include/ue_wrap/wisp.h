@@ -23,8 +23,8 @@
 // detour -- polling the resolved fields is the only host-side observation path (the same
 // reason keypad_sync / door_sync POLL rather than observe).
 //
-// RE: research/findings/votv-wisp-and-client-inventory-RE-2026-06-12.md +
-//     research/findings/votv-event-system-RE-2026-06-13.md (sec 10).
+// RE: research/findings/npc-creatures/votv-wisp-and-client-inventory-RE-2026-06-12.md +
+//     research/findings/events/votv-event-system-RE-2026-06-13.md (sec 10).
 
 #pragma once
 

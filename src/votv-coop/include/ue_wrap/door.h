@@ -11,7 +11,7 @@
 // bypassCheck) / doorClose(bool bypassCheck). Adoor_pryable_C inherits all of
 // these unchanged, so resolving against door_C covers both classes.
 //
-// RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+// RE: research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md.
 
 #pragma once
 

@@ -19,7 +19,7 @@
 // subsystem (modular rule -- weather_sync is already over the soft cap). The migration
 // roadmap's coop::WorldState would later consolidate both; this is the focused clock fix.
 //
-// RE: research/findings/votv-coop-class-clone-migration-roadmap-2026-06-06.md §2.
+// RE: research/findings/architecture-audits/votv-coop-class-clone-migration-roadmap-2026-06-06.md §2.
 
 #pragma once
 

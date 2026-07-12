@@ -623,7 +623,7 @@ void RemotePlayer::ApplyToEngine() {
     // foot-IK alpha (useLegIK / rise) -- same path the LOCAL uses.
     // Routed through ue_wrap::puppet (Principle 7): the engine-specific
     // CMC offsets stay in the wrapper; coop/ sees only the typed API.
-    // (RE: research/findings/votv-local-anim-drive-RE-2026-05-27.md.)
+    // (RE: research/findings/player-puppet/votv-local-anim-drive-RE-2026-05-27.md.)
     {
         const float yawRad = curYaw_ * 0.01745329252f;  // PI/180
         const ue_wrap::FVector vel{
@@ -669,7 +669,7 @@ void RemotePlayer::ApplyToEngine() {
     // camera -- making this emerge from the wire alone -- was falsified by
     // hands-on 2026-06-11: VOTV's first-person body follows the camera
     // immediately, so the lead is synthesized receiver-side instead.)
-    // RE: research/findings/votv-puppet-head-look-RE-2026-06-11.md.
+    // RE: research/findings/player-puppet/votv-puppet-head-look-RE-2026-06-11.md.
     {
         constexpr float kDeg2Rad = 0.01745329252f;
         const float yawRad   = (curYaw_ + curHeadYawDelta_) * kDeg2Rad;

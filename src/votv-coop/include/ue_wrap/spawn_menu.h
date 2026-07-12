@@ -4,7 +4,7 @@
 // this just reproduces the engine path the Q key fires. The dev toggle that
 // decides WHEN to open it (client-lock, ini flag) is coop/dev/spawn_menu_unlock.
 //
-// RE ground truth (research/findings/votv-spawnmenu-storymode-RE-2026-06-14.md):
+// RE ground truth (research/findings/world-systems/votv-spawnmenu-storymode-RE-2026-06-14.md):
 // the Q key fires mainPlayer's UFunction
 //   InpActEvt_spawnmenu_K2Node_InputActionEvent_2(FKey Key)   [the PRESSED edge]
 // which forwards into ExecuteUbergraph_mainPlayer @12077. That open block has NO

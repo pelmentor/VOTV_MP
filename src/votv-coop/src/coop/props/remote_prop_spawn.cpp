@@ -865,7 +865,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // dupe. Fall back to the base-resolved g_propSetKeyFn for Aprop_C
     // descendants (its declaring class; the fuzzy-rekey path already calls it
     // on leaf instances -- proven safe live at 11:54:45 in the RCA logs). See
-    // research/findings/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md.
+    // research/findings/props-lifecycle/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md.
     void* setKeyFn = R::FindFunction(actorClass, P::name::PropSetKeyFn);
     if (!setKeyFn && ue_wrap::prop::IsClassDescendantOfProp(actorClass)) {
         setKeyFn = g_propSetKeyFn;
@@ -987,7 +987,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
     // drops its cross-peer mirror by IDENTITY via the trash_collect_sync mirror-pile
     // death-watch -> PropDestroy(eid). The wire chipType (read off the held clump at grab
     // time) is authoritative for the variant.
-    // research/findings/votv-clump-lifecycle-observability-and-robust-design-2026-06-08-pass2.md.
+    // research/findings/piles-trash/votv-clump-lifecycle-observability-and-robust-design-2026-06-08-pass2.md.
     const uint8_t variant = payload.chipType;
     if (classW.find(L"garbageClump") != std::wstring::npos) {
         // Silence THIS mirror clump's own ground-hit -> turn-to-pile handler.

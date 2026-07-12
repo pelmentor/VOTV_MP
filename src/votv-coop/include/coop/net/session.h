@@ -15,7 +15,7 @@
 // slots 1..3 unused (host-authoritative model -- clients only talk to host).
 //
 // Topology-blind: per the forward-compat plan
-// (research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md), every code
+// (research/findings/network/votv-gns-p2p-masterserver-plan-2026-05-28.md), every code
 // path below is topology-agnostic except Session::Start. P2P + master server
 // will add a sibling branch in Start; the multi-peer storage / PollGroup /
 // status callback / lanes / receive loop all work unchanged for any

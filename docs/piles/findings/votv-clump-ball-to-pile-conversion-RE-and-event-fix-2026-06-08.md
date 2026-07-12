@@ -1,6 +1,6 @@
 # VOTV trash-clump ball->pile conversion — exact BP trigger, the ~3 s mirror lag root cause, and an event-driven fix — 2026-06-08
 
-Builds on `research/findings/votv-clump-mirror-grab-RE-2026-06-08.md` (the grab-trace + the
+Builds on `research/findings/piles-trash/votv-clump-mirror-grab-RE-2026-06-08.md` (the grab-trace + the
 PhysicsOnly lock) and `…class-clone-migration-roadmap-2026-06-06.md`. This doc adds the part
 those left as a guess: **WHEN and HOW** the clump ball turns into a ground pile, proven from the
 kismet bytecode, and why our mirror lags ~3 s. Implementation-ready.

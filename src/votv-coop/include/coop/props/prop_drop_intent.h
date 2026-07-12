@@ -4,7 +4,7 @@
 // host-authoritative: a client's own fresh Aprop_C spawn is skipped at prop_lifecycle:210 (client
 // keyed spawns are host-auth), so a client-placed rock is INVISIBLE to the host (F2). The proper fix
 // (NOT a seam-catch crutch -- see the /qf-15 convergence in
-// research/findings/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md) is the pattern
+// research/findings/join-identity/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md) is the pattern
 // chipPiles already use: the CLIENT sends an INTENT, the HOST is the sole authority.
 //
 // THE FLOW (Increment 1 = the DROP half; the grab half already works -- the client's hold-R pickup

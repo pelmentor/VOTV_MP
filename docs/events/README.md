@@ -12,10 +12,10 @@ cross-cutting CONTRACTS stay where they are:
 - `src/votv-coop/src/coop/world/event_fire_sync.cpp` — the replay/no-replay dupe matrix
   is AUTHORITY in code (kReplayRows/kNoReplayRows). A per-event doc cites its row's
   verdict; changing a verdict changes the CODE first, the doc second.
-- `research/findings/votv-event-system-RE-2026-06-13.md` — the runEvent dispatcher RE
+- `research/findings/events/votv-event-system-RE-2026-06-13.md` — the runEvent dispatcher RE
   (all 69 list_events rows' concrete outputs). Durable ground truth; per-event docs cite
   it instead of re-deriving.
-- `research/findings/votv-active-events-registry-RE-2026-07-04.md` — the native
+- `research/findings/events/votv-active-events-registry-RE-2026-07-04.md` — the native
   activeEvents registry (lib_C::setEvent refcount + senders; the ~95-class census).
 
 ## Doc skeleton (copy for a new event)

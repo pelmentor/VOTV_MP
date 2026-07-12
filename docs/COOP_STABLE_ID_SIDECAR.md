@@ -14,7 +14,7 @@ at session teardown (`quiescence_drain::Reset` via `join_membership_sweep::Reset
 undrained pos-correction" data loss is gone. **VERIFICATION PENDING** -- whether b2/b3 actually snaps the moved pile
 end-to-end is part of the combined hands-on (research/handson_runbook_2026-06-30_destroy_before_load.md,
 [[project-anti-smear-refactor-2026-06-30]]). Full session detail: the new finding
-`research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` +
+`research/findings/join-identity/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md` +
 `[[project-grab-throw-joinwindow-2026-06-26]]`.
 
 **UPDATE 2026-06-27 — the join-window PURGE-TIMING race + the SIDECAR v2 position re-bind.** A 2nd hands-on
@@ -31,7 +31,7 @@ before b3's apply) -- order/count/timing-independent (no client-side eid->pos so
 pre-FinishSpawning = (0,0,0), and a churned eid has no survivor to capture from). Also: **lever (a) reaper
 escalation** (`bfe9182a`, drains a mass-purge backlog at frame cadence; 11:32 log: 37s->1s) is the independent
 timing companion. Full saga + the TRUE mechanism (the "purge re-creates all 870" model is FALSE -- the bulk
-survive) + the two refuted approaches: `research/findings/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`
+survive) + the two refuted approaches: `research/findings/join-identity/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`
 (read §2.7 then §2.8). **2026-07-03 (`2ab718d5`): the client-side entry gained a RUNTIME hostPos OVERLAY
 (never serialized) — savePos is now IMMUTABLE (it names where a purge re-create spawns; the earlier
 PropSnapPos retrack of savePos deadlocked re-binds = docs/piles/12 eid=4435), and `UpdateChipHostPos`
@@ -408,7 +408,7 @@ eid and the in-window move is irrelevant.
   intrinsic `loadObjects` rebuild (host SP too); the killer is `TryDestroyTwin`, not a pre-quiescence race. FIXED
   by (X) below.) Gated `[dev] save_identity_bind=1`.
 - **(X) NATIVE-AUTHORITATIVE — the end-to-end fix. BUILT + VERIFIED (`f299229f`).**
-  `research/findings/phase1-X-native-authoritative-chippile-DESIGN-2026-06-25.md` (BUILT+VERIFIED banner). Keep
+  `research/findings/join-identity/phase1-X-native-authoritative-chippile-DESIGN-2026-06-25.md` (BUILT+VERIFIED banner). Keep
   the native as the host-eid mirror; **per-eid SUPPRESS the proxy** (guard (a) skip `SpawnProxy` on live
   `IsBoundMirrorNative`; guard (b) exempt bound natives from the reconcile destroy set [EnsureIndex + sweep +
   consume-site re-check]; + `RetireProxy` for the case-ii race) — NOT a wholesale delete (runtime/host-only
@@ -475,7 +475,7 @@ per-class manifest + floor. One new file per the modular rule
    fired=870 (full field), kerfurOff 4/4 CAUGHT-ALL (missed=0). Spawn-order is
    the deterministic PRIMARY; §3.3 bijection stays as the backstop. (Detail +
    the separate "client piles purge-not-reload" observation:
-   `research/findings/phase1-save-identity-map-BUILD-PLAN-2026-06-25.md` 1A RESULT.)
+   `research/findings/join-identity/phase1-save-identity-map-BUILD-PLAN-2026-06-25.md` 1A RESULT.)
 2. **§4 manifest source** — confirm a host-side per-class GUObjectArray census
    at snapshot-finalize is cheap + independent of the expression path (it must
    not share the failure mode it guards).

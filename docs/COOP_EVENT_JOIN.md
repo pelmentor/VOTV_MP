@@ -8,7 +8,7 @@ Phase 2a (cue join re-send) AS-BUILT 2026-07-05, e2e PASS; Phase 2b (census fill
 open-incremental — the `trigger_alarm_C` hole CLOSED 2026-07-05 at the LANE, not the map
 (v101 `alarm_sync` + the first kLaneOwnedClasses skip; docs/events/alarm.md, 3.4 alarm
 row); Phase 3 DESIGN.
-Bytecode ground truth — `research/findings/votv-active-events-registry-RE-2026-07-04.md`.
+Bytecode ground truth — `research/findings/events/votv-active-events-registry-RE-2026-07-04.md`.
 This is the answer to the devs' gauntlet hard case (`docs/DEVS_GAUNTLET.md`): a player
 joins while the host is mid-event (pyramid et al.) and must converge to the same world.
 

@@ -25,7 +25,7 @@ items.
   (PR-4 SHIPPED 2026-05-28); gameplay subsystems must follow suit (state
   push to all puppets, snapshot fan-out, host-relay of client-originated
   events for 3+ peers — see PR-FOUNDATION-1..3 in
-  `research/findings/votv-architecture-audit-2026-05-29.md`).
+  `research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md`).
   Decided 2026-05-26 (user verbatim: "It should handle at least 4 players").
   STATUS 2026-05-29: wire layer 4-peer-ready; some gameplay paths still
   2-peer-shaped (no host-relay between clients yet); 4-peer autonomous
@@ -128,7 +128,7 @@ items.
   locations). Methodology phase: ~Phase 4.x (post-pose-sync, post-input-
   sync). Deep-research converged via 3 parallel agents (IDA / SDK-
   reflection / MTA-fidelity); full plan in
-  `research/findings/physics-object-pickup-coop-plan-2026-05-23.md`.
+  `research/findings/physics-grab/physics-object-pickup-coop-plan-2026-05-23.md`.
   PREREQUISITE: prop-Key cross-peer agreement (`Aprop_C.Key @ +0x02E0`)
   — spawn paths must route through host so both peers see the same Key
   for the same prop. This is a separate prerequisite scope item; the
@@ -146,9 +146,9 @@ items.
 
 - **NPCs + interactable entities sync (proposed, AWAITING USER REVIEW)** —
   next major feature after physics-prop pickup. Architecture proposal in
-  `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md`,
-  grounded in `research/findings/mta-npc-entity-sync-2026-05-24.md` (MTA
-  patterns) and `research/findings/votv-npc-entity-survey-2026-05-24.md`
+  `research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md`,
+  grounded in `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` (MTA
+  patterns) and `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md`
   (VOTV ~17 NPC classes + 1200+ prop subclasses + doors/triggers/keypads
   + 2 vehicle-ish + UFO/event actors). Recommended 5-phase stagging:
   5N1 NPC pose stream (kerfur/zombie/ariral, host-authoritative);
@@ -258,7 +258,7 @@ items.
   hitting client puppets). Cross-link: enemies-target-both above (those puppets
   are what enemies hit; THIS replicates the resulting health/death). RE +
   design (incl. adversarial-verify must-fixes):
-  `research/findings/votv-player-vitals-death-RE-2026-05-30.md`. STATUS: Inc0 (P7
+  `research/findings/player-puppet/votv-player-vitals-death-RE-2026-05-30.md`. STATUS: Inc0 (P7
   extraction) + Inc1 (continuous health/food/sleep on PoseSnapshot + nameplate
   health bar) SHIPPED (6f5949c); Inc2a (#8 PASS, 4d52d40) + **Inc2b ragdoll/faint
   DISPLAY-bit sync SHIPPED 2026-05-31** (protocol v20, `kStateBitRagdoll`,
@@ -340,7 +340,7 @@ Candidate VOTV systems to classify during Phase 1 (this is a checklist of
   Lightning: host POST observer on `BeginDeferredActorSpawnFromClass`
   filtered on `lightningStrike_C`; receiver spawns at received loc via
   BeginDeferred+FinishSpawning. RE docs:
-  `research/findings/votv-weather-RE-{mainGamemode,effect-actors,scheduler}-2026-05-26.md`,
+  `research/findings/weather-wind/votv-weather-RE-{mainGamemode,effect-actors,scheduler}-2026-05-26.md`,
   synthesis `votv-weather-DESIGN-2026-05-26.md`. **OUT OF Phase 5W**
   (deferred to a future `EntityEventPacket` phase): story-event weather
   spawns (`spawnBlackFog` / `spawnRedSky` / `Spawn Bad Sun` /
@@ -494,7 +494,7 @@ Design implications (do NOT build yet; record so the architecture serves it):
   3 new ReliableKind packets (DoorState + LightState + LockState).
   Symmetric for player-triggered; host-authoritative for
   NPC-sensor-triggered (NPCs are host-only). RE pass complete
-  (`research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md`);
+  (`research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md`);
   7-increment implementation queued.
 - 2026-05-26 — **Player count raised to 4** (host + 3 clients); user
   verbatim "It should handle at least 4 players". Replaces the prior
@@ -503,7 +503,7 @@ Design implications (do NOT build yet; record so the architecture serves it):
 - 2026-05-29 — **Foundation audit v2** identified that the network
   topology is still fundamentally 2-player today (no host-relay between
   clients for PoseSnapshot/PropPose/ItemActivate; NPC AI per-client).
-  Doc: `research/findings/votv-architecture-audit-2026-05-29.md`.
+  Doc: `research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md`.
   PR-FOUNDATION-1..5 work-list queued.
 - 2026-05-25 — **Voice chat** parked as future (mention only; out of
   current scope). Plasmo-Voice-style proximity positional + push-to-
@@ -527,7 +527,7 @@ Design implications (do NOT build yet; record so the architecture serves it):
   Revive/respawn deferred pending respawn-mechanism RE. MTA shape:
   `CPlayerPuresyncPacket` stream + `CPlayerWastedPacket` death +
   `CPlayerSpawnPacket` respawn. Design + adversarial-verify must-fixes:
-  `research/findings/votv-player-vitals-death-RE-2026-05-30.md`. Concretizes
+  `research/findings/player-puppet/votv-player-vitals-death-RE-2026-05-30.md`. Concretizes
   the enemies-target-both decision (puppets are what enemies hit; this
   replicates the resulting health/death). SHIPPED across Inc1/Inc2b/Inc3 —
   see the 2026-05-30/05-31 entries below (commits 6f5949c7 Inc1 health/food/
@@ -591,12 +591,12 @@ Design implications (do NOT build yet; record so the architecture serves it):
   the moment it is grabbed — normal client-owned prop flow). Same session also
   widened the adoption sweep to the full expressible universe + keyless chipPile
   eid expression (protocol v55); RE + verdicts:
-  `research/findings/votv-snapshot-adoption-root-causes-2026-06-10.md`.
+  `research/findings/join-identity/votv-snapshot-adoption-root-causes-2026-06-10.md`.
 - 2026-07-09 — **Signal-SERVER simulation state + its notifications** added to In
   scope; user ("Build A. Per rule 1."). DISTINCT from and DEEPER than the
   2026-05-25 "terminals interactable + analog controls synced" entry (that was the
   console WIDGET visual+analog; this is the underlying server SIM). Root problem
-  (RE, `docs/notifications/` + `research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`):
+  (RE, `docs/notifications/` + `research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`):
   VOTV's signal-server state — `mainGamemode.{servers, brokenServers,
   serverEfficiency_calc/downl}` + per-`serverBox_C.{isBroken,damaged,upgrades,health}`,
   broken/fixed by the host-only `ticker_serverBreaker` — is NOT UE-replicated, so a

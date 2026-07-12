@@ -613,7 +613,7 @@ bool DebugForceRain(bool isRaining, float rainStrength) {
     }
 
     // Proper RULE-1 invocation sequence per
-    // research/findings/votv-weather-RE-mainGamemode-2026-05-26.md + the
+    // research/findings/weather-wind/votv-weather-RE-mainGamemode-2026-05-26.md + the
     // RE agent's 2026-05-27 deep pass. Required because direct
     // `setRainProperties(true, 1.0, 0, 0, 0)` ALONE has two latent risks:
     //   (a) the BP body of `setRainProperties` is not visible in the CXX

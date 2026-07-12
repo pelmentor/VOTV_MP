@@ -1,6 +1,6 @@
 // coop/host_spawn_watcher.h -- M2: host-authoritative mirroring of ambient
 // spawner outputs (the pinecone scare + sibling forage), 2026-06-11.
-// Roadmap: research/findings/votv-events-triggers-catalog-2026-06-11.md (M2).
+// Roadmap: research/findings/events/votv-events-triggers-catalog-2026-06-11.md (M2).
 //
 // THE SEAM. VOTV's ambient spawners (pineconeSpawner_C etc.) materialize their
 // props via UGameplayStatics::BeginDeferredActorSpawnFromClass. The spawned

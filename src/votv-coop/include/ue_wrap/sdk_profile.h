@@ -9,7 +9,7 @@
 //   * struct offsets   -- stable within an engine version; shift across them.
 //   * content names    -- change when the game's blueprints/levels change.
 //
-// Re-derivation workflow (see research/findings/ue-wrap-reflection-2026-05-22.md):
+// Re-derivation workflow (see research/findings/phase0-bootstrap/ue-wrap-reflection-2026-05-22.md):
 //   1. Launch once with UE4SS; its log prints GUObjectArray / FName::ToString
 //      addresses (ground truth). Compute RVAs (addr - module base).
 //   2. In IDA (the .exe is loaded), confirm each RVA, derive a unique AOB
@@ -172,7 +172,7 @@ inline constexpr size_t UFunction_ReturnValueOffset = 0xB8;  // uint16 (0xFFFF =
 // pointer = the standalone "UE4SS RegisterHook" technique -- catches an EX_CallMath
 // call a ProcessEvent observer can NEVER see (the chipPile/clump spawn). The value
 // must land in .text. See ue_wrap/ufunction_hook.{h,cpp} +
-// research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md.
+// research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md.
 inline constexpr size_t UFunction_Func = 0xD8;
 
 // FFrame layout (the BP-VM execution frame; one passed to every native exec thunk).
@@ -254,7 +254,7 @@ inline constexpr size_t USkinnedMesh_SkeletalMesh = 0x0480;       // USkeletalMe
 inline constexpr size_t USkeletalMesh_AnimClass = 0x06A8;         // TSubclassOf<UAnimInstance>  Engine.hpp:18094
 
 // 2026-05-25 puppet rework (mainPlayer_C orphan path, per
-// research/findings/votv-puppet-mainplayer-body-RE-2026-05-25.md): the
+// research/findings/player-puppet/body-visible-f12-and-pose-mirroring-2026-05-22.md (the dedicated mainplayer-body finding was never filed)): the
 // remote-player puppet now spawns mainPlayer_C directly (inertPawn=true)
 // instead of ASkeletalMeshActor. We need to:
 //   * destroy the per-screen PostProcess components (these affect the
@@ -351,7 +351,7 @@ inline constexpr size_t USceneComponent_HiddenFlagsByte   = 0x014D;  // bHiddenI
 inline constexpr size_t USceneComponent_RelativeLocation = 0x011C;     // FVector  Engine.hpp:17904
 
 // ---- Physics-prop pickup interaction --------------------------------------
-// See research/findings/physics-object-pickup-architecture-2026-05-23.md.
+// See research/findings/physics-grab/physics-object-pickup-architecture-2026-05-23.md.
 // Three converging research agents (IDA / SDK-reflection / MTA-fidelity)
 // established: mainPlayer_C grabs ANY of ~540 Aprop_C derivatives via E-press;
 // the lift/drag distinction is DATA-DRIVEN (Fstruct_prop.heavy bool, loaded
@@ -554,7 +554,7 @@ inline constexpr size_t UEngine_SmallFont = 0x0050; // UFont*    Engine.hpp:1073
 // Phase 5W (2026-05-26): AdaynightCycle_C weather state fields. All offsets
 // from CXXHeaderDump/daynightCycle.hpp -- literal `@ 0xNNN` comments in the
 // dump. Owned by mainGamemode.daynightCycle@0x0450 (singleton per session).
-// See research/findings/votv-weather-RE-mainGamemode-2026-05-26.md for the
+// See research/findings/weather-wind/votv-weather-RE-mainGamemode-2026-05-26.md for the
 // derivation.
 inline constexpr size_t AdaynightCycle_eff_rain             = 0x0228;  // UParticleSystemComponent* (the actual rain VFX driver)
 inline constexpr size_t AdaynightCycle_rain                 = 0x02E0;  // float (per-frame Ease interp target -- write to anchor rainStrength)
@@ -589,7 +589,7 @@ inline constexpr size_t AdaynightCycle_permanentFog         = 0x042D;  // bool (
 // Its OWN ReceiveTick ramps the height-fog density over its Duration -- a fresh
 // actor ramps from 0, which is the late-joiner fog "warm-up". To SNAP a joiner to
 // the host's CURRENT fog, copy the host actor's ramp state onto the mirror actor.
-// Offsets from research/findings/votv-weather-RE-effect-actors-2026-05-26.md §5c
+// Offsets from research/findings/weather-wind/votv-weather-RE-effect-actors-2026-05-26.md §5c
 // (CXX header dump weatherFogController.hpp). Confirmed at runtime by the fog probe.
 inline constexpr size_t WeatherFogController_Time     = 0x0238;  // float (elapsed lifetime clock)
 inline constexpr size_t WeatherFogController_Alpha    = 0x023C;  // float (current ramp intensity)

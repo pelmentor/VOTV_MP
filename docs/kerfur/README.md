@@ -12,7 +12,7 @@
 > never fixed here). **(ROOT 2) 5-of-6 on join** — a mid-join `SendReliable(KerfurConvert)` FAILED with no
 > retry → permanent divergence (kerfur form is not in the join snapshot). #1 turn-on twitch = STILL CLEARED.
 > Full design (kerfur live-fix + the `coop/sync`-as-authority refactor + the strict reorg taxonomy):
-> **`research/findings/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`**. Status: DESIGN,
+> **`research/findings/kerfur/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`**. Status: DESIGN,
 > no code written yet. See [[project-kerfur-identity-authority-refactor-2026-06-29]].
 >
 > Single source of truth for the **kerfur** multiplayer sync problem, mirroring `docs/piles/`.

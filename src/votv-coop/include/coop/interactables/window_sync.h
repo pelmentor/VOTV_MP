@@ -17,7 +17,7 @@
 // connect edge the HOST snapshots each window's current clean with adopt=1 (the receiver
 // writes it VERBATIM so the joiner adopts the host's world even if its own save was cleaner).
 //
-// RE: research/findings/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
+// RE: research/findings/world-systems/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
 
 #pragma once
 

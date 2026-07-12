@@ -21,7 +21,7 @@
 // Phase 2 = fuel/health/brake on-change + the broken/explode discrete edge. Phase 1.5+ may move
 // the transport to an UNRELIABLE newest-wins datagram (the blueprint's element path) if a lossy
 // link makes the reliable ARQ lag the body -- on LAN/low-loss the reliable stream + interp is
-// smooth. RE: research/findings/votv-ATV-quadbike-RE-and-coop-sync-design-2026-06-08.md +
+// smooth. RE: research/findings/vehicles/votv-ATV-quadbike-RE-and-coop-sync-design-2026-06-08.md +
 // votv-ATV-Phase1-pose-stream-blueprint-2026-06-08.md.
 
 #pragma once

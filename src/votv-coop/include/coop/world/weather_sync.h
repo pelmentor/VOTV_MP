@@ -27,7 +27,7 @@
 //       writes -- intComs_triggerSnow has 53 BP listeners that need the
 //       UFunction dispatch fan-out per the RE doc).
 //
-// See research/findings/votv-weather-DESIGN-2026-05-26.md (synthesis) and
+// See research/findings/weather-wind/votv-weather-DESIGN-2026-05-26.md (synthesis) and
 // votv-weather-RE-{mainGamemode,effect-actors,scheduler}-2026-05-26.md
 // (evidence).
 

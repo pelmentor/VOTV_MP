@@ -28,7 +28,7 @@
 // in `EnsurePlayerElement_` when the puppet pointer changes for the same
 // slot). There is no global `Registry::Reset` -- per-subsystem drain only.
 //
-// Per the audit (`research/findings/votv-mta-cclientelement-audit-2026-05-28.md`
+// Per the audit (`research/findings/mta/votv-mta-cclientelement-audit-2026-05-28.md`
 // section 4.3): MTA's `CClientPlayer` is just a refinement of `CClientPed`.
 // Local and remote are the same class; the discriminator is `IsLocalPlayer()`.
 // Our scope keeps the local-vs-puppet split inside `coop::players::Registry`

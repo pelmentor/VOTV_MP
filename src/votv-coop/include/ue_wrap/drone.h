@@ -14,7 +14,7 @@
 // drone). It has no top-level Key (its key lives inside Data@0x0410) -- but a singleton needs no
 // key. State we read: Active@0x0370 (dormant<->flying).
 //
-// RE: research/findings/votv-delivery-drone-RE-and-coop-sync-design-2026-06-03.md.
+// RE: research/findings/vehicles/votv-delivery-drone-RE-and-coop-sync-design-2026-06-03.md.
 
 #pragma once
 

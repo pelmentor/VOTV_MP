@@ -130,7 +130,7 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   → OWNER-EFFECT; absolute float coords → world host-auth; navmesh random-walk var → world roamer; a
   PRODUCT that stalks the local player → OWNER-ENTITY. Two wrong name-and-vibes calls reversed in one
   day (pinecone wrongly suppressed; sky wisps wrongly per-peer). *Look FIRST:*
-  `research/findings/votv-ambient-anchor-audit-RE-2026-07-10.md` + the tier table in spawn_authority.h.
+  `research/findings/world-systems/votv-ambient-anchor-audit-RE-2026-07-10.md` + the tier table in spawn_authority.h.
   `memory/lesson_ambient_spawner_anchor_read_decides_tier.md`
 - **Peer-keyed mirror lanes have 3 measured traps** (owner_entity_sync audit): a CLIENT has no transport
   edge for another client's slot → leaver teardown must be HOST-FANNED; your own mirror spawn re-enters
@@ -167,14 +167,14 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   host-side crowbar DUPE (rocks masked it: a rock IS prop_C). Resolve on the DECLARING class + cache;
   when adding any reflected-call site, grep for other leaf-class resolves of the same fn.
   *Look FIRST:* the SDK header for which class declares the fn + the RCA finding
-  `research/findings/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md`.
+  `research/findings/props-lifecycle/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md`.
   `memory/lesson_findfunction_exact_owner_no_superstruct_climb.md`
 - **VOTV damage NEVER touches UE TakeDamage/ApplyDamage** — melee = `mainPlayer.attack` →
   per-class `addDamage`/`damageByPlayer`, ALL EX_Local-invisible inward from `attack`; the ONE
   Func-patchable choke is `VictoryFloatMinusEquals` (every prop+creature health write; FFrame::Object =
   target). A client's hits are LOCAL-ONLY today (user live 2026-07-11: zero damage cross-peer, silent
   crowbar door hits). The mannequin is a PROP (`Aprop_mannequin_C : Aprop_C`), not a Character.
-  *Look FIRST:* `research/findings/votv-melee-damage-path-RE-2026-07-11.md` (chain + ranked hook seams).
+  *Look FIRST:* `research/findings/player-puppet/votv-melee-damage-path-RE-2026-07-11.md` (chain + ranked hook seams).
   `memory/lesson_votv_damage_bypasses_ue_takedamage.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
   NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`

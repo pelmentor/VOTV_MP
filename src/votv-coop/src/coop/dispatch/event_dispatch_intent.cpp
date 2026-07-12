@@ -134,7 +134,7 @@ bool HandleIntentEvent(net::Session& session,
         // v84 (Increment 2, docs/piles/08): CLIENT->HOST chipPile grab REQUEST. Host-authoritative
         // (the DoorOpenRequest shape). The host validates the eid is a tracked PILED pile + the sender
         // isn't already holding one, executes playerGrabbed on puppet-N (probe-proven, see
-        // research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md), and broadcasts the
+        // research/findings/player-puppet/votv-puppet-grab-feasibility-RE-2026-06-22.md), and broadcasts the
         // authoritative PropConvert{kToClump}. coop::trash_channel::OnGrabIntent.
         // NOTE (modular, RULE 2026-05-25): this file is ~757 LOC after this case (past the 800 soft cap
         // is near) -- the NEXT trash-intent handler (ThrowIntent/PileResyncRequest, phase 2) MUST extract

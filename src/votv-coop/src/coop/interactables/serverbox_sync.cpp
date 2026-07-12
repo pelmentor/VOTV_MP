@@ -1,6 +1,6 @@
 // coop/interactables/serverbox_sync.cpp -- see coop/interactables/serverbox_sync.h.
 //
-// Measured ground truth (RE 2026-07-09, research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md):
+// Measured ground truth (RE 2026-07-09, research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md):
 //   M1: breakServer/fix/break_type are EX_LocalVirtualFunction -> invisible to BOTH our seams -> we can
 //       NOT intercept the verb; we mirror STATE + drive the box's own check() ourselves (reflected).
 //   M2: serverBox_C.check() re-skins PURELY from the raw IsBroken bool (reads it, drives SetMaterial/

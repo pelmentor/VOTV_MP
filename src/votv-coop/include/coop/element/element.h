@@ -5,7 +5,7 @@
 // engine actor pointer + being-deleted flag + sync-time-context generation byte.
 //
 // EXPLICITLY OMITTED from MTA's CClientEntity (RULE 1 / RULE 3, per
-// `research/findings/votv-mta-cclientelement-audit-2026-05-28.md` section 6):
+// `research/findings/mta/votv-mta-cclientelement-audit-2026-05-28.md` section 6):
 //   - CCustomData (Lua key/value bag) -- no Lua at runtime.
 //   - CMapEventManager Lua dispatch -- no Lua.
 //   - Dimension / Interior layering -- no parallel-arena gameplay in VOTV.

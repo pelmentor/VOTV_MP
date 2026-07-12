@@ -1,6 +1,6 @@
 // coop/item_activate.cpp -- Phase 5F flashlight (and future item-activation)
 // sync. See coop/item_activate.h for the public interface and the RE doc
-// at research/findings/votv-flashlight-RE-2026-05-25.md for the full
+// at research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md for the full
 // rationale (Case-b verdict, save-persistence gap, etc).
 //
 // Implementation shape mirrors coop/grab_observer.cpp:

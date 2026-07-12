@@ -33,7 +33,7 @@ toasts (`Cannot be used when held`) alone.
   broadcasts `ServerState=91`; client drive-reals via raw-write `IsBroken` + reflected `check()`; client
   neutralizes its own `ticker_serverBreaker`). Agent-audited (0 CRITICAL/HIGH), LAN-smoke-clean, deployed
   (DLL `3B2762CA`). **NOT hands-on-verified** (smoke world was all-healthy). Inc-2 = forward the host break
-  EDGE (email/console/alarm true notice). See `research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`.
+  EDGE (email/console/alarm true notice). See `research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`.
 - Confidence tags in the docs: **[V]** verified-from-code/reflection · **[RD]** from-a-dump/
   RE-doc · **[?]** needs a runtime probe (e.g. `ui_hints_C`/`ui_hint_C` internals, `enum_notifyType`
   value meanings, the exact server-down localized string — all flagged in TOAST_SYSTEM_RE.md).

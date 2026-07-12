@@ -1,6 +1,6 @@
 // coop/interactables/serverbox_sync.h -- the signal-SERVER simulation as host-authoritative shared-world state.
 //
-// PROBLEM (RE 2026-07-09, docs/notifications/ + research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md):
+// PROBLEM (RE 2026-07-09, docs/notifications/ + research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md):
 // VOTV's signal-server sim -- mainGamemode.{servers, brokenServers, serverEfficiency_calc/downl} +
 // per-serverBox_C.IsBroken, broken/fixed by the host-only ticker_serverBreaker -- is NOT UE-replicated.
 // Each coop peer runs its OWN gamemode + ticker, so a client self-computes DIVERGED server state and

@@ -15,7 +15,7 @@
 > a load-tail timing race; the sweep waits for quiescence where the late native is present). Commits
 > `4c286cae`(stamp/match) + `124fbc9d`(sweep-reconcile timing fix). Audit GO; HANDS-ON take-2 PENDING.
 > Deployed `F9B6589E1F62955F`, proto v86.** Canonical (with the full as-built + the take-1 timing RE):
-> `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`. **The L1 bits in the banner
+> `research/findings/join-identity/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`. **The L1 bits in the banner
 > below (level-pile client->host / absence-removal) are HISTORICAL.**
 
 > **UPDATE 2026-06-23 (HEAD `54a3a332`) — a real two-peer HANDS-ON of the v85 chain found 5 layers; this
@@ -126,7 +126,7 @@
 >   **DISPROVEN by bytecode** — `holdPlayer` (`@0x0240`) is set ONCE on grab (`actorChipPile.json` @8492) and
 >   NEVER cleared in any BP, so it cannot mark "released" (DEAD, NOT pending / NOT design-locked). See
 >   **"AS-BUILT — the client trash MIRROR is the host-authoritative `AStaticMeshActor` proxy"** below + the new
->   canonical finding **`research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`**.
+>   canonical finding **`research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`**.
 > - **DUP-FIX (derived) + VISIBILITY + CARRY-FREEZE + carry-JANK + THROW-ARC + ROTATION + SOUND all VERIFIED
 >   [V hands-on]; Z-fix + LEVEL-PILE dup-DESTROY + FPS-fix [V harness]; SCALE AS-BUILT:** the derived-pile dup
 >   is gone + the resting/landed piles mirror visibly (user-confirmed); the carry-freeze is fixed by the
@@ -183,7 +183,7 @@ of Increment 1; it never worked.
   CONTRADICTED our own earlier correct RE. **[RD → confirmed]**
 - **Live proof (hands-on 2026-06-21):** `host_spawn_watcher` registered the POST observer fine but logged
   **0 fires** across 870 piles + every re-pile. Committed in `0e56ca39`; full RE in
-  `research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md`. **[V]**
+  `research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md`. **[V]**
 
 **Consequence:** `host_spawn_watcher` was reverted to owning the AMBIENT/pinecone BeginDeferred POST ONLY (the
 chipPile/clump convert link was removed from it). The grab + re-pile now sync via the **VISIBLE** seams
@@ -411,7 +411,7 @@ hands-on alongside the single-grab-cue check.)
 
 Catch the `EX_CallMath BeginDeferred` itself by patching the callee's thunk (a ProcessEvent observer provably
 can't — that's the whole point of the disproof). Full RE + the IDA-pinned offsets + the validation result:
-**`research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md`** §3 (now AS-BUILT). As built:
+**`research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md`** §3 (now AS-BUILT). As built:
 
 - **`ue_wrap/ufunction_hook.{h,cpp}`** — the standalone Func-patch facility (principle 7, engine substrate).
   `InstallPostHook(ufn, cb)` saves the original `Func` (@`UFunction+0xD8`) and writes a STAMPED transparent
@@ -444,7 +444,7 @@ The `GrabIntent` → host-executes-on-puppet-N path (the door `OnRequest` shape,
 stream + `ThrowIntent`. **The client-INITIATED path is now BUILT** (camera-ray cone recognition, NOT the
 originally-planned suppress-native): the host arm (below, v84) carries it, plus the v85 carry-visibility +
 throw + camera-cone recognition. See the consolidated AS-BUILT finding
-`research/findings/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`.
+`research/findings/physics-grab/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`.
 
 > **HOST-SIDE — AS-BUILT + VERIFIED [V harness] (2026-06-22, commits `81e8e687` + MEDIUM-1 `2dc5d06e`,
 > deployed `AAEC4D8F3B4341F8`, proto v84, push held).** The full client→host wire + router + handler + drive,
@@ -467,7 +467,7 @@ throw + camera-cone recognition. See the consolidated AS-BUILT finding
 > no-crash. Carry-test regression 16/16 PASS (no regression to the existing pile work). The harness CAUGHT a
 > real bug pre-ship: an over-strict `g_ctx` "tracked" gate denied a never-transitioned resting pile (removed).
 > Test: `VOTVCOOP_RUN_GRAB_INTENT_TEST=1` (the client sends a synthetic GrabIntent). Findings:
-> `research/findings/votv-increment2-clientgrab-host-side-DESIGN-2026-06-22.md` +
+> `research/findings/physics-grab/votv-increment2-clientgrab-host-side-DESIGN-2026-06-22.md` +
 > `votv-puppet-grab-feasibility-RE-2026-06-22.md`.
 >
 > **AS-BUILT (2026-06-23, v85, HEAD `29353191`) — the CLIENT-INITIATED path + carry visibility + throw.**
@@ -481,7 +481,7 @@ throw + camera-cone recognition. See the consolidated AS-BUILT finding
 > is still walk-through). Plus the FEEL (PHC-jitter, head-vs-camera offset) at a real hands-on.
 
 **The gating `[?]` is RESOLVED (2026-06-22, RE + runtime probe — `[V harness]`).** Full result:
-`research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md`. The puppet-grab probe
+`research/findings/player-puppet/votv-puppet-grab-feasibility-RE-2026-06-22.md`. The puppet-grab probe
 (`harness/autotest_chippile.cpp::RunPuppetGrabProbe`, env `VOTVCOOP_RUN_PUPPET_GRAB_PROBE=1`, deployed
 `CDBDCFB2996A68DC`) drove `pile.playerGrabbed(Player=puppet)` on a confirmed unpossessed slot-1 puppet
 (`GetController()==null`) and asserted the host log:
@@ -619,7 +619,7 @@ autonomous log-truth harness against real autonomous-run logs, NOT a human hands
   (`@0x0240 AmainPlayer_C*`, CXXHeaderDump-confirmed) is set ONCE on grab (`actorChipPile.json` @8492) and
   **NEVER cleared in any BP**, so it cannot mark "released." (CLOSE-B latch + land-settle SHIPPED `65AD883A` —
   correct, but not the freeze cause.) The root + the open-item fixes: the new canonical finding
-  **`research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`**. NEXT = USER HANDS-ON take-29
+  **`research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`**. NEXT = USER HANDS-ON take-29
   (carry-smooth + the throw arc + the level-pile native-destroy).
 
 ### The dup this fixes (the ROBUSTNESS track — was OPEN, now addressed BY CONSTRUCTION)
@@ -726,11 +726,11 @@ Scope: trash only; `Aprop_C` + kerfur mirrors unchanged.
     harness]** (take-31 regressed → take-32 land-settle re-read); proxy SCALE **AS-BUILT**; ORPHAN dup
     **DESTROY BUILT + VERIFIED [V harness]** — derived gone [V hands-on], ORIGINAL level-placed native destroyed
     at proxy-spawn; FPS ~4s stutter **FIXED [V harness]**): the canonical finding
-    `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md` (option 1 FAILED; option 2, the
+    `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md` (option 1 FAILED; option 2, the
     `holdPlayer` convert/ctx gate, is DISPROVEN by bytecode — `holdPlayer` never cleared). The final verified
     state + the autonomous harness are in `research/handson_runbook_2026-06-22_regression_and_harness.md` (take-32)
     + `[[reference-pile-test-harness]]` (`tools/pile-test-assert.ps1`, 13 invariants, VERDICT PASS).
 
-Full design + RCA: **`research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`** (§2 the
+Full design + RCA: **`research/findings/piles-trash/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`** (§2 the
 proxy design, §6 the four mesh/collision requirements, §7 the phase split + C1/C2/C3 + Q1/Q2 + the
 AS-BUILT-phase-1 section).

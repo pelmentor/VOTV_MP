@@ -1,6 +1,6 @@
 // coop/world_actor_sync.h -- HOST-AUTHORITATIVE mirror of NON-Character event actors (B3b, 2026-06-17).
 //
-// The "sync all events" arc (research/findings/votv-all-events-coop-sync-classification-2026-06-17.md,
+// The "sync all events" arc (research/findings/events/votv-all-events-coop-sync-classification-2026-06-17.md,
 // channel B3 / the B3b split) + the design doc votv-b3b-worldactor-mirror-design-2026-06-17.md.
 // Mirrors the ~14 non-Character event actors (gray saucers, Rozital mothership, ariral ships, sky UFO,
 // space jellyfish, firetank, ...) that fly in on events. The Character-only NPC mirror (npc_sync +

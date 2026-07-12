@@ -44,7 +44,7 @@ Copies the probe into the dev copy's UE4SS `Mods/` and enables it in
     ProbeScreenButtonInvoke, ProbeGatherSignal, ProbeSpaceRendererIntegrator,
     ProbeSetDataAudio, FinalSummary. Driven by
     `tools/probe-terminals.ps1`. Findings folded into
-    `research/findings/votv-interactable-terminals-RE-2026-05-25.md`.
+    `research/findings/computers-devices/votv-interactable-terminals-RE-2026-05-25.md`.
 
 ## Why we don't ship probes
 

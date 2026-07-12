@@ -38,7 +38,7 @@ The carry is not in a testable state: the fix is designed but not built. **Do no
   churn stays (transient + self-cleaning). KEEP fix #2 (the `OnConvert` `pile→clump` no-teleport re-skin) — it
   is part of option 2.
 - **Full root + the fix design (the canonical doc):**
-  `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. Read it before building.
+  `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. Read it before building.
 
 A fresh carry hands-on runbook will be written once option 2 is built + smoked.
 
@@ -55,6 +55,6 @@ A fresh carry hands-on runbook will be written once option 2 is built + smoked.
 - **CARRY — NOT fixed; deployed `8bc797ef` STILL CHURNS** (the contact-re-pile churn). The take-24
   "mechanism smoke-proven on a settled join" is WITHDRAWN (wrong grab slot + render-blind). Option 1 FAILED;
   option 2 (the `holdPlayer` convert/ctx gate) is designed-not-built. **No carry hands-on is pending** until
-  option 2 is built. Root + fix: `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+  option 2 is built. Root + fix: `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 - **Open sub-question for after option 2:** the non-disappearing-pile symptom may be a SEPARATE proxy/orphan
   bug, not the churn — re-check it separately once the carry mirrors (do not assume one fix covers both).

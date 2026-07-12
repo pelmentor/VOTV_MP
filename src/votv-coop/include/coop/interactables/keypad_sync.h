@@ -35,7 +35,7 @@
 //           non-native green+red "PURPLE" the user reported. The LED colour is power-driven and
 //           already equal across peers from the same world; we do not drive it.
 //
-// RE: research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md (+ the 2026-06-11
+// RE: research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md (+ the 2026-06-11
 // uber re-read in research/bp_reflection/_passwordlock_uber_full.txt).
 
 #pragma once

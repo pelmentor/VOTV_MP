@@ -9,7 +9,7 @@
 // rate.
 //
 // State previously lived in harness.cpp as file-scope globals; extracted
-// per the audit (`research/findings/votv-coop-audit-post-pr4-7-2026-05-28.md`)
+// per the audit (`research/findings/architecture-audits/votv-coop-audit-post-pr4-7-2026-05-28.md`)
 // to keep harness.cpp at its boot/scenario glue role.
 //
 // Scenario branches in harness.cpp that drove a single puppet for

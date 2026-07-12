@@ -76,7 +76,7 @@ it was the owner over-reaching; the gate confines it to moved-and-settled piles 
 
 ## Take 3 — the OWNER (host-authoritative pile identity through the join tail) [VERIFIED 19:06]
 Host + client. NO protocol bump (reuses PropSnapPos). Full RE + timeline:
-`research/findings/votv-joinwindow-massmove-dup-RE-2026-07-01.md`. SEPARATE class from `docs/piles/09`
+`research/findings/join-identity/votv-joinwindow-massmove-dup-RE-2026-07-01.md`. SEPARATE class from `docs/piles/09`
 (single held-clump-at-join) and `docs/piles/11` (nativization) — the MASS version. [[project-pile-nativization-2026-06-30]]
 
 Takes 1-4 (`fa8bc344` create-edge, `76257bb0` CONVERT-WINS, `46e35edd` twin-sweep, `110b1bde` DUP-RETIRE) each
@@ -222,7 +222,7 @@ the `_41` dispatch "subsumes" the deny was WRONG (covers 1 of 3 seams). Fix: a s
 (`OnPileUseDenySuppress`, `trash_collect_sync.cpp`) on `_38` + `_42` — client-only; on a pile interaction
 (carrying, or aimed at a bound-native/proxy pile) it ONLY cancels the dispatch (no grab/throw intent, no cue;
 `_42`-on-release must never throw). `_41` stays the sole intent sender. RE finding:
-`research/findings/votv-use-action-three-bindings-RE-2026-07-01.md`. Lesson: [[lesson-input-action-multiple-delegate-bindings]].
+`research/findings/props-lifecycle/votv-use-action-three-bindings-RE-2026-07-01.md`. Lesson: [[lesson-input-action-multiple-delegate-bindings]].
 
 ## GHOST-WEDGE — a pile permanently ungrabbable for the client (root pinned from logs 2026-07-02;
 ## delivery half `d4833b9b` + UPSTREAM root SHIPPED `2ab718d5` 2026-07-03; hands-on verdict pending)

@@ -34,7 +34,7 @@
 // peers, so it is not position-identifiable (would need the eid/spawn path). Level-placed grime + its
 // cleaning is the stated ask.
 //
-// RE: research/findings/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md PART A.
+// RE: research/findings/world-systems/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md PART A.
 
 #pragma once
 

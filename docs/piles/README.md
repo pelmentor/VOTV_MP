@@ -11,7 +11,7 @@
 > **FOLLOW-ON (updated 2026-07-02, LOCAL commits `de492af8`..HEAD = 19+ ahead, NOT pushed):**
 > - **SOUND-events (pickup + land) = VERIFIED [V hands-on 16:23]** (`8f2b689c`). RE: the chipPile BP has NO
 >   dedicated pickup/land sound — pickup = `use`+`physSound.soft`, land = `physSound.impact`
->   (`research/findings/votv-pile-pickup-land-sound-RE-2026-07-01.md`). See doc 11 § Sound-events.
+>   (`research/findings/piles-trash/votv-pile-pickup-land-sound-RE-2026-07-01.md`). See doc 11 § Sound-events.
 > - **JOIN-WINDOW MASS-MOVE DUP class = VERIFIED FIXED [V hands-on 19:06]; ONE residual + ARMED probe.**
 >   Re-derived to the OWNER level after 4 instance fixes: a host in-window move keeps the SAME eid but the
 >   client keys keyless piles by their FROZEN save-pos (lies after a move) → RE-BIND resurrects @old. FIX:
@@ -46,7 +46,7 @@
 > >50% valve). Modules: `coop/props/pile_spawn_bind` (spawn-time TryDestroyTwin) + `coop/element/quiescence_drain`
 > (the deferred queues + the post-quiescence sweep) -- was `coop/pile_reconcile.{h,cpp}`, split in the 2026-06-30
 > anti-smear refactor [[project-anti-smear-refactor-2026-06-30]]. Canonical RE:
-> `research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`.
+> `research/findings/join-identity/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md`.
 >
 > **2026-06-25 — TWO pile bugs now tracked, BOTH from the in-window manipulation:**
 > **2026-06-26 UPDATE — both subsumed by the stable-ID native-authoritative model + #2 proxy-wins:**
@@ -215,8 +215,8 @@ history/diagnosis/design, and **08 is the CURRENT design** (the host-authoritati
   `TrashCarryPose` stream), THROWS (self-re-piles), all via the REAL E-press path. What's STILL OPEN
   (greenlight): a `garbageCollider`-analog SHAPE component on the proxy (occlusion-correct aim +
   movement-block — the cone ignores walls, the proxy is walk-through) + the feel. As-built:
-  `research/findings/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`; the carry root + fix:
-  `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. **Read these for the pile sync.**
+  `research/findings/physics-grab/votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md`; the carry root + fix:
+  `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. **Read these for the pile sync.**
 - **`_archive/07-MORPH-V2-held-object-channel.md`** — **SUPERSEDED + RETIRED 2026-06-21, archived** (the
   morph: held-object adopt + PROXIMITY land-watch). Its smoke "VERIFIED" was a FALSE POSITIVE; the real
   hands-on refuted it (proximity false-fires in clusters; client grab never armed). History only — see 08.
@@ -325,8 +325,8 @@ channel**, which is the CURRENT design + as-built. The day-to-day live state is 
    (`@0x0240`) is set ONCE on grab (`actorChipPile.json` @8492) and NEVER cleared in any BP, so it cannot mark
    "released." (CLOSE-B latch + land-settle SHIPPED `65AD883A` — correct, not the freeze cause.) The 3-verdict
    discriminator / health-poll / serial-check plan is DROPPED (moot). Design + AS-BUILT:
-   `research/findings/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`; the carry root + fix (the
-   canonical doc): `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
+   `research/findings/piles-trash/votv-pile-mirror-staleness-robustness-DESIGN-2026-06-21.md`; the carry root + fix (the
+   canonical doc): `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`.
 4. **STATUS (2026-06-23): the items this roadmap listed are SHIPPED.** carry-freeze + carry-JANK FIXED
    [V hands-on take-30/32]; throw arc + ROTATION + Z-height [V]; the level-pile native-destroy [V harness];
    proxy SCALE AS-BUILT; the client-grab FULL CHAIN (recognition camera-cone + carry stream + throw)
@@ -346,7 +346,7 @@ clump CARRY-FREEZE + the carry JANK are hands-on confirmed**; **proxy SCALE is B
 the throw arc is the flight-stream (hands-on pending), and the ORIGINAL (level-placed) pile dup is SPLIT off
 (native-coexistence root confirmed, native-destroy fix not built)** — option 1 FAILED + option 2 (the
 `holdPlayer` convert/ctx gate) is DISPROVEN by bytecode (`holdPlayer` never cleared); see the Status above +
-the canonical finding `research/findings/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. The earlier `8bc797ef`
+the canonical finding `research/findings/piles-trash/votv-chippile-carry-churn-holdplayer-gate-2026-06-22.md`. The earlier `8bc797ef`
 (HEAD `70d28df4`, option 1), `70f1f04b` (HEAD `7f1b29ba`) proxy build, `BA79E705` (HEAD `fea04c26`, the thunk
 re-pile + sound fix), `C7030D00` adopt-bind baseline, the FAILED s05/06 morph, and the s07 morph-V2 are all
 superseded by 08 (the 07 doc is archived).

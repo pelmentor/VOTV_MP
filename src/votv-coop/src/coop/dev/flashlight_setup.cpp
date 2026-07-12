@@ -1,6 +1,6 @@
 // coop/dev/flashlight_setup.cpp -- autotest-only flashlight setup helpers.
 // See coop/dev/flashlight_setup.h and
-// research/findings/votv-inventory-equip-battery-RE-2026-05-26.md.
+// research/findings/inventory-items/votv-inventory-equip-battery-RE-2026-05-26.md.
 
 #include "coop/dev/flashlight_setup.h"
 

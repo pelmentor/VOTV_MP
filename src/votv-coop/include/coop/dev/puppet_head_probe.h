@@ -1,5 +1,5 @@
 // coop/dev/puppet_head_probe.h -- positive-confirm probe for the puppet head-look
-// FREEZE (RE: research/findings/votv-puppet-head-freeze-backturned-RE-2026-06-24.md).
+// FREEZE (RE: research/findings/player-puppet/votv-puppet-head-freeze-backturned-RE-2026-06-24.md).
 //
 // Measures, observer-side, the DESIRED head twist (the replicated look-input vs the
 // puppet's presentation body yaw) against the ACTUAL rendered 'head'/'neck' bone twist

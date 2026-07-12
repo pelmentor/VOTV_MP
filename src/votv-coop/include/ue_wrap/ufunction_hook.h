@@ -12,7 +12,7 @@
 // patch the callee UFunction's Func pointer (UFunction + off::UFunction_Func) with
 // our own transparent forwarder: EVERY dispatch path funnels through Func, so the
 // hook fires regardless of the caller's opcode. (docs/COOP_DISPATCH_VISIBILITY.md;
-// research/findings/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md, IDA-pinned.)
+// research/findings/piles-trash/votv-chippile-dispatch-and-thunk-hook-RE-2026-06-21.md, IDA-pinned.)
 //
 // The forwarder reads FFrame::Object (the actor whose bytecode is executing = the
 // SOURCE of a spawn issued from its ubergraph) BEFORE forwarding, forwards to the

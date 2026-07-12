@@ -19,7 +19,7 @@
 //   serverBox_C      Active       @0x03D5  SetActive(bool bNewActive)
 //   wallunit_tapes_C Active       @0x0290  upd()
 //
-// RE: research/findings/votv-all-interactables-sweep-catalog-2026-06-08.md.
+// RE: research/findings/props-lifecycle/votv-all-interactables-sweep-catalog-2026-06-08.md.
 
 #pragma once
 

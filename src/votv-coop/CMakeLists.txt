@@ -89,8 +89,8 @@ target_link_libraries(imgui PUBLIC freetype)
 # --- GameNetworkingSockets (BSD-3, vendored as git submodule, pinned v1.5.1) ---
 #
 # Wire-layer substrate for the 4-PR GNS migration plan in
-# research/findings/votv-gns-integration-plan-2026-05-27.md +
-# research/findings/votv-gns-sandbox-pass-2026-05-28.md (sandbox PASS report).
+# research/findings/network/votv-gns-integration-plan-2026-05-27.md +
+# research/findings/network/votv-gns-sandbox-pass-2026-05-28.md (sandbox PASS report).
 #
 # PR-1 vendored + linked the lib behind a /WHOLEARCHIVE smoke. PR-2 wired
 # coop::net::Session (src/coop/net/session.cpp) over GNS's CreateListenSocketIP /

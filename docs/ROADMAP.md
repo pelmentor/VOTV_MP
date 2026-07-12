@@ -32,7 +32,7 @@ For cross-cutting architecture truth see the new
 section at the bottom of this file is stale (≤2026-05-29) — defer to memory.
 
 **Foundation audit v2 (2026-05-29):** see
-`research/findings/votv-architecture-audit-2026-05-29.md` for the full
+`research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md` for the full
 14-dimension audit + PR-FOUNDATION-1..5 priorities. Key gap: cross-peer
 relay topology is still 2-player-shaped; 4-peer LAN smoke missing.
 
@@ -55,7 +55,7 @@ skeleton committed; UE4SS verified injecting into VOTV 0.9.0-n.
        (world/save hub).
 - ☑ 1.3 Input dispatch — stock `APlayerController`; VOTV input = pawn
        `InpActEvt_*` BP events. Full vocabulary mapped (see
-       `research/findings/coop-phase-1-input-map-and-spawn-probe-2026-05-21.md`).
+       `research/findings/phase0-bootstrap/coop-phase-1-input-map-and-spawn-probe-2026-05-21.md`).
 - ☑ 1.4 Tick / save / level-load / UI / Blueprint VM — covered piecewise
        across the 2026-05-22..2026-05-25 findings (autonomous harness
        skip-to-gameplay, save-load entry, UMG widget construction, BP
@@ -120,7 +120,7 @@ LAN (two-machine + same-box-two-instance both confirmed).
 - ☑ 3.4 Position-only pose sync at 60 Hz + receiver-side interpolation
        (50 ms LERP window, MTA-shape `SetTargetPose` on new packet +
        per-tick interp pump). See
-       `research/findings/mta-pose-interpolation-2026-05-23.md`.
+       `research/findings/mta/mta-pose-interpolation-2026-05-23.md`.
 - ☑ 3.5 Auto-spawn the remote on first packet.
 
 ### Priority lanes ☑
@@ -136,7 +136,7 @@ LAN (two-machine + same-box-two-instance both confirmed).
   need to compare a Bulk event against Normal state (e.g. PropSpawn vs
   Join) must gate on identity establishment, not lane order. See
   E-2 / C-1 finding in
-  `research/findings/votv-architecture-audit-2026-05-29.md`.
+  `research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md`.
 
 ### Reliable channel ☑
 
@@ -173,7 +173,7 @@ LAN (two-machine + same-box-two-instance both confirmed).
 - ◐ 4.2 Equipment / held-item / tool state — **physics-prop pickup
        SHIPPED** 2026-05-24 (PropGrab / PropPose-piggyback / PropRelease
        + throw impulse). See
-       `research/findings/physics-object-pickup-coop-plan-2026-05-23.md`
+       `research/findings/physics-grab/physics-object-pickup-coop-plan-2026-05-23.md`
        and the Aprop lifecycle RE doc. **HOTBAR hand item SHIPPED
        2026-07-06 (v105 hand_item display axis** — player expression, out
        of the prop pipeline; **+ v105b same day**: view-anchored mirror
@@ -251,7 +251,7 @@ Each item below is a feature increment series. Cross-referenced in
        spawns from natural spawners.
 
 ### 5T — Story-object terminals ◐
-- ☑ RE pass complete (`research/findings/votv-interactable-terminals-RE-2026-05-25.md`)
+- ☑ RE pass complete (`research/findings/computers-devices/votv-interactable-terminals-RE-2026-05-25.md`)
        — 12 sections + 4 audit cycles + UE4SS Lua probe pass (E-12-CR1
        critical finding: direct OnClicked invoke crashes without active-use
        state). 13-increment plan.
@@ -261,7 +261,7 @@ Each item below is a feature increment series. Cross-referenced in
 
 ### 5D — Doors + light switches ☑
 - ☑ RE pass complete 2026-05-25
-       (`research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md`)
+       (`research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md`)
        — class enumeration, hook/invoke = `doorOpen`/`doorClose` +
        `Atrigger_lightRoot_C::SetActive`, 7-increment plan, 6 open
        flags.
@@ -313,7 +313,7 @@ Each item below is a feature increment series. Cross-referenced in
        coop session (`MsgType::VoiceFrame`), miniaudio capture/playback, jitter
        buffer, whisper, per-player volume, mute, voice icons on nameplate /
        scoreboard / HUD. Simple-Voice-Chat port
-       (`research/findings/votv-voice-chat-port-design-2026-06-12.md`). Code:
+       (`research/findings/network/votv-voice-chat-port-design-2026-06-12.md`). Code:
        `src/votv-coop/src/coop/voice/*`, `session_voice.cpp`; wired
        `subsystems.cpp:108`/`:332`. Shipped f32ed1b0, UI refined 9ed8789a.
 - ☑ Master server + opt-in public server browser — SHIPPED. ImGui browser
@@ -328,10 +328,10 @@ Each item below is a feature increment series. Cross-referenced in
 - ☐ Phase 5N1 Inc3 cont. — EntityPoseBatch stream for NPC pose
        replication (currently NPC AI runs per-client; combat / horror
        loop incoherent without it). See S-1 in
-       `research/findings/votv-architecture-audit-2026-05-29.md`.
+       `research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md`.
 - ☐ Phase 5T Inc1+ — terminals interactive sync.
 - ☐ P2P + ICE / NAT punch (WAN). Design seed:
-       `research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md`.
+       `research/findings/network/votv-gns-p2p-masterserver-plan-2026-05-28.md`.
        `ENABLE_ICE=OFF` today.
 - ☐ Ragdoll sync (non-trivial — VOTV ragdoll renders on a SEPARATE
        invisible body; we'd be inventing visible ragdoll on the puppet).
@@ -356,7 +356,7 @@ Each item below is a feature increment series. Cross-referenced in
 
 ### PR-FOUNDATION queue (foundation audit v2, 2026-05-29)
 Strategic priorities derived from the 14-dimension audit. Read
-`research/findings/votv-architecture-audit-2026-05-29.md` for the full
+`research/findings/architecture-audits/votv-architecture-audit-2026-05-29.md` for the full
 TL;DR + tier-list.
 - ☐ PR-FOUNDATION-1 — Identity epoch + range enforcement
        (`IsAllowedSenderEid` helper across 7+ wire sites; closes E-1 +

@@ -73,7 +73,7 @@ coop::element::ElementId AdoptBornClump(coop::net::Session& s, coop::element::El
 // ---- CLIENT-GRAB direction (Increment 2, v84, docs/piles/08) -- the host arm of the door OnRequest --
 // A client sent GrabIntent{eid} (suppress-native + request, the interactable_channel.h:220 OnRequest shape;
 // MTA CStaticFunctionDefinitions::AttachElements). The HOST validates + executes the real grab on puppet-N
-// (probe-proven: research/findings/votv-puppet-grab-feasibility-RE-2026-06-22.md -- the grab ENGAGES on an
+// (probe-proven: research/findings/player-puppet/votv-puppet-grab-feasibility-RE-2026-06-22.md -- the grab ENGAGES on an
 // unpossessed puppet, NO controller dependency) + broadcasts the authoritative PropConvert{kToClump}, then
 // registers puppet_carry_drive (the puppet tick does NOT drive the PHC, so the host drives the hold pose).
 

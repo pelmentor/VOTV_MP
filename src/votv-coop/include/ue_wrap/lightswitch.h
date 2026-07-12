@@ -9,7 +9,7 @@
 // source (wall switch, power board, script) with one hook -- exactly as the RE
 // doc prescribes. Identity = the inherited AtriggerBase_C::Key.
 //
-// RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+// RE: research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md.
 
 #pragma once
 

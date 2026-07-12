@@ -14,7 +14,7 @@
 // -- we read/drive at the ACTOR level (GetActorLocation/Rotation/Velocity, SetActorLocation/
 // Rotation), reusing ue_wrap::engine; no component-transform plumbing needed.
 //
-// RE: research/findings/votv-ATV-quadbike-RE-and-coop-sync-design-2026-06-08.md +
+// RE: research/findings/vehicles/votv-ATV-quadbike-RE-and-coop-sync-design-2026-06-08.md +
 //     votv-ATV-Phase1-pose-stream-blueprint-2026-06-08.md.
 
 #pragma once

@@ -22,7 +22,7 @@ namespace coop::net {
 inline constexpr uint32_t kMagic = 0x564D5450u;
 // v5 (2026-05-24 post-compact): PropRelease replaces throw-impulse with
 // inherited-physics-velocity (FVector linVel + FVector angVel). Root-cause RE
-// (research/findings/votv-throw-release-pipeline-RE-2026-05-24.md) showed the
+// (research/findings/physics-grab/votv-throw-release-pipeline-RE-2026-05-24.md) showed the
 // "вжух" mouse-flick launch is NOT a discrete AddImpulse call -- it is the
 // kinematic-tracking velocity PhysX accumulates while the player flicks the
 // camera (UPhysicsHandleComponent.SetTargetLocation jumps the target each tick;
@@ -41,7 +41,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 //     linear+angular velocity (replaces v4's throw-impulse FVector); receiver
 //     re-enables SimulatePhysics + SetPhysicsLinearVelocity + SetPhysicsAngularVelocityInDegrees
 //   - WireKey carries the FName string (cross-peer stable, idx is NOT --
-//     see research/findings/votv-physics-interaction-deep-re-2026-05-23.md)
+//     see research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md)
 // v9 (2026-05-27 Phase 5G Inc 2): NonPropEntityState/Destroy packets shipped
 // then retired the same day -- chipPile/clump/trashBitsPile families ride
 // the existing Aprop_C pipeline via the IsKeyedInteractable extension
@@ -58,7 +58,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 //   ReliableKind::LightningStrike = 14 (discrete strike events)
 // Host-authoritative model: client suppresses its 5 scheduler UFunctions on
 // AdaynightCycle_C via multi-slot interceptor and receives state via reliable
-// pushes. See research/findings/votv-weather-DESIGN-2026-05-26.md.
+// pushes. See research/findings/weather-wind/votv-weather-DESIGN-2026-05-26.md.
 // v6 (2026-05-26 PM): ItemActivatePayload grew 16 -> 24 bytes -- added float
 // intensity + outerConeAngle + innerConeAngle + uint8 mode so the receiver can
 // mirror the sender's EXACT cone shape (Phase 5F user feedback: puppet's
@@ -220,7 +220,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // saveSlot per machine; a write would corrupt the local player's persisted
 // health). Reliable death/ragdoll authority is a later increment (these bytes
 // are continuous, lossy, and intentionally never trigger a DEAD transition).
-// See research/findings/votv-player-vitals-death-RE-2026-05-30.md.
+// See research/findings/player-puppet/votv-player-vitals-death-RE-2026-05-30.md.
 //
 // v20 (2026-05-31) -- vitals pillar Inc2b (ragdoll/faint DISPLAY sync):
 // PoseSnapshot.stateBits gains bit 1 `kStateBitRagdoll` (per-pose, per-peer-
@@ -306,7 +306,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // + a host connect-snapshot of every OPEN instance to a late joiner. Identity =
 // the instance's cross-peer-stable Key (AtriggerBase_C::Key for doors+lights;
 // Aprop_C::Key for swinger lids). RE:
-// research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md. ParseHeader
+// research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md. ParseHeader
 // rejects pre-v27 peers. [[project-coop-doors-lights-sync]]
 // v28 (2026-06-03): trash-clump DESPAWN + VARIANT fix. (a) PropDestroy is now
 // EID-ROUTABLE: the non-keyable clump (prop_garbageClump_C, key=None) rides our eid
@@ -357,7 +357,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // overwriting it and the native LookAt nodes aim at the host's target. The same native
 // lookAt/customLookAt path is the queued mechanism for the player-puppet "camera look = head
 // look" follow-on. [[project-npc-sync-pose-and-snapshot]] / docs:
-// research/findings/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md.
+// research/findings/kerfur/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md.
 // v40 (2026-06-07): KERFUR BODY-facing sync (the head-then-body tracking's BODY half).
 // EntityPoseSnapshot grows 40 -> 44 (adds `bodyYaw`) + a hasBodyYaw stateBit. RE (2 agents
 // CONVERGED, byte-exact): the kerfur ACTOR BP (ExecuteUbergraph_kerfurOmega @28614) rotates its
@@ -368,7 +368,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // on host vs client (user RE: back-to-keypad on host, front-to-keypad on client). The host streams
 // the resolved mesh world yaw; the client writes it onto the mirror's mesh (after SetActorRotation;
 // no gate flag -- mirror tick off can't clobber it). SEPARATE from the v39 head `lookAt` sync.
-// research/findings/votv-kerfur-bodyfacing-RE-2026-06-07.md (pending).
+// research/findings/kerfur/votv-kerfur-bodyfacing-RE-2026-06-07.md (pending).
 // v41 (2026-06-08): BASE-WINDOW DIRT sync (Request 1, Part B -- the base's "main huge window").
 // Adds ReliableKind::WindowCleanState (=30) + the 40-byte WindowCleanPayload. AbaseWindow_C's
 // whole-surface dirt is one scalar `clean`@0x0260 (a SetCustomPrimitiveDataFloat shader slot;
@@ -1297,7 +1297,7 @@ enum class ReliableKind : uint8_t {
                        //     door lock keys on the door's own `Active` (DoorState/CanOpen). Host
                        //     relays client edges + connect-snapshots. Payload: KeypadSyncPayload
                        //     (56 B). Own module coop/keypad_sync.
-                       //     RE: research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md.
+                       //     RE: research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md.
     DoorOpenRequest = 26, // 2026-06-04 (v32): CLIENT->host door open/close REQUEST.
                        //     Doors are now HOST-AUTHORITATIVE (MTA single-syncer model):
                        //     a door's isOpened is re-driven each tick by its LOCAL sensor +
@@ -1420,7 +1420,7 @@ enum class ReliableKind : uint8_t {
                        //     (IsClientRelayableReliableKind). The wall switches/breakers that
                        //     drive these just flip the bool -> the poll catches it (we never
                        //     observe the switch). coop/interactable_sync + ue_wrap/appliance. RE:
-                       //     research/findings/votv-all-interactables-sweep-catalog-2026-06-08.md.
+                       //     research/findings/props-lifecycle/votv-all-interactables-sweep-catalog-2026-06-08.md.
     PowerControlState = 36, // 2026-06-08 (v46): the base POWER PANEL breakers (ApowerControl_C
                        //     -- 5 latched press bools press_coord/downl/play/calc/light
                        //     @0x0380-0x0384, keyed by AtriggerBase_C::Key @0x0260). SYMMETRIC
@@ -1802,7 +1802,7 @@ enum class ReliableKind : uint8_t {
                        //     (senderPeerSlot==0 gate); NOT client-relayable. Payload:
                        //     WispGrabPayload (12 B). Module: coop/wisp_attack_sync (send) +
                        //     coop/wisp_tear_mirror (receive). Design:
-                       //     research/findings/votv-killerwisp-coop-design-2026-06-13.md.
+                       //     research/findings/npc-creatures/votv-killerwisp-coop-design-2026-06-13.md.
     WispTear = 68,     // 2026-06-13 (v72): the Killer Wisp tear MIRROR. HOST->ALL: every
                        //     peer resolves its local wisp NPC mirror by wispElementId and
                        //     plays the fatality tear on it (force-tick the parked mirror
@@ -1819,7 +1819,7 @@ enum class ReliableKind : uint8_t {
                        //     struct). HOST-TERMINAL -- NOT client-relayable (never fanned out to
                        //     other peers). The HOST->CLIENT apply-on-join (Inc 4) reuses this
                        //     kind in the reverse direction. Module: coop/player_inventory_sync.
-                       //     Plan: research/findings/votv-inventory-impl-plan-2026-06-14.md.
+                       //     Plan: research/findings/inventory-items/votv-inventory-impl-plan-2026-06-14.md.
     KerfurCommand = 70,  // 2026-06-14 (v74): host-authoritative kerfur radial-menu command relay.
                        //     CLIENT->HOST (+ host's own menu use, executed locally): a player picks
                        //     a kerfur menu verb (follow/idle/patrol/fix_servers/get_reports/
@@ -2036,7 +2036,7 @@ enum class ReliableKind : uint8_t {
                        //     against the already-gone rock) before the intent spawn. The GrabIntent
                        //     eid-lane (78) is the chipPile analog; a keyed prop stays ONE Aprop (no
                        //     morph) so it needs the durable Key + class, not just an eid. See
-                       //     research/findings/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md
+                       //     research/findings/join-identity/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md
                        //     + coop/props/prop_drop_intent.h.
     ServerState = 91,  // 2026-07-09 (v107): HOST->clients signal-SERVER simulation state (Inc-1). The
                        //     server break/fix sim (mainGamemode.{servers,brokenServers,serverEfficiency}
@@ -2049,7 +2049,7 @@ enum class ReliableKind : uint8_t {
                        //     STATE not the verb) + neutralizes its own ticker_serverBreaker (disable
                        //     tick). Client never sends. Connect replay: current state to a world-ready
                        //     joiner. Inc-2 will forward the break EDGE for the true notice. See
-                       //     research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md
+                       //     research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md
                        //     + docs/notifications/ + coop/interactables/serverbox_sync.h.
     RoachState = 92,   // 2026-07-10 (v108): HOST->clients roach-infestation snapshot, PAGED (12
                        //     roaches per datagram; maxAmount=128 CDO). Roaches are COMPONENTS on
@@ -2815,7 +2815,7 @@ static_assert(sizeof(PropDestroyPayload) <= 256 - 20 - 8,
 // doors + light-roots; Aprop_C::Key for swinger lids). The receiver resolves the
 // live actor by Key and idempotently applies. coop::interactable_sync drives all
 // three via one generic Channel (no per-feature duplication, RULE 2). RE:
-// research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md.
+// research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md.
 struct KeyedTogglePayload {
     WireKey  key;        // 32 -- the instance's Key FName (string)
     uint8_t  action;     // 1  -- 0 = closed/off, 1 = open/on (the state AFTER the edge)
@@ -3207,7 +3207,7 @@ static_assert(sizeof(TrashPileStatePayload) <= 256 - 20 - 8,
 // the door BP disassembly (2026-06-06) proved isAcc/isDeny are crosshair-HOVER flags, not
 // accept state -- mirroring both onto a keypad produced the non-native green+red "PURPLE" the
 // user reported, and the door lock keys on the door's own `Active`, not the keypad's isAcc.
-// RE: research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md.
+// RE: research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md.
 // v59 (2026-06-11): + `event` -- the SHORT-code submit mirror. The BP auto-submits at
 // Len>=5 (uber @2398), so long codes validate natively on EVERY peer from the digit replay
 // alone; but a short code's ACCEPT press (open(password==inPassword)) and the explicit
@@ -3494,7 +3494,7 @@ static_assert(sizeof(TeleportClientPayload) <= 256 - 20 - 8,
 // ItemActivate (ReliableKind = 12) -- Phase 5F flashlight + future radio/torch/
 // lamp / etc. Single unified packet for "item state with WORLD EFFECT changed"
 // per the project-coop-inventory-private carve-out. RE docs:
-//   research/findings/votv-flashlight-RE-2026-05-25.md
+//   research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md
 //
 // Two cases the same packet covers:
 //
@@ -3576,7 +3576,7 @@ static_assert(sizeof(PlayerDamagePayload) <= 256 - 20 - 8,
 // for real after a host-decided fixed delay (the kill is per-peer-authoritative: the
 // victim runs ragdollMode on its OWN player -- the wisp's BP only ever kills the local
 // host). Host-only send; receiver gates senderPeerSlot==0 + victimElementId==own; not
-// relayable. See research/findings/votv-killerwisp-coop-design-2026-06-13.md (B).
+// relayable. See research/findings/npc-creatures/votv-killerwisp-coop-design-2026-06-13.md (B).
 struct WispGrabPayload {
     uint32_t victimElementId;  // the addressed peer's Player Element id (self-verify == own)
     uint32_t wispElementId;    // the killerwisp NPC Element id (tear-mirror association)
@@ -3653,7 +3653,7 @@ static_assert(sizeof(AssignPeerSlotPayload) == 8,
 // reads these fields off the live AdaynightCycle_C after its own scheduler
 // UFunction runs; client receives + applies via the cycle's mutator
 // UFunctions. See protocol.h's ReliableKind::WeatherState doc above and
-// research/findings/votv-weather-DESIGN-2026-05-26.md for the field-by-field
+// research/findings/weather-wind/votv-weather-DESIGN-2026-05-26.md for the field-by-field
 // derivation. v7 stamped peerSessionId=0 for host validation; v13 (A4)
 // switches to senderElementId resolved via Registry::Get -> Player.PeerSlot
 // for the host trust-boundary check.
@@ -3725,7 +3725,7 @@ struct WeatherStatePayload {
     // particle/audio/engine SPEED, but NOT the leaf-shake (that's windTarget/intensity,
     // v50 below): the tick overwrites windStrengthBg = intensity every frame, so syncing
     // it alone can't fix "strong leaves on host, calm on client". The client overwrites
-    // these every apply. RE: research/findings/votv-wind-basefog-RE-2026-06-08.md.
+    // these every apply. RE: research/findings/weather-wind/votv-wind-basefog-RE-2026-06-08.md.
     float    windSpeedBg;       // AdirectionalWind_C::windSpeed_background    @0x02EC
     float    windStrengthBg;    // AdirectionalWind_C::windStrength_background @0x02F0
     float    windSpeedRain;     // AdirectionalWind_C::windSpeed_rain          @0x02E4
@@ -3909,7 +3909,7 @@ static_assert(sizeof(PileResyncRequestPayload) == 8, "PileResyncRequestPayload m
 // The host sends the eid + its CURRENT authoritative transform; the client snaps the bound native to it at
 // the quiescence sweep. Identity is preserved (the native stays a native -- this is a position delta on the
 // existing save-authoritative identity, NOT a re-spawn). Idempotent (safe for an eid already corrected by a
-// delivered convert -> drift 0). research/findings/coop-b3-window-moved-pile-position-DESIGN-2026-06-26.md.
+// delivered convert -> drift 0). research/findings/piles-trash/coop-b3-window-moved-pile-position-DESIGN-2026-06-26.md.
 struct PropSnapPosPayload {
     uint32_t eid;                       // the save-authoritative pile eid to reposition
     float    locX, locY, locZ;          // host's CURRENT authoritative world position (cm)
@@ -3944,7 +3944,7 @@ static_assert(sizeof(TimeSyncPayload) == 24, "TimeSyncPayload must be 24 bytes")
 // mesh's WORLD rotation (carrying the random offset + accumulated spin) + moonPhase on a ~1Hz
 // throttle + connect edge; the client writes them (SetComponentWorldRotation + moonPhase_mirror).
 // Sun/moon ORBIT + brightness already converge via TimeSync(29). Modeled on TimeSyncPayload.
-// RE: research/findings/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
+// RE: research/findings/weather-wind/votv-sky-stars-celestial-sync-RE-2026-06-08.md.
 struct SkyStatePayload {
     float skyPitch;    // sky mesh WORLD rotation (FRotator) -- pitch
     float skyYaw;      //   yaw  (the dominant value: random initial offset + accumulated spin)

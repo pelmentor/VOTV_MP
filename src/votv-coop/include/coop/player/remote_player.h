@@ -216,7 +216,7 @@ private:
                              // reproducing the LOCAL anim drive on the puppet.
                              // No satellite, no observer, no AnimInstance
                              // field overrides (post-2026-05-27 RE per
-                             // research/findings/votv-local-anim-drive-RE-2026-05-27.md).
+                             // research/findings/player-puppet/votv-local-anim-drive-RE-2026-05-27.md).
 
     // GUObjectArray InternalIndex of actor_, captured at Spawn while the puppet
     // was known live (via reflection::InternalIndexOf). valid() validates actor_

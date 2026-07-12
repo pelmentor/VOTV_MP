@@ -19,7 +19,7 @@
 // the same gotcha garage/appliance handle). The base power EFFECTS (servers/doors/lightRoots)
 // are synced by their OWN channels -- this wrapper mirrors the PANEL's own breaker/LED visual.
 //
-// RE: research/findings/votv-powerControl-panel-sync-RE-2026-06-08.md.
+// RE: research/findings/computers-devices/votv-powerControl-panel-sync-RE-2026-06-08.md.
 
 #pragma once
 

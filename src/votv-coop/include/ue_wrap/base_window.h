@@ -13,7 +13,7 @@
 // Aactor_save_C offset (0x0230) -- FindPropertyOffset does NOT climb to parent classes,
 // so EnsureResolved resolves it against actor_save_C explicitly.
 //
-// RE: research/findings/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
+// RE: research/findings/world-systems/votv-dirt-window-cleaning-RE-and-coop-sync-design-2026-06-07a.md.
 
 #pragma once
 

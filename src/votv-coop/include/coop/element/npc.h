@@ -1,7 +1,7 @@
 // coop/element/npc.h -- the Npc Element subclass.
 //
 // First subclass of `coop::element::Element`. PoC for the MTA CClientEntity
-// adoption per `research/findings/votv-mta-cclientelement-audit-2026-05-28.md`
+// adoption per `research/findings/mta/votv-mta-cclientelement-audit-2026-05-28.md`
 // section 4.5. NPCs were chosen as the PoC target because (a) lifecycle is the
 // simplest (host spawns, host destroys, no per-frame ownership transfer); (b)
 // the prior `g_nextNpcSessionId` atomic counter is the closest semantic match

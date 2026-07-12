@@ -10,7 +10,7 @@
 // NOT cross-peer stable; coop::interactable_sync's install-time keysHash
 // diagnostic surfaces that, and an unresolvable key simply expires harmlessly.
 //
-// RE: research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md +
+// RE: research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md +
 // CXXHeaderDump/prop_swinger.hpp.
 
 #pragma once

@@ -7,7 +7,7 @@
 > symptoms appeared (kerfur twitch + hang-in-air on turn-off; pile host-only). Those 3 symptoms are PARKED in
 > the PLAN-doc "OPEN SYMPTOMS" ledger to RE-CHECK after the module is whole. The D1/D2 + 3-symptom hands-on
 > happens on the ASSEMBLED module (then push). DO NOT run this runbook as-is. See
-> `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md` + [[project-sync-module-refactor-2026-06-27]].
+> `research/findings/architecture-audits/sync-consolidation-refactor-PLAN-2026-06-27.md` + [[project-sync-module-refactor-2026-06-27]].
 
 ---
 

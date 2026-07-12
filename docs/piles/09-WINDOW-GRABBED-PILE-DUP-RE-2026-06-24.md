@@ -28,7 +28,7 @@ interaction) — tracked as **b2/b3** (AS-BUILT commit `2829ce6d`) — **now ROO
 `SetActorLocation` silently NO-OP'd because a save-loaded `actorChipPile_C` native is **STATIC mobility** (the
 `SetActorRootMovable`-before-teleport fix — see the 2026-06-30 section at the bottom of this doc). The earlier
 b2 `2829ce6d` log-attempt was observability, not the cure; the mobility no-op was the actual root.
-Original b2 RE: `research/findings/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`. The `f837fbad` MD5 below is a dead
+Original b2 RE: `research/findings/join-identity/coop-grab-throw-and-join-window-bind-RE-2026-06-26.md`. The `f837fbad` MD5 below is a dead
 ancestor (its content re-landed via `08e35d77`); read the RE below for the original diagnosis, but the cure is
 #2. The 4TH mirror-identity window-race instance; same CLASS as L1.
 
@@ -141,7 +141,7 @@ and confirm the client holds proxy@new + native@old (two distinct actors).
 AdoptPendingGrabClump) · `net_pump.cpp:617-626` (re-seed minting 5283) · `prop_snapshot.cpp:325-332,
 528-560` (incremental PropSpawn, hasMatchPos=0) · `remote_prop_spawn.cpp:308-359,531-539` (proxy spawn +
 TryDestroyTwin) · `pile_reconcile.cpp:120-197` (twin-destroy + the NONE probe) ·
-`research/findings/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md` (L1 root + purge/re-seed gap) ·
+`research/findings/join-identity/votv-pile-dup-join-window-two-channel-RE-2026-06-23.md` (L1 root + purge/re-seed gap) ·
 `memory/project_prop_appearance_delay_backlog_2026-06-23.md:18-22` (symptom-1 held-pile-in-window).
 
 ## 2026-06-30 -- b3 pos-correction never snapped the native (STATIC-mobility no-op) -- ROOT-FIXED + VERIFIED

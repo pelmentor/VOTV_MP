@@ -2,7 +2,7 @@
 
 **Deployed: DLL `753bb549` (rock `[ROCK-DROP]` diagnostics) on all 4 peers. HEAD `8cae8597`.**
 Folders renamed this session: HOST=`Game_0.9.0n_HOST`, clients=`Game_0.9.0n_CLIENT_1/2/3`.
-Full RE: `research/findings/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07-08.md`.
+Full RE: `research/findings/props-lifecycle/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07-08.md`.
 
 Both bugs were seen in ONE braided log (join + pile-throw + no rock). These two repros ISOLATE each.
 **Piles are ALREADY FIXED — do NOT throw piles in either repro; it only re-confounds the log.**

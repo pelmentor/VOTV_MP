@@ -1,6 +1,6 @@
 // coop/wisp_tear_mirror.h -- Killer Wisp coop, RECEIVER side (Inc2, parts B + C).
 //
-// See research/findings/votv-killerwisp-coop-design-2026-06-13.md. The HOST detect +
+// See research/findings/npc-creatures/votv-killerwisp-coop-design-2026-06-13.md. The HOST detect +
 // route lives in coop/wisp_attack_sync; this module owns the two receiver paths:
 //
 //   * OnWispGrab (the VICTIM only): the host's killerwisp grabbed THIS client's puppet

@@ -1183,7 +1183,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // Surface session events (joins/disconnects) to the feed + send our Join.
     // Pass g_netLocal so remote_prop::OnRelease can call Aprop_C.thrown(player)
     // for the natural throw-sound dispatch (Path B in
-    // research/findings/votv-throw-sound-path-2026-05-24.md).
+    // research/findings/physics-grab/votv-throw-sound-path-2026-05-24.md).
     { PP::Scope _s{PP::Bucket::EventFeed}; coop::event_feed::Update(session, g_netLocal); }
 }
 

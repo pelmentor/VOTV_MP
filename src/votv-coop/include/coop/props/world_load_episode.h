@@ -9,7 +9,7 @@
 // from 3345 -> 1255 live keyed props and never recovered -- the host world emptied. This is a v106
 // regression: pre-v106 the churn dispatched via EX_* (ProcessEvent-invisible) and never crossed the wire;
 // three pre-v106 join runs ran the identical purge and broadcast ZERO. The v106 Func-patch is what first put
-// the load-churn destroys on the wire. See research/findings/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07-08.md
+// the load-churn destroys on the wire. See research/findings/props-lifecycle/votv-destroy-seam-hostwipe-and-rock-rdrop-RE-2026-07-08.md
 //
 // WHY AN EPISODE LATCH, not the alternatives (vetted /qf rounds 0-13, 2026-07-08):
 //   - A per-destroy FFrame::Node caller gate (skip when the caller UFunction is loadObjects/Load

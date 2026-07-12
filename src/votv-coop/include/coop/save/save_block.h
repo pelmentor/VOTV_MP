@@ -15,7 +15,7 @@
 // fix (RULE 1): one hook, total coverage, no per-trigger allowlist that could
 // miss a path. The BP funnel saveSlot_C:saveToSlot is NOT hookable by our
 // ProcessEvent interceptor (BP->BP dispatch goes through ProcessInternal); the
-// engine-native write fn is. See research/findings/votv-save-path-RE-2026-05-30.md.
+// engine-native write fn is. See research/findings/saves/votv-save-path-RE-2026-05-30.md.
 //
 // Part 2 (the pause-menu "Save Game" button grey-out, the honest UX) is a
 // separate increment -- this part is the under-the-hood guarantee that covers

@@ -1,7 +1,7 @@
 // coop/voice/voice_chat.h -- the voice-chat subsystem facade (v66).
 //
 // USER ASK (2026-06-12): proximity voice chat, the Simple-Voice-Chat port per
-// research/findings/votv-voice-chat-port-design-2026-06-12.md. User-mandated:
+// research/findings/network/votv-voice-chat-port-design-2026-06-12.md. User-mandated:
 // voice multiplexes over the existing coop session (NO second port) and PTT
 // defaults to 'X'. MTA precedent: CVoiceDataPacket rides the main connection
 // the same way.

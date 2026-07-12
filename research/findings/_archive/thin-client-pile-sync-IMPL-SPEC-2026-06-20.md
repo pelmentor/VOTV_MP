@@ -1,6 +1,6 @@
 # Thin-client pile sync — IMPLEMENTATION SPEC (gathered code facts) — 2026-06-20
 
-Companion to `research/findings/thin-client-pile-sync-redesign-2026-06-20.md` (the
+Companion to `research/findings/_archive/thin-client-pile-sync-redesign-2026-06-20.md` (the
 ARCHITECTURE — read it first; §8 delete-list, §5 doom-gate, §6 world-wipe proof,
 §10 file-by-file, §12 audit-focus are authoritative). This file pins the exact
 code locations + wire values gathered from the live tree so the implementation is

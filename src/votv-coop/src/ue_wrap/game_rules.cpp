@@ -16,7 +16,7 @@ namespace R = ue_wrap::reflection;
 
 // enum_gamemode ordinals -> friendly names. VOTV strips enum display names in
 // the cook, but the ordinal->mode map is EMPIRICALLY verified in the save-picker
-// RE (research/findings/votv-save-picker-create-new-RE-2026-06-06.md, the
+// RE (research/findings/saves/votv-save-picker-create-new-RE-2026-06-06.md, the
 // getSavePrefix table). 2 and 3 are unused sentinels ("-").
 const char* GameModeName(int ord) {
     switch (ord) {

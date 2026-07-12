@@ -5,7 +5,7 @@
 capability (`tools/bp_reflect.py`, see [[project-bp-reflection-capability]]).
 
 > **The §4 inventory below is SUPERSEDED + EXPANDED by the recon roadmap:**
-> `research/findings/votv-coop-class-clone-migration-roadmap-2026-06-06.md` — it covers ALL the
+> `research/findings/architecture-audits/votv-coop-class-clone-migration-roadmap-2026-06-06.md` — it covers ALL the
 > fragile-BP-mirror mechanics (door✓/keypad✓ done; NPC, time-of-day/dark-world, trash-clump dup,
 > grab/throw, flashlight, weather, drone) with per-mechanic disassembly verdicts + a prioritized
 > order. Read the roadmap for the current plan; this doc remains the door/keypad design record.
@@ -116,7 +116,7 @@ The cost surfaced as real bugs:
 We could not have known any of this without reading the BP. Now we can
 (`tools/bp_reflect.py`). The dead end ends here.
 
-Full ground truth: `research/findings/votv-keypad-door-BP-disassembly-2026-06-06.md`.
+Full ground truth: `research/findings/computers-devices/votv-keypad-door-BP-disassembly-2026-06-06.md`.
 
 ---
 

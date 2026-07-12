@@ -3,7 +3,7 @@
 **Purpose.** The single living home for "which of VOTV's RNG / non-deterministic systems are
 host-authoritative in coop, which still diverge, and the progress of closing each gap." This is the
 TRACKER (update it every session); the point-in-time audit snapshot is
-`research/findings/votv-rng-host-authority-audit-2026-07-10.md` (the evidence + file:line cites).
+`research/findings/world-systems/votv-rng-host-authority-audit-2026-07-10.md` (the evidence + file:line cites).
 
 **How to use.** Each RNG system has a STATUS. Work proceeds **tier by tier**, each tier gets its own
 `/qf 15` (QUESTION → DESIGN → IMPL) **before** any build (user directive 2026-07-10). Update the

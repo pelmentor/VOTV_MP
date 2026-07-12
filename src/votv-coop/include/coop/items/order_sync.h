@@ -15,7 +15,7 @@
 // commit+deliver+native-drain path. The delivered cargo box (Aprop_C) then rides the EXISTING prop
 // pipeline + the drone body rides DroneState; nothing else is on the wire.
 //
-// RE: research/findings/votv-delivery-drone-RE-and-coop-sync-design-2026-06-03.md (ECONOMY BUILD
+// RE: research/findings/vehicles/votv-delivery-drone-RE-and-coop-sync-design-2026-06-03.md (ECONOMY BUILD
 // PLAN + the 5-question commit/remove/charge RE).
 
 #pragma once

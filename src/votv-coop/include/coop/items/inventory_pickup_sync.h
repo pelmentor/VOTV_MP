@@ -3,7 +3,7 @@
 // player collect an item.
 //
 // WHY (hands-on 2026-06-11 "still no half life pick up sound effect" +
-// research/findings/votv-inventory-pickup-seam-RE-2026-06-11.md): the native
+// research/findings/physics-grab/votv-inventory-pickup-seam-RE-2026-06-11.md): the native
 // blip is `PlaySound2D(inventory_Cue, 1.0, 1.1)` inside mainPlayer_C::
 // putObjectInventory2 @659 -- 2D and COLLECTOR-ONLY by design, and a remote
 // collect reaches other peers only as a bare PropDestroy -> structurally

@@ -15,7 +15,7 @@
 //
 // Extracted 2026-05-30 from coop/dev/restore_vitals.cpp (M-1/P7) so the
 // player-vitals/death replication feature can read live health off the same
-// proven chain. See research/findings/votv-player-vitals-death-RE-2026-05-30.md.
+// proven chain. See research/findings/player-puppet/votv-player-vitals-death-RE-2026-05-30.md.
 #pragma once
 
 namespace ue_wrap::vitals {

@@ -75,7 +75,7 @@ inline FTransform MakeTransform(const FVector& location) {
 // (-90, 90) bound and dropped the entire pose packet. The proper fix is at
 // the wire boundary: produce values in the canonical axis range BEFORE they
 // enter PoseSnapshot. Mirrors MTA's SCameraRotationSync bWrapInsteadOfClamp
-// pattern (see research/findings/mta-rotation-normalize-2026-05-23.md).
+// pattern (see research/findings/mta/mta-rotation-normalize-2026-05-23.md).
 // Equivalent of UE4's FRotator::NormalizeAxis(float Angle).
 inline float NormalizeAxis(float deg) {
     deg = std::fmod(deg, 360.f);

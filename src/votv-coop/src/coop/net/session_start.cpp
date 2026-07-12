@@ -10,7 +10,7 @@
 // (CreateListenSocketP2P / ConnectP2PCustomSignaling + a signaling client) is
 // added here as a sibling -- everything downstream (PollGroup, status callback,
 // receive loop, relay, lanes) is topology-blind and stays in the other TUs.
-// See research/findings/votv-zero-ports-connectivity-ladder-design-2026-06-05.md.
+// See research/findings/network/votv-zero-ports-connectivity-ladder-design-2026-06-05.md.
 
 #include "coop/net/session.h"
 

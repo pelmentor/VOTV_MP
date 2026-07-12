@@ -4,7 +4,7 @@
 // (modular file-size rule -- harness.cpp had grown to 3126 LOC).
 //
 // See coop/grab_observer.h for the public interface. Full RE of the grab
-// pipeline: research/findings/votv-physics-interaction-deep-re-2026-05-23.md.
+// pipeline: research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md.
 
 #include "coop/props/grab_observer.h"
 
