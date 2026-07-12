@@ -102,6 +102,15 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   actor->eid reverse meaning "established cross-peer identity" must filter `IsMirror()`
   (`ResolveMirrorEidByActor(wireMirrorOnly)`), else it kills the Gap-I-1 divergent-key dedup.
   *Look FIRST:* mirror_manager.h "MIXES" block. `memory/lesson_prop_mirror_manager_mixes_local_and_wire_rows.md`
+- **ChildActorComponent children are OUTSIDE the world-object universe** — a kerfur eye cam
+  (prop_camera_good_C) passes every "world prop" filter (keyed, Aprop lineage, live) but the game's
+  own rule is `Aprop_C::ignoreSave = ignoreSav || IsChildActor()` (prop_base bytecode): its Key is
+  per-peer random, cross-peer identity impossible in principle. Enrolling/broadcasting them = floating
+  CCTV mirrors on the joiner + the joiner's own eye cams doomed (take-7). And a SEND-side exclusion
+  must gate EVERY payload builder — the steady re-seed express bypassed enrollment (elementId=0 keyed
+  payloads) while the gated destroy seam made its orphans PERMANENT (audit CRITICAL). *Look FIRST:*
+  `ue_wrap::engine::IsChildActor` (six consult surfaces, `c93617be`); any NEW prop enumeration must
+  consult it. `memory/lesson_child_actors_excluded_from_world_object_universe.md`
 - **Identity-critical log lines carry cls+key+loc (USER RULE)** — a class histogram alone makes
   per-entity RCA impossible; cold paths only, never at the POST-native destroy seam (PendingKill),
   throttle mass arms. `memory/feedback_identity_logs_carry_key_and_loc.md`
