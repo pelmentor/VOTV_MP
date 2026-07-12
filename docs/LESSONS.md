@@ -102,6 +102,15 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   actor->eid reverse meaning "established cross-peer identity" must filter `IsMirror()`
   (`ResolveMirrorEidByActor(wireMirrorOnly)`), else it kills the Gap-I-1 divergent-key dedup.
   *Look FIRST:* mirror_manager.h "MIXES" block. `memory/lesson_prop_mirror_manager_mixes_local_and_wire_rows.md`
+- **A NEW generic catch/express lane must inherit EVERY existing owner boundary; "UNTRACKED = mine"
+  premises die when per-tick claimers ship** — spawn_authority Inc-1's seam drain (07-10) lacked the
+  kerfur OWNER BOUNDARY the census lane already carried → the 5 Hz kerfur converge lost every race,
+  silently released the dead NPC, no KerfurConvert → the take-8 five-for-five toggle dupe. Fix = kerfur
+  FIRST REFUSAL at the express chokepoints (TryAdoptFreshKerfurProp: UNTRACKED + dead-NPC-watch match,
+  event-driven at the spawn edge; the poll stays as backstop), `ded3f793`. *Look FIRST:* a poll-class
+  "converge found nothing" WARN right after a `spawn-seam adopted`/generic express of the same
+  class+position = the race; when adding a lane, DIFF its gates against every sibling lane.
+  `memory/lesson_new_generic_lane_must_inherit_owner_boundaries.md`
 - **ChildActorComponent children are OUTSIDE the world-object universe** — a kerfur eye cam
   (prop_camera_good_C) passes every "world prop" filter (keyed, Aprop lineage, live) but the game's
   own rule is `Aprop_C::ignoreSave = ignoreSav || IsChildActor()` (prop_base bytecode): its Key is
