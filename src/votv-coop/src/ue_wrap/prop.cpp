@@ -621,6 +621,11 @@ void* FindNearbySameClass(const std::wstring& className,
         // reason -- it needs CDO/name first to skip stale dying-same-key
         // matches; here we just want the cheapest filter first.)
         if (!R::IsLive(obj)) continue;
+        // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA): a ChildActorComponent
+        // child (kerfur eye cam) never has independent cross-peer identity -- a wire spawn of a
+        // STANDALONE same-class prop (a user-placed camera) within 30 cm of a kerfur must not
+        // fuzzy-steal the kerfur's eye. Cheap 8-byte read, placed before the wstring allocs.
+        if (engine::IsChildActor(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) continue;
         // Class match (leaf name equality -- e.g. "Aprop_food_mushroom_C").

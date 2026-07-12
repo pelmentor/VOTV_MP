@@ -136,6 +136,14 @@ npc_adoption / quiescence_drain / join_membership_sweep). Verdicts:
 - Stale spawn-revalidation references in join_membership_sweep (a present-tense tripwire log line +
   the RunReconcile order comment) rewritten to the post-barrier truth (RULE 2).
 
+**TAKE-7 VERDICT (2026-07-12 13:58 — the kerfur-present run happened same day): the adoption
+candidates are CLOSED as KEEP.** 2 NPC adoptions bound poll #1 (81/93 ms — the barrier premise
+holds), but 2 NPC + 1 prop kerfur had NO blob twin and the wait-then-fresh-spawn fallback fired
+on a real join → the K-6/npc_adoption join-wait branch is LOAD-BEARING, not smear. RE-BIND
+ledger: 0 hits second session running (keep measuring, retirement still open). Take-7 also
+exposed the floating-CCTV child-actor identity leak — see
+research/findings/kerfur/votv-kerfur-eyecam-childactor-identity-leak-RCA-2026-07-12.md.
+
 **USER MANDATE 2026-07-12 (original): the KERFUR join-layer anti-smear** — the layers below plus a
 general smear audit across the kerfur files (adoption / convert / reconcile / entity /
 prop_adoption / menu_input), gated on LIVE LOG evidence (never on theory). The decisive evidence

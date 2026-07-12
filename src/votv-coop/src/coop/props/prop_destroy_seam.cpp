@@ -20,6 +20,7 @@
 #include "coop/props/prop_echo_suppress.h"
 #include "coop/props/prop_element_tracker.h"
 #include "coop/session/world_load_episode.h"
+#include "ue_wrap/engine.h"  // IsChildActor (child-actor exclusion, take-7 floating-CCTV RCA)
 #include "ue_wrap/game_thread.h"
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
@@ -65,6 +66,12 @@ void DestroySeamBody(void* self) {
         return;
     }
     if (!ue_wrap::prop::IsKeyedInteractable(self)) return;
+    // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA; predicate + full rationale:
+    // ue_wrap::engine::IsChildActor + prop_element_tracker::MarkPropElement). A dying parent-owned
+    // sub-actor (kerfur eye cam on every toggle) is destroyed by its parent's engine cascade on
+    // every peer -- broadcasting its keyed destroy is at best wire noise (per-peer random keys
+    // never match) and at worst a same-key hazard. Cheap 8-byte read, only keyed actors reach it.
+    if (ue_wrap::engine::IsChildActor(self)) return;
     const std::wstring keyStr = ue_wrap::prop::GetInteractableKeyString(self);
     // FName(NAME_None) stringifies to "None" -- a KEYED prop broadcasts by Key (the
     // common path). The NON-KEYABLE trash clump (prop_garbageClump_C: setKey doesn't

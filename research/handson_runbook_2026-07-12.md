@@ -103,3 +103,51 @@ What the logs must show (client, the anti-smear evidence):
   probe/sweep chain wedged — report immediately).
 - `[KERFUR CENSUS][CLIENT] TOTAL ...` — 0 UNTRACKED + 0 UNCLAIMED, and TOTAL equal to the host's.
 - RE-BIND ledger continues: count `keyed churn RE-BIND` hits (take-6: 0).
+
+## RESULT — TAKE 7 (2026-07-12 13:58, user hands-on + log forensics)
+
+USER: 6 kerfurs / 4 active on BOTH peers — counts match. Adoption evidence (the measurement this
+run existed for): 2 NPC adoptions bound **poll #1** (81/93 ms); 2 NPC + 1 prop kerfur had NO local
+twin (not in the blob) → fresh-spawned at poll #12 when the sweep latch fired — correct per design.
+RE-BIND ledger: 0 again. TRIPWIRE: 0. **K-6 collapse verdict: NOT collapsible — the fresh-spawn
+fallback fired on a real join (twins genuinely absent), so the wait-then-fresh-spawn branch is
+load-bearing. The K-6/npc_adoption join-wait machinery STAYS. The anti-smear candidate list for
+adoption is CLOSED (keep).**
+
+NEW BUG found by the user (floating CCTVs) → root-caused + fixed, see TAKE 8.
+
+## TAKE 8 — the CHILD-ACTOR EXCLUSION (floating-CCTV root fix, per rule 1)
+
+Deployed DLL: **`DE4B438A`** (md5 first 8), all 4 installs hash-verified. Audit: 1 CRITICAL found
+(the steady re-seed incremental-express lane bypassed the first 4 gates AND the gated destroy seam
+would have made its orphans permanent) → closed same session at SeedWalk_ + BuildPropSpawnPayload_
+(now 6 surfaces, one predicate); all other audit dimensions CONFIRMED sound.
+
+THE BUG (take-7, user: «камеры внутри 3 керфуров ... в воздухе cctv у них троих в груди»):
+kerfur eye cameras are `prop_camera_good_C` — keyed Aprop-lineage CHILD ACTORS (UChildActorComponent
+`cam` on both kerfur forms). Our prop identity layer treated them as independent world props:
+- HOST enrolled + broadcast them (`name='cam_b_1'` PropSpawns, waves at every kerfur toggle) →
+  the joiner materialized STANDALONE floating camera mirrors at each kerfur's chest (eid
+  9558/9567/9569 = exactly the 3 visible CCTVs).
+- The JOINER's own eye cams (keys are per-peer random — kerfur loadData never restores Key) were
+  unclaimed at the sweep → DOOMED (take-7 log: `doomed 2 x 'prop_camera_good_C'`).
+- Gap-I-1 30 cm fuzzy sometimes STOLE a live eye cam under a wire key (eid 9568/9575/9576/9580).
+
+THE FIX (mirrors the game's own rule, `Aprop_C::ignoreSave = ignoreSav || IsChildActor()`,
+prop_base bytecode): ChildActorComponent-owned actors are excluded from the independent prop
+identity universe. ONE predicate `ue_wrap::engine::IsChildActor` (raw reflected
+AActor.ParentComponent weak-ptr read, off-GT-safe), consulted at: MarkPropElement (the ONE enroll
+owner → element table, key index, R2, snapshot, reaper, sweep universe all covered), the Init-POST
+broadcast catch, the destroy seam, and the FindNearbySameClass fuzzy candidate walk.
+
+Test steps (kerfur save, both peers):
+1. Client joins → NO floating CCTVs anywhere; kerfur counts still match (6/6, 4/4).
+2. Client log: ZERO `remote_prop::OnSpawn: cls='prop_camera_good_C' name='cam_b_1'` lines and
+   ZERO `doomed N x 'prop_camera_good_C'` in the sweep. Expected instead (host+client):
+   `child-actor enroll REFUSED cls='prop_camera_good_C'` / `skip (parent-owned sub-actor...)`.
+3. Host toggles a kerfur off + on while the client watches → no camera appears/orphans on either
+   peer; the kerfur morphs correctly both ways.
+4. Regression: a USER-PLACED standalone camera (prop_camera_s/cursed/good bought+placed) still
+   syncs both ways (place, move, stick) — standalone cameras are NOT child actors and keep their
+   wire identity (take-7 log showed cursed+s cameras syncing; that must not regress).
+5. fps sanity + the take-6 rock repro still green (barrier untouched).

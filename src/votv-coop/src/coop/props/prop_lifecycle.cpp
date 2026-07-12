@@ -137,6 +137,17 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
         const std::wstring nm = R::ToString(R::NameOf(self));
         if (nm.rfind(L"Default__", 0) == 0) return;
     }
+    // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA; predicate + full rationale:
+    // ue_wrap::engine::IsChildActor + prop_element_tracker::MarkPropElement). A parent-owned
+    // sub-actor (kerfur eye cam) must neither enter the known-keyed set nor BROADCAST PropSpawn
+    // -- the parent's SCS re-creates it on every peer; broadcasting minted a standalone floating
+    // camera mirror on the joiner at every kerfur toggle (host log 13:59:44 waves).
+    if (ue_wrap::engine::IsChildActor(self)) {
+        UE_LOGI("grab_hook[Aprop.Init POST]: child actor %p cls='%ls' -- skip (parent-owned "
+                "sub-actor; no independent identity, no broadcast)",
+                self, R::ClassNameOf(self).c_str());
+        return;
+    }
     PT::MarkKnownKeyedProp(self);
 
     auto* s = LoadSession();

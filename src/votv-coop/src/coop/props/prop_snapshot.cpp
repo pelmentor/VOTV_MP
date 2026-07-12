@@ -256,6 +256,13 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
 bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t internalIdx,
                             coop::net::PropSpawnPayload& p, int matchSlot) {
     if (!obj) return false;
+    // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA; audit CRITICAL on the first
+    // cut: the steady re-seed incremental express reached this builder for a fresh kerfur eye
+    // cam WITHOUT MarkPropElement -- a keyed payload with elementId=0 -- re-creating the
+    // floating mirror, now PERMANENT because the gated destroy seam never tears it down).
+    // This is the ONE payload builder (RULE 2 doc above), so the gate here closes every
+    // outbound PropSpawn lane. Predicate + full rationale: ue_wrap::engine::IsChildActor.
+    if (ue_wrap::engine::IsChildActor(obj)) return false;
     // Phase 0 PROOF (dev-only, ini-gated): inject the docs/piles/10 over-destroy by SKIPPING chipPile
     // expression, so the joiner's seeded natives stay UNCLAIMED -> its claim sweep dooms them en masse
     // (the floor binary KEEPs them; a no-floor baseline WIPES them). Host-only choke (this builder runs

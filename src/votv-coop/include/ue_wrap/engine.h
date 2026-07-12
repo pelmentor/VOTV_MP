@@ -140,6 +140,20 @@ FVector GetActorLocation(void* actor);
 // pre-v54 senders hardcoded 1,1,1). Game thread only.
 FVector GetActorScale3D(void* actor);
 
+// TRUE iff `actor` was spawned by a UChildActorComponent (a kerfur's eye camera
+// prop_camera_good_C, a console screen child, ...). The game itself excludes these
+// from its world-object universe -- Aprop_C::ignoreSave = ignoreSav || IsChildActor()
+// (prop_base bytecode) -- because the PARENT's SCS spawns/positions/destroys them on
+// every peer; they must never carry an independent cross-peer identity (take-7
+// 2026-07-12 floating-CCTV RCA: host-enrolled kerfur eye cams materialized as
+// standalone floating camera mirrors on the joiner, and the joiner's own eye cams
+// were doomed by the divergence sweep). Raw read of the reflected
+// AActor::ParentComponent TWeakObjectPtr (offset resolved once via reflection); no
+// ProcessEvent dispatch -> safe off the game thread. A SET weak ptr (index >= 0,
+// serial != 0) means child actor even if the parent is mid-teardown -- the exclusion
+// semantic is "owned by a parent", not "parent currently live".
+bool IsChildActor(void* actor);
+
 // AActor::SetActorScale3D(FVector NewScale3D) on `actor` (root component relative
 // scale). Returns the success of the UFunction call (the engine fn itself is void).
 // v83: the host-authoritative trash proxy applies the host's real per-form scale

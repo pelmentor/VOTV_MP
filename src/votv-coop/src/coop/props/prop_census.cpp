@@ -13,6 +13,7 @@
 
 #include "coop/element/registry.h"
 #include "coop/player/hand_item.h"  // hand-axis boundary: CollectHandAxisActors (SeedWalk_ skip; local hand + remote mirrors)
+#include "ue_wrap/engine.h"  // IsChildActor (child-actor exclusion, take-7 floating-CCTV RCA)
 #include "ue_wrap/log.h"
 #include "ue_wrap/prop.h"
 #include "ue_wrap/reflection.h"
@@ -95,6 +96,12 @@ SeedCounts SeedWalk_(std::vector<void*>* outNewActors) {
         if (!obj) continue;
         if (isHandAxis(obj)) continue;  // hand-axis display actors are not world props
         if (!ue_wrap::prop::IsKeyedInteractable(obj)) continue;
+        // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA): a ChildActorComponent
+        // child (kerfur eye cam) is parent-owned, never an independent world prop -- keep it out
+        // of g_knownKeyedProps + outNewActors so the steady re-seed never treats a toggle-fresh
+        // eye cam as "new" (the incremental express would broadcast it; audit CRITICAL). Matches
+        // the Init-POST + MarkPropElement gates; predicate: ue_wrap::engine::IsChildActor.
+        if (ue_wrap::engine::IsChildActor(obj)) continue;
         const std::wstring nm = R::ToString(R::NameOf(obj));
         if (nm.rfind(L"Default__", 0) == 0) { ++c.cdo; continue; }
         if (!R::IsLive(obj)) { ++c.dying; continue; }

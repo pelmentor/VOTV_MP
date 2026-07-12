@@ -286,6 +286,22 @@ std::wstring MarkPropElement(void* actor, const std::wstring& key, const std::ws
     // g_actorToPropElementId idempotency check below does not know mirrors). Now sourced from the Element
     // flag via IsBoundMirrorNative (sync-refactor 2026-06-27). No-op in normal play.
     if (IsBoundMirrorNative(actor)) return key;
+    // CHILD-ACTOR EXCLUSION (2026-07-12, take-7 floating-CCTV RCA). Mirror the game's own rule --
+    // Aprop_C::ignoreSave = ignoreSav || IsChildActor() (prop_base bytecode): a ChildActorComponent-
+    // owned actor (kerfur eye cam prop_camera_good_C, console screens, ...) is NOT an independent
+    // world object -- its parent's SCS spawns/positions/destroys it on EVERY peer, and its Key is
+    // minted per-peer random (never in any save blob). Enrolling one gave it an independent wire
+    // identity: the host broadcast its kerfur eye cams as world props (the joiner materialized
+    // standalone FLOATING CCTVs at each kerfur's chest), while the joiner's own eye cams -- keys
+    // never matching the host's -- were doomed by the divergence sweep. This gate at the ONE
+    // enrollment owner keeps child actors out of the element table, the key index, the R2
+    // baselines, the connect snapshot, the reaper, and the sweep universe on BOTH peers.
+    if (ue_wrap::engine::IsChildActor(actor)) {
+        UE_LOGI("prop_element_tracker: child-actor enroll REFUSED cls='%ls' key='%ls' actor=%p "
+                "(parent-owned sub-actor; never an independent wire identity)",
+                cls.c_str(), key.c_str(), actor);
+        return key;
+    }
     // Audit fix 2026-05-29: capture role INSIDE the same locked block as the
     // idempotency check. Reading role after the lock release would race
     // SetSession / role-change between the two reads -- a seed-time
