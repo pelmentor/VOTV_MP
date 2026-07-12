@@ -107,6 +107,6 @@ a-world-with-a-non-default-rule check** (e.g. fall damage OFF → client's F1 pa
 - `docs/COOP_WORLD_PROP_DIVERGENCE.md` — the parent class (host save = authority). §"static vs mutating"
   note added 2026-07-09: STATIC world-state (gameRules) rides the save with no divergence; only
   MUTATING autonomous local-accumulator state (a prop's own dryTimer) diverges.
-- `research/findings/votv-save-picker-create-new-RE-2026-06-06.md` (localGameRules @0x0DB0, the
+- `research/findings/saves/votv-save-picker-create-new-RE-2026-06-06.md` (localGameRules @0x0DB0, the
   create-path, the enum_gamemode ordinal map).
 - Memory: `memory/project_world_rules_panel_2026-07-08.md`.

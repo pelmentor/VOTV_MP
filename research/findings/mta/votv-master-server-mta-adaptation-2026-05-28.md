@@ -167,10 +167,10 @@ Additional context elsewhere in the tree:
 ## Cross-refs
 
 - Existing master-server design seed:
-  `research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md`
+  `research/findings/network/votv-gns-p2p-masterserver-plan-2026-05-28.md`
 - MTA precedent (vendored, read-only):
   `reference/mtasa-blue/Client/core/ServerBrowser/`
 - Audit report that prioritized PR-5 as next-major-arc:
-  `research/findings/votv-coop-audit-post-pr4-7-2026-05-28.md`
+  `research/findings/architecture-audits/votv-coop-audit-post-pr4-7-2026-05-28.md`
 - COOP methodology (Principle 7 + MTA-aligned coop substrate):
   `docs/COOP_METHODOLOGY.md`

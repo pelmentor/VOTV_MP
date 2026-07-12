@@ -2,9 +2,9 @@
 
 The feature-dev:code-architect agent's verbatim blueprint after consuming
 the converged deep-research deliverables. Sources:
-- `research/findings/physics-object-pickup-coop-plan-2026-05-23.md` (consolidated)
-- `research/findings/mta-object-pickup-sync-2026-05-23.md`
-- `research/findings/votv-physics-interaction-surface-2026-05-23.md`
+- `research/findings/physics-grab/physics-object-pickup-coop-plan-2026-05-23.md` (consolidated)
+- `research/findings/mta/mta-object-pickup-sync-2026-05-23.md`
+- `research/findings/physics-grab/votv-physics-interaction-surface-2026-05-23.md`
 - IDA agent report (in conversation): RVA-renamed PhysicsHandle natives + ProcessEvent hook strategy
 - COOP_SCOPE entry: commit `1c620be`
 

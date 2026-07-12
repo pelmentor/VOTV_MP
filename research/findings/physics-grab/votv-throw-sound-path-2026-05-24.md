@@ -90,5 +90,5 @@ In `remote_prop::OnRelease(payload, localPlayer)`:
 
 - [[feedback-re-related-functions]] -- the rule that made me write this doc
 - [[feedback-audit-every-time]] -- audit-fix cycle that surfaced 9+ bugs in the wire layer
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` -- Stage 1 RE of the grab path
-- `research/findings/physics-object-pickup-architecture-2026-05-23.md` -- original architect blueprint
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` -- Stage 1 RE of the grab path
+- `research/findings/physics-grab/physics-object-pickup-architecture-2026-05-23.md` -- original architect blueprint

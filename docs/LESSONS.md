@@ -66,16 +66,22 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **chipPiles persist in `primitivesData`; off-kerfurs in `objectsData`** (different save lanes). `memory/lesson_chippile_saved_in_primitivesData_not_objectsData.md`
 - **DELIVERY-axis: join DELIVERY vs IDENTITY are separate; ONE owner = `prop_snapshot`.** `memory/feedback_deliver_missing_owner_delivery_axis.md`
 - **EVERY in-episode wire expression is PROVISIONAL** — loadObjects churn recreates only save-WORLD
-  records (a hotbar'd-at-capture prop has none -> dead mirror row forever). ORDER: the revalidation
-  drain runs at the quiescence fire edge BEFORE the doom sweep — doom judges LAST (the tail placement
-  doomed-then-resurrected 230 props = the take-3 2.5 fps storm). *Look FIRST:* client-log dead-row
-  TRIPWIRE + [SPAWN-DEFER] arm/apply + per-doom key/loc lines; on an fps/placement anomaly diff the
-  doomed-vs-re-expressed KEY SETS. `memory/lesson_join_window_wire_expression_provisional.md`
+  records (a hotbar'd-at-capture prop has none -> dead mirror row forever). ORDER x2: (take-3) the
+  revalidation drain runs at the quiescence fire edge BEFORE the doom sweep — doom judges LAST (232
+  doomed + 230 re-expressed = the 2.5 fps storm); (take-4) the spawn/destroy queues are PRE-NETTED per
+  identity at CAPTURE — phase replay inverts a destroy->spawn wire pair (host pickup->place) and kills
+  the placed prop, and an APPLIED wire destroy must cancel its captured spawn or the drain resurrects
+  it (`460da7e4`). *Look FIRST:* client-log dead-row TRIPWIRE + [SPAWN-DEFER] arm/apply/CANCELLED +
+  [DESTROY-DEFER] SUPERSEDED lines; on a single missing prop lay out ITS KEY's wire timeline across
+  both logs in arrival order; on an fps/placement anomaly diff the doomed-vs-re-expressed KEY SETS.
+  `memory/lesson_join_window_wire_expression_provisional.md`
 - **VOTV's OWN save ships DUPLICATE interactable Keys** (85 trashBitsPile_C across 4 keys — save-born
   clone families; the 06-24 sweep silently doomed "80 trashBitsPile" for weeks). Key uniqueness is OUR
   invariant: the HOST re-keys duplicates at enroll (MarkPropElement, the one owner; GT-gated setKey;
-  dead incumbent = churn recreate inheriting identity). *Look FIRST:* host-log "KEY-UNIQUENESS ...
-  re-keyed" burst; same-key multiplicity histogram in the adopt burst.
+  dead incumbent = churn recreate inheriting identity). Take-4: the `2fefd161` re-key was INERT (162x
+  "setKey not found" — trashBitsPile is actor_save_C lineage; repaired by the SuperStruct-climbing
+  resolver, `460da7e4`). *Look FIRST:* host-log "KEY-UNIQUENESS ... re-keyed -> 'rk_'" SUCCESS burst
+  ("re-key FAILED" = the authority is NOT working); same-key multiplicity histogram in the adopt burst.
   `memory/lesson_votv_save_ships_duplicate_interactable_keys.md`
 - **MirrorManager\<Prop\> MIXES census LOCAL rows with wire rows (one actor can carry BOTH)** — an
   actor->eid reverse meaning "established cross-peer identity" must filter `IsMirror()`
@@ -164,7 +170,10 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   (audit CRITICAL 2026-07-10: the ambient-mirror lifespan backstop was silently dead). SECOND STRIKE
   2026-07-11: BOTH spawn-by-key sites resolved `setKey` on the LEAF wire class → prop_crowbar_C mirrors
   spawned keyless → field key diverged from the wire binding → pickup-destroys missed the host = the
-  host-side crowbar DUPE (rocks masked it: a rock IS prop_C). Resolve on the DECLARING class + cache;
+  host-side crowbar DUPE (rocks masked it: a rock IS prop_C). THIRD STRIKE 2026-07-12: the take-3
+  KEY-UNIQUENESS re-key silently no-opped — trashBitsPile_C's setKey lives on actor_save_C, outside the
+  hardcoded Aprop_C fallback; fixed by `R::SuperStructOf` + a chain-climbing ResolveSetKeyFn
+  (`460da7e4`) — reuse that resolver shape. Resolve on the DECLARING class + cache;
   when adding any reflected-call site, grep for other leaf-class resolves of the same fn.
   *Look FIRST:* the SDK header for which class declares the fn + the RCA finding
   `research/findings/props-lifecycle/votv-crowbar-mirror-key-divergence-RCA-2026-07-11.md`.

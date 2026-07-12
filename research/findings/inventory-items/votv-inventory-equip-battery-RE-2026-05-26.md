@@ -220,6 +220,6 @@ Out of scope:
 
 ## Cross-references
 
-- `research/findings/votv-flashlight-RE-2026-05-25.md` — Phase 5F flashlight RE (parent of this work)
+- `research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md` — Phase 5F flashlight RE (parent of this work)
 - `[[project-inventory-item-activation-sync]]` — Phase 5F scope memo
 - `[[project-coop-inventory-private]]` — parent decision: inventory PRIVATE, world-effects sync

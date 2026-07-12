@@ -17,7 +17,7 @@
 **Date**: 2026-05-27
 **Target**: Alpha 0.9.0-n
 **Method**: CXXHeaderDump static analysis. Builds on the 2026-05-25 doors+lights doc
-(`research/findings/votv-doors-and-lightswitches-RE-2026-05-25.md`); identifies the
+(`research/findings/computers-devices/votv-doors-and-lightswitches-RE-2026-05-25.md`); identifies the
 gaps the original audit did NOT cover (keypad state, NPC-auto-open mechanism) and
 proposes a unified wire-protocol design for all three asks.
 

@@ -1,6 +1,6 @@
 # VOTV chipPile <-> garbageClump morph round-trip RE — 2026-05-27
 
-Follow-up to `research/findings/votv-garbage-trash-interaction-RE-2026-05-27.md`
+Follow-up to `research/findings/piles-trash/votv-garbage-trash-interaction-RE-2026-05-27.md`
 (§ "AactorChipPile_C and Aprop_garbageClump_C — runtime morph: a chipPile
 spawns a clump and vice-versa during pickup/throw. This is a sibling-spawn
 we do not observe today.").

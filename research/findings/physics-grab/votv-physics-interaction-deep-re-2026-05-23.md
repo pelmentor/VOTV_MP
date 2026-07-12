@@ -359,7 +359,7 @@ IDB saved: `D:\Projects\Programming\VOTV_MP\Game_0.9.0n\WindowsNoEditor\VotV\Bin
 
 ## Cross-refs
 
-- Previous (now-obsolete) plan: `research/findings/physics-object-pickup-coop-plan-2026-05-23.md` — the 8-UFunction observer plan, superseded by this doc.
-- Architect blueprint: `research/findings/physics-object-pickup-architecture-2026-05-23.md` — wire protocol + 7-stage build sequence remain valid; only the observer-registration step (Stage 1) changes.
-- MTA precedent: `research/findings/mta-object-pickup-sync-2026-05-23.md` — unchanged.
+- Previous (now-obsolete) plan: `research/findings/physics-grab/physics-object-pickup-coop-plan-2026-05-23.md` — the 8-UFunction observer plan, superseded by this doc.
+- Architect blueprint: `research/findings/physics-grab/physics-object-pickup-architecture-2026-05-23.md` — wire protocol + 7-stage build sequence remain valid; only the observer-registration step (Stage 1) changes.
+- MTA precedent: `research/findings/mta/mta-object-pickup-sync-2026-05-23.md` — unchanged.
 - Log: `Game_0.9.0n/WindowsNoEditor/VotV/Binaries/Win64/votv-coop.log` (session 22:39:56–22:43:21).

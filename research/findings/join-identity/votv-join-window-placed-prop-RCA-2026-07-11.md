@@ -1,10 +1,12 @@
 # RCA: join-window placed props invisible on the client (SIX roots, one saga) — 2026-07-11/12
 
 Status: all six roots AS-BUILT + log-RCA'd from live joins (takes 1-4); hands-on take-5 pending.
+ARCHITECTURAL VERDICT (2026-07-12, user decision): the next session redesigns the two-authority
+join seam per RULE 1 — see the closing section of this doc.
 Commits: `6d9c6518` (take 1: fresh-defer + fuzzy identity-steal gate), `8a2b04d0` (take 2: SPAWN
 REVALIDATION generalization), `8b1b340a` (watchdog quiescence-by-ceiling, audit MEDIUM),
 `2fefd161` (take 3: host KEY-UNIQUENESS authority + reconcile-before-doom order — see §take-3 below),
-take 4 (2026-07-12: wire-order queue netting + setKey SuperStruct climb — see §take-4 below).
+`460da7e4` (take 4, 2026-07-12: wire-order queue netting + setKey SuperStruct climb — see §take-4 below).
 Durable lessons: [[lesson-join-window-wire-expression-provisional]],
 [[lesson-prop-mirror-manager-mixes-local-and-wire-rows]], [[feedback-identity-logs-carry-key-and-loc]],
 [[lesson-votv-save-ships-duplicate-interactable-keys]].
@@ -188,3 +190,32 @@ sweep and the drain fighting) and histogram same-key multiplicity in the host ad
 family = root 3; host log `KEY-UNIQUENESS ... re-keyed` lines show the authority working). The
 mechanism docs: `quiescence_drain.h` (queue contract + fire-edge order) + COOP_ENTITY_EXPRESSION_MAP
 "Join-window PROVISIONALITY" + "KEY-UNIQUENESS AUTHORITY" bullets.
+
+## Architectural verdict (2026-07-12, user decision) — the saga IS the signal; next session goes per rule 1
+
+Of the six roots, FOUR (1, 2, 4, 5) live on ONE seam: **during the join window the client world has
+TWO concurrent authorities** — the transferred-save loader (loadObjects churn: destroy+recreate of
+every keyed prop, the PAST) and the live wire stream (the PRESENT). Every take added another
+compensation layer on that seam (episode gate, capture queues, deferred destroys, twins,
+pos-corrections, RE-BIND, doom sweep, wire-order netting); root 5 was literally our own deferral
+machinery destroying an ordering the reliable channel had already guaranteed.
+[[feedback-recurring-bug-is-architectural]] formally tripped at take 3. MTA has no such seam by
+design: no client save-load, ONE ordered entity stream, one authority.
+
+**DECISION (user, 2026-07-12): the next session approaches this architecturally per RULE 1** (full
+green light), with fresh context. The two candidate consolidation stages sketched at decision time
+(to be properly designed then, not now):
+1. **Single ordered wire-event JOURNAL for the whole episode** — one arrival-ordered log of every
+   in-episode wire event, replayed ONCE at quiescence; absorbs the per-type queues + hand-tuned
+   phase order (the take-4 netting is already the per-identity last-event-wins equivalent for
+   spawn/destroy — the journal is its general form, absorbing pos-corrections/twins too).
+2. **Remove the conflict at the source** — suppress loadObjects churn (destroy+recreate) for
+   wire-tracked keyed props entirely: the wire becomes the ONLY existence authority for tracked
+   entities during the join; the save feeds only the untracked world.
+Inputs the architecture session must read first: this finding (all six roots), `quiescence_drain.h`
+(the queue census — SIX specialized queues is the debt metric), `docs/COOP_ENTITY_EXPRESSION_MAP.md`
+join-window bullets, `reference/mtasa-blue/` entity-stream shape (CEntityAddPacket), and the take-5
+verdict. The owed `remote_prop_spawn.cpp` extraction (audit HIGH x2) sits on the same seam — fold it
+into the architecture work rather than doing it as a standalone shuffle first.
+TRIPWIRE agreed with the user: any NEW post-join prop bug of this class (wrong place / wrong count /
+missing after join) before the consolidation = stop patching, start the redesign immediately.

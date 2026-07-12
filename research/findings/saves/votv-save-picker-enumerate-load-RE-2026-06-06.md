@@ -196,7 +196,7 @@ tested fallback.**
 - **Under the hood (IDA `sub_141241E00` = `FPaths::ProjectSavedDir()`):** cached, honours
   the `-saveddirsuffix=` cmdline arg. For VOTV (packaged) this resolves to
   `%LOCALAPPDATA%\VotV\Saved\` (consistent with the prior on-disk RE:
-  `research/findings/votv-save-path-RE-2026-05-30.md` §5 — root
+  `research/findings/saves/votv-save-path-RE-2026-05-30.md` §5 — root
   `%LOCALAPPDATA%\VotV\Saved\SaveGames\`). So `GetProjectSavedDirectory()+"SaveGames/"`
   == the real on-disk root; **no need to build it from the environment ourselves**.
 - **VOTV-specific helpers (also callable on `lib_C` CDO):** `GetAssetFolder(skipCreation,

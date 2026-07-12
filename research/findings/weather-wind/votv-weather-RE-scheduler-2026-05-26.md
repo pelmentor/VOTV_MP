@@ -946,9 +946,9 @@ sharpen it.
   blackFog / badSun / event_lakeglow / event_fleshRain),
   [[project-coop-whole-map-sync]] (weather is whole-map, no AOI).
 - **Reference findings:**
-  `research/findings/votv-mushroom-state-RE-2026-05-24.md` (the
+  `research/findings/world-systems/votv-mushroom-state-RE-2026-05-24.md` (the
   "suppress on client" pattern that the weather scheduler follows),
-  `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md`
+  `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md`
   (lifecycle hook patterns).
 - **Files surveyed in this pass:**
   `mainGamemode.hpp` (564 LOC, full),

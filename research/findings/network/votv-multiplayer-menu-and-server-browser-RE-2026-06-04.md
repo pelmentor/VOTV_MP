@@ -204,7 +204,7 @@ that fires the begin-screen Proceed button's OnClicked handler via reflection (w
 canvas_begin -> UButtons -> read OnClicked[0].FunctionName -> Call the non-exit one).
 
 ## Cross-refs
-- docs/MULTIPLAYER_UI.md ; research/findings/votv-master-server-mta-adaptation-2026-05-28.md ;
-  research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md ; reference/mtasa-blue/Client/core/
+- docs/MULTIPLAYER_UI.md ; research/findings/mta/votv-master-server-mta-adaptation-2026-05-28.md ;
+  research/findings/network/votv-gns-p2p-masterserver-plan-2026-05-28.md ; reference/mtasa-blue/Client/core/
   ServerBrowser/ ; CXXHeaderDump/{ui_menu,UMG,Button,CanvasPanel,CanvasPanelSlot}.hpp ;
   src/votv-coop/src/ue_wrap/engine_widget.cpp.

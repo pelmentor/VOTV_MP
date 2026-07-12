@@ -501,7 +501,7 @@ IDB saved at: `D:\Projects\Programming\VOTV_MP\Game_0.9.0n\WindowsNoEditor\VotV\
 
 ## Cross-refs
 
-* `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1 PhysicsHandle + Timeline RE.
-* `research/findings/votv-throw-sound-path-2026-05-24.md` — Path A vs Path B sound design.
+* `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1 PhysicsHandle + Timeline RE.
+* `research/findings/physics-grab/votv-throw-sound-path-2026-05-24.md` — Path A vs Path B sound design.
 * `memory/project_physics_object_pickup.md` — current ship state + the user bug verbatim.
 * `src/votv-coop/include/ue_wrap/sdk_profile.h` — the porting surface for the new UFunction names.

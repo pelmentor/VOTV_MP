@@ -23,7 +23,7 @@
   identity reconcile now runs on the valve-abort path too AND has a post-purge steady trigger
   (`coop/sync/sync_reconcile`, commits `47384057`/`432183ce`/`8b85cb2e`). 15:44 hands-on: reconcile-on-valve-abort
   VERIFIED (variant-1 ran, log `position re-bind pass`); world ended CLEAN (870 piles, 0 orphans); variant-1 N=0 =
-  no native left unbound = a pass. **CURRENT HOME: `research/findings/sync-consolidation-refactor-PLAN-2026-06-27.md`
+  no native left unbound = a pass. **CURRENT HOME: `research/findings/architecture-audits/sync-consolidation-refactor-PLAN-2026-06-27.md`
   (step 4b+/7) + [[project-sync-module-refactor-2026-06-27]].** The `force_save_churn` synthetic probe is MOOT (the
   real purge pre-empts it) -- see the superseded runbook banner.
 - **b3 is INNOCENT** (proven below); never rolled back.

@@ -339,9 +339,9 @@ rather than reimplementing (RULE 1).
 - `src/votv-coop/include/ue_wrap/engine.h` (the API to extend with CreateNamedStorySave).
 - `src/votv-coop/src/harness/harness.cpp:287 BootStorySaveBlocking` (`fresh_boot` ini gate — the boot poll
   that calls StartFreshGame/LoadStorySave; CreateNamedStorySave plugs in here or via the Host button).
-- `research/findings/votv-save-path-RE-2026-05-30.md` (SaveGameToSlot → on-disk layout, non-atomic write,
+- `research/findings/saves/votv-save-path-RE-2026-05-30.md` (SaveGameToSlot → on-disk layout, non-atomic write,
   the client save-block).
-- `research/findings/votv-host-world-snapshot-RE-and-design-2026-06-04.md` (StartFreshGame validation;
+- `research/findings/join-identity/votv-host-world-snapshot-RE-and-design-2026-06-04.md` (StartFreshGame validation;
   blank-save-boots-clean proof).
 - `CXXHeaderDump/{ui_saveSlots,saveSlot,ui_menu,ui_gamemode,mainGameInstance,save_main,struct_gameRules,
   uicomp_saveSlot,enum_gamemode_enums}.hpp`.

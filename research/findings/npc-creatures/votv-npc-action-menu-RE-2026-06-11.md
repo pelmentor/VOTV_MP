@@ -9,7 +9,7 @@ Sources: cooked-BP kismet disassembly via `research/bp_reflection/` tooling
 `enum_interactionActions.json`), the CXXHeaderDump SDK
 (`Game_0.9.0n/WindowsNoEditor/VotV/Binaries/Win64/CXXHeaderDump/*.hpp`), and the
 coop sources (`src/votv-coop/`). Observability claims rest on the SETTLED
-measured table in `research/findings/votv-inventory-pickup-seam-RE-2026-06-11.md`
+measured table in `research/findings/physics-grab/votv-inventory-pickup-seam-RE-2026-06-11.md`
 section 3 (one MinHook on `UObject::ProcessEvent`; `EX_Local*` BP-script forms
 are the only measured zeros; EX_CallMath / EX_FinalFunction / EX_VirtualFunction
 native forms are measured-firing).

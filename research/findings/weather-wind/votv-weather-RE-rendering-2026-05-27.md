@@ -391,7 +391,7 @@ is the only culprit needs the runtime diagnostic above.
 ### Q4.1 Grep across CXXHeaderDump for weather-rendering classes
 
 Per the earlier scheduler RE doc
-(`research/findings/votv-weather-RE-scheduler-2026-05-26.md` Section
+(`research/findings/weather-wind/votv-weather-RE-scheduler-2026-05-26.md` Section
 8.1), greps for `schedul|random|rnd` returned zero hits and weather-
 adjacent classes are exhaustively enumerated. Re-running for rendering-
 specific patterns:
@@ -431,7 +431,7 @@ entirely the responsibility of `cycle.eff_rain`.
 
 ### Q4.3 Cross-reference to scheduler-RE doc Section 7.4
 
-`research/findings/votv-weather-RE-scheduler-2026-05-26.md:215-223`
+`research/findings/weather-wind/votv-weather-RE-scheduler-2026-05-26.md:215-223`
 already states: "Time-of-day fields drive ... per-tick. This is
 rendering, NOT a weather-RNG input." And `:223`: "**Hooking
 `ReceiveTick` is the WRONG layer to suppress client weather** — it
@@ -895,15 +895,15 @@ stay in place as ship-quality telemetry.
 
 ## Section 12 — Cross-refs
 
-- `research/findings/votv-weather-RE-mainGamemode-2026-05-26.md` —
+- `research/findings/weather-wind/votv-weather-RE-mainGamemode-2026-05-26.md` —
   the parent RE pass; established that cycle is the canonical state
   authority. This doc supplements with BP-body inspection.
-- `research/findings/votv-weather-RE-effect-actors-2026-05-26.md` —
+- `research/findings/weather-wind/votv-weather-RE-effect-actors-2026-05-26.md` —
   effect-actor enumeration; this doc confirms no missing renderer.
-- `research/findings/votv-weather-RE-scheduler-2026-05-26.md` —
+- `research/findings/weather-wind/votv-weather-RE-scheduler-2026-05-26.md` —
   scheduler-hook surface; this doc confirms ReceiveTick suppression
   is NOT the right path; selective field protection is.
-- `research/findings/votv-flashlight-RE-2026-05-25.md` — same pattern
+- `research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md` — same pattern
   precedent (Option α: direct UFunction call on the visible component
   bypassing BP wrapper). The flashlight cone fix that landed
   `b100e8e` 2026-05-26 used `SetVisibility` on the light component

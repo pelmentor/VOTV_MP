@@ -389,7 +389,7 @@ next sub-PR each subsystem touches — opportunistic, not its own PR.
 ## Cross-refs
 
 - 15-finding audit closeout: `[[project-session-2026-05-28-gns-pr4-1-ship]]`
-- Master-server design doc: `research/findings/votv-gns-p2p-masterserver-plan-2026-05-28.md`
+- Master-server design doc: `research/findings/network/votv-gns-p2p-masterserver-plan-2026-05-28.md`
 - Audit-prompt-perf-template: `reference/agency-agents/audit-prompt-perf-template.md`
 - Install-idempotent rule: `[[feedback-install-idempotent-o1-steady-state]]`
 - Modular file-size rule: `[[feedback-modular-file-size-rule]]`

@@ -590,7 +590,7 @@ file-touch confirmation before committing fix work.
   weather_sync crutch triggered (and 6 other findings share)
 - `CLAUDE.md` — RULE 1 + the explicit "no per-frame full-array scans"
   rule (4 findings violate this)
-- `research/findings/votv-weather-RE-causeRain-IDA-2026-05-27.md` —
+- `research/findings/weather-wind/votv-weather-RE-causeRain-IDA-2026-05-27.md` —
   source of the proper-fix pattern (echo-suppress) that should also
   apply to M15
 - Commit `987898b` (reverted at `4b5a2e3`) — the triggering crutch

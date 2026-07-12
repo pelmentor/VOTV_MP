@@ -202,5 +202,5 @@ Hands-on (rendering/interaction-blind autonomously — the user's hands-on):
 call), `:1081` (sweep mirror-exempt) · `pile_reconcile.cpp:121-200` (`TryDestroyTwin`) ·
 `prop_element_tracker.cpp` (`IsBoundMirrorNative`, `MarkBoundMirrorNative`) · `save_identity_bind.{h,cpp}` (the
 bind; case-ii `RetireProxy`) · `remote_prop_spawn.cpp:1393-1432` (quiescence gate, if item 1 adopted) ·
-research/findings/votv-pile-grab-observable-hook-RE-2026-06-08-pass1.md (kept native = fully grabbable) ·
+research/findings/piles-trash/votv-pile-grab-observable-hook-RE-2026-06-08-pass1.md (kept native = fully grabbable) ·
 votv-increment2-clientgrab-FULL-CHAIN-AS-BUILT-2026-06-23.md (camera-cone, the proxy workaround).

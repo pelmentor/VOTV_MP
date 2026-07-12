@@ -1255,7 +1255,7 @@ existing coop work.
 - `[[project-coop-save-host-authoritative]]` — `AdaynightCycle_C`'s
   Day/totalTime/timeZ are part of the host snapshot to send on
   connect.
-- `research/findings/votv-events-RE-2026-05-24.md` — events RE
+- `research/findings/events/votv-events-RE-2026-05-24.md` — events RE
   including `AskyFallingEvent_C`.
 
 ---

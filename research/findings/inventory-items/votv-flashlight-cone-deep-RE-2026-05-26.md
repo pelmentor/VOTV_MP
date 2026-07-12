@@ -342,5 +342,5 @@ Choice goes to future-session direction.
 - `[[project-session-2026-05-26-state]]` — session checkpoint
 - `[[feedback-deep-re-no-iteration]]` — the rule that gated the
   switch from iterative to evidence-first
-- `research/findings/votv-flashlight-RE-2026-05-25.md` — original
+- `research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md` — original
   Inc1 RE (Case-b verdict, intensity-vs-visibility, save persistence)

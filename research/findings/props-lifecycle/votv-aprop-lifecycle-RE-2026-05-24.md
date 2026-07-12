@@ -662,10 +662,10 @@ IDB saved at `D:\Projects\Programming\VOTV_MP\Game_0.9.0n\WindowsNoEditor\VotV\B
 
 ## Cross-refs
 
-- `research/findings/votv-inventory-drop-spawn-RE-2026-05-24.md` —
+- `research/findings/inventory-items/votv-inventory-drop-spawn-RE-2026-05-24.md` —
   prior RE on Init key generation, deferred-spawn pipeline, takeObj
   POST hook
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` —
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` —
   prior RE on grab pipeline (different concern, but uses same
   Aprop_C / Key infrastructure)
 - `src/votv-coop/src/harness/harness.cpp` L695–L789 — the shipped

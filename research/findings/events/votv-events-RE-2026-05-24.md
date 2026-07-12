@@ -8,9 +8,9 @@ anomalies, story triggers) cross-peer.
 **Methods:** CXX header dump (`CXXHeaderDump/`), IDA on the shipped exe
 (`VotV-Win64-Shipping.exe.i64`), MTA precedent for replication patterns.
 **Predecessors:**
-- `research/findings/votv-npc-entity-RE-2026-05-24.md`
-- `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md`
-- `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md`
+- `research/findings/npc-creatures/votv-npc-entity-RE-2026-05-24.md`
+- `research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md`
+- `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md`
 
 ---
 

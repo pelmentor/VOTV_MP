@@ -131,18 +131,18 @@ spawners x16), and level trigger_* volumes (~35: sound/spawn/teleport/alarm/box/
 agrav/jamDoor/breakDish...).
 
 4 PARALLEL RE AGENTS LAUNCHED (writing section files that survive compaction):
-- A -> research/findings/_events_catalog_A_scripted.md (event_* effects + output type
+- A -> research/findings/events/_events_catalog_A_scripted.md (event_* effects + output type
   + observability + sync shape + priority)
-- B -> research/findings/_events_catalog_B_scheduler.md (THE KEYSTONE: does VOTV roll
+- B -> research/findings/events/_events_catalog_B_scheduler.md (THE KEYSTONE: does VOTV roll
   events CENTRALLY? if yes, syncing the one roll = leverage for the whole system;
   central-roll-sync vs per-event-detector verdict)
-- C -> research/findings/_events_catalog_C_spawners.md (the spawner family + THE
+- C -> research/findings/events/_events_catalog_C_spawners.md (the spawner family + THE
   SHARED HOST-DETECTION MECHANISM, given Init is unobservable -- the pinecone's real
   fix)
-- D -> research/findings/_events_catalog_D_triggers.md (trigger_* volumes split:
+- D -> research/findings/events/_events_catalog_D_triggers.md (trigger_* volumes split:
   shared-world-NEEDS-SYNC | covered-transitively | per-player-no-sync)
 NEXT (post-compact): when all 4 land, SYNTHESIZE into
-research/findings/votv-events-triggers-catalog-2026-06-11.md (master roadmap + a
+research/findings/events/votv-events-triggers-catalog-2026-06-11.md (master roadmap + a
 priority/status table + the recommended shared sync architecture), then plan the
 implementation (the shared host-roll/host-detect -> broadcast -> mirror detector).
 The recurring pattern across ALL of it (user's principle): host rolls RNG ->

@@ -12,8 +12,8 @@ MTA-fidelity) per the RULE 1 escalation ladder + [[feedback-check-mta-and-docume
 
 ## Sources
 
-- `research/findings/mta-object-pickup-sync-2026-05-23.md` — MTA precedent + 3-packet protocol
-- `research/findings/votv-physics-interaction-surface-2026-05-23.md` — VOTV BP class hierarchy + state surface + per-tick writers
+- `research/findings/mta/mta-object-pickup-sync-2026-05-23.md` — MTA precedent + 3-packet protocol
+- `research/findings/physics-grab/votv-physics-interaction-surface-2026-05-23.md` — VOTV BP class hierarchy + state surface + per-tick writers
 - IDA agent report (verbatim in conversation): native RVAs + hook strategy
 - VOTV CXX header dump: `Game_0.9.0n/.../CXXHeaderDump/mainPlayer.hpp`, `prop.hpp`, `comp_gravitygun.hpp`
 

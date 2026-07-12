@@ -3,7 +3,7 @@
 Survey date: 2026-05-24
 Source: `Game_0.9.0n/WindowsNoEditor/VotV/Binaries/Win64/CXXHeaderDump/`
 (UE4SS-generated C++ headers extracted from cooked blueprints, ~2645 files).
-Companion: `research/findings/mta-npc-entity-sync-2026-05-24.md` (MTA conceptual precedent).
+Companion: `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` (MTA conceptual precedent).
 
 ## TL;DR
 
@@ -880,13 +880,13 @@ gameplay references (`chaseActor.Key`, `holdObject.Key`,
 
 ### Cross-refs to existing memory + MTA findings
 
-- **MTA precedent**: `research/findings/mta-npc-entity-sync-2026-05-24.md`
+- **MTA precedent**: `research/findings/mta/mta-npc-entity-sync-2026-05-24.md`
   — MTA's CPed / CObject / CVehicle / CElement hierarchy maps
   cleanly: VOTV `ACharacter` NPCs ↔ MTA CPed, VOTV `Aprop_C` ↔ MTA
   CObject, VOTV `AATV_C` ↔ MTA CVehicle, VOTV `AtriggerBase_C` ↔ MTA
   CColShape, VOTV `Aexplosion_C` ↔ MTA CExplosion (transient).
 - **Physics-prop pickup (shipped Stage 1)** —
-  `research/findings/physics-object-pickup-coop-plan-2026-05-23.md`
+  `research/findings/physics-grab/physics-object-pickup-coop-plan-2026-05-23.md`
   + `physics-object-pickup-architecture-2026-05-23.md`. The prop
   pickup hooks (`playerTryToGrab`, `canPickup`,
   `smoothGrab/pickupObject/pickupObjectDirect/dropGrabObject/
@@ -897,7 +897,7 @@ gameplay references (`chaseActor.Key`, `holdObject.Key`,
   user moves on to NPC sync, those observers need spawning too — to
   authoritatively propagate "kerfur is now holding prop X" to clients.
 - **Pose sync (shipped, LAN-tested)** —
-  `research/findings/mta-pose-interpolation-2026-05-23.md`. The
+  `research/findings/mta/mta-pose-interpolation-2026-05-23.md`. The
   receiver-side LERP / shortest-arc / velocity-scaled snap pattern
   generalises to NPC pawns; we already have the puppet machinery
   (`coop::RemotePlayer.Drive`). For NPCs the same machinery

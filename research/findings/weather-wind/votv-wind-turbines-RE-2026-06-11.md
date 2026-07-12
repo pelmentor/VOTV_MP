@@ -15,7 +15,7 @@ minimal mirror recipe.
 `research/bp_reflection/_windturbine_uber_full.txt`), CXXHeaderDump for offsets,
 repak + kismet-analyzer `to-json` of the placement sub-levels
 (`research/bp_reflection/_map_untitled_*.json`), the prior wind RE
-(`research/findings/votv-wind-event-driver-RE-2026-06-09.md`) + its CFG artifact
+(`research/findings/events/votv-wind-event-driver-RE-2026-06-09.md`) + its CFG artifact
 (`research/pak_re/cfg/directionalWind/directionalWind.txt`). All artifacts gitignored;
 every claim cites file + byte/line offset.
 

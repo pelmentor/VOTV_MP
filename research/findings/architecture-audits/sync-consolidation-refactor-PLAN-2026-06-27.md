@@ -11,7 +11,7 @@ HANDS-ON 10:15 (post-push): #1 kerfur twitch = CLEARED (gone); #2 kerfur HANG-IN
 window piles MISPLACED on client = CONFIRMED REAL, **probe added (no blind fix)** -> next hands-on pins the root.
 **>> SUPERSEDED FOR KERFURS (2026-06-29, 10:30 hands-on): `150da133` did NOT resolve kerfurs -- turn-off DOUBLES +
 join 5-of-6 = ROOT 1 (arg-slot) + ROOT 2 (mid-join convert drop). New canonical plan:
-`research/findings/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`. The sync-arc SHIPPED+PUSHED
+`research/findings/kerfur/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`. The sync-arc SHIPPED+PUSHED
 status above remains true. <<**
 HEAD `7e89b1d1` (2 ahead: the #2 fix + probe + runbook, NOT pushed). Deployed `E3E6BEAB` (hash-verified host+client).
 Author: Claude. Grounded in a 4-agent structural map + MTA:SA (`reference/mtasa-blue/`, RULE 2026-05-28).

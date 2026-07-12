@@ -233,6 +233,6 @@ autonomously testable and delivers the user's literal ask (moved/repositioned ob
 ## 7 — Cross-refs
 - [[project-ephemeral-client-host-authoritative-world]] (the umbrella direction; inventory half).
 - [[project-coop-interactable-state-sync]] (trigger-state snapshots this builds on).
-- `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md` (prop Init/Key/getData-loadData).
-- `research/findings/votv-save-path-RE-2026-05-30.md` (save write pipeline).
+- `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md` (prop Init/Key/getData-loadData).
+- `research/findings/saves/votv-save-path-RE-2026-05-30.md` (save write pipeline).
 - `CXXHeaderDump/{prop,prop_container,triggerBase,struct_triggerSave,saveSlot,mainGamemode}.hpp`.

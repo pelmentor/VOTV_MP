@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-25
 **Source:** `reference/VoidTogether-Server/` (rival sandbox VOTV multiplayer mod, Node.js/WebSocket)
-**Prior RE doc:** `research/findings/voidtogether-server-RE-2026-05-25.md` (architecture summary + per-file map)
+**Prior RE doc:** `research/findings/network/voidtogether-server-RE-2026-05-25.md` (architecture summary + per-file map)
 **User directive:** "from that voidtogether mod we can take CHAT, PERMISSIONS other stuff (ask agents)"
 
 This doc takes each candidate feature from VoidTogether's ops/moderation

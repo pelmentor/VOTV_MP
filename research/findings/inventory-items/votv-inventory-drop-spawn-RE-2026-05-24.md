@@ -607,8 +607,8 @@ events vs per-pawn state are different layers.
 - `Game_0.9.0n/.../CXXHeaderDump/propInventory.hpp` — takeObj / addObject
 - `Game_0.9.0n/.../CXXHeaderDump/struct_save.hpp` — Fstruct_save schema
 - `Game_0.9.0n/.../CXXHeaderDump/struct_prop.hpp` — Fstruct_prop (heavy flag, mesh)
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1-4 RE
-- `research/findings/mta-object-pickup-sync-2026-05-23.md` — MTA precedent
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1-4 RE
+- `research/findings/mta/mta-object-pickup-sync-2026-05-23.md` — MTA precedent
 - [[project-physics-object-pickup]] — Stage 1-4 ship state
 - [[project-coop-inventory-private]] — inventories per-peer-private rule
 - IDB comments added at 0x144199b88 / 0x144199de0 / 0x1441ac378 / 0x1441abea8

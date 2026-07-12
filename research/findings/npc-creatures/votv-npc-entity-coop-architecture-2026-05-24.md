@@ -38,11 +38,11 @@
 | NpcPose aggregated-bitstream design noted (gap to MTA) | MTA Gap 1 | Wire taxonomy |
 | Re-activation packet on NPC wake-up specified | MTA Gap 2 | NpcState section |
 **Prerequisites read:**
-- `research/findings/mta-npc-entity-sync-2026-05-24.md` — MTA precedent (what to copy / adapt)
-- `research/findings/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory + sync-relevant fields
+- `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` — MTA precedent (what to copy / adapt)
+- `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory + sync-relevant fields
 - `docs/COOP_METHODOLOGY.md` — architectural principles
 - `docs/COOP_SCOPE.md` — what's in scope; this doc proposes a new entry
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` — already-shipped Stage 1-4 grab wire
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` — already-shipped Stage 1-4 grab wire
 
 ## TL;DR
 
@@ -230,7 +230,7 @@ Per `feedback_re_related_functions`, before any of Phase 5N1-5N5 is implemented,
 | `AATV_C.input` / occupancy | AATV_C | 5N4 | TBD -- driver detection, input replication. |
 | `AnailProjectile_C / AgrimeProjectile_C / *` | projectile classes | 5N5 | TBD -- lifecycle: spawn → tick → hit/destroy. |
 
-The MTA findings doc has the corresponding MTA file:line refs for each. The VOTV survey has the SDK header field offsets. The Flaws 1-5 RE doc (`research/findings/votv-npc-entity-RE-2026-05-24.md`) has the closed RE items.
+The MTA findings doc has the corresponding MTA file:line refs for each. The VOTV survey has the SDK header field offsets. The Flaws 1-5 RE doc (`research/findings/npc-creatures/votv-npc-entity-RE-2026-05-24.md`) has the closed RE items.
 
 ### Enemies target both peers (USER DECISION 2026-05-24)
 
@@ -506,10 +506,10 @@ Only #5 (save persistence) remains; my recommendation is "out of scope for v5".
 
 ### Cross-refs
 
-- `research/findings/mta-npc-entity-sync-2026-05-24.md` — MTA patterns
-- `research/findings/votv-npc-entity-survey-2026-05-24.md` — VOTV inventory
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1-4 grab (the precedent for this design)
-- `research/findings/votv-throw-sound-path-2026-05-24.md` — Aprop_C.thrown pattern (re-usable for NPC throw events)
+- `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` — MTA patterns
+- `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md` — VOTV inventory
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` — Stage 1-4 grab (the precedent for this design)
+- `research/findings/physics-grab/votv-throw-sound-path-2026-05-24.md` — Aprop_C.thrown pattern (re-usable for NPC throw events)
 - `docs/COOP_SCOPE.md` — for scope-add (see next section)
 - `docs/COOP_METHODOLOGY.md` — RULE №1/2/3 and architectural principles
 - [[project-physics-object-pickup]] memory — what's already shipped

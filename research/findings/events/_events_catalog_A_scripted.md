@@ -10,7 +10,7 @@ kismet bytecode disassembly via `tools/bp_reflect.py` (output in
 `research/bp_reflection/<name>.json`). VOTV is STOCK UE4.27 — every BP is
 kismet bytecode, not native; offsets/calls below are cited from the
 disassembly, not guessed.
-**Predecessor:** `research/findings/votv-events-RE-2026-05-24.md` (the
+**Predecessor:** `research/findings/events/votv-events-RE-2026-05-24.md` (the
 original event-system RE — trigger_eventer dispatcher, wire-shape proposal,
 strategy taxonomy). This doc supersedes its per-event detail for the 16
 classes in scope with bytecode-verified specifics.
@@ -33,7 +33,7 @@ together), with their OUTPUT TYPE:
 9. **event_consoleWrite** — VISUAL/UI only (scripted "hacker" text to the in-game console). LOW-MED, cosmetic per-player.
 10. **redSkyEvent** — **DONE** (synced via `coop/weather_redsky` — host observes spawnRedSky/set, client mirrors). Do not redo. **event_arirFuelsAtv** is LOW (single ATV refuel cosmetic).
 
-File: `research/findings/_events_catalog_A_scripted.md`
+File: `research/findings/events/_events_catalog_A_scripted.md`
 
 ---
 

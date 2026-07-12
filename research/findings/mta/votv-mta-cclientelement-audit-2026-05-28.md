@@ -577,7 +577,7 @@ public:
 
 ## 5. Cost/benefit — concrete wins on the open list
 
-Reading `research/findings/votv-coop-audit-post-pr4-7-2026-05-28.md` and the
+Reading `research/findings/architecture-audits/votv-coop-audit-post-pr4-7-2026-05-28.md` and the
 open items in `memory/MEMORY.md`:
 
 ### Win 1 — Late-joiner snapshot for ALL replicated entities, single code path

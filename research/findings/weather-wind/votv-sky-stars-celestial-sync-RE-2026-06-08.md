@@ -225,7 +225,7 @@ SkyState = 33,   // 2026-06-08 (v44): host-authoritative night-sky orientation +
                  //   resolved sky WORLD rotation + moonPhase on a ~1Hz throttle + connect edge;
                  //   client writes them (its ReceiveTick keeps rendering). Sun/moon ORBIT +
                  //   brightness already converge via TimeSync(29). Payload: SkyStatePayload.
-                 //   RE: research/findings/votv-sky-stars-celestial-sync-RE-2026-06-08.md
+                 //   RE: research/findings/weather-wind/votv-sky-stars-celestial-sync-RE-2026-06-08.md
 ```
 
 Payload (16 B, modeled on `TimeSyncPayload`):

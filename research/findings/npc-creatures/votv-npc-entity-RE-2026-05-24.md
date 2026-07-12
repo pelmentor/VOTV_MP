@@ -266,10 +266,10 @@ Strings + xrefs verified but no new function decompile this session -- the RE wa
 
 ## Cross-refs
 
-- `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md` -- the architecture being patched
-- `research/findings/votv-npc-entity-survey-2026-05-24.md` -- SDK survey of NPC/entity classes
-- `research/findings/mta-npc-entity-sync-2026-05-24.md` -- MTA precedent
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` -- Stage 1-4 grab (the existing precedent)
+- `research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md` -- the architecture being patched
+- `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md` -- SDK survey of NPC/entity classes
+- `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` -- MTA precedent
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` -- Stage 1-4 grab (the existing precedent)
 - `src/votv-coop/include/ue_wrap/sdk_profile.h` -- the offsets already in profile
 - [[project-coop-inventory-private]] memory -- inventory rule
 - [[project-coop-whole-map-sync]] memory -- whole-map sync rule

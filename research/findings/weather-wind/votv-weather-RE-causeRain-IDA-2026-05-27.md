@@ -275,7 +275,7 @@ Searched the daynightCycle's UFunction surface (162 entries in
 is `eff_rain->Activate()` directly on the UParticleSystemComponent (we
 already use this pattern for flashlight: `light_R->SetVisibility(true)`
 direct on the SpotLightComponent — see precedent at
-`research/findings/votv-flashlight-RE-2026-05-25.md` and the shipped
+`research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md` and the shipped
 `b100e8e` 2026-05-26 fix). The eff_rain UParticleSystemComponent has
 inherited `Activate()` / `Deactivate()` at `Engine.hpp:7208/7207`. This
 is **not a "sibling on the cycle"** — it's a UFunction on the
@@ -656,16 +656,16 @@ The fix:
 
 ## Section X — Cross-refs
 
-- `research/findings/votv-weather-RE-rendering-2026-05-27.md` —
+- `research/findings/weather-wind/votv-weather-RE-rendering-2026-05-27.md` —
   parent doc; established causeRain has 3 RandomFloat + 3 Ease locals.
   THIS doc adds: full ubergraph CallFunc enumeration (zero HasAuthority,
   zero Activate-style local), spawnRedSky locals (4-local pure spawn),
   intComs_triggerSnow locals (1-local pure delegator), redSkyEvent.set
   locals (19-local pure curve swap, CurveLinearColor confirmed).
-- `research/findings/votv-weather-RE-scheduler-2026-05-26.md` —
+- `research/findings/weather-wind/votv-weather-RE-scheduler-2026-05-26.md` —
   parent for the 5 PRE-interceptors. Option (a) above EXTENDS this
   list with causeRain as a 6th interceptor on the same mechanism.
-- `research/findings/votv-flashlight-RE-2026-05-25.md` — Option α
+- `research/findings/inventory-items/votv-flashlight-RE-2026-05-25.md` — Option α
   precedent for direct UFunction call on a component bypassing the BP
   wrapper. Discussed but NOT chosen for rain (Option a chosen instead).
 - `src/votv-coop/src/coop/weather_sync.cpp:819-823` — the causeRain

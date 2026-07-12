@@ -603,12 +603,12 @@ IDB saved at
 
 ## Cross-refs
 
-- `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md` —
+- `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md` —
   prior RE: Init body, spawn pipeline, destroy paths, cascading
   callback risks. Section 1d documents the mushroomMaster pipeline.
   Section 4b cites mushroom growth manager double-registration as
   the Inc3 risk this RE addresses.
-- `research/findings/votv-physics-interaction-deep-re-2026-05-23.md` —
+- `research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md` —
   prior RE: SetCollisionEnabled usage in the Stage 1 grab path
   (proves the reflection pattern for Option C works).
 - `src/votv-coop/include/ue_wrap/prop.h` — existing prop helpers

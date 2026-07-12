@@ -1,6 +1,6 @@
 # VOTV coop — WIND-EVENT DRIVER RE (what energizes the spring) — 2026-06-09
 
-Follow-up to `research/findings/votv-wind-basefog-RE-2026-06-08.md`, which left a
+Follow-up to `research/findings/weather-wind/votv-wind-basefog-RE-2026-06-08.md`, which left a
 GAP: it claimed `setParameters` "has no caller" and never disassembled
 `doWind / updateVars / updState / changeWindOrigin / setWindLoc /
 timer_spawnLeaves / ReceiveBeginPlay`. This doc fills that gap from the Kismet

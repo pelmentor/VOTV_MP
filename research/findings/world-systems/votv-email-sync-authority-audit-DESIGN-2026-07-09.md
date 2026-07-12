@@ -140,4 +140,4 @@ classes); (2) the join+play hands-on (host inbox clean = Hole 1; client inbox cl
 This **supersedes** the notifications Inc-2 note that assumed "forward = reuse email_sync (symmetric)" as the
 free half. The correct framing: email needs no forward-gate; the client's false-email authoring is removed by
 source-killing its world-sims (Inc-2's real work), which `serverbox_sync` began. See
-`research/findings/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`.
+`research/findings/world-systems/votv-notifications-suppress-mirror-DESIGN-2026-07-09.md`.

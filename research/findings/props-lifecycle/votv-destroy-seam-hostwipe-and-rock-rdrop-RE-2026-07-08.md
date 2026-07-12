@@ -181,7 +181,7 @@ or the "is it real" question; the clean 11:54 bare-join log settles both.
 proposed v4 exclude-hand) is ABANDONED and REVERTED to a CLEAN BASELINE (deployed DLL `13a372a36084bf05`;
 `host_spawn_watcher.cpp` + `prop_lifecycle.cpp` back at HEAD; no dupe — client-placed props are invisible
 again = feature ABSENT, not broken). SUPERSEDED BY the host-authoritative intent lane:
-`research/findings/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md`. Do NOT re-implement v2/v3/v4.**
+`research/findings/join-identity/votv-keyed-prop-grabdrop-intent-lane-DESIGN-2026-07-09.md`. Do NOT re-implement v2/v3/v4.**
 
 **Why (a full `/qf 15`, R1-R10, 2026-07-09):** v3 was BUILT (DLL `d638ccbb`) and hands-on FAILED — it
 DUPED on grab. v3 suppressed a client keyed destroy whenever a live same-key carrier existed, which

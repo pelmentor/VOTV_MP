@@ -131,8 +131,8 @@ so no new turn-in-place and **no new wire field** is needed. Details + exact cod
   `research/bp_reflection/AnimBlueprint_kerfurOmega_regular.functions.txt` (function index),
   `research/bp_reflection/_mainplayer_uber_full.txt` (the puppet actor ubergraph).
 - **Prior RE this corroborates / extends** (both already byte-exact on the kerfur head pipeline):
-  `research/findings/votv-kerfur-headlook-BP-disassembly-2026-06-07.md`,
-  `research/findings/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md`.
+  `research/findings/kerfur/votv-kerfur-headlook-BP-disassembly-2026-06-07.md`,
+  `research/findings/kerfur/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md`.
 - **Live diagnostic** (smoke 2026-06-11, dumped at spawn before DriveAnimBP): the head-graph
   table in the task prompt (LookAt_1/LookAt disabled; ModifyBone @0x2C60 'head' rotMode=2).
 - Current code: `src/votv-coop/src/ue_wrap/puppet.cpp` (`DriveAnimBP` @612, helpers @95-116),

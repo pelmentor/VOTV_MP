@@ -251,7 +251,7 @@ grep -rl "inventory_Cue"       research/pak_re/extracted --include=*.uasset     
 grep -rl "putObjectInventory"  research/pak_re/extracted --include=*.uasset       # 24 assets (all call v2)
 grep -rl "collectObject"       research/pak_re/extracted --include=*.uasset       # mainPlayer + cremator(=collectObjects, false hit)
 # proven-firing precedent for the seam's dispatch form:
-#   research/findings/votv-physics-interaction-deep-re-2026-05-23.md:199-207 (PHC observers)
+#   research/findings/physics-grab/votv-physics-interaction-deep-re-2026-05-23.md:199-207 (PHC observers)
 ```
 
 New dumps produced for this RE (gitignored as usual): `customWall`,

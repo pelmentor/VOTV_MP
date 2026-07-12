@@ -16,12 +16,12 @@ bytecode (what `ReceiveTick` actually calls) is NOT visible
 statically — flagged as runtime UE4SS Lua-probe TODO where decisive.
 
 **Prerequisites read:**
-- `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md` — architecture
-- `research/findings/mta-npc-entity-sync-2026-05-24.md` — MTA precedent
-- `research/findings/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory
-- `research/findings/votv-npc-entity-RE-2026-05-24.md` — RE for 5 design flaws
-- `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md` — Inc2 retro RE
-- `research/findings/votv-throw-sound-path-2026-05-24.md` — throw-sound RE (Path A/B)
+- `research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md` — architecture
+- `research/findings/mta/mta-npc-entity-sync-2026-05-24.md` — MTA precedent
+- `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory
+- `research/findings/npc-creatures/votv-npc-entity-RE-2026-05-24.md` — RE for 5 design flaws
+- `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md` — Inc2 retro RE
+- `research/findings/physics-grab/votv-throw-sound-path-2026-05-24.md` — throw-sound RE (Path A/B)
 - SDK headers `Game_0.9.0n/WindowsNoEditor/VotV/Binaries/Win64/CXXHeaderDump/`
 - Project memory (5 locked user decisions)
 
@@ -152,7 +152,7 @@ mainPlayer (NOT the orphan) is the inventory anchor on its own side.
 
 **No suppression needed** for inventory tick on the orphan. The
 PRE-existing memo
-`research/findings/votv-npc-entity-coop-architecture-2026-05-24.md`
+`research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md`
 treated inventory-tick suppression as needs-RE; this RE closes it:
 **N/A — inventory is not a per-pawn subsystem on mainPlayer_C**.
 
@@ -920,11 +920,11 @@ knowledge artefacts.
 
 ## Cross-refs
 
-- `research/findings/votv-npc-entity-coop-architecture-2026-05-24.md` — the architecture this RE closes prereqs for
-- `research/findings/votv-npc-entity-RE-2026-05-24.md` — Flaws 1-5 RE (Flaw 1 + Flaw 3 + Flaw 4 are upstream of this RE)
-- `research/findings/votv-aprop-lifecycle-RE-2026-05-24.md` — Inc2 retro RE (analog patterns for Section 5)
-- `research/findings/votv-throw-sound-path-2026-05-24.md` — throw-sound RE (Section 3 reference)
-- `research/findings/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory
+- `research/findings/npc-creatures/votv-npc-entity-coop-architecture-2026-05-24.md` — the architecture this RE closes prereqs for
+- `research/findings/npc-creatures/votv-npc-entity-RE-2026-05-24.md` — Flaws 1-5 RE (Flaw 1 + Flaw 3 + Flaw 4 are upstream of this RE)
+- `research/findings/props-lifecycle/votv-aprop-lifecycle-RE-2026-05-24.md` — Inc2 retro RE (analog patterns for Section 5)
+- `research/findings/physics-grab/votv-throw-sound-path-2026-05-24.md` — throw-sound RE (Section 3 reference)
+- `research/findings/npc-creatures/votv-npc-entity-survey-2026-05-24.md` — VOTV entity inventory
 - `Game_0.9.0n/WindowsNoEditor/VotV/Binaries/Win64/CXXHeaderDump/` — SDK headers (RE source-of-truth)
 - `src/votv-coop/include/ue_wrap/sdk_profile.h` — APawn offsets already in profile (0x230, 0x231, 0x238)
 - [[project-coop-enemies-target-both]] — user rule (puppet redesign to mainPlayer_C orphan)

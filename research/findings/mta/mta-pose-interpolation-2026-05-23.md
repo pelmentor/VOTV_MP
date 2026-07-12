@@ -134,7 +134,7 @@ CharacterMovement on the puppet):
 two-process (`tools/lan-test.ps1`) both pass with the new path: pose moves
 smoothly between packets, snaps on first-pose + on large teleports, freezes
 between packets. See [[project-phase3-udp-transport]] and the LAN framework
-in `research/findings/two-instance-lan-test-framework-2026-05-23.md`.
+in `research/findings/phase0-bootstrap/two-instance-lan-test-framework-2026-05-23.md`.
 
 ## Source pointers (in `reference/mtasa-blue/`)
 

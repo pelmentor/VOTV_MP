@@ -373,11 +373,11 @@ head pins at ~67° while the target offset keeps growing past it ⇒ clamp POSIT
 confirmed. (By-elimination is already strong; this is only if positive proof is wanted.)
 
 ## Sources
-- `research/findings/votv-puppet-head-look-RE-2026-06-11.md` (the puppet head drive +
+- `research/findings/player-puppet/votv-puppet-head-look-RE-2026-06-11.md` (the puppet head drive +
   the 45° clamp @ node+0x170 + the two overlapped AnimInstances).
-- `research/findings/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md` (Q3:
+- `research/findings/kerfur/votv-kerfur-headlook-AnimBP-RE-and-coop-sync-2026-06-07.md` (Q3:
   head-look always-on; `lookingAtPlayer` is a STATE switch, not the aim gate).
-- `research/findings/votv-kerfur-bodyfacing-RE-2026-06-07.md` (kerfur native bodyfacing).
+- `research/findings/kerfur/votv-kerfur-bodyfacing-RE-2026-06-07.md` (kerfur native bodyfacing).
 - Code: `src/votv-coop/src/ue_wrap/puppet.cpp` (`DriveHeadLookAtWorld` @689,
   `SetAnimTickAlways` @549, seeds @626), `src/votv-coop/src/coop/remote_player.cpp`
   (`ApplyToEngine` head drive @786-813), `src/votv-coop/include/coop/puppet_body_yaw.h`

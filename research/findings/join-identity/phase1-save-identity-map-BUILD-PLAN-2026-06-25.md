@@ -6,7 +6,7 @@
 > arrays in load order — see `docs/COOP_STABLE_ID_SIDECAR.md` §6 + `[[lesson-chippile-saved-in-primitivesData-not-objectsData]]`);
 > (2) the spawn-time bind is verified but the bound chipPiles die to the host-proxy `TryDestroyTwin`, so the
 > end-to-end fix is the **(X) native-authoritative** design
-> (`research/findings/phase1-X-native-authoritative-chippile-DESIGN-2026-06-25.md`). Read those for current state.
+> (`research/findings/join-identity/phase1-X-native-authoritative-chippile-DESIGN-2026-06-25.md`). Read those for current state.
 
 **ON REVIEW, ZERO code.** Build-plan-level detail for `docs/COOP_STABLE_ID_SIDECAR.md` §2.1/§3/§3.6
 (design greenlit-in-principle). Covers BOTH keyless save-loaded families — chipPiles AND off-prop kerfurs
@@ -87,7 +87,7 @@ using IdMap = std::vector<IdEntry>;   // sparse over objectsData (keyless subset
 `uint16 version` (=1), `uint16 count`, then `count` * `{ uint32 index, uint32 eid, uint8 family }` = 9 B/entry.
 > **AS-BUILT diverged (see `save_identity_map.h`):** header is `['V','C','I','D']` magic(4) + `u32 version` +
 > `u32 count` = 12 B; and **v2 (2026-06-27)** added `savePosX/Y/Z` (3xf32) -> **21 B/entry** for the purge-race
-> position re-bind (`research/findings/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`).
+> position re-bind (`research/findings/join-identity/coop-purge-timing-reconcile-race-DESIGN-2026-06-27.md`).
 ~870 chipPiles + a handful of off-kerfurs ≈ ~8 KB. **This EXCEEDS the 228 B reliable payload cap**, so it does
 NOT ride a SnapshotComplete tail (that is why the census could and this cannot). It rides the **chunked
 `save_transfer` pipeline** (§3) — same transport as the ~19 MB blob, so the map and the blob arrive as one

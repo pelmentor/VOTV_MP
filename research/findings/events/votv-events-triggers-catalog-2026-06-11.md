@@ -3,13 +3,13 @@
 > **Status:** synthesis of four parallel bytecode-RE passes (all landed
 > 2026-06-11). This is the roadmap; the per-class detail lives in the four
 > section files (keep them — this doc does not duplicate every offset):
-> - `research/findings/_events_catalog_A_scripted.md` — the `event_*` effect
+> - `research/findings/events/_events_catalog_A_scripted.md` — the `event_*` effect
 >   classes (what each does + cheapest sync shape).
-> - `research/findings/_events_catalog_B_scheduler.md` — the central scheduler
+> - `research/findings/events/_events_catalog_B_scheduler.md` — the central scheduler
 >   (`list_events` table, `saveSlot::settime`, `trigger_eventer`). **The keystone.**
-> - `research/findings/_events_catalog_C_spawners.md` — the `*Spawner_C` family
+> - `research/findings/events/_events_catalog_C_spawners.md` — the `*Spawner_C` family
 >   (33 ambient spawners) + the shared host-detection seam.
-> - `research/findings/_events_catalog_D_triggers.md` — the `AtriggerBase_C`
+> - `research/findings/events/_events_catalog_D_triggers.md` — the `AtriggerBase_C`
 >   family (33 trigger volumes + condition triggers).
 >
 > Predecessor (superseded for the in-scope classes): `votv-events-RE-2026-05-24.md`.
