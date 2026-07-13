@@ -179,6 +179,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/pe_detour.cpp
     src/ue_wrap/spawn_gate.cpp
     src/ue_wrap/ufunction_hook.cpp
+    src/ue_wrap/vm_dispatch.cpp
     src/ue_wrap/engine.cpp
     src/ue_wrap/engine_save.cpp
     src/ue_wrap/begin_equipment.cpp
@@ -265,6 +266,7 @@ add_library(votv-coop SHARED
     src/coop/creatures/kerfur_command.cpp
     src/coop/creatures/kerfur_menu_input.cpp
     src/coop/creatures/kerfur_entity.cpp
+    src/coop/creatures/kerfur_form_assembler.cpp
     src/coop/creatures/kerfur_prop_adoption.cpp
     src/coop/creatures/kerfur_reconcile.cpp
     src/coop/interactables/keypad_sync.cpp

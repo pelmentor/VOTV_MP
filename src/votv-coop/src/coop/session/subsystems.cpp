@@ -38,6 +38,7 @@
 #include "coop/creatures/kerfur_command.h"  // v74: host-authoritative kerfur menu command relay + ownership follow
 #include "coop/creatures/kerfur_menu_input.h"  // client radial-menu verb detection (InpActEvt_use PRE -> kerfur_command relay)
 #include "coop/creatures/kerfur_entity.h"   // K-3: stable-KerfurId authority table (the redesign root fix)
+#include "coop/creatures/kerfur_form_assembler.h"  // VM-dispatch substrate consumer (incr 1: observe-only + containment counter)
 #include "coop/props/prop_stick_sync.h"  // v68: wall-attachable stick mirror (camera-on-wall)
 #include "coop/session/teleport_client.h"  // TeleportSlotToHost: spawn a joiner at the host pose (connect edge)
 #include "coop/dev/keypad_probe.h"
@@ -155,6 +156,7 @@ void Install(coop::net::Session& session) {
     coop::kerfur_convert::Install(&session);  // v67: host-authoritative kerfur on/off conversion (the dupe fix -- client menu cancel -> request; host verb + converge)
     coop::kerfur_command::Install(&session);  // v74: host-authoritative kerfur menu command relay + ownership-aware Follow
     coop::kerfur_menu_input::Install(&session);  // client radial-menu verb detect (InpActEvt_use PRE -- the actionName dispatch is PE-invisible) -> kerfur_command relay
+    coop::kerfur_form_assembler::Install(&session);  // VM-dispatch substrate consumer (incr 1): register the two EX_LocalVirtual conversion verbs + open the session gate; observe-only + containment counter
     coop::prop_stick_sync::Install(&session); // v68: wall-attachable stick mirror (camera-on-wall -- commit observer -> PropStickState; receiver replays forceStick)
     coop::sleep_sync::Install(&session);      // v71: the Minecraft sleep gate (isSleep edge poll -> host tally -> accelerate/end phases)
     coop::wisp_attack_sync::Install(&session); // v72: Killer Wisp coop -- AddPlayerDamage PRE-cancel (host neutralize) + host detect/relay
@@ -338,6 +340,7 @@ DisconnectStats DisconnectAll() {
     coop::prop_drop_intent::Reset();            // v106 F2 Inc-1: clear the client park set + pending places
     coop::host_spawn_watcher::OnDisconnect();  // M2: drop the ambient-prop death-watch list
     coop::kerfur_convert::OnDisconnect();      // v67: drop pending host-menu converges
+    coop::kerfur_form_assembler::OnDisconnect();  // incr 1: dump the containment SUMMARY (always) + close the substrate session gate
     coop::kerfur_entity::OnDisconnect();       // K-3: clear the KerfurId table + free its reserved host ids
     coop::kerfur_command::OnDisconnect();      // v74: drop pending menu commands + owned-follow map
     coop::kerfur_menu_input::OnDisconnect();   // drop the cached session (the InpActEvt_use observer stays registered)
@@ -438,6 +441,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::host_spawn_watcher::DrainPendingSpawns(&session); }  // v106: adopt+express FinishSpawningActor Func-seam spawns (R-drop/place/Q-menu) one tick after Finish (key restored, hand actor excluded)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::prop_drop_intent::Tick(&session); }  // v106 F2 Inc-1 CLIENT: author a PropDropIntent for a detected place whose Key is parked (cheap no-op when empty / on host)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_convert::Tick(); }  // v67: drain deferred kerfur conversion requests/converges (cheap no-op when empty)
+    { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_form_assembler::Tick(); }  // incr 1: GT FName-resolve the 2 verbs + bind the containment seams (latches once; no-op after)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::kerfur_command::Tick(); }  // v74: drain menu commands + advance the ownership-follow loop (cheap no-op when idle)
     { PP::Scope _s{PP::Bucket::TrashWatch};    coop::prop_stick_sync::Tick(); }  // v68: broadcast recorded stick commits NOW -- must precede local_streams' release edge (net_pump runs TickGameplay first)
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:pause_guard"}; coop::pause_guard::Tick(isConnected); }  // 2026-07-04: coop no-pause invariant -- un-pause the world while connected (ESC menu stays usable; a paused peer froze its pose stream)

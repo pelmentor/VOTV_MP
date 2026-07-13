@@ -53,9 +53,25 @@
 > filter that never matched. §1 filter now carries the corrected decode. See
 > `[[lesson-fscriptname-operand-layout-cmpidx-dispidx-number]]`.
 >
-> **NEXT = increment 1** (§3): the permanent GNatives[0x45] swap + registration API + observe-only
-> logging consumer (the real substrate, using the corrected `{CmpIdx@0, Number@8}` match), then
-> 1b/2a/2b/2c → verifying take → one-commit retirement.
+> **INCREMENT 1 — BUILT (compiles+links clean, NOT yet deployed/run) 2026-07-13.** `ue_wrap/vm_dispatch.
+> {h,cpp}` (permanent GNatives[0x45] swap + name-keyed registration + name-first filter on the corrected
+> `{CmpIdx@0, Number@8}` decode + enable gate + unwind-safe RAII active-verb window) + `coop/creatures/
+> kerfur_form_assembler.{h,cpp}` (observe-only consumer + CONTAINMENT COUNTER). Refined by a /qf pass
+> (user's 8 Qs + 3 escalation rounds, 2026-07-13): RAII depth guard (unwind leak fix); the counter hooks
+> BOTH `FinishSpawningActor` AND `K2_DestroyActor` (spawn + destroy seams pinned INDEPENDENTLY); spawn
+> attributed by class-successor filter on `*Result`, destroy by the IDENTITY invariant `dyingActor==bracketCtx`
+> (self-destroy), not class; counters accrue ALWAYS (summary dumped at OnDisconnect), only verbose lines
+> behind `[dev] vm_dispatch_log`; every line role-tagged `[HOST]`/`[CLIENT]`.
+>
+> **CONTAINMENT — [V]-CONFIRMED (static, artifact body walk 2026-07-13)** — before building on it: both
+> verbs are standalone synchronous bodies with NO latent node (see §3 CAPTURE for the statement-index
+> citations). So the 2a "capture the spawn inside the bracket" model is sound, and a runtime `formOut>0`
+> cannot be a latent node (collapses the counter's failure table, §3a). The counter is now LIVE CONFIRMATION
+> of a [V] static answer + the coverage/authority cross-check, not the sole arbiter.
+>
+> **NEXT:** deploy + a USER hands-on containment MEASUREMENT run (toggle kerfurs both peers, `vm_dispatch_log=1`,
+> read the `CONTAINMENT SUMMARY` line) → 2a is HALT-gated on the verdict (all form spawns + self-destroys
+> in-window; zero formOut/offGt/anomaly) → 1b harden + self-bracket → 2a/2b/2c → verifying take → retirement.
 
 ## 0. The problem (why this exists)
 
@@ -291,8 +307,16 @@ turn-OFF[NPC] vs turn-ON[prop], B-FinishSpawning both directions) is owed at inc
 
 **CAPTURE (mid-verb = ZERO engine calls; reads + branches + DATA STORES only — the re-entrancy
 discipline, impl /qf R4):**
-- B's `FinishSpawningActor` (measured SYNCHRONOUS inside the verb, before A's destroy — bytecode
-  `EX_CallMath→BeginDeferred→EX_CallMath→FinishSpawningActor`) is caught at the EXISTING
+- B's `FinishSpawningActor` (**SYNCHRONOUS inside the verb [V], artifact-derived body walk 2026-07-13** —
+  import-resolved re-derivation of the two verb bytecodes, superseding the 2026-06-12 [RD] prose per the
+  operand-lie discipline: `dropKerfurProp` is a standalone 30-statement body, `BeginDeferred`@STMT8→
+  `FinishSpawning`@STMT12 (floppy) and `BeginDeferred`@STMT17→`FinishSpawning`@STMT21 (dropProp, cast to
+  `prop_kerfurOmega_C`@STMT22), `sentient` copy@STMT25, `K2_DestroyActor(self)`@STMT26; `spawnKerfuro` a
+  standalone 23-statement body, `BeginDeferred`@STMT7→`FinishSpawning`@STMT15→`IsValid`→`K2_DestroyActor
+  (self)`@STMT18. **Whole-body latent scan = NONE in either — no Delay/RetriggerableDelay/LatentActionInfo,
+  none between any BeginDeferred and its FinishSpawning.** The child exists before the parent self-destroy +
+  before return, so capture-in-window is sound. Same artifact confirms the TWO-spawn premise the class filter
+  rests on — both facts stand or fall together, re-derived, not cherry-picked.) is caught at the EXISTING
   `host_spawn_watcher` Func seam; if `TLS.converting` is set + the spawned actor is-a successor-form
   class (`prop_kerfurOmega_C` desc for turn-off, `kerfurOmega_C` for turn-on — the floppy
   `prop_floppyDisc_C` distinguished by class), record B into the bracket. Capture B deterministically
@@ -363,10 +387,30 @@ Enable gates on **SESSION-ACTIVE (host OR client)**, re-armed at StartCoopSessio
   session = log-and-continue; after = census the missed entry → EXTEND the watch table (never re-enable
   poll authoring); revert = escalation only.
 
+### 3a. Containment counter — the `formOut>0` decision table (WRITTEN before the number arrives)
+
+The increment-1 counter emits per session: `catch{off,on}`, `spawn{formIn,formOut,floppyIn}`,
+`destroy{selfIn,otherIn,kerfurOut}`, plus substrate `offGtMatch`, plus two external truths — the user's
+KNOWN toggle count `K` and whether the flip visibly happened. GOOD = for `K` toggles, `catch≈K`,
+`formIn≈K`, `selfIn≈K`, and `formOut=otherIn=kerfurOut=offGtMatch=0`. A non-clean number is read IN THIS
+ORDER (so it is never interpreted by whoever is tired at 2am):
+
+| Symptom | Distinguishing field | Cause | Action |
+|---|---|---|---|
+| `catch<K`, `offGtMatch>0` | verb ran off-GT | off-GT dispatch (bracket is GT-only; its spawn is legitimately out-of-window) | expected tripwire; note the worker-thread verb |
+| `catch<K`, `offGtMatch==0` | fewer 0x45 entries than visible flips | COVERAGE HOLE (inline-copy bypass OR a variant name/operand missed) — the xref falsifier | investigate that variant / re-check the AOB |
+| `catch≈K`, `formOut>0`, static=synchronous ([V] body walk) | spawn unpaired-in-time with a catch | NON-conversion kerfur spawn (save-load / mirror) — NOT a containment failure | confirm by timing correlation; ignore |
+| `catch≈K`, `formOut>0`, static=latent | (excluded: body walk proved synchronous) | would be containment FALSE | — cannot occur given §3 CAPTURE [V]; if it does, the body walk was wrong → re-open |
+| `formIn≫K` OR `otherIn>0` | more in-window events than toggles / a non-self destroy read in-window | WINDOW LEAK (RAII/SEH) — reads false-IN, not out | instrument bug, fix the bracket |
+
+The two hardest-to-separate causes (latent vs non-conversion) are pre-collapsed by the [V] static body walk
+(§3): synchronous ⇒ `formOut` cannot be latent. That is why the body walk came first, not the counter.
+
 **INCREMENTS (each build+deploy+hash+smoke+code-reviewer-audit):** 1.0 = probe real-filter gate +
 LIVE-CATCH + positive control (§2.0 — the premise gate, folded in by impl /qf R11; the live-catch is
-NO LONGER in incr-1). Only 0x45 swapped. 1 = permanent substrate + observe-only logging consumer (first
-PERMANENT-substrate step; opener-a only). 1b = harden (validation-mode first-N, 1/s slot-integrity, loud
+NO LONGER in incr-1). Only 0x45 swapped. 1 = permanent substrate + observe-only logging consumer + the
+CONTAINMENT COUNTER (§3a — both seams, class-successor spawn attribution + identity-invariant destroy,
+counters-always-accrue, role-tagged; BUILT 2026-07-13, compiles+links clean; opener-a only). 1b = harden (validation-mode first-N, 1/s slot-integrity, loud
 latches) + the self-bracket TLS opener (b). **2a = capture+LOG both peers + the per-seam CENSUS live
 (every FinishSpawning + every destroy, both directions, both peers) — and MEASURE one-capture-per-A-eid
 with BOTH openers live (the two-openers dedup, impl /qf R14).** 2b = enable SUPPRESS + reconcile (smoke:
