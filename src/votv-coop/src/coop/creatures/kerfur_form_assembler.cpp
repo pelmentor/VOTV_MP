@@ -27,16 +27,40 @@
 //     churn by pointer identity.
 // Both seams are pinned INDEPENDENTLY (spawn does not imply destroy).
 //
+// On top of the containment counter, this increment carries the 2a-OBSERVE GATE
+// instrumentation the /qf convergence (2026-07-13 nite) named as the HALT-gate the
+// repoint-at-birth capture design must clear on ONE deliberate hands-on run, counted
+// deliberately -- all measured by READS only (registry lookup / index check), NO
+// capture, NO repoint, NO converge:
+//   - GATE 1 (one-capture-per-A-eid): resolve A's eid at verb ENTRY (Registry::
+//     EidForActor -- a map read the mid-verb lesson explicitly permits). eidUnbound>0
+//     means the repoint would have no source; reentrySameEid>0 is the contested/
+//     re-entrant double-capture hazard.
+//   - GATE 2 (class separation): the floppy is class-distinguished from the form (the
+//     existing floppyIn counter). A RUN CONDITION, not code: the 18/18 floppyIn=0 was
+//     a NULL result -- a floppy-carrying toggle is needed to turn it into a pass.
+//   - GATE 3b (per-bracket seam ORDER -- LOAD-BEARING): a thread-local per-bracket flag
+//     proves B's form-spawn fires BEFORE A's self-destroy WITHIN one bracket (not just
+//     as global totals). destroyNoSpawn>0 = the eid would strand on the dying A = HALT.
+//   - GATE 3c (B-index live at capture): B is a real, index-assigned, live object at
+//     FinishSpawningActor (the repoint target is valid). bIndexDead>0 = HALT.
+// The client LOCAL forced-prediction verb-death husk falls out of the SAME counters
+// under the [CLIENT] role tag (SetEnabled is both roles); the pending-eid pose-tick
+// misroute is NOT observable without the pending flag and is deferred to 2a-capture's
+// own verification (documented in docs/COOP_VM_DISPATCH_PLAN.md, not faked here).
+//
 // The COUNTERS accrue whenever the session is active, independent of the verbose log
-// -- and a one-line summary is ALWAYS dumped at OnDisconnect -- so a run can never end
-// having measured nothing. Only the per-catch VERBOSE lines are gated behind [dev]
-// vm_dispatch_log (+ a cap). Every line is role-tagged [HOST]/[CLIENT] so the gate
-// set is not authority-blind. NO capture / suppress / converge yet (2a-2c); the verb
-// bodies run entirely unchanged.
+// -- and BOTH summary lines (containment + 2a-OBSERVE GATES) are ALWAYS dumped at
+// OnDisconnect -- so a run can never end having measured nothing. Only the per-catch
+// VERBOSE lines are gated behind [dev] vm_dispatch_log (+ a cap). Every line is
+// role-tagged [HOST]/[CLIENT] so the gate set is not authority-blind. NO capture /
+// suppress / converge yet (2a-2c); the verb bodies run entirely unchanged.
 
 #include "coop/creatures/kerfur_form_assembler.h"
 
 #include "coop/config/config.h"
+#include "coop/element/element.h"    // ElementId, kInvalidId (gate 1 per-eid read)
+#include "coop/element/registry.h"   // Registry::EidForActor (gate 1 per-eid read)
 #include "coop/net/session.h"
 
 #include "ue_wrap/game_thread.h"
@@ -56,6 +80,7 @@ namespace R  = ue_wrap::reflection;
 namespace GT = ue_wrap::game_thread;
 namespace vm = ue_wrap::vm_dispatch;
 namespace P  = ue_wrap::profile;
+namespace E  = coop::element;
 
 // Verb ids echoed back in the substrate Bracket (also the window's verbId).
 constexpr int kVerbTurnOff = 1;  // dropKerfurProp -- NPC -> prop (destroys the NPC self)
@@ -86,6 +111,30 @@ std::atomic<std::uint64_t> g_destroyKerfurOutWindow{0}; // a kerfur-class actor 
 std::atomic<std::uint64_t> g_catchTurnOff{0};        // 0x45 dropKerfurProp entries caught
 std::atomic<std::uint64_t> g_catchTurnOn{0};         // 0x45 spawnKerfuro entries caught
 
+// ---- 2a-observe gate instrumentation (measures what the repoint-at-birth design rests on) ----
+// GATE 1 (one-capture-per-A-eid): does the verb's Context actor A carry an eid at ENTRY?
+// The repoint has NO source unless A is registry-bound here. Also the re-entry tripwire:
+// a same-eid bracket opened while one is already open on this thread = double-capture hazard.
+std::atomic<std::uint64_t> g_entryEidBound{0};       // A had a live eid at verb entry (repoint has a source)
+std::atomic<std::uint64_t> g_entryEidUnbound{0};     // A had NO eid at verb entry (nothing to repoint -- HALT-relevant)
+std::atomic<std::uint64_t> g_entrySameEidReentry{0}; // nested bracket on the SAME eid (contested/re-entrant -- HALT)
+// GATE 3b (per-bracket seam ORDER -- LOAD-BEARING): within ONE bracket, did B's form-spawn
+// fire BEFORE A's self-destroy? The repoint migrates identity at B's birth, so a self-destroy
+// with no preceding in-bracket form-spawn would leave the eid stranded on the dying A.
+std::atomic<std::uint64_t> g_orderSpawnBeforeDestroy{0}; // GOOD: form-spawn preceded self-destroy in-bracket
+std::atomic<std::uint64_t> g_orderDestroyNoSpawn{0};     // VIOLATION: self-destroy, no in-bracket form-spawn (HALT)
+// GATE 3c (B-index live at capture): is the finished successor B a real, index-assigned, live
+// GUObjectArray object at FinishSpawningActor time? The repoint target must be valid here.
+std::atomic<std::uint64_t> g_spawnBIndexLive{0};     // B had a live internal index at spawn (repoint target valid)
+std::atomic<std::uint64_t> g_spawnBIndexDead{0};     // B's index not live at spawn (HALT -- repoint would dangle)
+
+// Per-bracket seam-order record (thread-local: the verb runs synchronously on the GT, so a
+// single-slot TLS tracks the innermost depth-1 bracket; nested depth is counted as an anomaly
+// via the substrate's Bracket.depth, not tracked here). Reset at each depth-1 verb ENTRY.
+thread_local bool     tls_spawnFormFiredThisBracket = false;
+thread_local void*    tls_bracketCtx = nullptr;       // the Context whose bracket owns the TLS record
+thread_local E::ElementId tls_bracketEntryEid = E::kInvalidId; // A's eid captured at entry (for re-entry check)
+
 // Verbose per-catch log cap (the measurement counters above are UNCAPPED + always on).
 constexpr int kLogCap = 128;
 std::atomic<int> g_logged{0};
@@ -111,12 +160,31 @@ void OnVerbEntry(const vm::Bracket& b) {
     if (b.verbId == kVerbTurnOff) g_catchTurnOff.fetch_add(1, std::memory_order_relaxed);
     else                          g_catchTurnOn.fetch_add(1, std::memory_order_relaxed);
 
+    // GATE 1 -- resolve A's eid at entry (a pure Registry map READ, not an engine call; the
+    // mid-verb lesson explicitly permits "resolve an eid off a still-live actor by lookup").
+    const E::ElementId entryEid = E::Registry::Get().EidForActor(b.ctx);
+    const bool bound = (entryEid != E::kInvalidId);
+    if (bound) g_entryEidBound.fetch_add(1, std::memory_order_relaxed);
+    else       g_entryEidUnbound.fetch_add(1, std::memory_order_relaxed);
+
+    // GATE 3b -- reset the per-bracket seam-order record on the OUTERMOST (depth-1) entry.
+    // A nested (depth>1) bracket on the SAME eid is the double-capture hazard; count it and
+    // do NOT clobber the outer record.
+    if (b.depth <= 1) {
+        tls_spawnFormFiredThisBracket = false;
+        tls_bracketCtx = b.ctx;
+        tls_bracketEntryEid = entryEid;
+    } else if (bound && entryEid == tls_bracketEntryEid) {
+        g_entrySameEidReentry.fetch_add(1, std::memory_order_relaxed);
+    }
+
     if (!LogVerbose()) return;
     if (g_logged.fetch_add(1, std::memory_order_relaxed) >= kLogCap) return;
     const wchar_t* verb = (b.verbId == kVerbTurnOff) ? L"dropKerfurProp" : L"spawnKerfuro";
     std::wstring cls = R::ClassNameOf(b.ctx);
-    UE_LOGI("[kerfur_asm][%s] VERB %ls id=%d Context=%p class=%ls depth=%d (observe-only)",
-            RoleTag(), verb, b.verbId, b.ctx, cls.c_str(), b.depth);
+    UE_LOGI("[kerfur_asm][%s] VERB %ls id=%d Context=%p class=%ls depth=%d eid=%s%u (observe-only)",
+            RoleTag(), verb, b.verbId, b.ctx, cls.c_str(), b.depth,
+            bound ? "" : "UNBOUND:", bound ? entryEid : 0u);
 }
 
 // ---- the SPAWN seam (FinishSpawningActor post-hook) ----------------------------
@@ -130,17 +198,31 @@ void OnFinishSpawn(void* /*context*/, void* /*sourceObject*/, void* spawnedResul
     if (!isForm && !isFloppy) return;  // unrelated spawn -- not our measurement
 
     const vm::ActiveVerb av = vm::CurrentThreadVerb();
+    bool bIndexLive = false;
+    int32_t bIdx = -1;
     if (isForm) {
-        if (av.active) g_spawnFormInWindow.fetch_add(1, std::memory_order_relaxed);
-        else           g_spawnFormOutWindow.fetch_add(1, std::memory_order_relaxed);
+        if (av.active) {
+            g_spawnFormInWindow.fetch_add(1, std::memory_order_relaxed);
+            // GATE 3b -- mark that the form-spawn fired in THIS bracket, so the later
+            // self-destroy can prove spawn-before-destroy ordering.
+            tls_spawnFormFiredThisBracket = true;
+            // GATE 3c -- is B a real, index-assigned, live object at FinishSpawningActor?
+            bIdx = R::InternalIndexOf(spawnedResult);
+            bIndexLive = R::IsLiveByIndex(spawnedResult, bIdx);
+            if (bIndexLive) g_spawnBIndexLive.fetch_add(1, std::memory_order_relaxed);
+            else            g_spawnBIndexDead.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_spawnFormOutWindow.fetch_add(1, std::memory_order_relaxed);
+        }
     } else {  // floppy
         if (av.active) g_spawnFloppyInWindow.fetch_add(1, std::memory_order_relaxed);
     }
     if (LogVerbose() && g_logged.fetch_add(1, std::memory_order_relaxed) < kLogCap) {
         std::wstring cn = R::ClassNameOf(spawnedResult);
-        UE_LOGI("[kerfur_asm][%s] SPAWN %ls actor=%p class=%ls %s verbId=%d depth=%d",
+        UE_LOGI("[kerfur_asm][%s] SPAWN %ls actor=%p class=%ls %s verbId=%d depth=%d bIdx=%d bLive=%d",
                 RoleTag(), isForm ? L"FORM" : L"floppy", spawnedResult, cn.c_str(),
-                av.active ? "IN-WINDOW" : "out-of-window", av.verbId, av.depth);
+                av.active ? "IN-WINDOW" : "out-of-window", av.verbId, av.depth,
+                bIdx, bIndexLive ? 1 : 0);
     }
 }
 
@@ -153,16 +235,27 @@ void OnDestroy(void* context, void* /*sourceObject*/, void* /*result*/) {
 
     const vm::ActiveVerb av = vm::CurrentThreadVerb();
     const char* kind;
+    bool orderGood = false;
     if (!av.active) {
         g_destroyKerfurOutWindow.fetch_add(1, std::memory_order_relaxed);
         kind = "out-of-window";
     } else if (context == av.ctx) {  // IDENTITY invariant: the verb's own self-destroy
         g_destroySelfInWindow.fetch_add(1, std::memory_order_relaxed);
-        kind = "IN-WINDOW self";
+        // GATE 3b -- did B's form-spawn already fire in THIS bracket (spawn-before-destroy)?
+        // A self-destroy with no preceding in-bracket form-spawn strands the eid (2a-HALT).
+        if (tls_spawnFormFiredThisBracket && context == tls_bracketCtx) {
+            g_orderSpawnBeforeDestroy.fetch_add(1, std::memory_order_relaxed);
+            orderGood = true;
+            kind = "IN-WINDOW self (order OK: spawn<destroy)";
+        } else {
+            g_orderDestroyNoSpawn.fetch_add(1, std::memory_order_relaxed);
+            kind = "IN-WINDOW self (ORDER VIOLATION: destroy w/o in-bracket spawn)";
+        }
     } else {
         g_destroyOtherInWindow.fetch_add(1, std::memory_order_relaxed);
         kind = "IN-WINDOW non-self(anomaly)";
     }
+    (void)orderGood;
     if (LogVerbose() && g_logged.fetch_add(1, std::memory_order_relaxed) < kLogCap) {
         std::wstring cn = R::ClassNameOf(context);
         UE_LOGI("[kerfur_asm][%s] DESTROY actor=%p class=%ls %s verbId=%d ctx=%p depth=%d",
@@ -223,6 +316,19 @@ void DumpSummary(const char* when) {
             (unsigned long long)g_destroySelfInWindow.load(std::memory_order_relaxed),
             (unsigned long long)g_destroyOtherInWindow.load(std::memory_order_relaxed),
             (unsigned long long)g_destroyKerfurOutWindow.load(std::memory_order_relaxed));
+    // 2a-observe GATES: the repoint-at-birth design is GREEN only if eidUnbound=0,
+    // sameEidReentry=0, orderNoSpawn=0, and bIndexDead=0 (all HALT signals at zero).
+    UE_LOGI("[kerfur_asm][%s] 2a-OBSERVE GATES (%s): g1_entry{bound=%llu UNBOUND=%llu reentrySameEid=%llu} "
+            "g3b_order{spawn<destroy=%llu DESTROY_NO_SPAWN=%llu} g3c_Bindex{live=%llu DEAD=%llu} "
+            "-- GREEN iff UNBOUND=0 & reentrySameEid=0 & DESTROY_NO_SPAWN=0 & DEAD=0",
+            RoleTag(), when,
+            (unsigned long long)g_entryEidBound.load(std::memory_order_relaxed),
+            (unsigned long long)g_entryEidUnbound.load(std::memory_order_relaxed),
+            (unsigned long long)g_entrySameEidReentry.load(std::memory_order_relaxed),
+            (unsigned long long)g_orderSpawnBeforeDestroy.load(std::memory_order_relaxed),
+            (unsigned long long)g_orderDestroyNoSpawn.load(std::memory_order_relaxed),
+            (unsigned long long)g_spawnBIndexLive.load(std::memory_order_relaxed),
+            (unsigned long long)g_spawnBIndexDead.load(std::memory_order_relaxed));
 }
 
 }  // namespace
