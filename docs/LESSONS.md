@@ -33,6 +33,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 ## 1. How to work (process / working agreements)
 
+- **Run `/qf` (up to 15 rounds) BEFORE any non-trivial implementation + when planning new changes** —
+  default to it; the adversarial pass is where crutches/wrong-layer/un-measured-assumption get caught
+  before cementing. `memory/feedback_qf_before_implementation.md`
+- **The /qf critic has a SELECTIVE-TRUST blind spot** — it interrogates claims individually + accepts the
+  primary's answers as settled, so "trust a source for X, distrust it for Y" slips a whole pass. Skill
+  patched 2026-07-13 (source-consistency / cross-answer / undone-measurement angles); still check manually.
+  `memory/feedback_qf_selective_trust_blindspot.md`
 - **"per rule 1" = full green light** for the root-cause fix in its complete form (incl. hard
   architectural change). Don't scope down, don't ask "is this too big". `memory/feedback_no_crutch_questions_act_autonomously.md`
 - **No design/architect AGENTS** — design yourself from code + docs + MTA; search + audit agents OK. `memory/feedback_no_design_architect_agents.md`
@@ -244,6 +251,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   destroy-SUPPRESS feeding the existing deferred converge — NOT a converge rewrite. Reusable for the whole
   VM-consumer class (kerfur/melee/smart-items). *Look FIRST:* `docs/COOP_VM_DISPATCH_PLAN.md` §3.
   `memory/lesson_vm_bracket_zero_engine_mid_verb.md`
+- **The kerfur conversion verbs are SYNCHRONOUS bodies (no latent node) — so the form spawn
+  (`FinishSpawningActor`) AND the `K2_DestroyActor(self)` both fire INSIDE the 0x45 bracket, every
+  toggle** → capture-in-window is sound. `dropKerfurProp` 30 stmts, `spawnKerfuro` 23 stmts, both
+  standalone, whole-body latent scan = NONE, none between any `BeginDeferred`/`FinishSpawning`.
+  [V] two ways: import-resolved body walk + 18/18 hands-on (`722fbe18`). This is the load-bearing 2a
+  premise — settled, do NOT re-dig. *Look FIRST:* `research/findings/world-systems/votv-vm-dispatch-RE-2026-07-13.md`
+  (body walk + runtime). `memory/lesson_kerfur_verbs_synchronous_capture_in_window.md`
 - **Before installing a PERMANENT / un-removable seam (process-lifetime GNatives swap, never un-swapped),
   measure its real cost in a THROWAWAY removable probe FIRST** — including the ENABLED=false disabled path
   (the eternal tax the process pays forever) and a WORST-CASE frame, not idle. You can't roll back a

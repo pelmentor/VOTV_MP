@@ -191,9 +191,44 @@ NOT "the next BeginDeferred" — it must key on the spawned class, because the s
 loot BeginDeferreds. NOT yet censused: the ~28 kerfur VARIANT JSONs (assumed to inherit the base
 verbs; verify a sample at build). This is a DESIGN-status census, not VERIFIED.
 
+## Body walk 2026-07-13 — the two verb bytecodes RE-DERIVED (import-resolved) [V]
+
+Prompted by a consistency challenge (the design was leaning on the 2026-06-12 [RD] PROSE for the
+class-successor filter while distrusting it for the latent-node question — incoherent). Re-derived
+BOTH function bodies from the artifact (import indices resolved via `Imports[-idx-1]`, not text-grep),
+sources `research/pak_re/kerfurOmega.json` (export #169) + `research/pak_re/prop_kerfurOmega.json`
+(export #5):
+
+- **`dropKerfurProp`** — standalone `FunctionExport`, ScriptBytecodeSize 906, 30 statements. Mainline:
+  optional floppy `BeginDeferred`@STMT8→`FinishSpawning`@STMT12 (class from `floppyFromType` — DYNAMIC,
+  data-driven, so the concrete floppy class is a variant e.g. `prop_floppyDisc_Y/R/G_C`, confirmed at
+  runtime); `BeginDeferred`@STMT17→`FinishSpawning`@STMT21 (member `dropProp`, `EX_DynamicCast` to
+  `prop_kerfurOmega_C`@STMT22); `sentient` copy@STMT25; `K2_DestroyActor(SELF)`@STMT26.
+- **`spawnKerfuro`** — standalone, ScriptBytecodeSize 891, 23 statements. `BeginDeferred(spawnKerfur)`
+  @STMT7→`FinishSpawning`@STMT15→`IsValid`→on-success `K2_DestroyActor(SELF)`@STMT18 / on-fail `addHint`
+  + prop survives@STMT20.
+- **Whole-body latent scan = NONE in either** — no Delay/RetriggerableDelay/LatentActionInfo/Timeline,
+  and specifically NONE between any `BeginDeferred` and its paired `FinishSpawning`. The jumps present
+  (`hasFloppy` skip-gate, `IsValid` gate) are synchronous bytecode jumps within the one
+  `ProcessLocalScriptFunction` invocation, not tick deferrals.
+
+**Verdict: the `BeginDeferred → [pure statements] → FinishSpawning → K2_DestroyActor(self)` synchronous
+model is TRUE for both.** The child exists (post-FinishSpawning) before the parent self-destroy and
+before return → CAPTURE-IN-WINDOW is sound. The SAME artifact confirms the two-spawn premise the class
+filter rests on — both facts re-derived together, not cherry-picked.
+
+## Runtime confirmation 2026-07-13 — increment 1 hands-on [V]
+
+The observe-only substrate + containment counter (commit `722fbe18`) measured it live (host+client,
+`vm_dispatch_log=1`): **18/18 own-toggles fully contained** — every `VERB` catch paired with a
+`SPAWN FORM ... IN-WINDOW` + `DESTROY ... IN-WINDOW self` (`ctx==dying actor`), `depth=1`; HOST summary
+`catch{off=5 on=5} spawn{formIn=10 formOut=10} destroy{selfIn=10 otherIn=0 kerfurOut=6}`, CLIENT 8/8.
+`otherIn=0`, `offGtMatch=0`, RAII window leak-free. All out-of-window events were non-conversion
+(world-load + host-authored mirror on the client). Static + runtime agree. See
+`docs/COOP_VM_DISPATCH_PLAN.md` §3/§3a + `[[lesson-kerfur-verbs-synchronous-capture-in-window]]`.
+
 ## Next
 
-Build the real substrate: the GNatives wrapper (per §1 of the plan — non-destructive peek,
-two-stage filter, coverage-gated validation, loud latches, GT/worker thread policy) + the kerfur
-form-flip assembler (§3), then the static conversion-entry census (§4), the verifying take (§5),
-and the one-commit crutch retirement. Retire the throwaway `gnatives_probe` with that work.
+2a (capture + suppress + converge) — OPENS with a `/qf 15` pass before any code
+(`[[feedback-qf-before-implementation]]`). Then the static conversion-entry census (§4), the verifying
+take (§5), and the one-commit crutch retirement. Retire the throwaway `gnatives_probe` with that work.

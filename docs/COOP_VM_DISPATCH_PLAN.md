@@ -53,7 +53,15 @@
 > filter that never matched. §1 filter now carries the corrected decode. See
 > `[[lesson-fscriptname-operand-layout-cmpidx-dispidx-number]]`.
 >
-> **INCREMENT 1 — BUILT (compiles+links clean, NOT yet deployed/run) 2026-07-13.** `ue_wrap/vm_dispatch.
+> **INCREMENT 1 — SHIPPED + RUNTIME-VERIFIED (hands-on host+client) 2026-07-13, commit `722fbe18`.** DLL
+> SHA `39EA14E7`, deployed HOST+CLIENT_1 (hash-verified). Containment measured LIVE: 18/18 own-toggles
+> (HOST 10, CLIENT 8) fully contained — `catch==VERB==formIn==selfIn` on both peers, `otherIn=0`,
+> `offGtMatch=0`, no Warn/Error, RAII window proven leak-free (toggles `depth=1`, all out-of-window events
+> `depth=0`/`verbId=0`). All out-of-window spawns/destroys were the benign non-conversion case the §3a table
+> predicts (world-load materialization + host-authored mirror on the client — the authority split rendered
+> in the log). `vm_dispatch_log` turned back to 0 post-measurement.
+>
+> **INCREMENT 1 — BUILT (as-built shape) 2026-07-13.** `ue_wrap/vm_dispatch.
 > {h,cpp}` (permanent GNatives[0x45] swap + name-keyed registration + name-first filter on the corrected
 > `{CmpIdx@0, Number@8}` decode + enable gate + unwind-safe RAII active-verb window) + `coop/creatures/
 > kerfur_form_assembler.{h,cpp}` (observe-only consumer + CONTAINMENT COUNTER). Refined by a /qf pass
@@ -63,15 +71,18 @@
 > (self-destroy), not class; counters accrue ALWAYS (summary dumped at OnDisconnect), only verbose lines
 > behind `[dev] vm_dispatch_log`; every line role-tagged `[HOST]`/`[CLIENT]`.
 >
-> **CONTAINMENT — [V]-CONFIRMED (static, artifact body walk 2026-07-13)** — before building on it: both
-> verbs are standalone synchronous bodies with NO latent node (see §3 CAPTURE for the statement-index
-> citations). So the 2a "capture the spawn inside the bracket" model is sound, and a runtime `formOut>0`
-> cannot be a latent node (collapses the counter's failure table, §3a). The counter is now LIVE CONFIRMATION
-> of a [V] static answer + the coverage/authority cross-check, not the sole arbiter.
+> **CONTAINMENT — [V]-CONFIRMED TWO WAYS (2026-07-13):** STATIC (artifact body walk — both verbs standalone
+> synchronous bodies, NO latent node, §3 CAPTURE statement-index citations) AND RUNTIME (the 18/18 hands-on
+> measurement above). The 2a "capture the spawn inside the bracket + suppress the self-destroy" model is
+> sound — the FinishSpawningActor spawn and the K2_DestroyActor(self) both fire IN the 0x45 bracket, every
+> toggle, on both peers. 2a's HALT-gate (all form spawns + self-destroys in-window; zero from-a-toggle
+> formOut/offGt/anomaly) is **PASSED**.
 >
-> **NEXT:** deploy + a USER hands-on containment MEASUREMENT run (toggle kerfurs both peers, `vm_dispatch_log=1`,
-> read the `CONTAINMENT SUMMARY` line) → 2a is HALT-gated on the verdict (all form spawns + self-destroys
-> in-window; zero formOut/offGt/anomaly) → 1b harden + self-bracket → 2a/2b/2c → verifying take → retirement.
+> **NEXT = 2a (capture + suppress + converge).** Per the standing rule `[[feedback-qf-before-implementation]]`,
+> 2a OPENS with a `/qf 15` design+implementation pass BEFORE any 2a code (interrogate the capture reservation,
+> suppression-as-loan restore, authority routing by `IsMirror()`, the two-openers dedup, eviction/TTL — against
+> the now-[V] containment facts). Then 1b (harden + self-bracket opener-b) can interleave. Sequence tail:
+> 2a/2b/2c → verifying take → one-commit retirement of the legacy crutches.
 
 ## 0. The problem (why this exists)
 
@@ -500,12 +511,13 @@ scalar state, mirror-STATE-not-verb stays law.
 
 ## 8. Sequence (updated by impl /qf pass 2026-07-13)
 
-✅ IDA spike → ✅ counter (lower-bound, simpler filter) → ✅ **STEP 1.0 PASSED (real filter + LIVE-CATCH,
-hands-on v3; 0x45 opener CONFIRMED, operand decode corrected)** → **NEXT: incr 1 substrate observe-only
-(permanent GNatives[0x45] swap + registration API, corrected `{CmpIdx@0,Number@8}` match)** → 1b harden
-+ self-bracket → 2a capture+log → 2b suppress+reconcile → 2c park+converge + crutches inert → verifying
-take (JOIN + contested toggle + re-host, legacy off) → retirement commit (same session) → melee RE (its
-own /qf) → smart-items per-item.
+✅ IDA spike → ✅ counter (lower-bound) → ✅ **STEP 1.0 PASSED** (real filter + LIVE-CATCH, operand decode
+corrected) → ✅ **INCREMENT 1 SHIPPED + RUNTIME-VERIFIED `722fbe18`** (permanent GNatives[0x45] swap +
+registration + observe-only consumer + containment counter; containment [V] static+runtime, 18/18
+in-window) → **NEXT: 2a (capture + suppress + converge) — OPENS with a `/qf 15` pass before any code**
+→ 1b harden + self-bracket (opener-b) → 2b suppress+reconcile → 2c park+converge + crutches inert →
+verifying take (JOIN + contested toggle + re-host, legacy off) → retirement commit (same session) →
+melee RE (its own /qf) → smart-items per-item.
 
 Design detail lives in §3 (rewritten). The **1h bridge fix** is NO LONGER on the table — the user
 decided (07-13) NO bridge, straight per plan; kerfur coop stays broken until the substrate lands.
