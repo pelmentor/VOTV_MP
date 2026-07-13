@@ -30,7 +30,7 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
 | NPCs / Characters | BeginDeferred (VISIBLE) | host `BeginDeferred` interceptor + POST; save-loaded via `RegisterExistingWorldNpcs` walk | host eid (no BP key) | npc_sync, npc_mirror, npc_world_enum, npc_adoption |
 | wisp_C (wispSwarm event) | BeginDeferred **as `EX_CallMath`** from trigger_wispSwarm's ubergraph (INVISIBLE to PE) | **`ufunction_hook` Func-thunk, SOURCE-GATED** (FFrame::Object class == trigger_wispSwarm_C) → queue → pose-tick drain enroll; **ambient ticker sky wisps host-mirrored too since 2026-07-10 eve** (`ticker_wispSpawner_C` added as an EX-catch source row + the 8 color variants allowlisted; the client's ticker tick is a spawn_authority t3 cancel -- the old per-peer call assumed player-anchoring the dump refutes); PE-invisible self-despawn caught by the **pose-walk dead-retire** | host eid (no BP key) | npc_world_enum (EX-catch + enroll), npc_sync (SyncDestroyedNpcByEid), npc_pose_drive + ue_wrap/wisp (landing edge) |
 | WorldActors (event actors) | BeginDeferred (VISIBLE for most; `piramidSpawner_C` = EX_CallMath INVISIBLE) | 2nd `BeginDeferred` interceptor (disjoint, NAME-matched allowlist) + EX Func-thunk drain -> `HostEnrollExSpawn`; destroy = PRE observer + pose-walk dead-retire (SELF-destroys invisible) | host eid | world_actor_sync, npc_world_enum (EX catch), piramid_sync (choreography) |
-| Kerfur (prop⇄NPC) | conversion verbs (EX_CallMath, INVISIBLE) | **turn_off = FIRST-REFUSAL at the express edge** (2026-07-12 `ded3f793` [AS-BUILT, take-9 pending]: every generic express lane offers a fresh UNTRACKED kerfur PROP to `TryAdoptFreshKerfurProp` — dead-NPC-watch match within 5 m ⇒ event-driven converge, KerfurConvert only) **+ the death-watch POLL as backstop** (solo-host / seam-missed; still the turn-ON owner — no generic NPC lane exists; the generic npc pose-walk dead-retire SKIPS kerfur-family since 2026-07-05) | host **KerfurId** (spans both forms) + the per-form eid | kerfur_entity, kerfur_convert, kerfur_command, kerfur_prop_adoption |
+| Kerfur (prop⇄NPC) | conversion verbs = **`EX_LocalVirtualFunction` ubergraph self-calls** (bytecode-measured 2026-07-13; the INNER spawns are EX_CallMath→**Func-VISIBLE** — "EX_CallMath is a wall" was FALSE, see `docs/COOP_VM_DISPATCH_PLAN.md` §0) | **PLANNED OWNER: the form-flip ASSEMBLER on VM verb brackets** (`COOP_VM_DISPATCH_PLAN.md`, /qf-converged 2026-07-13 — will retire everything below in ONE commit). Interim as-built: turn_off = express-edge FIRST-REFUSAL `ded3f793` (**live-fired 2x clean, take-10 log 12:59:10-11, 0 cm**) + turn-on destroy-edge capture `873ce32a` **[BROKEN — never fired: the destroy seam is a POST hook; `GetActorLocation` on the destroyed actor reads (0,0,0) → the 5 m filter silently declined all; do NOT fix-forward beyond the optional 1h bridge]** + the death-watch POLL (client request driver; **host turn-ON arm structurally DEAD**: the seam drains the element with the death — the "element present + actor dead" premise never holds for a host prop) | host **KerfurId** (spans both forms) + the per-form eid | kerfur_entity, kerfur_convert, kerfur_command, kerfur_prop_adoption |
 
 > **GATING UPDATE 2026-07-05 [V live-failure root-fix, `ff338d87`] — every catch/enroll above is
 > HOSTING-gated, NEVER connected()-gated.** Identity/tracking seams (spawn interceptors, the EX-catch +
@@ -465,7 +465,21 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   drop) closed by v91 (`retireOffEid` rides the npc EntitySpawn, which the connect snapshot always
   delivers) + the 2026-07-12 JOIN BARRIER (no mid-churn window). Historical design doc:
   `research/findings/kerfur/kerfur-identity-authority-and-module-refactor-DESIGN-2026-06-29.md`.
-- **KERFUR FIRST-REFUSAL (2026-07-12 `ded3f793` [AS-BUILT, audit-clean, take-9 hands-on pending]):**
+- **TAKE-9/10 AFTERMATH + THE VM PLAN (2026-07-13):** take-9 exposed the turn-ON twin pair (client
+  destroy-seam relayed a kerfur-mirror death → host killed its authoritative prop → «kerfur deleted
+  everywhere»; host-own turn-on had structurally NO converge — this same destroy seam drains the prop
+  element synchronously with the death, so the poll's premise never holds for a host prop). The take-10
+  fix (`873ce32a`: destroy-edge capture + fresh-spawn stamps + eid-first OnDestroy) REGRESSED: the
+  capture NEVER fired — the destroy seam is a **POST** hook, `GetActorLocation` on the already-destroyed
+  actor reads (0,0,0) and the 5 m filter silently declined every candidate (both silent exits had no
+  logging). eid-first OnDestroy (kept — correct fix) flipped the visible symptom from "stale off-prop"
+  to "dies on the other peer". **Resolution: /qf 15 design pass (13 rounds, converged) →
+  `docs/COOP_VM_DISPATCH_PLAN.md`** — VM verb brackets + the form-flip assembler replace the whole
+  compensation family; the key reframing: the conversion verbs are `EX_LocalVirtualFunction` (VM-
+  hookable via GNatives swap) and their INNER spawns are EX_CallMath→Func-VISIBLE (the "wall" was only
+  ever EX_Local*→script). [[lesson-post-destroy-seam-reads-zeros-and-silent-declines]]
+- **KERFUR FIRST-REFUSAL (2026-07-12 `ded3f793` [turn_off converge LIVE-FIRED 2x clean — take-10 log
+  12:59:10-11, 0 cm; slated for retirement into the VM assembler per the plan]):**
   the death-watch poll's host turn_off converge premise ("the verb's fresh prop is UNTRACKED") died
   with spawn_authority Inc-1 (2026-07-10) — the per-tick FinishSpawningActor seam drain expressed the
   conversion prop first, the poll's converge found it tracked and silently released the dead NPC with
@@ -506,7 +520,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
 | nested BeginDeferred steals a pending eid in POST | params-pointer correlation | [V] |
 | client kerfur conversion ghost grabbed → client-eid dupe | `ClaimConversionGhosts` parks/freezes immediately (adopt or reap) | [V] |
 | host kerfur eye cam (ChildActorComponent child, keyed Aprop lineage) ↔ the whole prop identity universe (enroll/broadcast/sweep/fuzzy) | **CHILD-ACTOR EXCLUSION** — `ue_wrap::engine::IsChildActor` at 6 surfaces mirrors the game's own `ignoreSave \|\| IsChildActor()`; the eye cam never gets an independent wire identity (`c93617be`) | [V — take-8 «камер нету»] |
-| kerfur turn_off's fresh prop ↔ the generic spawn-seam drain + any express lane (the drain out-raced the 5 Hz poll converge) | **KERFUR FIRST-REFUSAL** — every express lane offers an UNTRACKED kerfur prop to `TryAdoptFreshKerfurProp` first (dead-NPC-watch match ⇒ KerfurConvert, no generic PropSpawn); poll = backstop (`ded3f793`) | [AS-BUILT, take-9 pending] |
+| kerfur turn_off's fresh prop ↔ the generic spawn-seam drain + any express lane (the drain out-raced the 5 Hz poll converge) | **KERFUR FIRST-REFUSAL** — every express lane offers an UNTRACKED kerfur prop to `TryAdoptFreshKerfurProp` first (dead-NPC-watch match ⇒ KerfurConvert, no generic PropSpawn); poll = backstop (`ded3f793`) | [V log take-10 12:59:10-11: 2x clean 0 cm converges; slated for retirement into the VM assembler — COOP_VM_DISPATCH_PLAN.md] |
 
 ## NEEDS-PROBE (do not encode as truth without it)
 - **[ANSWERED]** (trash redesign 08) PROBE-A: the carry slot is **`grabbing_actor`** (the PHC light-grab

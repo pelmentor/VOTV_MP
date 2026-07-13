@@ -219,7 +219,17 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   *Look FIRST:* `research/findings/player-puppet/votv-melee-damage-path-RE-2026-07-11.md` (chain + ranked hook seams).
   `memory/lesson_votv_damage_bypasses_ue_takedamage.md`
 - **A SCRIPT-fn called via `EX_Local*` is invisible to BOTH the PE hook AND the Func-patch** — patch the
-  NATIVE calls inside it. `memory/lesson_script_fn_invisible_to_func_patch.md`
+  NATIVE calls inside it. **Boundary sharpened 2026-07-13: this is THE ONLY remaining invisible class,
+  and it's SOLVABLE (GNatives swap = a third hook primitive); EX_CallMath was NEVER part of the wall
+  (native targets = Func-patchable). Check the CALLEE's nativeness before declaring a wall.** *Look
+  FIRST:* `docs/COOP_VM_DISPATCH_PLAN.md`. `memory/lesson_script_fn_invisible_to_func_patch.md`
+- **A destroy-seam consult runs POST-destruction: engine reads on the dying actor return ZEROS** —
+  `GetActorLocation` on it reads (0,0,0) (RootComponent gone) while class/name/key MEMORY reads still
+  work, so a proximity matcher silently mis-filters (take-10: the capture never fired all session).
+  AND: matcher decline paths must NEVER be silent — take-10's two unlogged declines cost a full test
+  cycle to localize. Positions come from caches (watch/stamps/element rows), never live dispatches on
+  the dying actor. *Look FIRST:* `docs/COOP_VM_DISPATCH_PLAN.md` (the superseding temporal-pairing
+  design). `memory/lesson_post_destroy_seam_reads_zeros_and_silent_declines.md`
 - **BP-JSON call censuses: text-grepping an export for a NATIVE fn name gives FALSE NEGATIVES** — imported
   callees are bare `StackNode` indices; resolve `Imports[-idx-1].ObjectName` first (2026-07-10 twice:
   updateHold "no attach", delEmail "removes=[]"). *Look FIRST:* the resolver pattern in

@@ -273,3 +273,22 @@ enroll wave lands — separates the fix's axis from the pre-enroll window):
 5. Hand-place regression: hold-R a kerfur off-prop into the hand, place elsewhere → appears on
    the other peer at the new spot (no NPC nearby ⇒ capture declines ⇒ generic path intact).
 6. Cameras stay gone (take-8, must not regress).
+
+### RESULT (take-10, user hands-on 2026-07-13 12:57-12:59): REGRESSED — «пир включает керфура — умирает у другого»
+
+The capture (`TryCaptureKerfurPropDestroy`) NEVER fired on either peer (zero capture lines in both
+logs; DLL `12204C8F` confirmed loaded via mtime 12:37 vs boot 12:57). ROOT: the destroy seam is a
+**POST** hook (`InstallPostHook(K2_DestroyActor)` — fires AFTER destruction); `GetActorLocation`
+on the already-destroyed actor (RootComponent gone) reads **(0,0,0)**, so the 5 m candidate filter
+silently rejected every stamped NPC. Both silent-decline exits had NO logging — a diagnosability
+failure (the identity-logs rule now extends: no silent declines in matchers). Compounding: the
+eid-first OnDestroy fix (kept — it is correct) made the host's generic destroys effective on the
+client's synthetic-key mirrors, flipping take-9's "stale off-prop" symptom into "kerfur dies".
+Positive finding in the same logs: take-8's express-edge FIRST-REFUSAL turn_off converge
+**live-fired 2x clean (12:59:10-11, 0 cm)** — that half is verified.
+
+RESOLUTION: fix-forward abandoned per the user's pivot — /qf 15 design pass (13 rounds, converged)
+produced `docs/COOP_VM_DISPATCH_PLAN.md`: VM verb brackets (GNatives swap) + the kerfur form-flip
+assembler replace this whole compensation family; retirement inventory included. Take-10 logs:
+scratchpad take10_{host,client}.log. NEXT = the plan's HALT-gated ladder (IDA spike first); the
+1h temporal-pairing bridge was declined in favor of going straight to the substrate.
