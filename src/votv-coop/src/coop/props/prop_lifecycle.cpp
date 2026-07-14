@@ -318,10 +318,6 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
     }
     p.initLinVelX = p.initLinVelY = p.initLinVelZ = 0.f;
     p.initAngVelX = p.initAngVelY = p.initAngVelZ = 0.f;
-    UE_LOGI("grab_hook[Aprop.Init POST]: HOST broadcasting SPAWN cls='%ls' key='%ls' loc=(%.1f,%.1f,%.1f) heavy=%d frozen=%d",
-            cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
-            (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
-            (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
     // v12 (2026-05-28): populate elementId from the Prop Element shadow,
     // translating kInvalidId -> 0 (wire sentinel per protocol.h contract).
     // (v15 also stamped a senderContext byte; v16 PR-FOUNDATION-1b
@@ -342,6 +338,13 @@ void GrabObserver_Aprop_Init_POST_Body(void* self) {
                 "PropSpawn SUPPRESSED (KerfurConvert is the sole express; tracked so the other "
                 "broadcasters defer)", self, keyStr.c_str());
     } else {
+        // Log the broadcast ONLY where it actually happens (2026-07-14): the old site logged it
+        // unconditionally BEFORE the suppress gate, so a suppressed conversion still printed
+        // "broadcasting SPAWN" -- a lie that defeated the runbook's diff signal.
+        UE_LOGI("grab_hook[Aprop.Init POST]: HOST broadcasting SPAWN cls='%ls' key='%ls' loc=(%.1f,%.1f,%.1f) heavy=%d frozen=%d",
+                cls.c_str(), keyStr.c_str(), p.locX, p.locY, p.locZ,
+                (p.physFlags & coop::net::propspawn_flags::kIsHeavy)  ? 1 : 0,
+                (p.physFlags & coop::net::propspawn_flags::kFrozen)   ? 1 : 0);
         s->SendPropSpawn(p);
     }
     // Fork B 2c: self-claim -- this peer just wire-expressed the spawn; an
