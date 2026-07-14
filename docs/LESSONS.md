@@ -277,17 +277,23 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   this session, same shape (dead cancel · Model-B eid-reuse [§3 said rebindInPlace, code mints per-form eids]
   · "the two-phase arm record" = actually FOUR converge mechanisms): the DOC describes intent, the CODE
   describes behavior, nobody diffed them. Instrument the SUPPRESSION path (one line on every fire); before
-  building ON a documented mechanism, grep its fire-line in a real session to prove it RUNS. *Look FIRST:*
-  grep the guard's log line in a real log — no line = never fires OR silent; add it and find out which.
+  building ON a documented mechanism, grep its fire-line in a real session to prove it RUNS. **INVERSE
+  INSTANCE 2026-07-14 pm:** a no-log guard can be REACHED-BUT-DECLINING, not only never-fired — I read
+  `TryCaptureKerfurPropDestroy`'s zero log lines as "structurally dead" and nearly deleted it; it was reached
+  on every client turn-on and declined SILENTLY (its no-qualified-B path logged nothing). Instrumenting the
+  DECLINE path (not just suppress) revealed it. So instrument EVERY exit, not just success. *Look FIRST:*
+  grep the guard's log line in a real log — no line = never fires OR silently declining; add it on the fire
+  AND decline paths and find out which BEFORE building on it or deleting it.
   `memory/lesson_guard_that_never_logs_is_a_dead_guard.md`
 - **A VM-dispatch bracket (GNatives-swap wrapper / self-bracket) runs MID-BYTECODE — do ZERO engine
   calls in that window** — capture data only (pointers, eids off a LIVE actor, class checks) + a pure DATA
   STORE (no engine dispatch); DEFER every engine call (register, park=ProcessEvent, broadcast, converge) to
   the deferred barrier. A nested ProcessEvent pump mid-verb corrupts (measured `kerfur_convert.cpp:11-20`;
-  park=PE `kerfur.cpp:132`). **KERFUR DATA-STORE CORRECTED 2026-07-14:** the mid-verb store is a **DRAIN** of
-  A's prop-eid (subtract A from the reverse so A dies husk), NOT an identity-REPOINT/migrate — the impl /qf
-  measured the eid is per-form + K stable, so nothing migrates at birth (see the identity-map row above +
-  `[[project-vm-dispatch-2a-capture-2026-07-14]]`). Core discipline (zero engine mid-verb, defer to barrier)
+  park=PE `kerfur.cpp:132`). **KERFUR MID-VERB STORE CORRECTED 2026-07-14 pm (DRAIN retired, measured-false):**
+  the mid-verb store is just CAPTURING B (the successor actor pointer + index) — NO drain, NO repoint, NO
+  migrate. The FINAL fix feeds that captured-B to the DEFERRED converge (`TryCaptureKerfurPropDestroy` /
+  `ConvergeAfterConversion`), which does its normal per-form eid mint + KerfurId re-key UNCHANGED; only WHICH-B
+  is fixed (see `[[project-vm-dispatch-2a-capture-2026-07-14]]`). Core discipline (zero engine mid-verb, defer to barrier)
   is reusable for the whole VM-consumer class (kerfur/melee/smart-items). *Look FIRST:*
   `docs/COOP_VM_DISPATCH_PLAN.md` §3 (SUPERSEDED banner points at the A+ spec).
   `memory/lesson_vm_bracket_zero_engine_mid_verb.md`
@@ -303,11 +309,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   identity surface — the kerfur HOST has a SECOND table (`g_actorToKerfurId`/`KerfurRecord.actor`,
   `kerfur_entity.cpp:62-64`; client is eid-based, no KerfurId map) that an eid-only rebind does NOT re-key →
   mid-window KerfurId resolves DEAD-A while eid resolves LIVE-B (heisenbug). **KERFUR RESOLUTION CORRECTED
-  2026-07-14: kerfur does NOT migrate at birth at all** — the impl /qf measured the eid is per-form + K
-  stable (`kerfur_convert.cpp:188-258`), so the converged model (A+) DRAINS A's prop-eid at birth (a pure
-  subtraction, NOT a repoint), KerfurId re-key STAYS at converge, and `BindFormActor` is NOT split. The
-  2nd-map trap is precisely WHY kerfur chose drain-over-migrate: migrating the eid at birth while KerfurId
-  finalizes late IS the heisenbug, so kerfur migrates NOTHING at birth. *Look FIRST:* grep the entity's
+  2026-07-14 pm (drain retired): kerfur migrates NOTHING and DRAINS NOTHING at birth** — the eid is per-form
+  + K stable (`kerfur_convert.cpp:188-258`), and the FINAL fix leaves the existing converge (per-form eid mint
+  + KerfurId re-key) UNCHANGED, fixing only WHICH-B (feed the captured successor to the guard). So the 2nd-map
+  heisenbug cannot arise — nothing is migrated at birth to go half-done. The GENERAL enumerate-every-map
+  principle still holds for ANY design that DOES migrate. *Look FIRST:* grep the entity's
   id/type + enumerate every keyed map BEFORE any migration design; `[[project-vm-dispatch-2a-capture-2026-07-14]]`
   for the A+ resolution. `memory/lesson_identity_migrate_at_birth_covers_every_map.md`
 - **Before installing a PERMANENT / un-removable seam (process-lifetime GNatives swap, never un-swapped),

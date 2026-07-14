@@ -1,10 +1,27 @@
 # Hands-on runbook — G1 (CallFunction-route capture) + TryCapture decline/provenance
 
-**Date:** 2026-07-14 pm · **Take:** G1 observe increment (still OBSERVE-ONLY -- no behavior change,
-no capture/suppress/converge; the conversion verbs run unmodified).
-**Deployed DLL SHA256 (first 16):** `e09044d77a7863e7` -- byte-identical on HOST, CLIENT_1, CLIENT_2, DEV
-(verified). Supersedes `1E41A807`.
-**Flags:** `vm_dispatch_log=1` on HOST + CLIENT_1 (`gnatives_probe=0`). Set already.
+**Date:** 2026-07-14 pm · **Take:** G1 observe increment (OBSERVE-ONLY -- no behavior change).
+**Deployed DLL SHA256 (first 16):** `e09044d77a7863e7` -- byte-identical on HOST, CLIENT_1, CLIENT_2, DEV.
+**Flags:** `vm_dispatch_log=1` on HOST + CLIENT_1 (`gnatives_probe=0`).
+
+## ✅ RESULT — 13:40 take RAN, GREEN across the board (logs: `g1_host_1340.log` / `g1_client_1340.log`)
+
+- **G1 GREEN:** host `spawn{formIn=9 formInReqScope=2 ...} destroy{selfIn=9 selfInReqScope=2 ...}`, with
+  `HOST executing turn ×4` confirming `OnConvertRequest` fired (the null-as-pass guard PASSED — the
+  CallFunction route was exercised). The host-exec-client-request B IS Func-visible + pairs to the request
+  eid (reqEid=5277/5279 on the two CallFunction declines). Client `formInReqScope=0` = correct (client never
+  runs OnConvertRequest). Load-bearing gates GREEN: `DESTROY_NO_SPAWN=0 DEAD=0 reentrySameEid=0`.
+- **Provenance SETTLED:** every client decline reads `provenance{vmActive=1 verbId=2 ctxSelf=1}` → the
+  relay's destroy IS the conversion verb's own in-window self-destroy. `K2_DestroyActor` IS Func-visible;
+  only the VERB is EX_Local. The "EX_Local-invisible K2" premise was FALSE.
+- **Decline ROOT (corrected):** 11 `TryCapture DECLINE` lines, all "1 fresh stamp but NONE qualified
+  (>500cm/owned/mirror/parked)" — NOT stamp-starvation (the stamp EXISTS). Root = the dying prop's
+  post-destroy `GetActorLocation` anchor reads ~(0,0,0) so the 500cm proximity finds no B (the take-10
+  mechanism, now instrumented). Deterministic captured-B (bracket-paired) bypasses the anchor → the fix.
+- **bug2 (host-own turn-ON converge) still OPEN:** the host-own turn-ons (`vmActive=1 reqEid=-1`) decline at
+  TryCapture too; whether they converge is unverified — the same captured-B mints it, VERIFY when wiring.
+
+**Everything below is the pre-run plan (kept for provenance).** NEXT = wire the narrow which-B fix.
 
 ---
 
