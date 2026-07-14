@@ -319,6 +319,18 @@ FunctionParams guard + per-consumer cross-check.
 
 ## 3. The first consumer: kerfur FORM-FLIP ASSEMBLER (REWRITTEN by impl /qf pass 2026-07-13)
 
+> **⚠ SUPERSEDED 2026-07-14 — MODEL B (repoint / eid-reuse / "migrate the eid onto B" / split
+> `BindFormActor`) IS MEASURED FALSE.** The 2a-capture IMPLEMENTATION /qf pass (5 rounds + user injection)
+> read the converge code (`kerfur_convert.cpp:188-258`): the eid is **per-form** (minted fresh, A released,
+> wire carries `oldEid→newEid`), **K is the stable identity**, and Npc/Prop are separate `MirrorManager<T>`
+> singletons (no in-place type-migration without a lane merge). The converged model is **FULL-UNIFY A+**:
+> deterministic in-bracket B-capture + **DRAIN** A's prop-eid at birth (a subtraction, NOT a migrate);
+> KerfurId re-key STAYS at converge; `BindFormActor` is **NOT** split; the four converge crutches collapse
+> to one. **2a-observe is COMPLETE + GREEN** (all gates, incl. the loot reject gate — real result). Foundation
+> committed `e785cb04`. The full §3 rewrite lands with the wiring code commit (RULE 2, deliberately NOT a
+> third prose-before-code rewrite). **Read [[project-vm-dispatch-2a-capture-2026-07-14]] for the authoritative
+> A+ spec; everything below this banner describes the retired Model B.**
+
 **The substrate is a deterministic CAPTURE + identity-REPOINT-at-birth mechanism that FEEDS THE EXISTING
 deferred converge — NOT a converge rewrite, and NOT a suppression** (2a /qf pass, the key reframe). It
 replaces THREE probabilistic crutches (`TryAdoptFreshKerfurProp` / `TryCaptureKerfurPropDestroy` /
