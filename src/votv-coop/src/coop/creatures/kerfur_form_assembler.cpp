@@ -53,8 +53,14 @@
 // -- and BOTH summary lines (containment + 2a-OBSERVE GATES) are ALWAYS dumped at
 // OnDisconnect -- so a run can never end having measured nothing. Only the per-catch
 // VERBOSE lines are gated behind [dev] vm_dispatch_log (+ a cap). Every line is
-// role-tagged [HOST]/[CLIENT] so the gate set is not authority-blind. NO capture /
-// suppress / converge yet (2a-2c); the verb bodies run entirely unchanged.
+// role-tagged [HOST]/[CLIENT] so the gate set is not authority-blind.
+//
+// 2a-CAPTURE (2026-07-14): on top of the counters, an in-bracket / in-req-scope
+// kerfur-form successor spawn now STORES the finished actor B in a one-shot
+// thread-local slot (tls_captured*), published via ConsumeCapturedForm for the convert
+// layer to consume at the paired A-destroy edge. This module still does NO suppress /
+// converge / authority routing (2b/2c) -- the verb bodies run unchanged; it only makes
+// the deterministic which-B available so kerfur_convert can stop guessing by proximity.
 
 #include "coop/creatures/kerfur_form_assembler.h"
 
@@ -72,6 +78,7 @@
 #include "ue_wrap/vm_dispatch.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 
 namespace coop::kerfur_form_assembler {
@@ -144,6 +151,16 @@ thread_local bool     tls_spawnFormFiredThisBracket = false;
 thread_local void*    tls_bracketCtx = nullptr;       // the Context whose bracket owns the TLS record
 thread_local E::ElementId tls_bracketEntryEid = E::kInvalidId; // A's eid captured at entry (for re-entry check)
 
+// ---- 2a-capture: the DETERMINISTIC successor B, captured in-bracket, consumed once at the
+// paired A-destroy edge by kerfur_convert. Thread-local: the verb + both native seams run
+// synchronously on the GT, so a single-slot TLS is race-free and lock-free. Cleared at each
+// depth-1 verb ENTRY (0x45) and at the OnConvertRequest CallFunction entry (via
+// ClearCapturedForm), plus a freshness backstop, so a capture never outlives its bracket.
+thread_local void*   tls_capturedForm    = nullptr;   // B's actor pointer (nullptr = slot empty)
+thread_local int32_t tls_capturedFormIdx = -1;        // B's GUObjectArray internal index (for liveness)
+thread_local bool    tls_capturedIsNpc   = false;     // true = kerfurOmega_C (turn-ON B); false = prop (turn-OFF B)
+thread_local std::chrono::steady_clock::time_point tls_capturedAt{};  // capture instant (freshness backstop)
+
 // Verbose per-catch log cap (the measurement counters above are UNCAPPED + always on).
 constexpr int kLogCap = 128;
 std::atomic<int> g_logged{0};
@@ -162,6 +179,21 @@ bool IsKerfurFormClass(void* cls) {
 bool IsFloppyClass(void* cls) {
     void* fb = g_floppyClass.load(std::memory_order_relaxed);
     return fb && R::IsDescendantOfAny(cls, &fb, 1);
+}
+// Is `cls` the NPC form (kerfurOmega_C), as opposed to the prop form? Called only after
+// IsKerfurFormClass(cls) is already true, to tag the captured B's direction.
+bool IsKerfurNpcClass(void* cls) {
+    void* nb = g_npcClass.load(std::memory_order_relaxed);
+    return nb && R::IsDescendantOfAny(cls, &nb, 1);
+}
+// Record the freshly-finished successor B in the one-shot slot (2a-capture). Called from
+// OnFinishSpawn on both the 0x45 (av.active) and the CallFunction (reqScope) form branch,
+// only when B has a live index. Overwrites any prior slot (this bracket's B supersedes).
+void StoreCapturedForm(void* b, int32_t idx, void* cls) {
+    tls_capturedForm    = b;
+    tls_capturedFormIdx = idx;
+    tls_capturedIsNpc   = IsKerfurNpcClass(cls);
+    tls_capturedAt      = std::chrono::steady_clock::now();
 }
 // G1: is the host currently executing a client's convert-request via CallFunction (the 0x45-blind route)?
 bool InReqScope() {
@@ -187,6 +219,8 @@ void OnVerbEntry(const vm::Bracket& b) {
         tls_spawnFormFiredThisBracket = false;
         tls_bracketCtx = b.ctx;
         tls_bracketEntryEid = entryEid;
+        tls_capturedForm = nullptr;      // 2a-capture: fresh slot per 0x45 bracket
+        tls_capturedFormIdx = -1;
     } else if (bound && entryEid == tls_bracketEntryEid) {
         g_entrySameEidReentry.fetch_add(1, std::memory_order_relaxed);
     }
@@ -242,7 +276,8 @@ void OnFinishSpawn(void* /*context*/, void* /*sourceObject*/, void* spawnedResul
             // GATE 3c -- is B a real, index-assigned, live object at FinishSpawningActor?
             bIdx = R::InternalIndexOf(spawnedResult);
             bIndexLive = R::IsLiveByIndex(spawnedResult, bIdx);
-            if (bIndexLive) g_spawnBIndexLive.fetch_add(1, std::memory_order_relaxed);
+            if (bIndexLive) { g_spawnBIndexLive.fetch_add(1, std::memory_order_relaxed);
+                              StoreCapturedForm(spawnedResult, bIdx, cls); }  // 2a-capture (0x45 route)
             else            g_spawnBIndexDead.fetch_add(1, std::memory_order_relaxed);
         } else if (reqScope) {
             // G1: the host is executing a client's convert-request via CallFunction (0x45-blind route) --
@@ -251,6 +286,7 @@ void OnFinishSpawn(void* /*context*/, void* /*sourceObject*/, void* spawnedResul
             g_spawnFormInReqScope.fetch_add(1, std::memory_order_relaxed);
             bIdx = R::InternalIndexOf(spawnedResult);
             bIndexLive = R::IsLiveByIndex(spawnedResult, bIdx);
+            if (bIndexLive) StoreCapturedForm(spawnedResult, bIdx, cls);      // 2a-capture (CallFunction route)
         } else {
             g_spawnFormOutWindow.fetch_add(1, std::memory_order_relaxed);
         }
@@ -387,6 +423,33 @@ void DumpSummary(const char* when) {
 }
 
 }  // namespace
+
+// ---- 2a-capture public accessors (consumed by coop::kerfur_convert) ----------------
+CapturedForm ConsumeCapturedForm(bool wantNpc) {
+    CapturedForm out{nullptr, -1};
+    if (!tls_capturedForm) return out;                       // slot empty
+    // Freshness backstop: the store is one-shot + cleared at each bracket entry, but a
+    // conversion that spawned NO matching B and then consumes could otherwise pull a prior
+    // bracket's B. A capture is only valid within its own (sub-second) verb window.
+    if (std::chrono::steady_clock::now() - tls_capturedAt > std::chrono::seconds(2)) {
+        tls_capturedForm = nullptr; tls_capturedFormIdx = -1;
+        return out;
+    }
+    if (tls_capturedIsNpc != wantNpc) return out;            // wrong direction: leave for the right consumer
+    if (!R::IsLiveByIndex(tls_capturedForm, tls_capturedFormIdx)) {  // died since capture
+        tls_capturedForm = nullptr; tls_capturedFormIdx = -1;
+        return out;
+    }
+    out.actor = tls_capturedForm;
+    out.idx   = tls_capturedFormIdx;
+    tls_capturedForm = nullptr; tls_capturedFormIdx = -1;    // one-shot
+    return out;
+}
+
+void ClearCapturedForm() {
+    tls_capturedForm = nullptr;
+    tls_capturedFormIdx = -1;
+}
 
 void Install(coop::net::Session* session) {
     g_session = session;

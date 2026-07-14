@@ -10,22 +10,53 @@
 // the capture + destroy-suppress + deferred-converge assembler that retires those
 // crutches (increments 2a-2c).
 //
-// INCREMENT 1 (this file, observe-only): register the two verbs with the substrate
-// and, on each caught dispatch, LOG the Context class + depth. This proves the
-// PERMANENT substrate delivers the catch end-to-end through the registration API
-// (the same live catch coop/dev/gnatives_probe made throwaway-style at STEP 1.0,
-// now through the shipping seam) and turns the inferred kerfur variant family into
-// a MEASURED set. NO capture, NO suppress, NO converge, NO authority routing yet --
-// those are 2a/2b/2c. The verb bodies run entirely unchanged.
+// INCREMENT 1 (observe-only, retained): register the two verbs with the substrate
+// and, on each caught dispatch, LOG the Context class + depth + the 2a-observe gate
+// counters. This proved the PERMANENT substrate delivers the catch end-to-end and
+// turned the inferred kerfur variant family into a MEASURED set (G1 13:40 take:
+// formIn/selfIn in-window, DESTROY_NO_SPAWN=0, Bindex live).
+//
+// INCREMENT 2a-CAPTURE (2026-07-14, this file now feeds behavior): on each in-bracket
+// (0x45) OR in-request-scope (CallFunction) kerfur-form successor spawn, STORE the
+// finished actor B (pointer + live index + form) in a one-shot thread-local slot. The
+// convert layer (coop::kerfur_convert) CONSUMES it at the paired A-destroy edge --
+// TryCaptureKerfurPropDestroy (client relay-suppress / host inline converge) and
+// ConvergeAfterConversion (request route) -- to bypass the (0,0,0) post-destroy
+// proximity anchor that starved the guard on every real toggle (take-8/take-10
+// misfilter class; measured live in the G1 take). The capture is the DETERMINISTIC
+// which-B; the converge/suppress logic itself is unchanged and still lives in
+// kerfur_convert. Still NO suppress/converge IN THIS FILE (2b/2c own routing) -- the
+// verb bodies run unchanged; this module only publishes B.
 //
 // Logging is gated behind [dev] vm_dispatch_log (default off) and capped, so a
-// normal session is silent and a hands-on observation run is not spammed.
+// normal session is silent and a hands-on observation run is not spammed. The capture
+// STORE + the observe counters accrue whenever the session is active (behind neither
+// gate) so a run can never end having captured/measured nothing.
 
 #pragma once
+
+#include <cstdint>
 
 namespace coop::net { class Session; }
 
 namespace coop::kerfur_form_assembler {
+
+// A DETERMINISTIC conversion successor B, captured in-bracket at its FinishSpawningActor
+// (2a-capture). {nullptr, -1} = nothing captured / stale / class-mismatch / index-dead.
+struct CapturedForm { void* actor; int32_t idx; };
+
+// One-shot: return the last in-bracket / in-req-scope kerfur-form successor B whose class
+// matches wantNpc (true = kerfurOmega_C NPC successor of a turn-ON; false = prop_kerfurOmega_C
+// successor of a turn-OFF), if it is fresh (captured within the verb window) and still live,
+// then CLEAR the slot. Returns {nullptr, -1} otherwise (the caller falls back to its legacy
+// proximity search). GT-only: the store is thread-local to the game thread the verb runs on,
+// so it is race-free and needs no lock. See kerfur_convert's two consume sites.
+CapturedForm ConsumeCapturedForm(bool wantNpc);
+
+// Clear the capture slot for the current thread. Called at the OnConvertRequest CallFunction
+// bracket entry (the 0x45 route clears itself at OnVerbEntry) so every conversion bracket
+// starts with an empty slot and never consumes a prior bracket's stale B.
+void ClearCapturedForm();
 
 // Register the two conversion verbs with ue_wrap::vm_dispatch and open the session
 // gate (SetEnabled(true)). Called from subsystems::Install (world-up, session

@@ -24,6 +24,7 @@
 #include "coop/creatures/kerfur_convert.h"
 
 #include "coop/creatures/kerfur_command.h"  // v74: route the non-turn_off menu verbs to the command relay
+#include "coop/creatures/kerfur_form_assembler.h"  // 2a-capture: ConsumeCapturedForm/ClearCapturedForm (deterministic which-B)
 #include "coop/element/mirror_manager.h"
 #include "coop/element/npc.h"
 #include "coop/element/prop.h"
@@ -197,7 +198,20 @@ void ConvergeAfterConversion(void* oldActor, int32_t oldIdx, coop::element::Elem
                              uint8_t toProp, float px, float py, float pz,
                              void* capturedForm = nullptr, int32_t capturedIdx = -1) {
     namespace KE = coop::kerfur_entity;
+    // 2a-capture: if no explicit successor B was threaded in, pull the assembler's DETERMINISTIC
+    // in-bracket B (a turn-ON wants the NPC successor; a turn-OFF wants the prop). This replaces
+    // FindNewFormKerfurActor's proximity search on the request route. An empty slot (already
+    // consumed by the destroy-edge first refusal, or a genuinely absent B) -> the legacy search.
+    if (!capturedForm) {
+        auto cap = coop::kerfur_form_assembler::ConsumeCapturedForm(/*wantNpc=*/toProp == 0);
+        capturedForm = cap.actor;
+        capturedIdx  = cap.idx;
+    }
     const bool haveCaptured = capturedForm && R::IsLiveByIndex(capturedForm, capturedIdx);
+    if (haveCaptured)
+        UE_LOGI("kerfur_convert: 2a-capture converge (%s) eid=%u -> captured successor %p "
+                "(deterministic; FindNewFormKerfurActor bypassed)",
+                toProp ? "turn_off" : "turn-on", static_cast<unsigned>(oldEid), capturedForm);
     if (toProp) {
         // turn_off: NPC -> prop. The NPC should have died; a kerfur prop (+ maybe floppy) spawned at
         // its position. A SENTIENT kerfur refused -> the NPC is still live -> echo a reject.
@@ -893,6 +907,10 @@ void OnConvertRequest(const coop::net::KerfurConvertPayload& payload,
         return;
     }
     const auto eid = static_cast<coop::element::ElementId>(payload.elementId);
+    // 2a-capture: start this request's CallFunction bracket with an EMPTY capture slot (the 0x45
+    // route self-clears at OnVerbEntry; this route is 0x45-blind, so clear here) -- the successor B
+    // spawned INSIDE the verb below is the only capture the destroy-edge / converge may consume.
+    coop::kerfur_form_assembler::ClearCapturedForm();
     if (payload.toProp) {
         auto* el = coop::element::MirrorManager<coop::element::Npc>::Instance().Get(eid);
         void* actor = el ? el->GetActor() : nullptr;
@@ -1161,76 +1179,102 @@ bool TryCaptureKerfurPropDestroy(void* actor, coop::element::ElementId dyingEid)
     const bool isHost = s->role() == coop::net::Role::Host;
     const ue_wrap::FVector ploc = ue_wrap::engine::GetActorLocation(actor);
     constexpr float kR2 = 500.f * 500.f;  // spwn billboard + (0,0,50); 500cm mirrors every kerfur proximity site
-    // The conversion-product test (ALL THREE required; audit 2026-07-13 findings 1+2):
-    //   1. FRESH-SPAWN STAMP -- FinishSpawningActor'd within the last 2 s (the seam fires inside
-    //      the spawn-then-destroy verb, so the true product is milliseconds old). This is the
-    //      load-bearing discriminator: a save-loaded / long-lived kerfur is NEVER stamped, so an
-    //      enrollment-gap "unowned" wanderer can neither suppress a legit relay (client) nor be
-    //      identity-welded onto the dying prop (host).
-    //   2. Not an established identity: HOST untracked by npc_sync (mirrors
-    //      FindNewFormKerfurActor); CLIENT not a bound NPC wire mirror (CollectMirrorActors is
-    //      the authoritative ownership signal) and not a PARKED ghost (another pending
-    //      conversion's product).
-    //   3. Within the verb's spawn radius of the dying prop.
-    const auto now = std::chrono::steady_clock::now();
-    PruneFreshNpcStamps(now);
-    if (g_freshNpcStamps.empty()) {
-        // OBSERVE (2026-07-14, G1 increment -- the DECLINE reason + destroy provenance). The stamp list is
-        // fed by NoteFreshKerfurNpcSpawn off the host_spawn_watcher FinishSpawningActor seam; if that seam is
-        // host-only the CLIENT branch is STARVED (empty stamps) on every turn-on -> TryCapture returns false
-        // -> the generic keyed-destroy relay (bug1) fires unsuppressed. provenance{} distinguishes the
-        // conversion verb's own self-destroy (vmActive + ctxSelf, or reqEid on the CallFunction route) from an
-        // unrelated teardown (neither) -- resolving the K2-visibility question in one line per real destroy.
-        if (coop::config::IsIniKeyTrue("vm_dispatch_log")) {
-            const ue_wrap::vm_dispatch::ActiveVerb av = ue_wrap::vm_dispatch::CurrentThreadVerb();
-            const coop::element::ElementId reqEid = ActiveRequestVerbEid();
-            UE_LOGI("kerfur_convert: TryCapture DECLINE (%s) actor=%p -- STAMP LIST EMPTY (no fresh kerfur NPC "
-                    "stamped; client stamp-starved?) -- relay proceeds. provenance{vmActive=%d verbId=%d "
-                    "ctxSelf=%d reqEid=%d}",
-                    isHost ? "HOST" : "CLIENT", actor, av.active ? 1 : 0, av.verbId,
-                    (av.active && av.ctx == actor) ? 1 : 0,
-                    reqEid == coop::element::kInvalidId ? -1 : static_cast<int>(reqEid));
-        }
-        return false;  // nothing fresh in the world -> genuine destroy
-    }
-    std::unordered_set<void*> mirrors;
-    if (!isHost) CollectMirrorActors(/*wantProp=*/false, /*wantNpc=*/true, mirrors);
+    // 2a-capture (2026-07-14): consult the form assembler's DETERMINISTIC in-bracket successor B
+    // FIRST -- captured at B's FinishSpawningActor, consumed here at the paired A-destroy edge (the
+    // measured spawn<destroy order, DESTROY_NO_SPAWN=0). This BYPASSES the (0,0,0) post-destroy
+    // proximity anchor: GetActorLocation(actor) on the dying prop reads ~origin, so the stamp walk
+    // below rejected the real B on every real toggle (take-8/take-10 misfilter, seen live in the G1
+    // take: "1 fresh stamp but NONE qualified"). PRIMARY path; the stamp walk is the FALLBACK,
+    // retired once this deterministic path is hands-on proven.
     void* freshNpc = nullptr;
     float bestD2 = kR2;
-    // Walk the STAMP LIST, not GUObjectArray -- the candidate universe is "kerfur NPCs finished
-    // in the last 2 s" (typically 0-1 entries), already class-gated at stamp time.
-    for (const auto& st : g_freshNpcStamps) {
-        void* obj = st.actor;
-        if (!obj || !R::IsLiveByIndex(obj, st.idx)) continue;
-        if (isHost) {
-            if (coop::npc_sync::GetNpcIdForActor(obj) != coop::element::kInvalidId) continue;
-        } else {
-            if (mirrors.count(obj)) continue;
-            bool parked = false;
-            for (const auto& g : g_parkedGhosts)
-                if (g.actor == obj) { parked = true; break; }
-            if (parked) continue;
+    {
+        auto cap = coop::kerfur_form_assembler::ConsumeCapturedForm(/*wantNpc=*/true);
+        if (cap.actor) {
+            freshNpc = cap.actor;
+            const ue_wrap::FVector floc = ue_wrap::engine::GetActorLocation(freshNpc);
+            const float dx = floc.X - ploc.X, dy = floc.Y - ploc.Y, dz = floc.Z - ploc.Z;
+            bestD2 = dx * dx + dy * dy + dz * dz;  // honest distance; the anchor may be stale, NOT gated on kR2
+            UE_LOGI("kerfur_convert: 2a-capture HIT (%s) -- dying kerfur prop %p paired to captured successor "
+                    "NPC %p (deterministic, bracket-paired; proximity anchor bypassed)",
+                    isHost ? "HOST" : "CLIENT", actor, freshNpc);
         }
-        const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
-        const float dx = loc.X - ploc.X, dy = loc.Y - ploc.Y, dz = loc.Z - ploc.Z;
-        const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < bestD2) { bestD2 = d2; freshNpc = obj; }
     }
+
     if (!freshNpc) {
-        // OBSERVE (2026-07-14, G1 increment): stamps EXIST but none qualified (out of 500cm / owned / a mirror
-        // / a parked ghost). Distinct decline from stamp-starvation above -- here the fresh B was seen but the
-        // WHICH-B match failed (the take-8/take-10 proximity-misfilter class). provenance{} as above.
+        // ORDER ASSERT (user rule 2026-07-14): B is captured at FinishSpawning, consumed here at A's
+        // destroy; the assembler measured spawn<destroy on every bracket (DESTROY_NO_SPAWN=0). A capture
+        // MISS while a verb bracket is live means either that invariant broke OR this is a genuine
+        // (non-conversion) destroy -- log the in-bracket case loud, then fall back to the stamp walk.
         if (coop::config::IsIniKeyTrue("vm_dispatch_log")) {
             const ue_wrap::vm_dispatch::ActiveVerb av = ue_wrap::vm_dispatch::CurrentThreadVerb();
-            const coop::element::ElementId reqEid = ActiveRequestVerbEid();
-            UE_LOGI("kerfur_convert: TryCapture DECLINE (%s) actor=%p -- %zu fresh stamp(s) but NONE qualified "
-                    "(>500cm / owned / mirror / parked) -- relay proceeds. provenance{vmActive=%d verbId=%d "
-                    "ctxSelf=%d reqEid=%d}",
-                    isHost ? "HOST" : "CLIENT", actor, g_freshNpcStamps.size(), av.active ? 1 : 0, av.verbId,
-                    (av.active && av.ctx == actor) ? 1 : 0,
-                    reqEid == coop::element::kInvalidId ? -1 : static_cast<int>(reqEid));
+            if (av.active || ActiveRequestVerbEid() != coop::element::kInvalidId)
+                UE_LOGW("kerfur_convert: 2a-capture MISS in-bracket (%s) actor=%p -- no captured B at the destroy "
+                        "edge (ORDER ASSERT: spawn<destroy expected) -- falling back to proximity walk",
+                        isHost ? "HOST" : "CLIENT", actor);
         }
-        return false;  // no conversion product beside it -> a genuine destroy -> generic relay
+        // ---- legacy stamp-list proximity fallback (the conversion-product test; retired once the
+        // deterministic captured-B path is hands-on proven; audit 2026-07-13 findings 1+2) ----
+        //   1. FRESH-SPAWN STAMP -- FinishSpawningActor'd within the last 2 s (the load-bearing
+        //      discriminator: a save-loaded / long-lived kerfur is NEVER stamped).
+        //   2. Not an established identity (HOST untracked by npc_sync; CLIENT not a bound NPC mirror
+        //      and not a PARKED ghost).
+        //   3. Within the verb's spawn radius of the dying prop (the anchor that (0,0,0) defeats).
+        const auto now = std::chrono::steady_clock::now();
+        PruneFreshNpcStamps(now);
+        if (g_freshNpcStamps.empty()) {
+            // OBSERVE (2026-07-14, G1 increment -- DECLINE reason + destroy provenance). provenance{}
+            // distinguishes the conversion verb's own self-destroy (vmActive + ctxSelf, or reqEid on the
+            // CallFunction route) from an unrelated teardown -- resolving K2-visibility in one line.
+            if (coop::config::IsIniKeyTrue("vm_dispatch_log")) {
+                const ue_wrap::vm_dispatch::ActiveVerb av = ue_wrap::vm_dispatch::CurrentThreadVerb();
+                const coop::element::ElementId reqEid = ActiveRequestVerbEid();
+                UE_LOGI("kerfur_convert: TryCapture DECLINE (%s) actor=%p -- STAMP LIST EMPTY (no fresh kerfur NPC "
+                        "stamped; client stamp-starved?) -- relay proceeds. provenance{vmActive=%d verbId=%d "
+                        "ctxSelf=%d reqEid=%d}",
+                        isHost ? "HOST" : "CLIENT", actor, av.active ? 1 : 0, av.verbId,
+                        (av.active && av.ctx == actor) ? 1 : 0,
+                        reqEid == coop::element::kInvalidId ? -1 : static_cast<int>(reqEid));
+            }
+            return false;  // nothing fresh in the world -> genuine destroy
+        }
+        std::unordered_set<void*> mirrors;
+        if (!isHost) CollectMirrorActors(/*wantProp=*/false, /*wantNpc=*/true, mirrors);
+        // Walk the STAMP LIST, not GUObjectArray -- the candidate universe is "kerfur NPCs finished
+        // in the last 2 s" (typically 0-1 entries), already class-gated at stamp time.
+        for (const auto& st : g_freshNpcStamps) {
+            void* obj = st.actor;
+            if (!obj || !R::IsLiveByIndex(obj, st.idx)) continue;
+            if (isHost) {
+                if (coop::npc_sync::GetNpcIdForActor(obj) != coop::element::kInvalidId) continue;
+            } else {
+                if (mirrors.count(obj)) continue;
+                bool parked = false;
+                for (const auto& g : g_parkedGhosts)
+                    if (g.actor == obj) { parked = true; break; }
+                if (parked) continue;
+            }
+            const ue_wrap::FVector loc = ue_wrap::engine::GetActorLocation(obj);
+            const float dx = loc.X - ploc.X, dy = loc.Y - ploc.Y, dz = loc.Z - ploc.Z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestD2) { bestD2 = d2; freshNpc = obj; }
+        }
+        if (!freshNpc) {
+            // OBSERVE (2026-07-14, G1): stamps EXIST but none qualified (out of 500cm / owned / mirror /
+            // parked) -- the WHICH-B match failed (the take-8/take-10 proximity-misfilter class that the
+            // captured-B path above eliminates). provenance{} as above.
+            if (coop::config::IsIniKeyTrue("vm_dispatch_log")) {
+                const ue_wrap::vm_dispatch::ActiveVerb av = ue_wrap::vm_dispatch::CurrentThreadVerb();
+                const coop::element::ElementId reqEid = ActiveRequestVerbEid();
+                UE_LOGI("kerfur_convert: TryCapture DECLINE (%s) actor=%p -- %zu fresh stamp(s) but NONE qualified "
+                        "(>500cm / owned / mirror / parked) -- relay proceeds. provenance{vmActive=%d verbId=%d "
+                        "ctxSelf=%d reqEid=%d}",
+                        isHost ? "HOST" : "CLIENT", actor, g_freshNpcStamps.size(), av.active ? 1 : 0, av.verbId,
+                        (av.active && av.ctx == actor) ? 1 : 0,
+                        reqEid == coop::element::kInvalidId ? -1 : static_cast<int>(reqEid));
+            }
+            return false;  // no conversion product beside it -> a genuine destroy -> generic relay
+        }
     }
 
     if (!isHost) {
