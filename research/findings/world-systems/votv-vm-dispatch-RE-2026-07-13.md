@@ -247,6 +247,15 @@ descend?" open item as GREEN, statically, before any 2a code.)
 
 ## Next
 
+> **⚠ SUPERSEDED 2026-07-14 — the 2a-repoint design below (07-13 nite) is retired.** The 2a-capture
+> IMPLEMENTATION /qf pass MEASURED the eid is per-form + K stable (`kerfur_convert.cpp:188-258`), so
+> "REPOINT / migrate the eid onto B / split `BindFormActor`" is FALSE. Converged model = **FULL-UNIFY A+**
+> (deterministic capture + **DRAIN** A's prop-eid at birth, a subtraction not a migrate; `BindFormActor`
+> NOT split; the 4 converge crutches collapse to 1). **2a-observe is COMPLETE + GREEN** (all gates incl. the
+> loot reject gate). Authoritative spec: `[[project-vm-dispatch-2a-capture-2026-07-14]]`. The RE facts above
+> this section (operand layout, body walk, variant census, containment [V]) all STAND; only the design
+> projection in this "Next" block is retired. Kept as dated history.
+
 **2a DESIGN /qf pass CONVERGED 2026-07-13 nite** (11 rounds + user injection, commit `5b58c86b`): the
 "suppress OUR eid-drain" mechanism was caught as the §9 crutch + REPLACED by REPOINT ==
 identity-migrate-at-birth (`SetActor` reverse-map re-key at B's birth → A husks eid-less via

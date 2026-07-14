@@ -4,10 +4,13 @@
 **Deployed DLL SHA256:** `1E41A8070635705CBDDC4C837926449D3DEE357DF5C7EA6F7DDDD678E0C8591D`
 (byte-identical on HOST, CLIENT_1, CLIENT_2, DEV — verified; supersedes 1802B5A3)
 
-**STATUS 2026-07-14:** gates 1 (dedup), 2-floppy, 3b (seam-order), 3c (B-index-live) all **GREEN** both roles
-(host 10:54 + 11:04 runs; client reconstructed from verbose lines). The ONE remaining item is the **loot
-gate (gate 2 REJECT side)** below — a bracketed spawn that is neither form nor floppy must land `spawn.otherIn`,
-NOT `formIn`. Everything else on this runbook is history; jump to "LOOT GATE" at the bottom.
+**STATUS 2026-07-14 — OBSERVE PASS COMPLETE, ALL GATES GREEN both roles.** gates 1 (dedup), 2-floppy,
+3b (seam-order), 3c (B-index-live): GREEN (host 10:54 + 11:04; client reconstructed from verbose lines).
+**Loot gate (gate 2 REJECT side): GREEN** (host 11:50 run — `prop_C` ×2 landed `spawn.otherIn`, `formIn`
+clean at 4/all-bLive=1; a REAL rejection, not a null). The design premises are measured. This runbook is now
+HISTORY; the NEXT step is the 2a-capture BUILD (see `[[project-vm-dispatch-2a-capture-2026-07-14]]`), whose
+verification take MUST include a **client-initiated turn-on** (every observe run had `UNBOUND=4` → the drain
+is untested).
 **Wire protocol:** UNCHANGED — this is observe-only; no packets added, no behavior changed.
 The kerfur conversion verbs run entirely unmodified. NO capture, NO repoint, NO converge.
 **Flags:** `vm_dispatch_log=1` set in HOST + CLIENT_1 inis (`gnatives_probe=0`, the retired probe).

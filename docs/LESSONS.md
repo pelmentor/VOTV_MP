@@ -167,7 +167,7 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   save-authoritative pos reconcile is SEND-SIDE ONLY (capture baseline + flush); the chip overlay
   auto-skips a non-chip eid, so no dup. *Look FIRST:* `FlushDivergedSavePositionsForSlot` +
   `UpdateChipHostPos`. `memory/lesson_pos_reconcile_generalizes_via_generic_receiver.md`
-- **To sync a VOTV world SYSTEM (servers/alarm/…), mirror the STATE + drive the notify-free re-applier
+- (Mirror STATE, not the verb — not because the verb is invisible (the GNatives substrate can now see EX_Local*), but because state-mirroring is convergent, path-agnostic, and handles the client's autonomous mutator. Verb brackets are for identity-flip / intent-attribution, where the fact you need exists only inside the verb's execution window.)**To sync a VOTV world SYSTEM (servers/alarm/…), mirror the STATE + drive the notify-free re-applier
   from the host — NEVER intercept the mutating verb** (breakServer/runTrigger are `EX_Local*` invisible).
   Poll the state field 1 Hz → broadcast on change → client raw-writes + reflected `check()`/`runTrigger`;
   client neutralizes its own autonomous mutator (disable ticker tick / zero the data array). *Look FIRST:*
@@ -272,15 +272,15 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   grep the guard's log line in a real log — no line = never fires OR silent; add it and find out which.
   `memory/lesson_guard_that_never_logs_is_a_dead_guard.md`
 - **A VM-dispatch bracket (GNatives-swap wrapper / self-bracket) runs MID-BYTECODE — do ZERO engine
-  calls in that window** — capture data only (pointers, eids off a LIVE actor, class checks) + the
-  identity-REPOINT (a pure DATA STORE: `SetActor` reverse-map re-key, NO engine dispatch); DEFER every
-  engine call (BindFormActor FORM-half, register, park=ProcessEvent, broadcast) to the EXISTING
-  two-phase-armed net-pump barrier. A nested ProcessEvent pump mid-verb corrupts (measured
-  `kerfur_convert.cpp:11-20`; park=PE `kerfur.cpp:132`). The substrate = deterministic CAPTURE +
-  identity-REPOINT-at-birth feeding the existing deferred converge — NOT a converge rewrite, NOT a
-  suppression (that framing was caught+removed 2026-07-13 nite, see
-  [[lesson-identity-migrate-at-birth-covers-every-map]]). Reusable for the whole VM-consumer class
-  (kerfur/melee/smart-items). *Look FIRST:* `docs/COOP_VM_DISPATCH_PLAN.md` §3.
+  calls in that window** — capture data only (pointers, eids off a LIVE actor, class checks) + a pure DATA
+  STORE (no engine dispatch); DEFER every engine call (register, park=ProcessEvent, broadcast, converge) to
+  the deferred barrier. A nested ProcessEvent pump mid-verb corrupts (measured `kerfur_convert.cpp:11-20`;
+  park=PE `kerfur.cpp:132`). **KERFUR DATA-STORE CORRECTED 2026-07-14:** the mid-verb store is a **DRAIN** of
+  A's prop-eid (subtract A from the reverse so A dies husk), NOT an identity-REPOINT/migrate — the impl /qf
+  measured the eid is per-form + K stable, so nothing migrates at birth (see the identity-map row above +
+  `[[project-vm-dispatch-2a-capture-2026-07-14]]`). Core discipline (zero engine mid-verb, defer to barrier)
+  is reusable for the whole VM-consumer class (kerfur/melee/smart-items). *Look FIRST:*
+  `docs/COOP_VM_DISPATCH_PLAN.md` §3 (SUPERSEDED banner points at the A+ spec).
   `memory/lesson_vm_bracket_zero_engine_mid_verb.md`
 - **The kerfur conversion verbs are SYNCHRONOUS bodies (no latent node) — so the form spawn
   (`FinishSpawningActor`) AND the `K2_DestroyActor(self)` both fire INSIDE the 0x45 bracket, every
@@ -289,16 +289,18 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   [V] two ways: import-resolved body walk + 18/18 hands-on (`722fbe18`). This is the load-bearing 2a
   premise — settled, do NOT re-dig. *Look FIRST:* `research/findings/world-systems/votv-vm-dispatch-RE-2026-07-13.md`
   (body walk + runtime). `memory/lesson_kerfur_verbs_synchronous_capture_in_window.md`
-- **Identity-migrate-at-birth must cover EVERY identity map, not the one you were thinking about.** The
-  correct morph/convert shape = repoint the eid onto successor B at B's `FinishSpawningActor` (measured to
-  precede A's `K2_DestroyActor`) so A dies eid-less (natural husk, `UnmarkKnownKeyedProp` returns on
-  `EidForActor==kInvalidId`) — ZERO suppression, dissolving the §9 `if(isMorphing)skip` crutch. TRAP: "the
-  eid" is not the whole identity surface — the HOST has a SECOND table (`g_actorToKerfurId`/`KerfurRecord.actor`,
-  `kerfur_entity.cpp:62-64`; client is eid-based, no KerfurId map) that `RebindLocalElementActor` does NOT
-  re-key → mid-window KerfurId resolves DEAD-A while eid resolves LIVE-B (heisenbug). FIX: split
-  `BindFormActor` into {actor-migrate ALL maps at birth} + {form-finalize at converge}. *Look FIRST:* grep
-  the entity's id/type + enumerate every keyed map BEFORE the design; `docs/COOP_VM_DISPATCH_PLAN.md` §3.
-  `memory/lesson_identity_migrate_at_birth_covers_every_map.md`
+- **When a design MIGRATES identity at birth, it must cover EVERY identity map keyed on the entity** —
+  GENERAL principle, holds for any repoint/rebind/re-key. TRAP that made it: "the eid" is not the whole
+  identity surface — the kerfur HOST has a SECOND table (`g_actorToKerfurId`/`KerfurRecord.actor`,
+  `kerfur_entity.cpp:62-64`; client is eid-based, no KerfurId map) that an eid-only rebind does NOT re-key →
+  mid-window KerfurId resolves DEAD-A while eid resolves LIVE-B (heisenbug). **KERFUR RESOLUTION CORRECTED
+  2026-07-14: kerfur does NOT migrate at birth at all** — the impl /qf measured the eid is per-form + K
+  stable (`kerfur_convert.cpp:188-258`), so the converged model (A+) DRAINS A's prop-eid at birth (a pure
+  subtraction, NOT a repoint), KerfurId re-key STAYS at converge, and `BindFormActor` is NOT split. The
+  2nd-map trap is precisely WHY kerfur chose drain-over-migrate: migrating the eid at birth while KerfurId
+  finalizes late IS the heisenbug, so kerfur migrates NOTHING at birth. *Look FIRST:* grep the entity's
+  id/type + enumerate every keyed map BEFORE any migration design; `[[project-vm-dispatch-2a-capture-2026-07-14]]`
+  for the A+ resolution. `memory/lesson_identity_migrate_at_birth_covers_every_map.md`
 - **Before installing a PERMANENT / un-removable seam (process-lifetime GNatives swap, never un-swapped),
   measure its real cost in a THROWAWAY removable probe FIRST** — including the ENABLED=false disabled path
   (the eternal tax the process pays forever) and a WORST-CASE frame, not idle. You can't roll back a
