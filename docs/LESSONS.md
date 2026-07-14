@@ -292,7 +292,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   on every client turn-on and declined SILENTLY (its no-qualified-B path logged nothing). Instrumenting the
   DECLINE path (not just suppress) revealed it. So instrument EVERY exit, not just success. *Look FIRST:*
   grep the guard's log line in a real log — no line = never fires OR silently declining; add it on the fire
-  AND decline paths and find out which BEFORE building on it or deleting it.
+  AND decline paths and find out which BEFORE building on it or deleting it. **SECOND INVERSE 2026-07-14 eve
+  (log LIES the OTHER way):** `prop_lifecycle.cpp` Init POST logged `"HOST broadcasting SPAWN"`
+  UNCONDITIONALLY, above the sole-express suppress gate — so a SUPPRESSED conversion still printed a broadcast
+  that never happened; behavior right, log invented a failure, and it cost a detour chasing a phantom
+  double-broadcast in the 20:20 take. Same root one layer down (log-SITE vs code-PATH): **a fire-line must be
+  emitted from INSIDE the branch it describes — logging before a gate logs an INTENTION, not an event**, and an
+  intention-log makes a working seam read as broken. Fixed `6b246201`.
   `memory/lesson_guard_that_never_logs_is_a_dead_guard.md`
 - **A VM-dispatch bracket (GNatives-swap wrapper / self-bracket) runs MID-BYTECODE — do ZERO engine
   calls in that window** — capture data only (pointers, eids off a LIVE actor, class checks) + a pure DATA
