@@ -260,6 +260,17 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   raw bytes-0-7 vs an 8-byte FName NEVER matches (v1 probe's silent-miss). LIVE-measured; the probe-first
   STEP 1.0 caught it BEFORE the un-removable swap. *Look FIRST:* dump the live operand as THREE int32s,
   expect `op[0]==op[1]`. `memory/lesson_fscriptname_operand_layout_cmpidx_dispidx_number.md`
+- **A guard/suppression that never LOGS is indistinguishable from one that never FIRES** — the client
+  kerfur menu-cancel hooks the PE-VISIBLE menu entry, but the conversion verb is `EX_LocalVirtualFunction`
+  (PE-invisible), so the cancel NEVER reached it (*"cancel/queue lines never appeared in any real session"*,
+  `kerfur_convert.cpp:97,402`) — the client has been converting LOCALLY then reconciling after the fact, and
+  that dead guard is the mechanism that made take-9-bug1 possible ("kerfur deleted on both peers"). THREE
+  this session, same shape (dead cancel · Model-B eid-reuse [§3 said rebindInPlace, code mints per-form eids]
+  · "the two-phase arm record" = actually FOUR converge mechanisms): the DOC describes intent, the CODE
+  describes behavior, nobody diffed them. Instrument the SUPPRESSION path (one line on every fire); before
+  building ON a documented mechanism, grep its fire-line in a real session to prove it RUNS. *Look FIRST:*
+  grep the guard's log line in a real log — no line = never fires OR silent; add it and find out which.
+  `memory/lesson_guard_that_never_logs_is_a_dead_guard.md`
 - **A VM-dispatch bracket (GNatives-swap wrapper / self-bracket) runs MID-BYTECODE — do ZERO engine
   calls in that window** — capture data only (pointers, eids off a LIVE actor, class checks) + the
   identity-REPOINT (a pure DATA STORE: `SetActor` reverse-map re-key, NO engine dispatch); DEFER every
