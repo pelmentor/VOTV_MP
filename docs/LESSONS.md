@@ -379,10 +379,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 - **NEVER raw-write a UE field the game sets via a setter UFunction** — call the setter. `memory/feedback_no_raw_write_of_setter_managed_fields.md`
 - **UE `TArray<struct>` stride = 16-ALIGNED size, NOT the raw `Size:`.** `memory/feedback_tarray_stride_aligned_not_raw_size.md`
-- **plain `IsLive` passes a RECYCLED slot** — cached instances need `IsLiveByIndex`. A recycled-slot fix
-  must sweep EVERY cache of that entity: the 07-04 audit converted `daynightcycle.cpp Cycle()` but MISSED
-  `weather_sync.cpp ResolveCycle()` → the SAME crash recurred 2026-07-15 (`setRainParticles` on a recycled
-  `crematorDoor`, exit-to-menu); fixed at weather_sync.cpp:154. `memory/lesson_islive_recycled_slot_blind_use_by_index.md`
+- **plain `IsLive` passes a RECYCLED slot** — cached instances need `IsLiveByIndex`. A written lesson is NOT
+  proof its enumeration was run: this lesson named `daynightcycle.cpp Cycle()` "good" but the sweep was never
+  done → `weather_sync.cpp ResolveCycle` (setRainParticles crash, exit-to-menu 07-15) + TWO more
+  (`world_actor_sync.cpp:380` OnDisconnect drain + `world_actor_mirror.cpp:208` OnDestroy — K2 on a cached
+  mirror actor) all slipped it. Re-run the grep for real (`\bIsLive\s*\(` minus fresh/same-frame + autotest,
+  keep cached-ptr + UFunction-CALL + teardown-reachable); all fixed 07-15.
+  `memory/lesson_islive_recycled_slot_blind_use_by_index.md`
 - **A runtime-spawned `AStaticMeshActor` is STATIC mobility** → set Movable BEFORE `SetActorLocation` (a
   Static root silently no-ops the teleport). `memory/lesson_runtime_staticmeshactor_must_be_movable.md`
 - **SEH shields must NEVER absorb `0xC00000FD`** (stack overflow). `memory/lesson_never_absorb_stack_overflow.md`
