@@ -426,5 +426,17 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   LATER** (2026-07-10, spawn_authority: initial park pass found 0 instances; the fix is
   hunt-until-first-hit at 1 Hz then relax). Instance #4 of the snapshot-before-state-ready class.
   Look FIRST: `memory/feedback_snapshot_before_state_ready.md`
+
+- **Making a static/absent MIRROR MOVE can WAKE dormant per-peer OUTPUT generation** (2026-07-15, desk
+  cursor v109). The jaggy-cursor fix animated the host's coords-panel cursor mirror; the host's native BP
+  then began appending LOCAL `MOVE_*` coordLog lines from that motion (silent while the mirror was frozen),
+  and `ProduceLogLines` running on "EVERY peer" shipped them → host shipped 78 log lines vs client 13 = a
+  NEW divergence the fix created. You test the axis you fixed (cursor = smooth) and miss the downstream axis
+  the motion now DRIVES (the log). Rule: after animating any mirror, enumerate every per-peer producer that
+  reads the now-moving field (log producers, tick-sims, ship counters) and gate it to the owner / suppress
+  the non-owner path. A "mirror the input" change is incomplete until "don't ALSO generate the output
+  locally" is done. Family of OWNER-EFFECT + mirror-STATE-not-verb. Look FIRST:
+  `memory/lesson_smooth_mirror_wakes_dormant_per_peer_generation.md`,
+  `memory/project_desk_console_sync_2026-07-15.md`
 - **NEVER `git add -A`/`<dir>` over held WIP — explicit paths or stash.** `memory/lesson_never_git_add_A_over_held_wip.md`
 - **AUTONOMOUS pile test loop harness** (reference). `memory/reference_pile_test_harness.md`
