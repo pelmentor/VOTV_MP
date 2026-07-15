@@ -139,6 +139,12 @@ inline constexpr size_t FSlateColor_ColorUseRule = 0x10;       // within UTextBl
 // the UVerticalBox that holds button_start (NEW GAME), inside ui_menu_C. All UMG.hpp /
 // SlateCore.hpp cited.
 inline constexpr size_t UWidget_Slot = 0x0028;                 // UWidget::Slot (UPanelSlot*) -- the layout-slot back-pointer. UMG.hpp:1742
+// UVerticalBoxSlot layout region (UMG.hpp:1705-1710): Size@0x38 (FSlateChildSize,8)
+// + Padding@0x40 (FMargin,16) + HorizontalAlignment@0x58 + VerticalAlignment@0x59.
+// Cloned as ONE block so an injected item's slot matches a native item's exactly
+// (indent + spacing). Excludes the base UPanelSlot Parent/Content ptrs (< 0x38).
+inline constexpr size_t UVerticalBoxSlot_LayoutStart = 0x0038;
+inline constexpr size_t UVerticalBoxSlot_LayoutSize  = 0x0022;  // 0x38..0x5A (Size+Padding+H/VAlign)
 inline constexpr size_t UPanelSlot_Parent = 0x0028;            // UPanelSlot::Parent (UPanelWidget*) -- the containing panel. UMG.hpp:1009
 inline constexpr size_t UPanelSlot_Content = 0x0030;           // UPanelSlot::Content (UWidget*). UMG.hpp:1010
 inline constexpr size_t UPanelWidget_Slots = 0x0108;           // UPanelWidget::Slots (TArray<UPanelSlot*>). UMG.hpp:1016

@@ -323,6 +323,16 @@ bool InjectCanvasButton(void* refButton, const wchar_t* label, void* refText,
             *reinterpret_cast<FLinearColor*>(s + P::off::UTextBlock_ColorAndOpacity);
         *(d + P::off::UTextBlock_ColorAndOpacity + P::off::FSlateColor_ColorUseRule) =
             *(s + P::off::UTextBlock_ColorAndOpacity + P::off::FSlateColor_ColorUseRule);
+        // Match the reference's LAYOUT + shadow too, not only font+colour -- else the
+        // label read as "different font, indented": a fresh UTextBlock does not inherit
+        // the native menu text's Justification (-> our label sat indented vs the native
+        // left-aligned items) nor its drop SHADOW (native menu text is shadowed; a fresh
+        // block has none, which reads as a lighter/different face).
+        *(d + P::off::UTextLayoutWidget_Justification) = *(s + P::off::UTextLayoutWidget_Justification);
+        *reinterpret_cast<FVector2D*>(d + P::off::UTextBlock_ShadowOffset) =
+            *reinterpret_cast<FVector2D*>(s + P::off::UTextBlock_ShadowOffset);
+        *reinterpret_cast<FLinearColor*>(d + P::off::UTextBlock_ShadowColorAndOpacity) =
+            *reinterpret_cast<FLinearColor*>(s + P::off::UTextBlock_ShadowColorAndOpacity);
         SetTextOnBlock(txt, label);
     } else {
         ConfigureTextBlock(txt, label, FLinearColor{1.f, 1.f, 1.f, 1.f}, 24, /*Center*/ 1);
@@ -387,6 +397,20 @@ bool InjectCanvasButton(void* refButton, const wchar_t* label, void* refText,
     } else {
         addToVBox(button);
         UE_LOGW("engine: InjectCanvasButton -- list snapshot empty (n=%d); appended at bottom", prevN);
+    }
+
+    // Match the reference item's VBox SLOT layout (padding + H/V alignment + size) so
+    // our button sits EXACTLY like NEW GAME -- same indent, same spacing. The slot was
+    // created fresh by AddChildToVerticalBox with defaults; copy the reference's layout
+    // region (excludes the base UPanelSlot Parent/Content ptrs, so no aliasing).
+    {
+        void* ourSlot = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(button) + P::off::UWidget_Slot);
+        void* refSlot2 = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(refButton) + P::off::UWidget_Slot);
+        if (ourSlot && refSlot2) {
+            std::memcpy(reinterpret_cast<uint8_t*>(ourSlot) + P::off::UVerticalBoxSlot_LayoutStart,
+                        reinterpret_cast<uint8_t*>(refSlot2) + P::off::UVerticalBoxSlot_LayoutStart,
+                        P::off::UVerticalBoxSlot_LayoutSize);
+        }
     }
 
     // Force Visible (input-receiving) so the hover/click poll sees it.
