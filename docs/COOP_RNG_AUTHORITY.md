@@ -137,6 +137,7 @@ per-peer today. FIX (planned, /qf next): host-authoritative SIM — host runs th
 client SUPPRESSES its own accrual + mirrors the outputs; the freq/pol knobs are host-sim-inputs (client
 intent up, host owns the value + streams the animated offset back, INTERPOLATED like the cursor). Full RE +
 field-ownership table: `research/findings/computers-devices/votv-desk-download-machine-RE-2026-07-15.md`.
+Subsystem home (all signal-desk elements + their status): `docs/signals/TRACKER.md` (this RNG row = its OPEN-0).
 See `[[lesson-rng-in-rate-path-is-mechanic-desync]]`.
 **Divergence now MEASURED (2026-07-15, `2de202ed` desk_diag probe hands-on):** end-state host
 `decoded=0.0064 pol=1` vs client `decoded=0.0262 pol=0` — different progress AND polarity, confirming the
