@@ -48,3 +48,20 @@ Validate q-tag -> read divergence -> `/qf` the freq/polarity host-authoritative 
 sim+RNG, client suppresses its tick, knobs intent-up, offsets INTERPOLATED like the cursor, screen
 split by ownership). Then the ping (`coord_isPing` external setter) + PC power button each need their
 own surface-resolution. RE foundation: `research/findings/computers-devices/votv-desk-download-machine-RE-2026-07-15.md`.
+
+---
+## UPDATE 2026-07-15 eve — probe SHIPPED + analyzed; pending hands-on is now CLOCK F
+The desk_diag probe RAN (session 17:07-17:18) and produced valid census; committed `2de202ed`.
+MEASURED divergences: `decoded`/`pol` (host 0.0064/1 vs client 0.0262/0), `coordCooldown`
+(per-peer timer), `coordLog2Text` (host 55 vs client 34 lines), `coordIsPing` (local-only). The
+freq/pol FILTER offsets stayed 0 (no signal caught) → that specific divergence still needs a
+re-test with a LOCKED signal, but the rate divergence is proven. The host-auth freq/pol FIX is
+UNBUILT (next, needs `/qf`). Details folded into `docs/COOP_RNG_AUTHORITY.md` T2-5b.
+
+### CLOCK design F — the current pending hands-on (deployed `9a4a2ef8b5f3a142`+, v110)
+NOTE: a proto bump to 110 + this doc pass will REDEPLOY a new hash — use whatever
+`tools/deploy-all.ps1` last printed / `wc`-verified, NOT 9a4a2ef, for the clock test.
+TAKE (2 peers, one look): host + client show the **same HH:MM at a paused moment**. Log cue
+(client): one-shot `time_sync: applied CONNECT-EDGE host clock` on join, then
+`time_sync: applied STREAM host clock` ~every 10 s; and NO `SendReliable(TimeSync)` spam on the
+host. Design: `research/findings/computers-devices/votv-clock-sync-design-F-2026-07-15.md`.

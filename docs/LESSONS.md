@@ -179,8 +179,21 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **Host TRACKING/enroll gates on HOSTING, never `connected()`.** `memory/lesson_tracking_gates_on_hosting_not_connected.md`
 - **EVERY session-end path runs the FULL teardown fanout** — AND session-scoped UI (chat feed/input/
   bubbles/nameplate/voice_panel) dies at the FLEE funnel (`FleeToMainMenu`), NOT `DisconnectAll` (which
-  also runs on the HOST keeping its world, so it must not clear on-screen UI). *Look FIRST:* net_pump.cpp:184
+  also runs on the HOST keeping its world, so it must not clear on-screen UI). **A RESET alone is not
+  enough if a per-tick EDGE DETECTOR re-fires AFTER it:** `session.Stop()` flips slots -> the next
+  `event_feed::Update` re-Pushes "Host left the game" into the just-cleared feed (client self-quit,
+  `e02343c4`) -> also disarm the producer (`SuppressPeerLeaveEdges`). *Look FIRST:* net_pump.cpp:184
   (chat-leak-into-menu, 2026-07-15). `memory/lesson_every_session_end_path_full_teardown_fanout.md`
+- **A host-auth FROZEN mirror displaying slightly stale = a TRANSPORT+CADENCE bug, NOT authority.** Fix
+  the refresh (periodic UNRELIABLE absolute snapshot at display cadence, pose-stream pattern); do NOT hand
+  the client simulation + clamp it back (lateral/regression + a per-broadcast site-list). Clock design F
+  (v110, `2dde3e16`): client stays frozen mirror, clock streams `ClockPose=37`. *Look FIRST:* smooth-sun
+  needs advancing `totalTime` through `ReceiveTick` which fires every `newMinute`/`newHour` -> that path
+  is gated on enumerating those consumers. `memory/lesson_frozen_mirror_desync_is_transport_not_authority.md`
+- **`subsystems::Install` is called EVERY net_pump tick (idempotent contract)** — net_pump.cpp:1014, "one-
+  shot install ... idempotent"; each sub-Install MUST latch its noisy/expensive work or it re-runs per
+  frame (desk_diag ENABLED banner ~37k/session, `2de202ed`). *Look FIRST:* add a `static bool` latch to
+  any new Install that logs/allocates/hooks/resolves. `memory/lesson_subsystems_install_runs_every_tick_must_latch.md`
 - **Every client-side SUPPRESSION is a LOAN, not a purchase (N=3: weather 06-11, serverbox 07-09,
   garbage_sync 07-10).** Persistent-state neutralizations (tick-disable, field-zero, TimeScale=0,
   suppress flags) need an EXPLICIT OnDisconnect restore; fn-body PRE-cancels SELF-restore ONLY when
@@ -437,6 +450,12 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 ## 8. Build / deploy / git hygiene
 
 - **`deploy-all.ps1` deploys Release** → ALWAYS build Release + hash-verify. `memory/lesson_deploy_sources_release_config_not_relwithdebinfo.md`
+- **ANY wire-format change bumps `kProtocolVersion`** (new/removed `MsgType`/`ReliableKind`, changed
+  payload, changed reliability/cadence) — else two builds differing on the wire connect at the same
+  version + silently degrade; the gate (`session.cpp:352-371`) HARD-CLOSEs on a mismatch instead. Caught
+  by the `/documentize` sweep 2026-07-15 (clock F added `ClockPose=37` + dropped the reliable periodic on
+  v109; bumped to 110). *Look FIRST:* any diff touching `protocol.h` enums/payloads or a `Send*` flag.
+  `memory/feedback_wire_format_change_bumps_protocol_version.md`
 - **The smoke HOST slot `s_1234` is STATEFUL — restore `coop_backup` FIRST.** `memory/lesson_s1234_host_slot_stateful_coop_backup.md`
 - **`votv-coop.log` is TRUNCATED at boot (no rotation)** — copy a peer's log to the scratchpad BEFORE any
   mid-run relaunch or the previous life's evidence is destroyed (2026-07-10: an 18-min census slice lost).
