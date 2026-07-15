@@ -99,6 +99,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   the desk_diag `q=Y` tag (game-jittered knobs → always-N; unchecked active-filter integration → q=Y
   mid-ramp). Prefer clean DISCRETE state over float-delta heuristics; first check the log = do `q=Y`
   samples cluster at the real pauses. `memory/lesson_comparability_tag_inputs_need_measured_validation.md`
+- **A handed-down measurement / build / on-disk noun is a CLAIM, not a fact** — verify it with grep
+  (SDK+reflection+src) and `git status` BEFORE building on it, whoever asserts it (user, critic,
+  prior-turn summary) and however confidently/repeatedly; **re-assertion AFTER a grep-refutation is a
+  STRONGER red flag, not weaker.** Born 2026-07-15: four consecutive fabricated nouns
+  (`serverStorageComp`/`ELEMENT`/`getAll`/`getServerStorage`, all 0 hits) + a "ship it" for a build
+  `git status` showed never existed — caught every time by grep+git, never by reasoning.
+  *Look FIRST:* `memory/feedback_verify_handed_down_measurement_before_building.md`
 
 ## 2. Join-window identity & the DUP-prone zone (measure before touching)
 
@@ -268,6 +275,14 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   the client's own load mis-read 2 swapped default rows as player deletes → EmailDelete broadcast →
   host rows deleted). Any poll-diff over save-backed state must gate on `world_load_episode::InEpisode()`.
   `src/coop/world/email_sync.cpp` + `coop/session/world_load_episode.h`.
+
+- **Mirroring a multi-entry engine array needs NO lock-free scheme if all readers are GT UFunctions** —
+  census the readers by disasm first; when every reader is game-thread and none caches the array across
+  the write, GT run-to-completion makes a single-GT-task clear+repopulate atomic w.r.t. them (the only
+  tear is splitting it across frames). No build-then-swap, no generation counter — just overwrite in one
+  fn call + notify-free re-apply of derived state. Measured for container `GObjStack[Index].obj`
+  (`recalculateNames`/`getObj`/`updateVolumesAndMass`/UI-copy all GT, 2026-07-15 `bp_reflect`).
+  *Look FIRST:* `memory/lesson_gobjstack_mirror_single_gt_task_overwrite_atomic.md`
 
 ## 4. Dispatch, hooks & input seams
 

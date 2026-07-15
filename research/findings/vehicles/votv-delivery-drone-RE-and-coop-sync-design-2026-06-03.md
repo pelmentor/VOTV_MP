@@ -195,8 +195,12 @@ NULL -> the 'dust' param was never set -> invisible dust = the user's "no dust" 
   emission/render) -> may need to NOT suppress the whole tick (neutralize only the flight integrator) or
   re-enable/re-register the specific FX components. (2) **Drone SACK INVENTORY contents sync** (the user's "items
   inside sack not synced"): the container ACTOR mirrors via the prop pipeline, but the ITEMS INSIDE it
-  (`Aprop_container_C.propInventory`) are a SEPARATE sync gap -- RE whether the prop getData/loadData Fstruct_save
-  already carries the inventory or it needs its own packet.
+  (`Aprop_container_C.propInventory` -> `saveSlot.GObjStack[Index].obj`) are a SEPARATE sync gap.
+  **RESOLVED to a DESIGN (2026-07-15, NOT built):** a 15-round `/qf` (sack = motivating instance) converged
+  on a host-authoritative dupe-preventing `container_contents_sync` -- population field-mirror + birth-gate,
+  take gate-before at the UMG slot `OnClicked` seam. Design home: `docs/items/container.md` §3; full trail
+  `[[project-drone-sack-contents-qf-design-2026-07-15]]`. ONE open probe-gate: is the slot `OnClicked`
+  delegate PE-hookable+cancelable (clean) vs GNatives fallback. No code, no build.
 
 ---
 

@@ -4,7 +4,9 @@ RE pass 2026-07-11 (static bytecode, offsets computed with the validated `resear
 sizer; call censuses resolve StackNode import indices per `[[lesson-bp-json-grep-resolve-imports]]`).
 Sources: `research/bp_reflection/{propInventory,prop_container,prop_inventoryContainer_player,
 uicomp_playerInvContainerSlot,uicomp_playerInvSlot,ui_playerInventory,prop}.json`, CXXHeaderDump,
-and the shipped mod code (cited file:line). Sync NOT designed — §3 is TBD.
+and the shipped mod code (cited file:line). Sync DESIGNED (§3, /qf-converged 2026-07-15) — DESIGN,
+not built, no code; ONE open probe-gate (the slot `OnClicked` PE-hookability). Full trail:
+`[[project-drone-sack-contents-qf-design-2026-07-15]]`.
 
 Naming trap up front: the wire `ReliableKind::ContainerState` (interactable_sync.cpp:98-107) syncs
 **`prop_swinger_C` LIDS** (wardrobe doors etc.), NOT this system. `prop_container_C` has **no lid
@@ -282,51 +284,72 @@ self-simulating world-prop state = divergence class).
 | container actor itself (pose/grab/destroy) | prop lane (already owned there) | — | existing keyed-prop lanes [V, COOP_SYNC_MAP:86] |
 | prop_openContainer itemsInside membership | TBD (member actors already ride prop lanes) | consistent membership OR proven-safe divergence | NOT CARRIED; garbage subclass tick cancelled client-side (garbage_sync.cpp) |
 
-## 3. Coop design (primary, 2026-07-11 — DESIGN, not built)
+## 3. Coop design (/qf-converged 2026-07-15 — DESIGN, not built, no code)
 
-**One mechanism: a host-canonical CONTENTS-LIST state mirror, key/eid-addressed, driven by a
-1 Hz per-container count-diff.** Chosen over verb intents because the mutating verbs are
-EX-internal/unproven-hookable (§1.3 addObject [?]; `[[lesson-votv-world-system-sync-mirror-state-not-verb]]`),
-and over any Index-based addressing because GObjStack Index values are PER-PEER (append-only,
-minted locally — a mid-session container gets different Index values on each peer; §1.2/§4).
+> SUPERSEDES the 2026-07-11 "1 Hz count-diff post-hoc report" design that ACCEPTED the
+> concurrent-take dupe ("Races accepted in Inc-1"). RULE 1 rejects an accepted-dupe design; a
+> 15-round `/qf` (drone sack as the motivating instance) converged on the dupe-PREVENTING shape
+> below. Do NOT re-propose the count-diff/accept-the-race approach. Full trail:
+> `[[project-drone-sack-contents-qf-design-2026-07-15]]`.
 
-- **Detection**: both peers walk `gamemode.allContainers` (the game's own registry, §1.3
-  ReceiveBeginPlay) at 1 Hz reading ONLY `GObjStack[propInventory.Index].obj.Num` per container
-  (raw memory via reflection offsets, no UFunction dispatch — serverbox-poll cost class). A count
-  change on a container = a contents mutation on THIS peer (take-out, put-in, addLoot, burp).
-  Count-only deliberately misses `moveIndex` reorders (rare; Inc-2 adds an order hash).
-- **Authority flow (the email-delete/serverbox shape)**: on a local count change, a CLIENT sends
-  the container's FULL record list to the host as a post-hoc action report (it cannot be a
-  request — the native verb already ran); the HOST applies it to its own slot and rebroadcasts
-  the canonical list; a HOST local change broadcasts directly. Receivers overwrite their slot
-  wholesale (idempotent; no index races on the wire — last host word wins) and refresh the
-  actor's parallel accounting (`updateVolumesAndMass`/`recalculateNames` — dispatchability [?],
-  else recompute in C++; build-time item).
-- **Wire payload**: the full `Fstruct_save` records (open question 2 answered: class-only loses
-  the fridge flag/uses/keys that live INSIDE the record, §4). Serializer = the live-verified
-  `ue_wrap/inventory.h` record machinery (player inventory items are the same record shape, §1.2).
-  Addressed by container prop key/eid, chunked via blob_chunks if a list exceeds one frame.
-- **Loot divergence closes for free**: a mid-session client container (mirror or local) rolls its
-  own loot into its own slot, then the host's canonical broadcast (triggered by the HOST copy's
-  own 0→k count change) overwrites it — no init/addLoot hook needed at all (mirror-step-3 by
-  state, not source-kill). Add the missing `docs/COOP_RNG_AUTHORITY.md` row for addLoot, closed
-  by this lane.
-- **Exclusions**: `prop_inventoryContainer_player_C` (the backpack) is class-excluded — it is
-  per-player state owned by player_inventory_sync; mirroring it here would fight that lane.
-  `prop_openContainer` stays out (different model, live actors already ride prop lanes; its
-  itemsInside probe = Inc-3). Locked stays static (§1.3) pending pryingCrowbar RE.
-- **Races accepted in Inc-1** (documented, native-parity): two peers extracting the same record
-  inside one convergence window can double-spawn the item (native SP has no arbitration either);
-  the GHOST/LOSS divergences — the user-visible bugs — converge ≤1 s. Host adjudication
-  hardening (reject impossible reports) = Inc-2.
-- **Late-join**: already correct at join via the v56 save blob (§1.2); this lane keeps it
-  correct afterward. New mid-session containers: the actor crosses via the prop lanes, contents
-  via the first count-diff broadcast.
+**INVARIANT: a client cannot authoritatively mutate a host-owned container's contents. The HOST
+is the sole author of the canonical contents; the client mirror is a read-only host-ordered copy.**
+The design splits into TWO mutations with two mechanisms (fusing them was the trap the `/qf` caught):
 
-**Increments**: Inc-1 = `coop/props/container_contents_sync.{h,cpp}` (count-diff + key-addressed
-full-list mirror + backpack exclusion + RNG tracker row + SYNC_MAP row). Inc-2 = order hash /
-UI-open refresh nudge / host adjudication / burp+spill edge audit. Inc-3 = prop_openContainer
-probe + doctrine call.
+- **POPULATION** (drone deposit via `compileOrder`→`addObject`; `addLoot` birth roll; any host-side
+  add/remove) — HOST-authored, FIELD-mirrorable. Fix = the `alarm_sync` shape
+  (`[[lesson-votv-world-system-sync-mirror-state-not-verb]]`): host-authoritative array mirror of
+  `GObjStack[Index].obj` + BIRTH-GATE the client mirror container (pre-allocate a local GObjStack
+  slot + set member `Index>=0` BEFORE `FinishSpawningActor` so `init` skips its self-register +
+  `addLoot` — §1.2 GreaterEqual gate; no self-rolled garbage to hide, gate-off-at-birth not
+  overwrite-after). **ATOMIC-OVERWRITE INVARIANT (measured, reader census below):** apply the whole
+  clear+repopulate in ONE game-thread task (one fn call), never split across frames — that is
+  sufficient because ALL readers are GT UFunctions (GT run-to-completion → a reader runs entirely
+  before/after the apply, never mid-populate). **NO build-then-swap / generation counter needed.**
+  After the overwrite, call `recalculateNames` + `updateVolumesAndMass` + fire `inventoryUpdated`
+  so the parallel `nameData`/volume and any open UI refresh (the notify-free re-applier).
+- **TAKE** (discrete player click → `getObject`→`takeObj`) — MEASURED-NEGATIVE for field
+  neutralization (propInventory field census: no disable flag `takeObj` checks; `takeObj@0-1568`
+  has no entry gate). A take is a one-shot player action, not a continuous generator, so
+  `alarm_sync` cannot reach it. Dupe-prevention = **host-authoritative take, GATE-BEFORE** (never
+  correct-after: an optimistically-spawned item lands in the backpack and `player_inventory_sync`,
+  a SEPARATE lane, can propagate it before a deny arrives = cross-lane leak). The transfer verbs are
+  `EX_Local*` → pre-hoc unhookable (§1.3), BUT the take is AUTHORED one layer up at the UMG **Button
+  `OnClicked` delegate** (`BndEvt__Button_103_...OnButtonClickedEvent` → ubergraph → `CallFunc_getObject`,
+  `uicomp_playerInvContainerSlot`) — a seam that fires BEFORE the verb. On a CLIENT: intercept the
+  click → suppress the local `getObject` → send a request → host adjudicates against its LIVE
+  GObjStack (single game thread serializes concurrent requests; the 2nd finds the record gone → DENY)
+  → the item materializes FROM the host. Loser: nothing materializes (no spawn, no yank, no flicker).
+- **Addressing**: the client names the record via the host-published canonical list (a host-minted
+  id or the full `Fstruct_save`, which `takeObj`'s `Output` param also returns); the host validates
+  against its live list (stale → deny). Index is PER-PEER append-only (§1.2/§4) → never the wire
+  address. `Fstruct_save` serializer = the live-verified `ue_wrap/inventory.h` record machinery.
+- **Exclusions**: `prop_inventoryContainer_player_C` (backpack) class-excluded (player_inventory_sync
+  owns it). `prop_openContainer` out (live-actor model, Inc-3). Locked stays static pending
+  pryingCrowbar RE. Put-in = LOSS not dupe (separate: same host-request mechanism, no contention
+  arbitration; overlap/use paths have no UI seam → post-hoc). `moveIndex` reorder deferred
+  (content-addressing makes it non-duping).
+
+**THE ONE OPEN GATE (needs a read-only game-probe):** is the slot Button `OnClicked` delegate
+PE-dispatched AND cancelable on the client (can our observer skip the original so `getObject` never
+runs)? **PASS** → intercept-at-click-and-reroute (clean, cheap, no substrate). **FAIL** → GNatives
+`EX_Local*` verb-interception (`docs/COOP_VM_DISPATCH_PLAN.md`) is the fallback (kerfur-class effort).
+Every `/qf` fork pushed AWAY from GNatives; this probe is the last thing that could force it. Probe =
+an ini-gated read-only `container_take_probe` (client PRE-observer on the OnClicked delegate; logs
+fires? + does skipping suppress the `getObject` spawn). UNWRITTEN.
+
+**Reader census (PERFORMED 2026-07-15, `bp_reflect` disasm):** readers of `GObjStack[Index].obj` =
+`recalculateNames` (full-array `Array_Get` loop, re-resolves per element, no cached pointer),
+`getObj(index)` (`Array_IsValidIndex` bounds-check → single-element read), `updateVolumesAndMass`
+(recompute volume/mass), UI `uicomp_playerInvContainerSlot` (`init`/`changeInfo`/`setAmount` render
+COPIED display data, populate on `inventoryUpdated`). ALL are game-thread UFunctions; the client is
+ephemeral (no off-GT save reader). → single-GT-task overwrite is atomic w.r.t. every reader (this is
+what killed the build-then-swap/generation-counter idea — no reader holds the array across the write).
+
+**Build order (when the probe greenlights):** (1) population mirror + birth-gate + single-task
+overwrite (fully specced); (2) the take gate (mechanism per the probe result); (3) put-in (symmetric
+request); (4) burp/spill fall out of host-authority. `coop/props/container_contents_sync.{h,cpp}`,
+backpack-excluded, + a `COOP_RNG_AUTHORITY.md` addLoot row + a `COOP_SYNC_MAP.md` row on build.
 
 ## 4. Caveats / known quirks
 
@@ -360,8 +383,14 @@ Proven (static bytecode, offsets sizer-computed; live tags cited from shipped-co
 - The full verb census + entry points (all ubergraph stubs mapped to entry offsets).
 - The UI routes all reduce to getObject/addObject (slot + ui ubergraphs).
 - Mod coverage/gaps as cited in §1.6/§1.7 (file:line).
+- **Reader census (2026-07-15, `bp_reflect` disasm):** every reader of `GObjStack[Index].obj`
+  (`recalculateNames`/`getObj`/`updateVolumesAndMass`/UI-copy) is a game-thread UFunction and none
+  caches the array across the write → a single-GT-task overwrite is atomic w.r.t. them (§3).
 
-Open questions a design pass must answer (no designs here):
+Open questions — the 2026-07-15 `/qf` design pass (§3) ANSWERED 1-4 (host-owned gate-before-at-
+OnClicked; full `Fstruct_save` on the wire; loot via birth-gate + host mirror; put-in seam = the
+OnClicked click-intercept). RESIDUAL: the ONE probe-gate in §3 (is OnClicked cancelable?), plus 5-6
+below still open:
 1. **Contents-list authority**: host-owned GObjStack with intent messages (pattern rows 2+10), or
    per-action delta mirror? Must answer the UI-index race (two peers extracting index 0
    simultaneously) and the append-only-slot constraint (§4).
