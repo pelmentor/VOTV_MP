@@ -200,21 +200,34 @@ Two coupled fixes to the join/leave surface — shipped (DLL `a760f9f51bec2f07`,
   doomed connect) — so a timed-out connect no longer emits a false `"Remote player left the game"`
   that leaked into the menu. See `[[lesson-departure-toast-gates-on-ready-edge-not-transport]]`.
 
-The **ghost lobby** a killed host leaves in the browser (up to `LOBBY_TTL`=300s) is a SEPARATE,
-server-side item — still OPEN as of 2026-07-16 (the deployed Rust master carries `LOBBY_TTL=300`); see
+The **ghost lobby** a killed host left in the browser is **FIXED (2026-07-16, deployed live)**: the Rust
+master's `LOBBY_TTL` is **90s** (3 missed 30s heartbeats; was 300s — commit `6d640679`, binary
+`ad9844b6` live on the VPS). See
 `research/findings/network/votv-master-server-RE-and-rust-port-scope-2026-07-16.md`.
 
-## Main-menu version / update line (AS-BUILT 2026-07-16, NOT hands-on)
+## Main-menu version / update line (NATIVE UMG — VERIFIED hands-on 2026-07-16)
 
-The old v59 **launch UPDATE toast** (a top-center pop of `session_manager::LatestVersionLine`) is
-RETIRED — the entire `ui::toast` subsystem was its only user and is gone (RULE 2; commit `ed009c0d`).
-In its place, `imgui_overlay.cpp::DrawVersionCorner()` renders that same async `/v1/latest` verdict as a
-**self-updating string in VOTV's MAIN-MENU top-left corner**, among the game's own build labels (e.g.
-"Alpha 0.9.0n") — amber when an update is available, subtle otherwise, with a `VOTV-Coop v<N>` fallback
-until the check lands. Gated on the new `coop::multiplayer_menu::IsMainMenuOpen()` (same
-freshness-stamped-atomic model as `IsPauseMenuOpen`, off the `ui_menu_C::Tick` observer's `isPause`
-read) so it shows on the main menu only, never over gameplay. DLL `92B216EF...` (deployed x4,
-hash-verified). Position/size (top-left, 15px) are a first cut, easy to nudge.
+The old v59 **launch UPDATE toast** is RETIRED (RULE 2; `ed009c0d`), and so is its first replacement,
+the ImGui-drawn corner string (`DrawVersionCorner` + `IsMainMenuOpen` — never showed: the overlay's
+render gate needs a surface/HUD open, and the bare main menu has none; retired in `fd50f127`). The
+shipped form is a **native UMG `UTextBlock`** injected as the TOP row of the VerticalBox holding VOTV's
+own build labels ("Alpha 0.9.0" / "Build a090n"), so the coop line reads as one more native label and
+auto show/hides with the menu — **cyan** (the coop accent, matching the MULTIPLAYER button), amber when
+an update is available. Verdict formats: `VOTV-Coop v111 (latest)` / `... -- UPDATE vN AVAILABLE: <url>`
+/ `... (dev; latest released vN)`; plain `VOTV-Coop v<N>` until the check lands.
+
+Mechanics: `engine::InjectTextRowAbove` (clones `txt_version`'s text style + the row slot layout;
+`InsertAtTopOfVBox` is the shared snapshot→Clear→re-add reorder, now save/restoring every native row's
+slot layout) + `engine::SetTextBlockColorDispatch` (post-attach colour MUST be the
+`UTextBlock::SetColorAndOpacity` setter dispatch — a raw write never repaints; see
+`[[lesson-umg-runtime-inject-traps]]`). Driven from `coop::multiplayer_menu::UpdateVersionLabel` (the
+`ui_menu_C::Tick` observer): inject once per menu instance (self-heals), text/colour edge-applied.
+**Re-polled on every main-menu entrance** (a >500 ms tick gap = a fresh entrance →
+`session_manager::RefreshLatestVersion`, DoS-safe: one worker in flight + an 8 s min-interval floor).
+The master's `/v1/latest` answer is env-overridable on the VPS (`COOP_LATEST_PROTO` in
+`/etc/coop-master.env`, set to 111 — a release bump is an env edit + restart, no rebuild; the stale
+hardcoded 66 was the "latest released: v66" bug). USER hands-on confirmed: cyan, above the game labels,
+correct "(latest)" verdict. DLL `22CD3EAF...` deployed x4; commits `6d640679` + `fd50f127`, pushed.
 
 ## Master / signaling server — Rust port DEPLOYED LIVE (AS-BUILT + wire-verified 2026-07-16)
 

@@ -38,13 +38,12 @@ Stop), `lobby_client.cpp` (browser `/v1/lobbies` fetch), `signaling_client.cpp`,
 - **Hand-rolled validation:** `clamp_str` + manual dict-key checks everywhere. In Rust this is exactly what
   `serde` typed request structs delete for free — the single biggest maintainability win of the port.
 
-## The ghost-lobby (bug C) — a one-liner, independent of the port
+## The ghost-lobby (bug C) — FIXED + DEPLOYED (2026-07-16, user go)
 
-A TASK-KILLED host runs no cleanup, so no `/v1/leave` is sent; the entry lingers up to `LOBBY_TTL`=300s
-until the reaper drops it (measured 2026-07-16: browser showed a dead host at 237s/297s age). Fix = lower
-`LOBBY_TTL` to ~90 (3 missed 30s heartbeats). Deploying it is a PRODUCTION VPS action (`tools/vps.py put`
-+ restart the systemd unit) — do only with the user's explicit go. Do this whether or not the Rust port
-happens.
+A TASK-KILLED host runs no cleanup, so no `/v1/leave` is sent; the entry lingered up to `LOBBY_TTL`=300s
+until the reaper dropped it (measured 2026-07-16: browser showed a dead host at 237s/297s age). **FIXED:
+`LOBBY_TTL = 90s`** (3 missed 30s heartbeats; `src/bin/master.rs`, commit `6d640679`) — deployed live
+same day (binary `ad9844b6`, `.prev` rollback kept).
 
 ## Rust port scope (grounded — ~877 LOC total)
 
@@ -111,7 +110,10 @@ Consolidated + fixed per RULE 1; **Tier A is BUILT + DEPLOYED + committed** (ser
 - Master/signaling: **RUST, DEPLOYED LIVE (2026-07-16)** — verified on the box against the REAL secret
   (TURN cred byte-exact), + a live host/join/relay smoke on the prod ports. systemd drop-in cutover,
   Python stopped + backed up for rollback, reboot-safe (`enabled` + drop-in persists), hash-verified.
-- Ghost-lobby TTL: **STILL OPEN** — the deployed Rust master carries `LOBBY_TTL = Duration::from_secs(300)`
-  (`src/bin/master.rs`); lowering it to ~90 + redeploy is a user-gated action.
+- Ghost-lobby TTL: **DONE, DEPLOYED** (2026-07-16, user go) — `LOBBY_TTL = 90s` live (commit `6d640679`,
+  binary `ad9844b6`).
+- `/v1/latest` release info: **env-overridable** (`COOP_LATEST_PROTO/MOD/URL`, compiled default 111;
+  `/etc/coop-master.env` carries `COOP_LATEST_PROTO=111`, provisioner writes it). Root fix for the stale
+  "latest = v66" verdict (was compile-time only). Live-verified: `/v1/latest` -> proto 111.
 - RULE-2 finalization (user-gated): update `tools/vps_provision.sh` to ExecStart the Rust bins + stop
   shipping the `.py`, then DELETE the Python + the drop-ins / `.prev` backups (no dual-run kept).

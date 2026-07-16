@@ -471,6 +471,17 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   submenu/loadLevel fade, NOT a per-button style (replicate with a modal ImGui backdrop).
   `memory/lesson_umg_injected_menu_button_native_parity.md`
 
+- **UMG runtime injection = 3 traps (native version label, 2026-07-16)** — (1) raw property writes work
+  ONLY pre-Slate-attach; after `AddChildTo*`, UMG has baked props into Slate, so changes MUST be setter
+  UFunction dispatches (`SetColorAndOpacity` etc. — a raw write silently doesn't repaint; the "no cyan"
+  bug). (2) The insert-at-top reorder (snapshot→ClearChildren→re-add) DESTROYS every slot and creates
+  DEFAULTS — save each child's slot layout region before Clear + restore onto the RE-READ new slot; never
+  reuse a pre-reorder slot pointer (`InsertAtTopOfVBox`, engine_widget.cpp). (3) Never assume the parent
+  panel type — resolve the target's slot chain in `research/bp_reflection/<widget>_fixed.json` first
+  (txt_version = a HorizontalBox row in VerticalBox_138, NOT a canvas child; the canvas-API attempt
+  rendered inline-RIGHT). Look here FIRST: reuse `InjectTextRowAbove`/`SetTextBlockColorDispatch`.
+  `memory/lesson_umg_runtime_inject_traps.md`
+
 ## 6. Assets, models, geometry
 
 - **Curating GAME assets = census EVERY asset** — games ship broken leftovers. `memory/lesson_game_asset_census_before_curation.md`
