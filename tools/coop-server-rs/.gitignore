@@ -1,0 +1,8 @@
+/target
+
+# The repo-root .gitignore has a blanket `bin/` rule (build-output dirs) that would
+# silently swallow our src/bin/ SOURCE (the two server binaries). Re-include it — the
+# directory first, then its contents (git cannot re-include a file whose parent dir
+# stays excluded).
+!src/bin/
+!src/bin/*.rs

@@ -1,0 +1,36 @@
+# VOTV coop master + signaling server (Rust port of tools/coop_master_server.py +
+# tools/coop_signaling_server.py). RULE 3: VPS infra, never ships in the mod.
+# Wire-compatible with the Python services (same JSON endpoints + signaling line
+# protocol) so old + new can run in parallel during cutover.
+[package]
+name = "coop-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+# Standalone: do not let cargo absorb this into any accidental parent workspace.
+[workspace]
+
+[[bin]]
+name = "coop-master"
+path = "src/bin/master.rs"
+
+[[bin]]
+name = "coop-signaling"
+path = "src/bin/signaling.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+socket2 = "0.6"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
