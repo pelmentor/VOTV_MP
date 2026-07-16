@@ -1,0 +1,6 @@
+# Cross-build the Linux VPS binaries from a Windows dev box without an external
+# cross-toolchain: the x86_64-unknown-linux-musl target is self-contained (Rust
+# ships a precompiled musl libc), and rust-lld emits the ELF. Produces a fully
+# static binary -> just scp + run on the VPS, no runtime deps to install.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
