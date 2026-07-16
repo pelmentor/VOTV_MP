@@ -138,6 +138,9 @@ COOP_SIGNALING_TOKEN=$SIG_TOKEN
 COOP_SIGNALING_URL=$PUBLIC_IP:$SIG_PORT
 COOP_STUN_URI=stun:$PUBLIC_IP:$TURN_PORT
 COOP_TURN_URI=turn:$PUBLIC_IP:$TURN_PORT
+# Latest released mod, served by /v1/latest -- bump on each release + restart coop-master
+# (no rebuild; overrides the compiled-in default).
+COOP_LATEST_PROTO=111
 EOF
 chmod 600 /etc/coop-master.env
 

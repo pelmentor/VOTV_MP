@@ -35,7 +35,10 @@ const MAX_BODY: usize = 64 * 1024;
 const MAX_CONNS: usize = 256;
 
 const TURN_TTL: u64 = 120;
-const LOBBY_TTL: Duration = Duration::from_secs(300);
+// 90s = 3 missed 30s heartbeats before a lobby is reaped. Was 300s (ghost-lobby bug:
+// a TASK-KILLED host sends no /v1/leave, so its dead entry lingered up to the TTL; a
+// dead host was seen at 237s/297s age). Lowered 2026-07-16 per the user's go.
+const LOBBY_TTL: Duration = Duration::from_secs(90);
 const LOBBIES_CACHE_TTL: Duration = Duration::from_secs(5);
 
 const MAX_LOBBIES_PER_IP: usize = 8;
@@ -56,8 +59,12 @@ const MAX_NAME: usize = 63;
 const MAX_WORLD: usize = 39;
 const MAX_VERSION: usize = 23;
 
-// latest released mod (operator-maintained; bump on each mod release).
-const LATEST_PROTO: i64 = 66;
+// latest released mod, served by /v1/latest. DEPLOY CONFIG, not code: overridable via
+// COOP_LATEST_PROTO / COOP_LATEST_MOD / COOP_LATEST_URL in /etc/coop-master.env, so a
+// release bump is an env edit + `systemctl restart coop-master` -- no rebuild. The
+// constants below are only the compiled-in defaults (2026-07-16: proto 66 had gone
+// stale vs the shipped v111 client because it was compile-time only).
+const LATEST_PROTO: i64 = 111;
 const LATEST_MOD: &str = "0.9.0-n";
 const LATEST_URL: &str = "https://github.com/pelmentor/VOTV_MP/releases";
 
@@ -746,10 +753,19 @@ async fn handle(mut stream: TcpStream, peer_ip: String) {
             write_response(&mut stream, 200, &body).await;
         }
     } else if method == "GET" && path == "/v1/latest" {
+        // Env-overridable release info (resolved once; see the LATEST_* comment above).
+        static LATEST: LazyLock<(i64, String, String)> = LazyLock::new(|| {
+            (
+                env_int("COOP_LATEST_PROTO", LATEST_PROTO),
+                env_str("COOP_LATEST_MOD", LATEST_MOD),
+                env_str("COOP_LATEST_URL", LATEST_URL),
+            )
+        });
+        let (proto, mod_str, url) = &*LATEST;
         write_response(
             &mut stream,
             200,
-            &json_bytes(&json!({"proto": LATEST_PROTO, "mod": LATEST_MOD, "url": LATEST_URL})),
+            &json_bytes(&json!({"proto": proto, "mod": mod_str, "url": url})),
         )
         .await;
     } else if method == "GET" && path == "/healthz" {
