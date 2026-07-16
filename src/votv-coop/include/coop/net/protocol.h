@@ -961,8 +961,10 @@ inline constexpr uint16_t kDefaultPort = 47621;
 // surfaces (the shipped ini, the connect console, browser status) show the
 // word "DEFAULT" instead of the raw address when the master equals this --
 // no need to advertise the VPS IP in plain sight (user 2026-06-10).
-inline constexpr const char* kOfficialMasterUrl    = "87.121.218.33:10001";
-inline constexpr const char* kOfficialSignalingUrl = "87.121.218.33:10000";
+// 2026-07-16: the Cloudzy box (the old VPS hosts no coop services anymore). Becomes
+// https://master.votv.mp with the Tier B TLS cutover once DNS lands.
+inline constexpr const char* kOfficialMasterUrl    = "172.86.94.3:10001";
+inline constexpr const char* kOfficialSignalingUrl = "172.86.94.3:10000";
 
 // PR-2 v10 (2026-05-28): GNS owns handshake (Hello), graceful disconnect
 // (Bye), RTT (Ping/Pong), and reliable acks (ReliableAck). Those five

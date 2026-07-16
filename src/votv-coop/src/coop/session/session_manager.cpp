@@ -30,8 +30,9 @@ constexpr const char* kModVersion = "0.9.0-n";
 // cfg::ReadMasterUrl() (the canonical source -> the built-in VPS endpoint or the
 // net.master.custom gate), which overwrites g_masterUrl before any host/join. This
 // VPS default just makes a read before Configure() (shouldn't happen) reach the right
-// place instead of localhost. Keep in sync with config.cpp kBuiltinMasterUrl.
-constexpr const char* kDefaultMaster = "87.121.218.33:10001";
+// place instead of localhost. Aliases the ONE definition in protocol.h (was a
+// duplicated string literal with a "keep in sync" comment -- retired 2026-07-16).
+constexpr const char* kDefaultMaster = coop::net::kOfficialMasterUrl;
 
 std::string ReadEnvA(const char* name) {
     char buf[256] = {};
