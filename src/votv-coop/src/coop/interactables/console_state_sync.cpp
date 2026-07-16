@@ -2,6 +2,7 @@
 
 #include "coop/interactables/console_state_sync.h"
 
+#include "coop/interactables/desk_input_sync.h"
 #include "coop/interactables/device_occupancy.h"
 #include "coop/net/session.h"
 #include "coop/interactables/signal_catch_sync.h"
@@ -59,9 +60,11 @@ PartAssembly g_assembly;
 constexpr auto kAssemblyTTL = std::chrono::seconds(5);
 
 // ---- desk state -------------------------------------------------------------
-CD::Scalars g_deskLastSent;          // owner-side dedupe
-CD::Scalars g_deskEdgeLast;          // unclaimed discrete-edge detector
-bool g_deskEdgePrimed = false;
+// v112 (RULE 2): the claimed 1 Hz ScalarsDiffer stream and the unclaimed
+// DiscreteDiffer edge lane are RETIRED -- live desk INPUT rides the claim-free
+// field-granular DeskInput lane (coop/desk_input_sync); sim OUTPUTS ride
+// DeskSimPose. DeskState here is ADOPT-only (the joiner seed). The desk poll
+// timer below survives solely as the 1 Hz log-producer cadence.
 Clock::time_point g_nextDeskPoll{};
 
 // ---- desk log lines (v70) ---------------------------------------------------
@@ -187,67 +190,6 @@ void SendSkySnapshot(coop::net::Session* s, const std::vector<SR::SignalRow>& se
     }
 }
 
-bool ScalarsDiffer(const CD::Scalars& a, const CD::Scalars& b) {
-    return std::memcmp(&a, &b, sizeof(CD::Scalars)) != 0;
-}
-
-// The PLAYER-INPUT subset for the unclaimed edge detector: discrete buttons/
-// toggles ONLY. The four filter knob floats were originally here under the
-// phase-2 claim "only player input writes them" -- FALSIFIED by the smoke of
-// 2026-06-12 19:07: both peers, standing idle with the desk unclaimed,
-// broadcast (dlPoFilterOffset,dlFrFilterOffset) edges once per second -- the
-// GAME drifts the knob floats continuously. That made every peer a 1 Hz
-// DeskState sender forever; the receivers' ApplyCoordLogTail append-on-no-
-// overlap then grew the BP coordLog unboundedly on every peer = the round-3
-// RAM balloon + the duplicated/gappy mirror log. Knob floats are claim-owner
-// state: they ride the 1 Hz OWNER stream (ScalarsDiffer) like the rest of
-// the analog state; an unclaimed knob write stays local by design (v64
-// authority model). The genuinely tick-derived fields (detection needle /
-// progress / cooldown / the downloading float's magnitude) stay excluded for
-// the same reason they always were.
-bool DiscreteDiffer(const CD::Scalars& a, const CD::Scalars& b) {
-    // canDL is also OUT (STOLAS RE 2026-06-12: it is DERIVED -- canSaveSignal
-    // recomputes it per tick from signal state @313); it would oscillate the
-    // moment signal conditions fluctuate, exactly like the knob floats did.
-    return a.playVolume != b.playVolume || a.dlPolarityDir != b.dlPolarityDir ||
-           a.compMaxLevel != b.compMaxLevel || a.playSelectIndex != b.playSelectIndex ||
-           a.dlActiveFrFilter != b.dlActiveFrFilter || a.dlActivePoFilter != b.dlActivePoFilter ||
-           a.activePlay != b.activePlay || a.activeDownload != b.activeDownload ||
-           a.activeCoords != b.activeCoords || a.activeComp != b.activeComp ||
-           (a.dlDownloading > 0.f) != (b.dlDownloading > 0.f);
-}
-
-// Name the fields DiscreteDiffer saw flip. A real button press names ONE field
-// once; a tick-derived field misclassified into the "player input" set names
-// itself at the poll rate forever -- which is how the 2026-06-12 1 Hz edge
-// storm (and its ApplyCoordLogTail append RAM balloon) gets pinned to a field
-// from a single log line instead of another blind round.
-void DescribeDiscreteDiff(const CD::Scalars& a, const CD::Scalars& b,
-                          char* out, size_t cap) {
-    size_t n = 0;
-    out[0] = '\0';
-    auto add = [&](const char* name) {
-        const size_t l = ::strlen(name);
-        if (n + l + 2 >= cap) return;
-        if (n) out[n++] = ',';
-        ::memcpy(out + n, name, l);
-        n += l;
-        out[n] = '\0';
-    };
-    if (a.playVolume != b.playVolume)               add("playVolume");
-    if (a.dlPolarityDir != b.dlPolarityDir)         add("dlPolarityDir");
-    if (a.compMaxLevel != b.compMaxLevel)           add("compMaxLevel");
-    if (a.playSelectIndex != b.playSelectIndex)     add("playSelectIndex");
-    if (a.dlActiveFrFilter != b.dlActiveFrFilter)   add("dlActiveFrFilter");
-    if (a.dlActivePoFilter != b.dlActivePoFilter)   add("dlActivePoFilter");
-    if (a.activePlay != b.activePlay)               add("activePlay");
-    if (a.activeDownload != b.activeDownload)       add("activeDownload");
-    if (a.activeCoords != b.activeCoords)           add("activeCoords");
-    if (a.activeComp != b.activeComp)               add("activeComp");
-    if ((a.dlDownloading > 0.f) != (b.dlDownloading > 0.f)) add("dlDownloading>0");
-    if (n == 0) add("none");
-}
-
 void ScalarsToPayload(const CD::Scalars& sc, uint8_t adopt,
                       coop::net::DeskStatePayload& p) {
     std::memset(&p, 0, sizeof(p));
@@ -322,12 +264,18 @@ void SendDeskState(coop::net::Session* s, const CD::Scalars& sc, uint8_t adopt, 
 // filtered below anyway.) Receiver-side reconstruction died with the v64 tail
 // window (RULE 2): only complete event lines ride the wire now.
 
-// The animated line families regenerate per peer from mirrored scalars
-// (cooldown/isPing via DeskState; the CR cursor line only while dragging) --
-// shipping them would double-write every mirror's terminal at 5 Hz.
+// v112: ONLY the CDOWN family stays filtered -- it is the one animated family
+// whose regenerate-premise is TRUE (cooldown mirrors via DeskInput charge
+// events + native per-peer decay -> every peer's own 0.2 s coordLog pump
+// regenerates its CDOWN lines; shipping them would double-write terminals).
+// CR:[ (gated on the presser's move_* input bools), APPROXIMATION:/ANALYSIS:
+// (gated on the ping FSM) and AREA SCAN: [ (measured @43336-80: ALSO
+// ping-FSM-gated, not scan) can NEVER regenerate on a mirror -- they ship as
+// normal producer lines now (BUGS-v111 bug 5; CR volume is bounded by the
+// 1000-char BP cap at the 1 Hz producer).
 bool IsAnimatedLogLine(const std::wstring& line) {
     static const wchar_t* const kPrefixes[] = {
-        L"CDOWN: [", L"AREA SCAN: [", L"APPROXIMATION:", L"ANALYSIS:", L"CR:[",
+        L"CDOWN: [",
     };
     for (const wchar_t* p : kPrefixes)
         if (line.compare(0, ::wcslen(p), p) == 0) return true;
@@ -450,35 +398,15 @@ void Tick() {
 
     if (!s->connected()) return;  // everything below is wire traffic
 
-    // ---- DESK + DISH (claim-owner streams / unclaimed edges) ----
+    // ---- DESK log producer (1 Hz) ----
+    // v112 (RULE 2): the claimed/unclaimed live DeskState branches that lived
+    // here are RETIRED -- desk INPUT rides coop/desk_input_sync (claim-free
+    // field deltas); sim OUTPUTS ride DeskSimPose. Only the log producer keeps
+    // this cadence: EVERY peer produces -- event lines originate where the
+    // action ran; the CDOWN-only filter keeps the one mirror-regenerable
+    // family off the wire.
     if (cdUp && now >= g_nextDeskPoll) {
         g_nextDeskPoll = now + kDeskPoll;
-        CD::Scalars cur;
-        if (CD::ReadScalars(cur)) {
-            const bool owner = coop::device_occupancy::LocalHolds(kDeskClaim);
-            if (owner) {
-                // Claimed cadence: anything changed -> stream (1 Hz).
-                if (ScalarsDiffer(cur, g_deskLastSent)) {
-                    SendDeskState(s, cur, 0, -1);
-                    g_deskLastSent = cur;
-                }
-            } else if (g_deskEdgePrimed && DiscreteDiffer(cur, g_deskEdgeLast)) {
-                // Unclaimed: a LOCAL discrete flip (physical button press by
-                // this peer; wire applies prime g_deskEdgeLast so an applied
-                // edge never re-broadcasts).
-                SendDeskState(s, cur, 0, -1);
-                g_deskLastSent = cur;
-                char diff[192];
-                DescribeDiscreteDiff(cur, g_deskEdgeLast, diff, sizeof(diff));
-                UE_LOGI("console_state: desk button edge broadcast (%s)", diff);
-            }
-            g_deskEdgeLast = cur;
-            g_deskEdgePrimed = true;
-        }
-        // Desk log lines (v70): EVERY peer produces -- event lines originate
-        // where the action ran (the holder's catch/errors, any peer's delete
-        // button); the animated-prefix filter keeps mirror-regenerated lines
-        // off the wire.
         ProduceLogLines(s);
     }
     if (cdUp && coop::device_occupancy::LocalHolds(kDeskClaim) && now >= g_nextDish) {
@@ -565,6 +493,12 @@ void OnSkySignalState(const coop::net::SkySignalStatePayload& p, uint8_t senderS
 void OnDeskState(const coop::net::DeskStatePayload& p, uint8_t senderSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s) return;
+    // v112 (RULE 2): ADOPT-ONLY. The live claimed stream and the unclaimed edge
+    // lane are retired (desk INPUT rides DeskInput=97; outputs ride DeskSimPose)
+    // -- a live (adopt=0) DeskState no longer exists on the wire; drop any
+    // stale/old-peer instance defensively.
+    if (!p.adopt) return;
+    if (senderSlot != 0) return;  // adopt snapshots are host-only
     // Finite-validate before any engine write (the WireRowFinite/PayloadFinite
     // discipline -- a NaN filter offset/cooldown must never land in BP floats).
     const float vals[] = { p.dlPoFilterOffset, p.dlFrFilterOffset, p.dlPoFilterSpeed,
@@ -572,45 +506,22 @@ void OnDeskState(const coop::net::DeskStatePayload& p, uint8_t senderSlot) {
                            p.coordCooldown, p.dlDecoded };
     for (float v : vals)
         if (!std::isfinite(v)) return;
-    if (p.adopt && senderSlot != 0) return;  // adopt snapshots are host-only
-    // While the desk is CLAIMED, the holder is the sole authority -- drop a
-    // non-holder's live edge (stale/buggy double-stream).
-    const uint8_t holder = coop::device_occupancy::HolderOf(kDeskClaim);
-    if (!p.adopt && holder != 0xFF && senderSlot != holder) return;
-    // The local holder ignores incoming live state (it IS the authority).
-    if (!p.adopt && coop::device_occupancy::LocalHolds(kDeskClaim)) return;
     if (!CD::EnsureResolved() || !CD::Instance()) return;
 
     // [dev] desk_diag JOIN-ADOPT: capture the client's PRE-ADOPT local scalars
     // BEFORE WriteScalars overwrites them with the host seed (join-seed vs drift).
-    if (p.adopt && s->role() == coop::net::Role::Client)
+    if (s->role() == coop::net::Role::Client)
         coop::dev::desk_diag::NoteJoinAdopt();
 
-    CD::Scalars sc = PayloadToScalars(p);
-    // v111 (gate 1): the download-SIM OUTPUT fields (rate/needle/offsets/cooldown) are host-owned
-    // via DeskSimPose=38 -- the LIVE DeskState carries only the occupant INTENTS. Keep the local
-    // (DeskSim-mirrored) output values so this apply never fights the sim stream (two authors = the
-    // dupe shape). The ADOPT snapshot still seeds them (the join baseline before DeskSim catches up).
-    if (!p.adopt) {
-        CD::Scalars local;
-        if (CD::ReadScalars(local)) {
-            sc.dlDownloading     = local.dlDownloading;
-            sc.dlResDetecPercent = local.dlResDetecPercent;
-            sc.dlPoFilterOffset  = local.dlPoFilterOffset;
-            sc.dlFrFilterOffset  = local.dlFrFilterOffset;
-            sc.coordCooldown     = local.coordCooldown;
-        }
-    }
+    const CD::Scalars sc = PayloadToScalars(p);
     if (CD::WriteScalars(sc)) {
-        // Prime BOTH detectors so this apply never reads as a local edge and
-        // never echo-streams back (house lastKnown pattern).
-        g_deskEdgeLast = sc;
-        g_deskEdgePrimed = true;
-        g_deskLastSent = sc;
+        // Prime the INPUT lane's poll baselines so the seeded values never
+        // read as local edges (echo-proof; same-GT-task atomicity).
+        coop::desk_input_sync::PrimeBaselines();
         // dlDecoded/dlPolarity are ADOPT-ONLY (live decoded self-accrues on
         // every armed peer -- see the protocol v70 note): the joiner queues
         // the host's progress and applies it once its own machine arms.
-        if (p.adopt && s->role() == coop::net::Role::Client) {
+        if (s->role() == coop::net::Role::Client) {
             coop::signal_catch_sync::SetPendingDownloadAdopt(
                 p.dlDecoded, p.dlPolarity, p.dlResDetecPercent);
         }
@@ -655,16 +566,6 @@ void OnDeskLogLine(const coop::net::DeskLogLinePayload& p, uint8_t senderSlot) {
     // email watermark prime precedent).
     g_logBaseline = CD::ReadCoordLogTail(kLogReadMax);
     g_logPrimed = true;
-}
-
-void PrimeDeskEdgeDetector() {
-    if (!CD::EnsureResolved() || !CD::Instance()) return;
-    CD::Scalars cur;
-    if (CD::ReadScalars(cur)) {
-        g_deskEdgeLast = cur;
-        g_deskEdgePrimed = true;
-        g_deskLastSent = cur;
-    }
 }
 
 void QueueConnectBroadcastForSlot(int peerSlot) {
@@ -720,9 +621,6 @@ void OnDisconnect() {
     g_skyMirror.clear();
     g_haveWireSet = false;
     g_assembly = {};
-    g_deskLastSent = {};
-    g_deskEdgeLast = {};
-    g_deskEdgePrimed = false;
     g_dishLastSent = {};
     g_logBaseline.clear();
     g_logPrimed = false;

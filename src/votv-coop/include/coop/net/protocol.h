@@ -705,7 +705,16 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // + replays them in ConnectReplayForSlot. mainPlayer.holding_actor with an Aprop_C no
 // longer feeds the PropSpawn/PropPose path (the trash clump/pile carry -- the
 // non-Aprop_C holding_actor case -- stays on its lane untouched).
-inline constexpr uint16_t kProtocolVersion = 111; // v111: signal-desk download-SIM host-authoritative --
+inline constexpr uint16_t kProtocolVersion = 112; // v112 (2026-07-16, the BUGS-v111 fix): the desk INPUT
+                                                  // re-partition -- claim-free field-granular DeskInput=97
+                                                  // deltas + DeskScanEvent=98 replace the v64 claimed/
+                                                  // unclaimed live DeskState lanes (DeskState=54 is now
+                                                  // ADOPT-only); coord_cooldown LEAVES the DeskSimPose
+                                                  // stream (8->7 channels, 32->28 B snapshot) -- it is
+                                                  // charge-event-driven + natively dt-decayed per peer.
+                                                  // WIRE CHANGE (kinds + snapshot layout + lane semantics)
+                                                  // -> bump so a mixed 111/112 pair HARD-CLOSEs at the gate.
+                                                  // v111: signal-desk download-SIM host-authoritative --
                                                   // new unreliable DeskSimPose=38 (host->all output vector)
                                                   // + the live DeskState apply no longer authors the sim
                                                   // OUTPUT fields (host owns them via DeskSim; one author,
@@ -1705,19 +1714,15 @@ enum class ReliableKind : uint8_t {
                        //     filters stale in-flight SkySignalState snapshot rows.
                        //     Payload: SkySignalCatchPayload (80 B). Module:
                        //     coop/signal_catch_sync + ue_wrap/dish + ue_wrap/console_desk.
-    DeskState = 54,    // 2026-06-12 (v64; reshaped v70): the 4-screen desk's LIVE-VISIBLE
-                       //     scalars (analogDScreenTest). Streamed at ~1-2 Hz on-change
-                       //     by the desk-claim OWNER while claimed (host-relayed),
-                       //     edge-broadcast by ANY peer on a discrete button flip while
-                       //     unclaimed (physical buttons don't require entering),
-                       //     adopt=1 on the host connect snapshot. Receivers write the
-                       //     raw fields + reflect-call the desk's upd* refresh chain.
-                       //     The PERSISTED blob already rides v56 save-transfer at join;
-                       //     this channel covers only live divergence. v70: the coordLog
-                       //     tail moved to DeskLogLine; canDL left the wire (derived);
-                       //     dlDecoded/dlPolarity ride ADOPT-ONLY (the joiner download
-                       //     catch-up). Payload: DeskStatePayload (60 B). Module:
-                       //     coop/console_state_sync + ue_wrap/console_desk.
+    DeskState = 54,    // 2026-06-12 (v64; reshaped v70; ADOPT-ONLY since v112): the desk's
+                       //     scalar snapshot. v112 (RULE 2): the live claimed stream and
+                       //     the unclaimed edge lane are RETIRED -- live input rides the
+                       //     claim-free field-granular DeskInput=97 deltas; sim outputs
+                       //     ride DeskSimPose. This kind now carries ONLY the host->joiner
+                       //     connect ADOPT snapshot (adopt=1; seeds all fields incl.
+                       //     cooldown/speeds + the dlDecoded/dlPolarity download catch-up
+                       //     and primes the joiner's poll baselines). Payload:
+                       //     DeskStatePayload (60 B). Module: coop/console_state_sync.
     DishAimState = 55, // 2026-06-12 (v64): the coords-panel cursor state (the
                        //     ui_coordinates widget: viewCoordinate + Coordinate_0..2 +
                        //     selected + the v70 Direction toggle) streamed ~3 Hz by
@@ -2123,6 +2128,26 @@ enum class ReliableKind : uint8_t {
                        //     movement at the module cadence; relayed like Spawn).
     OwnerEntityDestroy = 96, // owner's entity died locally (native despawn/self-destroy caught by
                        //     the owner death-watch) -- receivers destroy the mirror. Relayed.
+    DeskInput = 97,    // 2026-07-16 (v112, BUGS-v111 fix): CLAIM-FREE field-granular desk INPUT
+                       //     delta -- ONE input-class field (knob speed / filter toggle / polarity
+                       //     dir / volume / select / maxLevel / unit power / coordIsPing / a
+                       //     cooldown CHARGE) changed on the presser (detected by the 250 ms
+                       //     per-field poll; desk verbs are EX_Local* PE-INVISIBLE, the poll is
+                       //     the canonical detector). Presser -> host -> relayed to all EXCEPT
+                       //     the originator (an echo would revert a newer local value -- the
+                       //     eaten-scroll race). Receivers apply (patch + WriteScalars upd chain /
+                       //     native setter side effects) + prime that field's poll baseline in
+                       //     the same GT task (echo-proof). Replaces the v64 claimed/unclaimed
+                       //     live DeskState lanes (RULE 2; DeskState=54 is ADOPT-only now).
+                       //     Payload: DeskInputPayload. Relayed.
+    DeskScanEvent = 98, // 2026-07-16 (v112): the SHIFT quick-scan happened on a peer (classified
+                       //     by the poll: an upward cooldown jump to > maxCooldown/2 -- only the
+                       //     scan charges to FULL coord_maxCooldown; dots charge to half; the
+                       //     ENTER ping never touches cooldown). Mirrors replay the accepted-
+                       //     branch EFFECTS only: reflected spawnDirs() + playPingSound(beepLong1)
+                       //     (never useSearch() -- its cooldown gate would refuse on decay
+                       //     jitter). The charge itself rides a DeskInput cooldown delta; the log
+                       //     line rides DeskLogLine. Payload: DeskScanEventPayload. Relayed.
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -4027,15 +4052,56 @@ struct DeskSimSnapshot {
     float poData;     // 4 -- DL_poData (polarity-match)
     float frOffset;   // 4 -- DL_FrFilterOffset (knob position)
     float poOffset;   // 4 -- DL_poFilterOffset
-    float cooldown;   // 4 -- coord_cooldown
+    // v112: coord_cooldown REMOVED from the stream (RULE 2) -- the 10 Hz host
+    // overwrite erased a client presser's charge (BUGS-v111 bug 1). It is now
+    // DeskInput charge-event-driven + natively dt-decayed per peer.
 };
-static_assert(sizeof(DeskSimSnapshot) == 32, "DeskSimSnapshot must be 32 bytes");
+static_assert(sizeof(DeskSimSnapshot) == 28, "DeskSimSnapshot must be 28 bytes (v112: cooldown out)");
 
 struct DeskSimPosePacket {
     PacketHeader   header;  // 20
-    DeskSimSnapshot sim;    // 32
+    DeskSimSnapshot sim;    // 28
 };
-static_assert(sizeof(DeskSimPosePacket) == 52, "DeskSimPosePacket must be 52 bytes");
+static_assert(sizeof(DeskSimPosePacket) == 48, "DeskSimPosePacket must be 48 bytes (v112)");
+
+// v112 (2026-07-16): the claim-free field-granular desk INPUT delta (DeskInput=97).
+// Exactly ONE input-class field per message; the receiver applies it through the
+// field's native side-effect path and primes its own poll baseline for that field.
+// See coop/interactables/desk_input_sync.
+enum class DeskInputField : uint8_t {
+    FrFilterSpeed = 0,   // float   DL_FrFilterSpeed
+    PoFilterSpeed = 1,   // float   DL_poFilterSpeed
+    FrFilterActive = 2,  // bool    DL_activeFrFilter
+    PoFilterActive = 3,  // bool    DL_activePoFilter
+    PolarityDir = 4,     // int32   DL_PolarityDir
+    PlayVolume = 5,      // int32   play_volume (+ live signalSound.SetVolumeMultiplier)
+    PlaySelectIndex = 6, // int32   play_selectIndex
+    CompMaxLevel = 7,    // int32   comp_maxLevel
+    ActivePlay = 8,      // bool    active_play    (+ hum/light side effects)
+    ActiveDownload = 9,  // bool    active_download (+ hum/light side effects)
+    ActiveCoords = 10,   // bool    active_coords  (+ hum/light side effects)
+    ActiveComp = 11,     // bool    active_comp    (+ light/console-glow side effects)
+    CoordIsPing = 12,    // bool    coord_isPing (rising = presser's ENTER; falling = its FSM end)
+    CooldownCharge = 13, // float   coord_cooldown -- UPWARD jumps only (a press charge; decay is
+                         //         per-peer local and never rides the wire)
+    Count = 14,
+};
+
+struct DeskInputPayload {
+    uint8_t field;     // 1 -- DeskInputField
+    uint8_t boolVal;   // 1 -- for bool fields (0/1)
+    uint8_t _pad[2];   // 2
+    float   floatVal;  // 4 -- for float fields
+    int32_t intVal;    // 4 -- for int fields
+};
+static_assert(sizeof(DeskInputPayload) == 12, "DeskInputPayload must be 12 bytes");
+
+// v112: the SHIFT quick-scan notification (DeskScanEvent=98). Carries the observed
+// charge for the log line only; mirrors replay spawnDirs()+beep (effects, no gate).
+struct DeskScanEventPayload {
+    float observedCooldown;  // 4 -- the presser's post-charge cooldown (diagnostic)
+};
+static_assert(sizeof(DeskScanEventPayload) == 4, "DeskScanEventPayload must be 4 bytes");
 
 // SkyStatePayload -- the host-authoritative NIGHT-SKY snapshot (SkyState=34, v44). The visible
 // star dome (Anewsky_C's `sky` mesh) is given a per-game UNSEEDED random yaw + a slow per-tick

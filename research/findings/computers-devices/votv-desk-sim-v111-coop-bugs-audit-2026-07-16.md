@@ -96,6 +96,8 @@ Host latches natively at exactly 1.0 — unaffected.
   `ANALYSIS:` (`console_state_sync.cpp:328-335`, applied :381). The filter's premise
   ("regenerate per peer from mirrored scalars") holds for CDOWN (cooldown streams) but is FALSE
   for CR (input-gated) and APPROXIMATION/ANALYSIS (gated on `coord_pingStage`, never mirrored).
+  *(CORRECTED in the fix /qf 2026-07-16: AREA SCAN is ALSO ping-FSM-gated — measured @43336-80,
+  `coord_isPing && coord_pingStage != 3` — NOT scan-regenerable; the v112 filter keeps ONLY CDOWN.)*
   The discrete dot LOCKS do mirror (DishAimState -> `WriteDishCommitted`,
   `console_desk.cpp:610-635`) — repaints dots but writes no log lines. Matches the user's "dots
   yes, chat screen no".

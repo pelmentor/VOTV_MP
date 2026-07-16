@@ -11,6 +11,7 @@
 #include "coop/interactables/atv_sync.h"
 #include "coop/interactables/comp_sync.h"
 #include "coop/interactables/console_state_sync.h"
+#include "coop/interactables/desk_input_sync.h"
 #include "coop/interactables/signal_catch_sync.h"
 #include "coop/player/sleep_sync.h"
 #include "coop/interactables/device_occupancy.h"
@@ -426,9 +427,9 @@ bool HandleStateEvent(net::Session& session,
         break;
     }
     case net::ReliableKind::DeskState: {
-        // v64 (reshaped v70): the desk's live scalars. Claim-owner cadence /
-        // any-peer button edges (host-relayed) / host adopt snapshot; the
-        // holder-authority + adopt trust gates live in OnDeskState.
+        // v112: ADOPT-ONLY (the host->joiner connect seed). The live claimed/
+        // unclaimed lanes retired to DeskInput; the adopt gate lives in
+        // OnDeskState.
         if (msg.payloadLen < sizeof(net::DeskStatePayload)) {
             UE_LOGW("event_feed: DeskState payload too short (%zu < %zu)",
                     static_cast<size_t>(msg.payloadLen), sizeof(net::DeskStatePayload));
@@ -441,6 +442,41 @@ bool HandleStateEvent(net::Session& session,
                 ? static_cast<uint8_t>(msg.senderPeerSlot)
                 : static_cast<uint8_t>(0xFF);
         coop::console_state_sync::OnDeskState(dp, dslot);
+        break;
+    }
+    case net::ReliableKind::DeskInput: {
+        // v112: the claim-free field-granular desk INPUT delta (presser-
+        // authored; host relays to all except the originator). The apply +
+        // echo-prime live in desk_input_sync.
+        if (msg.payloadLen < sizeof(net::DeskInputPayload)) {
+            UE_LOGW("event_feed: DeskInput payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::DeskInputPayload));
+            break;
+        }
+        net::DeskInputPayload ip{};
+        std::memcpy(&ip, msg.payload, sizeof(ip));
+        const uint8_t islot =
+            (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                ? static_cast<uint8_t>(msg.senderPeerSlot)
+                : static_cast<uint8_t>(0xFF);
+        coop::desk_input_sync::OnDeskInput(ip, islot);
+        break;
+    }
+    case net::ReliableKind::DeskScanEvent: {
+        // v112: the SHIFT quick-scan happened on a peer -- replay the
+        // accepted-branch effects (spawnDirs + beep) on this mirror.
+        if (msg.payloadLen < sizeof(net::DeskScanEventPayload)) {
+            UE_LOGW("event_feed: DeskScanEvent payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::DeskScanEventPayload));
+            break;
+        }
+        net::DeskScanEventPayload sp2{};
+        std::memcpy(&sp2, msg.payload, sizeof(sp2));
+        const uint8_t sslot2 =
+            (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                ? static_cast<uint8_t>(msg.senderPeerSlot)
+                : static_cast<uint8_t>(0xFF);
+        coop::desk_input_sync::OnDeskScan(sp2, sslot2);
         break;
     }
     case net::ReliableKind::DishAimState: {

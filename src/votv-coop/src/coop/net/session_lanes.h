@@ -99,6 +99,14 @@ inline Lane LaneForKind(ReliableKind k) {
     case ReliableKind::AtvRelease:     return Lane::Normal;
     case ReliableKind::AtvSpawn:       return Lane::Normal;
     case ReliableKind::AtvDestroy:     return Lane::Normal;
+    // v112: DeskInput + DeskScanEvent are ORDER-COUPLED with each other and
+    // with the adopt DeskState (GNS orders within a lane; the design's
+    // adopt-before-deltas + charge/scan ordering proofs assume one lane).
+    // All three land on Normal via default: anyway; pin them so a future
+    // single-kind lane move can't split the group (audit 2026-07-16).
+    case ReliableKind::DeskState:      return Lane::Normal;
+    case ReliableKind::DeskInput:      return Lane::Normal;
+    case ReliableKind::DeskScanEvent:  return Lane::Normal;
     default:                           return Lane::Normal;
     }
 }
@@ -142,7 +150,10 @@ inline bool IsClientRelayableReliableKind(ReliableKind k) {
     case ReliableKind::PowerControlState: // v46: base power panel breakers are SYMMETRIC -- relay a client's edge to the others
     case ReliableKind::AtvState:          // v47: ATV body pose is OCCUPANT-OR-GRABBER-authoritative -- relay a client driver's/grabber's pose to the other clients
     case ReliableKind::AtvRelease:        // v76: ATV grab-release/throw edge -- relay a client grabber's release to the other clients (companion to AtvState)
-    case ReliableKind::DeskState:         // v64: desk scalars are CLAIM-OWNER-authoritative (+ any-peer button edges) -- relay a client's edge to the others
+    // DeskState is NOT relayable since v112 (RULE 2): it is ADOPT-ONLY, host->joiner
+    // point-to-point; clients never send it. Live desk input rides DeskInput below.
+    case ReliableKind::DeskInput:         // v112: claim-free field-granular desk input deltas are PRESSER-authored -- relay a client's delta to the others (the host excludes the originator by relay construction)
+    case ReliableKind::DeskScanEvent:     // v112: the SHIFT scan notification is PRESSER-authored -- relay so every mirror replays dirs+beep
     case ReliableKind::DishAimState:      // v64: dish aim is CLAIM-OWNER-authoritative -- relay a client occupant's stream to the others
     case ReliableKind::KeypadState:
     case ReliableKind::WindowCleanState:  // v41: base-window clean is SYMMETRIC -- relay a client's wipe to the others

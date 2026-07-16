@@ -68,11 +68,8 @@ void OnDeskState(const coop::net::DeskStatePayload& p, uint8_t senderSlot);
 void OnDishAim(const coop::net::DishAimStatePayload& p, uint8_t senderSlot);
 void OnDeskLogLine(const coop::net::DeskLogLinePayload& p, uint8_t senderSlot);
 
-// Re-baseline the unclaimed desk edge detector to the CURRENT desk scalars so
-// a programmatic apply (the signal_catch_sync replay's scalar fallout) never
-// reads as a local button edge and echo-broadcasts (the house lastKnown
-// pattern, callable cross-module).
-void PrimeDeskEdgeDetector();
+// (v112, RULE 2: PrimeDeskEdgeDetector RETIRED with the unclaimed edge lane --
+// programmatic-apply re-baselining is coop::desk_input_sync::PrimeBaselines().)
 
 // HOST: send the current sky-signal snapshot + desk scalars (adopt=1) to a
 // joining peer (world-ready replay).

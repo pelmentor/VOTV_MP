@@ -188,7 +188,9 @@ struct SimOutputs {
     float poData = 0;     // DL_poData (polarity-match, @0x0A10)
     float frOffset = 0;   // DL_FrFilterOffset (knob position)
     float poOffset = 0;   // DL_poFilterOffset
-    float cooldown = 0;   // coord_cooldown
+    // v112: coord_cooldown left the sim vector (RULE 2) -- the 10 Hz overwrite
+    // erased a client presser's charge (BUGS-v111 bug 1). It rides DeskInput
+    // charge events + native per-peer dt-decay now (coop/desk_input_sync).
 };
 bool ReadSimOutputs(SimOutputs& out);
 // Raw-write the sim outputs; repaint the screens (the WriteScalars upd* chain)
@@ -205,6 +207,38 @@ bool DownloadMeshValid();
 // playPingSound(newdesk_panelCoord_pingSuccess) -- the catch-replay presence
 // cue (@10027).
 bool PlayPingSuccess();
+
+// ---- The v112 desk-INPUT apply surface (coop/interactables/desk_input_sync) ----
+// The claim-free field-granular input lane's engine writes. RE: the signal-chain
+// units RE 2026-07-16 + the desk-input-lane DESIGN doc (12-round /qf).
+
+// coord_maxCooldown @0x0C08 -- the scan-charge target (SHIFT charges cooldown
+// exactly to it; dots charge to getMaxCooldown()/2 -- the poll's scan
+// classifier threshold is maxCooldown/2 + 0.01). False if unresolved.
+bool ReadMaxCooldown(float& out);
+
+// Apply one active_* power toggle with its native setter-event side effects
+// replicated reflected (uber [1113-1156]): hum SetActive(v, reset) + light
+// SetVisibility(v) + {play: stopSound(); download: download_playSignall();
+// comp: active_console + setMats()}. The native fused setter (powerChanged)
+// runs ALL FIVE units' blocks incl. an unconditional stopSound -- too broad
+// for a per-field apply, hence the replication. Raw-write the FIELD via
+// WriteScalars first (this only adds the side effects). unit: 0=play
+// 1=download 2=coords 3=comp. Game thread.
+bool ApplyActiveToggleEffects(int unit, bool value);
+
+// Live-apply play_volume the way the atlas setSignalVolume does: raw field
+// write is the caller's (WriteScalars); this adds
+// signalSound.SetVolumeMultiplier(FClamp(v/10, 0.1, 5)). Game thread.
+bool ApplyPlayVolumeEffects(int32_t value);
+
+// The SHIFT-scan accepted-branch EFFECTS for a mirror: reflected spawnDirs()
+// (arrows regenerate from the wire-mirrored signals_a -- bytecode-verified no
+// RNG / no local-peer read) + playPingSound(newdesk_beepLong1). NEVER a
+// useSearch() replay -- its cooldown gate would refuse on per-peer decay
+// jitter. Null-guarded on the widget; false (log once at the caller) if the
+// atlas/ui_coordinates widget is not live yet.
+bool PlayScanEffects();
 
 // ---- The refiner (comp) pane (v65, coop/comp_sync) ----
 // RE (2026-06-12 comp agent pass): the decode ticker is gated ONLY on

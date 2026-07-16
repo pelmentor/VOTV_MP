@@ -342,7 +342,10 @@ payload — name/id/level/size/image all cleared), `drive.upd()` (LED -> red), `
 ## 6. Dispatch-visibility summary (the whole chain)
 
 PE-VISIBLE seams only: `ui_consolesAtlas.OnKeyDown/OnKeyUp` (occupant machine only);
-`actionOptionIndex`/`playerUsedOn`/`player_use` (interaction entries); ComponentBoundEvent
+~~`actionOptionIndex`/`playerUsedOn`/`player_use`~~ *(CORRECTED 2026-07-16 during the fix /qf:
+these are EX_Context+EX_LocalVirtualFunction interface calls from mainPlayer (uber @17734/@102505)
+= PE-INVISIBLE — matches COOP_DISPATCH_VISIBILITY.md row "screen/panel device verbs" [RD/IDA
+2026-06-04]; the original clause here was wrong)*; ComponentBoundEvent
 button/overlap thunks; multicast delegates (`driveIn/driveOut`, `OnAudioPlaybackPercent`,
 `OnAudioFinished`, `input_scrollUp/Down`, tower `stateChanged`, `OnDestroyed`); timer/latent
 resumes (0.2 s `coordLog2` pump, `redphoneEventTimer`, `pingComp`, Delay re-entries).

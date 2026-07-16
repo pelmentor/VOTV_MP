@@ -132,6 +132,28 @@ int32_t g_offDirection = -1;       // bool @0x0441 -- the catch-gate toggle (v70
 void* g_updCursorLocationsFn = nullptr;
 void* g_intComsUnfocusedFn = nullptr;   // v109: desk intComs_unfocused -- reset-on-release target
 
+// ---- v112 desk-INPUT apply surface (coop/desk_input_sync) ----
+// The active_* setter-event side effects (uber [1113-1156]) replicated per
+// field: hum + light components, the per-unit extra verbs, the scan effects.
+int32_t g_offMaxCooldown = -1;       // coord_maxCooldown @0x0C08 (scan-charge target)
+int32_t g_offActiveConsole = -1;     // active_console (bool; the comp setter mirrors active_comp)
+int32_t g_offHumPlay = -1;           // computerHum_play   (UAudioComponent*)
+int32_t g_offHumDownl = -1;          // computerHum_downl
+int32_t g_offHumCoords = -1;         // computerHum_coords
+int32_t g_offLightPlay = -1;         // light_play  (scene component -- SetVisibility)
+int32_t g_offLightDown = -1;         // light_down
+int32_t g_offLightCoord = -1;        // light_coord
+int32_t g_offLightComp = -1;         // light_comp
+int32_t g_offSignalSound = -1;       // signalSound (UAudioComponent* -- playback volume)
+void* g_stopSoundFn = nullptr;           // desk stopSound() (the active_play setter runs it)
+void* g_downloadPlaySignallFn = nullptr; // desk download_playSignall() (the active_download setter)
+void* g_setMatsFn = nullptr;             // desk setMats() (screen materials -- the comp setter)
+void* g_spawnDirsFn = nullptr;           // desk spawnDirs() (the scan arrows)
+void* g_setActiveFn = nullptr;           // UActorComponent::SetActive(bNewActive, bReset)
+void* g_setVisibilityFn = nullptr;       // USceneComponent::SetVisibility(bNewVisibility, bPropagate)
+void* g_setVolumeMultFn = nullptr;       // UAudioComponent::SetVolumeMultiplier(float)
+void* g_sndBeepLong1 = nullptr;          // newdesk_beepLong1 (the scan beep)
+
 std::chrono::steady_clock::time_point g_nextResolve{};
 bool g_coreResolved = false;
 
@@ -205,6 +227,27 @@ void ResolvePass() {
     if (!g_sndWorkingEnd) {
         g_sndWorkingEnd = R::FindObject(L"computerWorking_end", L"SoundCue");
         if (!g_sndWorkingEnd) g_sndWorkingEnd = R::FindObject(L"computerWorking_end", L"SoundWave");
+    }
+
+    // ---- v112 desk-INPUT apply surface ----
+    if (g_offMaxCooldown < 0) g_offMaxCooldown = R::FindPropertyOffset(g_cls, L"coord_maxCooldown");
+    if (g_offActiveConsole < 0) g_offActiveConsole = R::FindPropertyOffset(g_cls, L"active_console");
+    if (g_offHumPlay < 0)    g_offHumPlay = R::FindPropertyOffset(g_cls, L"computerHum_play");
+    if (g_offHumDownl < 0)   g_offHumDownl = R::FindPropertyOffset(g_cls, L"computerHum_downl");
+    if (g_offHumCoords < 0)  g_offHumCoords = R::FindPropertyOffset(g_cls, L"computerHum_coords");
+    if (g_offLightPlay < 0)  g_offLightPlay = R::FindPropertyOffset(g_cls, L"light_play");
+    if (g_offLightDown < 0)  g_offLightDown = R::FindPropertyOffset(g_cls, L"light_down");
+    if (g_offLightCoord < 0) g_offLightCoord = R::FindPropertyOffset(g_cls, L"light_coord");
+    if (g_offLightComp < 0)  g_offLightComp = R::FindPropertyOffset(g_cls, L"light_comp");
+    if (g_offSignalSound < 0) g_offSignalSound = R::FindPropertyOffset(g_cls, L"signalSound");
+    if (!g_stopSoundFn) g_stopSoundFn = R::FindFunction(g_cls, L"stopSound");
+    if (!g_downloadPlaySignallFn)
+        g_downloadPlaySignallFn = R::FindFunction(g_cls, L"download_playSignall");
+    if (!g_setMatsFn)  g_setMatsFn = R::FindFunction(g_cls, L"setMats");
+    if (!g_spawnDirsFn) g_spawnDirsFn = R::FindFunction(g_cls, L"spawnDirs");
+    if (!g_sndBeepLong1) {
+        g_sndBeepLong1 = R::FindObject(L"newdesk_beepLong1", L"SoundCue");
+        if (!g_sndBeepLong1) g_sndBeepLong1 = R::FindObject(L"newdesk_beepLong1", L"SoundWave");
     }
 
     if (!g_uiCoordsCls) g_uiCoordsCls = R::FindClass(L"ui_coordinates_C");
@@ -789,7 +832,7 @@ bool ReadSimOutputs(SimOutputs& out) {
     out.frOffset  = *FieldPtr<float>(d, 1);   // DL_FrFilterOffset
     out.rate      = *FieldPtr<float>(d, 4);   // DL_downloading
     out.resDetec  = *FieldPtr<float>(d, 5);   // DL_resDetecPercent
-    out.cooldown  = *FieldPtr<float>(d, 7);   // coord_cooldown
+    // (v112: coord_cooldown left the sim vector -- desk_input_sync owns it.)
     out.frData = *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(d) + g_offDLFrData);
     out.poData = *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(d) + g_offDLPoData);
     auto* dld = reinterpret_cast<uint8_t*>(d) + g_offDLData;
@@ -805,7 +848,8 @@ bool WriteSimOutputs(const SimOutputs& in, bool repaint) {
     *FieldPtr<float>(d, 1) = in.frOffset;
     *FieldPtr<float>(d, 4) = in.rate;
     *FieldPtr<float>(d, 5) = in.resDetec;
-    *FieldPtr<float>(d, 7) = in.cooldown;
+    // (v112: coord_cooldown is NOT written here -- the 10 Hz overwrite erased a
+    // client presser's charge (BUGS-v111 bug 1); desk_input_sync owns it.)
     *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(d) + g_offDLFrData) = in.frData;
     *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(d) + g_offDLPoData) = in.poData;
     auto* dld = reinterpret_cast<uint8_t*>(d) + g_offDLData;
@@ -830,6 +874,131 @@ bool PlayPingSuccess() {
     if (!f.valid()) return false;
     f.Set<void*>(L"NewSound", g_sndPingSuccess);
     return ue_wrap::Call(d, f);
+}
+
+// ---- v112 desk-INPUT apply surface ----
+
+bool ReadMaxCooldown(float& out) {
+    void* d = Instance();
+    if (!d || g_offMaxCooldown < 0) return false;
+    out = *reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(d) + g_offMaxCooldown);
+    return true;
+}
+
+namespace {
+
+// UActorComponent::SetActive(bNewActive, bReset) -- the hum loops' native
+// switch (uber [1116/1150/1155] uses SetActive(value, true)).
+bool CompSetActive(void* comp, bool value) {
+    if (!comp) return false;
+    if (!g_setActiveFn) {
+        if (void* cls = R::ClassOf(comp))
+            g_setActiveFn = R::FindFunction(cls, L"SetActive");
+    }
+    if (!g_setActiveFn) return false;
+    ue_wrap::ParamFrame f(g_setActiveFn);
+    if (!f.valid()) return false;
+    f.Set<bool>(L"bNewActive", value);
+    f.Set<bool>(L"bReset", true);
+    return ue_wrap::Call(comp, f);
+}
+
+// USceneComponent::SetVisibility(bNewVisibility, bPropagateToChildren) -- the
+// unit lamps (uber [1115/1126/1149/1154] use SetVisibility(value, false)).
+bool CompSetVisibility(void* comp, bool value) {
+    if (!comp) return false;
+    if (!g_setVisibilityFn) {
+        if (void* cls = R::ClassOf(comp))
+            g_setVisibilityFn = R::FindFunction(cls, L"SetVisibility");
+    }
+    if (!g_setVisibilityFn) return false;
+    ue_wrap::ParamFrame f(g_setVisibilityFn);
+    if (!f.valid()) return false;
+    f.Set<bool>(L"bNewVisibility", value);
+    f.Set<bool>(L"bPropagateToChildren", false);
+    return ue_wrap::Call(comp, f);
+}
+
+bool CallParamless(void* obj, void* fn) {
+    if (!obj || !fn) return false;
+    ue_wrap::ParamFrame f(fn);
+    return f.valid() && ue_wrap::Call(obj, f);
+}
+
+}  // namespace
+
+bool ApplyActiveToggleEffects(int unit, bool value) {
+    void* d = Instance();
+    if (!d || !g_coreResolved) return false;
+    // The native setter events' side-effect blocks, replicated per field (uber
+    // [1113-1156]). The fused native setter (powerChanged) runs ALL FIVE units'
+    // blocks incl. an unconditional stopSound -- too broad for one field.
+    switch (unit) {
+    case 0: {  // active_play: stopSound() + light_play + computerHum_play
+        CallParamless(d, g_stopSoundFn);
+        CompSetVisibility(DeskAudioComponent(g_offLightPlay), value);
+        CompSetActive(DeskAudioComponent(g_offHumPlay), value);
+        return true;
+    }
+    case 1: {  // active_download: download_playSignall() + light_down + computerHum_downl
+        CallParamless(d, g_downloadPlaySignallFn);
+        CompSetVisibility(DeskAudioComponent(g_offLightDown), value);
+        CompSetActive(DeskAudioComponent(g_offHumDownl), value);
+        return true;
+    }
+    case 2: {  // active_coords: light_coord + computerHum_coords
+        CompSetVisibility(DeskAudioComponent(g_offLightCoord), value);
+        CompSetActive(DeskAudioComponent(g_offHumCoords), value);
+        return true;
+    }
+    case 3: {  // active_comp: light_comp + active_console mirror + setMats()
+        CompSetVisibility(DeskAudioComponent(g_offLightComp), value);
+        if (g_offActiveConsole >= 0)
+            *reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(d) + g_offActiveConsole) = value;
+        CallParamless(d, g_setMatsFn);
+        // (The computerWorking cue transitions stay owned by coop/comp_sync --
+        // its CompCueStart/Stop edges; not duplicated here.)
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool ApplyPlayVolumeEffects(int32_t value) {
+    // The atlas setSignalVolume live-apply half: signalSound.SetVolumeMultiplier
+    // (FClamp(v/10, 0.1, 5)) -- the raw play_volume field write is the caller's.
+    void* comp = DeskAudioComponent(g_offSignalSound);
+    if (!comp) return false;
+    if (!g_setVolumeMultFn) {
+        if (void* cls = R::ClassOf(comp))
+            g_setVolumeMultFn = R::FindFunction(cls, L"SetVolumeMultiplier");
+    }
+    if (!g_setVolumeMultFn) return false;
+    float mult = static_cast<float>(value) / 10.0f;
+    if (mult < 0.1f) mult = 0.1f;
+    if (mult > 5.0f) mult = 5.0f;
+    ue_wrap::ParamFrame f(g_setVolumeMultFn);
+    if (!f.valid()) return false;
+    f.Set<float>(L"NewVolumeMultiplier", mult);
+    return ue_wrap::Call(comp, f);
+}
+
+bool PlayScanEffects() {
+    void* d = Instance();
+    if (!d || !g_spawnDirsFn) return false;
+    // Null-guard: spawnDirs derefs ui_coordinates.CanvasPanel_245 -- skip the
+    // replay while the desk's screen widget isn't live yet (the caller logs once).
+    if (!UiCoordsInstance()) return false;
+    if (!CallParamless(d, g_spawnDirsFn)) return false;
+    if (g_playPingSoundFn && g_sndBeepLong1) {
+        ue_wrap::ParamFrame f(g_playPingSoundFn);
+        if (f.valid()) {
+            f.Set<void*>(L"NewSound", g_sndBeepLong1);
+            ue_wrap::Call(d, f);
+        }
+    }
+    return true;
 }
 
 }  // namespace ue_wrap::console_desk

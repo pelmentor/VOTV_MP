@@ -3,6 +3,7 @@
 #include "coop/interactables/signal_catch_sync.h"
 
 #include "coop/interactables/console_state_sync.h"
+#include "coop/interactables/desk_input_sync.h"
 #include "coop/interactables/device_occupancy.h"
 #include "coop/net/session.h"
 
@@ -178,7 +179,7 @@ void ApplyReplay(const coop::net::SkySignalCatchPayload& p) {
         g_pending.armed = false;  // a cleared signal voids any queued adopt
         g_prevSigName = L"None";  // prime: the wire apply must not re-fire the edge
         g_havePrevSig = true;
-        coop::console_state_sync::PrimeDeskEdgeDetector();
+        coop::desk_input_sync::PrimeBaselines();
         UE_LOGI("signal_catch: cleared replay applied (download machine reset)");
         return;
     }
@@ -210,7 +211,7 @@ void ApplyReplay(const coop::net::SkySignalCatchPayload& p) {
     }
     g_prevSigName = sig.objectName;  // prime the cleared detector
     g_havePrevSig = true;
-    coop::console_state_sync::PrimeDeskEdgeDetector();
+    coop::desk_input_sync::PrimeBaselines();
 }
 
 bool BuildCatchPayload(const CD::CoordSignal& sig, uint8_t kind,

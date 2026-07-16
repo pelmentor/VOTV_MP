@@ -29,8 +29,12 @@ void Install(coop::net::Session* session);
 
 // Game thread, per pump tick. HOST: read the live sim outputs + publish via
 // Session::SetHostDeskSim (net thread fans out DeskSimPose). CLIENT: drain the host's
-// vector, interpolate over a short LerpWindow (the cursor shape), and WriteSimOutputs
-// (raw every tick for smoothness; the full screen repaint pulses at ~3Hz).
+// vector, interpolate PER CHANNEL (v112: each channel keeps its own deadline; an
+// unchanged target ARRIVES and snaps cur=target EXACT -- the BUGS-v111 bug-4 fix:
+// the shared v111 window was reopened by every packet, so the detector's bitwise
+// 1.0 never landed and the client's own <1.0-gated block beeped every frame), and
+// WriteSimOutputs (raw every tick for smoothness; the full repaint pulses at ~3Hz).
+// v112: the vector is 7 channels -- coord_cooldown left for desk_input_sync.
 void Tick();
 
 void OnDisconnect();

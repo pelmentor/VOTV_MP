@@ -122,10 +122,11 @@ the cursor) — any new index MUST use the shared component, never raw `NextRang
 | `drone_sync.cpp` | Delivery drone state | DroneState `[V]` |
 | `order_sync.cpp` | Shop orders | OrderRequest `[V]` |
 | `sleep_sync.cpp` | Sleep/bed state | SleepState `[V]` |
-| `comp_sync.cpp`, `console_state_sync.cpp` | Computers / the in-game console + desk | CompState/CompData/DeskState/DeskLogLine `[?]` |
+| `comp_sync.cpp`, `console_state_sync.cpp` | Computers / comp decode + desk ADOPT snapshot + coordLog lines (v112: DeskState is ADOPT-ONLY; the live claimed/unclaimed lanes RETIRED; kPrefixes filter = CDOWN only) | CompState/CompData/DeskState(adopt)/DeskLogLine `[?]` |
+| `desk_input_sync.cpp` | Desk INPUT lane (v112, the BUGS-v111 axis fix): claim-free field-granular deltas for the 13 input scalars + cooldown charge events + SHIFT-scan classification (poll 250ms; presser-authored; host relays minus originator; echo-prime; pingSetter leaver teardown) | DeskInput=97/DeskScanEvent=98 `[AS-BUILT v112 — awaiting hands-on]` |
 | `signal_sync.cpp`, `signal_catch_sync.cpp`, `signal_wire.cpp` | Sky-signal hardware + catch + dish aim | SkySignalState/SkySignalCatch/DishAimState/SavedSignalAppend/Delete `[?]` |
 | `desk_cursor_sync.cpp` | Desk coords-panel live cursor (unreliable pose stream, 50ms interp) | DeskCursorPose=36 `[V v109, TAKE=SMOOTH]` |
-| `desk_sim_sync.cpp` | Signal-desk download-SIM host-auth output vector (decoded/needle/rate/frData/poData/offsets/cooldown; host streams 10Hz, client interpolates+overwrites; knob intents stay occupant-authored on DeskState) | DeskSimPose=38 `[AS-BUILT v111 — hands-on 2026-07-16 FAILED, 5 bugs root-caused: docs/signals/TRACKER.md BUGS-v111]` |
+| `desk_sim_sync.cpp` | Signal-desk download-SIM host-auth output vector (v112: 7ch — decoded/needle/rate/frData/poData/offsets; cooldown OUT to desk_input_sync; PER-CHANNEL interp with exact-snap on unchanged-target arrival = the bug-4 fix) | DeskSimPose=38 `[AS-BUILT v112 — awaiting hands-on; v111 hands-on FAILED -> BUGS-v111 all designed-out, see votv-desk-input-lane-DESIGN-2026-07-16.md]` |
 
 > **Signal-processing subsystem** (catch → screens → freq/pol tune → download → decode → play deck →
 > drive → comp processing → tapes): the whole workstation's element-by-element status lives in

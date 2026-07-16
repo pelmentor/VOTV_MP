@@ -23,7 +23,7 @@ tracker points there. Wire-lane discoverability lives in `COOP_SYNC_MAP.md`. Nei
 | Refiner pane (comp) | `comp_progress` refine (NOT the download) | 4 single-sim | occupant | `CompState 60` / `CompData 61` | **AS-BUILT** |
 | **Desk coords-panel cursor** | live cursor over the coord screen | 4 owner pose-stream | occupant | `DeskCursorPose 36` (`desk_cursor_sync`) | **VERIFIED** (v109, user TAKE=SMOOTH) — ⚠ see OPEN-1 |
 | **Desk alarm-clock** | HH:MM display, frozen host-mirror | 3 host-mirror | host | `ClockPose 37` + reliable connect-edge | **AS-BUILT** (v110 `2dde3e16`, NOT hands-on) |
-| **Freq/polarity + download rate** | tune → download SPEED; per-peer sim + 2 RNG | 3 host-auth sim | host | `DeskSimPose=38` (`desk_sim_sync`) | **AS-BUILT** v111 — ⚠ hands-on 2026-07-16 FAILED, see **BUGS-v111** |
+| **Freq/polarity + download rate** | tune → download SPEED; per-peer sim + 2 RNG | 3 host-auth sim (outputs) + claim-free input deltas | host / presser | `DeskSimPose=38` 7ch + `DeskInput=97`/`DeskScanEvent=98` (`desk_sim_sync` + `desk_input_sync`) | **AS-BUILT v112** (the BUGS-v111 fix; smoke PASS) — awaiting hands-on |
 | coord log lines (`CR:`/animated) | `ProduceLogLines` runs on EVERY peer | 4 holder-owned | occupant (planned) | partial (`CR:` filtered off wire) | **OPEN-2** (filter premise now MEASURED false for CR/APPROX/ANALYSIS) |
 | Dishes rotation/kinematics (24 big) | rest pose = load-time RNG (unsaved); per-slew RNG; catch targets already synced | 3/4 (tbd) | host (planned) | — (`SkySignalCatch` covers targets only) | **OPEN-4** (RE'd 2026-07-16) |
 | Stationary PC / laptop screen | portable-PC power + screen | 1/4 (tbd) | tbd | — | **OPEN** (screens gap-list #5) |
@@ -49,8 +49,14 @@ generic device layer, not the signal pipeline.
 
 ## BUGS-v111 — the 2026-07-16 hands-on verdict (5 bugs, ALL root-caused)
 
-Full audit with file:line cites:
-`research/findings/computers-devices/votv-desk-sim-v111-coop-bugs-audit-2026-07-16.md`.
+> **FIX AS-BUILT (v112, same day):** all five designed out by the 12-round fix /qf
+> (`votv-desk-input-lane-DESIGN-2026-07-16.md`) and BUILT: the claim-free field-granular
+> `DeskInput=97` lane + `DeskScanEvent=98` + the 7-channel per-channel-exact-snap DeskSimPose +
+> cooldown charge events + kPrefixes={CDOWN}. kProtocolVersion **112**, DLL `C4C1E69A…` deployed
+> x4, autonomous LAN smoke PASS (45 s steady, logs clean, retired lanes silent). **NOT hands-on
+> verified yet** — the take: client presses knobs/toggles at the download unit and they apply on
+> the host + sounds play on both peers + 1/2/3 cooldown works on the client + SHIFT arrows appear
+> on the mirror + detector 100% beeps once. The bullets below are the v111 diagnosis (historical).
 **The axis fact:** the desk claim NEVER engages for the download unit's world-space buttons
 (claim rides only the intComs `activeInterface` edge; physical +1/+5/+15/toggle presses don't set
 it) → the whole v111 occupant-intent lane was dead during the test.
@@ -143,6 +149,14 @@ owns the sim + the log, non-holders mirror the full state and SUPPRESS local gen
 never mirror — only `CDOWN:` is regenerable from streamed state). The buffer is
 `coord_coordLog2Text @0x0BF8` via `writeToCoordLog_2` (append, Right-capped 1000 chars; the
 sibling `writeToCoordLog`/`coord_coordLogText` are DEAD code). = BUG-5's second half.
+
+> **DESIGN CONVERGED for ALL of OPEN-4..9 (2026-07-16, /qf 9 rounds "that holds"):**
+> `research/findings/computers-devices/votv-signal-chain-all-units-DESIGN-2026-07-16.md` —
+> presser-authored state broadcasts + host-adopted sims + VM-bracket capture (HALT-gated on the
+> 0x45 frequency probe); build order v112 → probe → L4 → L7 → L6 → L8 → L5 → L9. The BUGS-v111
+> fix design converged separately (12 rounds): `votv-desk-input-lane-DESIGN-2026-07-16.md`
+> (v112: claim-free DeskInput lane; impl in progress). The per-lane sections below remain the
+> FACT base; the design doc is the plan of record.
 
 ### OPEN-4 · Dish rotation/kinematics (24 big dishes) — RE'd, unsynced
 RE: `votv-dish-rotation-RE-2026-07-16.md`. Catch TARGETS already sync (`SkySignalCatch` replays
