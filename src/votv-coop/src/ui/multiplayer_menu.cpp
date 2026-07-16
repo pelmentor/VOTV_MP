@@ -55,6 +55,11 @@ uint64_t g_lastInjectMs = 0;            // throttle inject attempts on failure /
 // gates the passive coop HUD (chat feed / nameplates) off so we never draw OVER the
 // native modal pause menu.
 std::atomic<uint64_t> g_pauseTickMs{0};
+// Render-thread-readable "MAIN menu is up" signal (isPause==false). Stamped on every
+// main-menu tick; IsMainMenuOpen() reports open while fresh, auto-clearing ~250 ms after
+// the menu stops ticking (i.e. once in gameplay). The overlay reads it to draw the coop
+// version/update line in the top-left corner ONLY on the main menu.
+std::atomic<uint64_t> g_mainMenuTickMs{0};
 // Client loading state: the menu instance + hidden-state we last applied for a join-in-
 // progress fade. Edge-applied so the SetVisibility/SetRenderOpacity UFunctions run only on
 // a change, not per tick. (g_menuFadeMenu is never dereferenced -- pointer compare only --
@@ -95,6 +100,9 @@ void OnMenuTickPost(void* self, void* /*function*/, void* /*params*/) {
         g_pauseTickMs.store(::GetTickCount64(), std::memory_order_relaxed);
         return;
     }
+    // Reached only on the MAIN menu (isPause==false): publish the freshness signal the
+    // overlay reads to place the coop version/update line among the game's top-left labels.
+    g_mainMenuTickMs.store(::GetTickCount64(), std::memory_order_relaxed);
 
     // Client loading state: while a join is in progress, hide the WHOLE menu widget so only
     // the 3D menu background remains -- the "clean menu canvas" the connecting screen
@@ -233,6 +241,14 @@ bool IsPauseMenuOpen() {
     // back to false within the window. Lock-free (atomic load + GetTickCount64) so it is
     // safe to call from the render thread (the ImGui overlay) and the WndProc thread.
     const uint64_t t = g_pauseTickMs.load(std::memory_order_relaxed);
+    return t != 0 && (::GetTickCount64() - t) < 250;
+}
+
+bool IsMainMenuOpen() {
+    // Same freshness model as IsPauseMenuOpen but for the MAIN menu (isPause==false).
+    // Lock-free -> safe from the render thread. False once in gameplay (ui_menu_C stops
+    // ticking) so the overlay's version corner shows on the main menu only.
+    const uint64_t t = g_mainMenuTickMs.load(std::memory_order_relaxed);
     return t != 0 && (::GetTickCount64() - t) < 250;
 }
 
