@@ -1,6 +1,6 @@
 # Hands-on runbook — v112..v116 + v117 L6 DECK + v118 L8 PHYSMODS (batched), take 4
 
-DEPLOYED: see the v118 section below for the current DLL hash (2026-07-18 build).
+DEPLOYED: `votv-coop.dll 2bb5f2a256adde7a...` x4, hash-verified 2026-07-18 late.
 kProtocolVersion **118** (v117's PlayDeckEvent + the NEW PhysModsState lane;
 a 117-or-older peer HARD-CLOSEs at the gate — RELAUNCH BOTH PEERS).
 
@@ -27,11 +27,11 @@ successful ping at 17:04:46 never crossed (the claim-gated catch detector raced 
 FSM-hold release) -> host NO SIGNAL / frozen host dishes / diverged client dishes /
 detector asymmetry. v116 retires the claim gates (the unprimed change-edge is the
 authority) + adds the laptop PC lane + catch -> activity feed.
-**NOTHING below is hands-on verified yet.** SEVEN unverified layers batch here; per-lane
+**NOTHING below is hands-on verified yet.** EIGHT unverified layers batch here; per-lane
 log prefixes keep attribution:
 `desk_input:`/`desk_sim:` = v112, `dish_sync:`/`[dish]` = v113, `[reel]`/`[task]` = v114,
 `desk_snd:`/`desk_cursor:` = v115, `FSM-hold`/`ping attribution`/`re-init window` = v115b,
-`signal_catch:`/`laptop_sync:`/`laptop:` = v116, `deck_play:` = v117.
+`signal_catch:`/`laptop_sync:`/`laptop:` = v116, `deck_play:` = v117, `physmods:` = v118.
 
 ## What changed in v117 (2026-07-18 — L6 deck playback)
 The unit-3 play deck's PLAYBACK now mirrors (it was fully local: a non-occupant heard

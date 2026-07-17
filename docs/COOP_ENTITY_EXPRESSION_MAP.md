@@ -77,6 +77,17 @@ host-authoritative (`senderPeerSlot != 0` ⇒ drop, except the either-range case
   side-channel under HOST authority, correlated to a client-eject birth via the adoption eid-binding.
   A held disc's world identity died at pickup (hand-actor keyless+eidless = correctly seam-dropped).
   **[AS-BUILT v116, smoke; RE votv-laptop-pc-RE-2026-07-17.md FD-Q1]**
+- **The desk module prop across the physMods sockets (v118 `45a886a4`):** plug =
+  `K2_DestroyActor(holdActor)` inside `plugInModule` (in-hand, NO prior release — the native path
+  itself destroys held actors) — rides the generic seam above, both roles (a client-held module's
+  host twin already died at grab, so receivers no-op). Unplug = `lib.physModToActor(byte)` →
+  BeginDeferred+Finish → `player."Hold Object"` (born INTO THE HAND): on the HOST the spawn watcher
+  expresses it the same tick (the hand exclusion is only the hotbar view husk) and it rides normal
+  carry; on a CLIENT it is invisible-while-held (doctrine) and births at DROP via the kind-104
+  fresh-birth whitelist widened to `IsChildOf(Aprop_physModule_C)` (the byte rides the CLASS — no
+  scalar channel). The ARRAY state itself is the `PhysModsState` lane (value-ops + host-canonical);
+  a raced unplug's ghost is deny-swept, a raced dup-plug is host-REFUNDED (a fresh spawn at the
+  desk). **[AS-BUILT v118, smoke + join-canonical in-log; design votv-physmods-L8-impl-DESIGN-2026-07-18.md]**
 - **Connect reconcile:** R2 blob-vs-live key-diff deletes → SnapshotBegin/claim-tracking → bracketed
   PropSpawn stream → SnapshotComplete → quiescence-gated **divergence sweep** (membership = the client's
   own local Prop Elements, mirror-excluded; **>50% world-wipe valve**) → `EnsurePileBindIndex` position-bind

@@ -16,8 +16,16 @@ record `votv-tape-caddy-L7-impl-DESIGN-2026-07-17.md`, which REVISES three lines
 the inserted progress and owns the accrual" became a both-peers-accrue + host ReelPose CORRECTOR
 (the park is un-holdable: upd() re-applies SetActorTickEnabled everywhere); and "eject spawns via
 the generic lanes" was measured HALF-TRUE — the client half needed ReelEjectIntent=104 + the
-PropSpawn savedScalar birth channel). **L5/L6/L8/L9 remain DESIGN** (nothing built; verified
-against HEAD `3fd39d22` — no drive/deck/physmods/meadow lane modules exist in src).
+PropSpawn savedScalar birth channel). **L6 = BUILT v117** (2026-07-18,
+commit `c077e910` — impl design of record `votv-deck-play-L6-impl-DESIGN-2026-07-18.md`, which
+REVISES this doc's §L6: SEAM detection replaces the 250 ms poll [the doc's own tier rule], the
+gen guard added, playSignal is parameterless [the "playSignal(index)" line was a sketch]).
+**L8 = BUILT v118** (2026-07-18, commit `45a886a4` — impl design of record
+`votv-physmods-L8-impl-DESIGN-2026-07-18.md`, which REVISES §L8 in three majors: {slot,moduleId}
+deltas -> VALUE-ops + a host-canonical array [the array is a SET]; the UNPLUG path exists;
+explotano is measured presser-local — "damage rides the choke" described a path explosion_C
+never enters). **L5/L9 remain DESIGN** (verified against HEAD `45a886a4` — no drive/meadow lane
+modules exist in src; both HALT-gated on the 0x45 frequency probe).
 PRECONDITION v112 shipped (`7d57478f`).
 
 ## The cross-cutting rules this design stands on

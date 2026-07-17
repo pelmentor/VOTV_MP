@@ -425,6 +425,28 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   desk; +20 s from connected landed). *Look FIRST:*
   `memory/lesson_audio_effect_mirror_func_patch_native_seam.md` + `desk_snd_fx.cpp` (v115 `c5ff11a4`).
 
+- **SET-state syncs as VALUE-ops + a host-canonical container, never slot deltas** (v118 L8,
+  2026-07-18). A native uniqueness gate (the plug dup-check) makes the positional-looking array a SET:
+  slot-keyed deltas lose an element permanently on a concurrent same-slot race and diverge index-read
+  layouts forever; value-ops (add/remove{value}) + the host's canonical full-container broadcast +
+  drain-before-adopt + a deny/refund op make divergence structurally impossible. *Look FIRST:*
+  `memory/lesson_set_state_syncs_as_value_ops_plus_canonical.md` + `physmods_sync.cpp` (v118).
+
+- **The HOST's organic change never rides the remote-op apply path** (v118 L8, 2026-07-18; BOTH
+  audits independently). A remote-op apply assumes NOT-YET-APPLIED state -- the host's own organic
+  change is already in its authoritative state, so self-routing it hits the dup/absent branches
+  (a phantom refund spawn per host plug + no canonical broadcast). Host organic diff = broadcast
+  canonical directly; only CLIENT ops ride the op path. *Look FIRST:*
+  `memory/lesson_host_organic_change_never_rides_the_remote_op_path.md` + DrainLocalDiff (v118).
+
+- **A GEN GUARD decouples correctness from an INFERRED dispatch-visibility fact** (v117 L6,
+  2026-07-18). When an edge-suppression rule hangs on unmeasured visibility (fin()'s PE dispatch was
+  doctrine-inferred, live-unmeasurable pre-hands-on), don't prove-first (blocked) or ship-on-inference
+  (the crutch class): make the mechanism NON-LOAD-BEARING — the session-start edge mints max(seen)+1,
+  the end edge carries the gen it terminates, receivers drop stale/duplicate ends, starts apply
+  unconditionally + realign. The inferred bracket demotes to spam suppression. *Look FIRST:*
+  `memory/lesson_gen_guard_decouples_inferred_visibility.md` + `deck_play_sync.cpp` (v117).
+
 - **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. THIRD instance
   2026-07-10: the T1 probe's PE-table interceptors on `Delay`/`K2_SetTimer*`/`SetActorTickInterval`/`QuitGame`
   were BLIND for a whole smoke (caught by its own positive control; moved to the Func-patch seam `7109efd1`).

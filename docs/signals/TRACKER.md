@@ -293,13 +293,13 @@ save-transfer only, no live lane. Same intent-CRDT shape as the shipped
 ---
 
 ## CHANGELOG
-- **2026-07-18 (v118 `pending-commit`, L8 physMods)** — L8 built per its own 8-round /qf
+- **2026-07-18 (v118 `45a886a4`, L8 physMods)** — L8 built per its own 8-round /qf
   (value-ops + host-canonical array REVISING the arch's slot-deltas; the unplug path
   discovered — the R1 reframe; the explosion measured presser-local — an inference
   retracted). PhysModsState=108, proto 118; the kind-104 client-birth whitelist widened to
-  desk modules. Smoke PASS + the joiner canonical hand-off proven in-log; audits pending at
-  write time. OPEN-8 flipped AS-BUILT.
-- **2026-07-18 (v117 `pending-commit`, L6 deck playback)** — the event_dispatch_signal.cpp
+  desk modules. Smoke x2 PASS + the joiner canonical hand-off proven in-log; BOTH audits converged on ONE
+  critical (the host self-op misroute) -- fixed pre-handoff. OPEN-8 flipped AS-BUILT.
+- **2026-07-18 (v117 `c077e910`, L6 deck playback)** — the event_dispatch_signal.cpp
   extraction landed first (e88cc5e0: the 18 signal-pipeline cases out of the 791-LOC state
   router; every future lane case lands in the signal family). Then L6 built per its own
   7-round /qf (design `votv-deck-play-L6-impl-DESIGN-2026-07-18.md`): PlayDeckEvent=107,
