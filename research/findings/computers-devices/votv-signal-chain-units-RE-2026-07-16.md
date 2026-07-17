@@ -245,9 +245,13 @@ data touched.
 `button_play_saveSig @0x0240` -> row = `savedSignals_0[play_selectIndex]`, gate
 `decoded >= size && size != 0`, -> **`gamemode.laptop.addSignal(row)`** — a COPY (the row stays
 in the deck list). `ui_laptop.addSignal`: **`saveSlot.savedSignals_0 @0x0680`.Add** (the
-persistent Meadow DATABASE store; sibling `savedSignals_comp_0 @0x0690` = the comp-processed DB)
+persistent Meadow DATABASE store; sibling `savedSignals_comp_0 @0x0690` — *(CORRECTED
+2026-07-19 during the L9 /qf prep: NOT a "comp-processed DB". Measured in the gamemode uber +
+saveObjects: `saveObjects` writes `saveSlot.savedSignals_comp_0 := gamemode.savedSignals_0`
+and the boot path loads it back — it is the DECK LIST's SAVE-PERSISTENCE MIRROR; the original
+"processed DB" reading here was a guess from the name)*)
 + creates the DATABASE-tab row widget. So there are THREE stores: gamemode.savedSignals_0 (deck
-list) / saveSlot.savedSignals_0 (Meadow DB) / saveSlot.savedSignals_comp_0 (processed DB).
+list) / saveSlot.savedSignals_0 (Meadow DB) / saveSlot.savedSignals_comp_0 (the deck list's save mirror — corrected above).
 
 ### Signal ID generation (identity fact)
 **`lib_C.setSignalID`** — called ONLY from the unit-2 save chain (and unit-4 level-up): if `id`

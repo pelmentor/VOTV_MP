@@ -24,8 +24,16 @@ gen guard added, playSignal is parameterless [the "playSignal(index)" line was a
 `votv-physmods-L8-impl-DESIGN-2026-07-18.md`, which REVISES §L8 in three majors: {slot,moduleId}
 deltas -> VALUE-ops + a host-canonical array [the array is a SET]; the UNPLUG path exists;
 explotano is measured presser-local — "damage rides the choke" described a path explosion_C
-never enters). **L5/L9 remain DESIGN** (verified against HEAD `45a886a4` — no drive/meadow lane
-modules exist in src; both HALT-gated on the 0x45 frequency probe).
+never enters). **L5 = BUILT v119** (2026-07-19 night, commit `b7ed3799` — impl design of record
+`votv-drive-chain-L5-impl-DESIGN-2026-07-18.md`, which REVISES §L5 in four majors:
+authored events -> idempotent any-peer state lines + host canonical; the eject FIFO
+assumption RETRACTED [the grab-half is the unreliable pose stream] -> deterministic
+latch-completion; prop_driveRack discovered IN scope [the L8 canonical shape on 0x70
+rows]; the slotted-latch satisfied by the standing frozen-pose gate). **L9 remains
+DESIGN** (verified against HEAD `b7ed3799` — no meadow lane module in src; its HALT
+gate PASSED 2026-07-18, see the GATE RUN block below; NOTE the comp_0 REFRAME:
+savedSignals_comp_0 is the DECK list's save mirror, not a sibling DB — L9 scope is
+saveSlot.savedSignals_0 alone).
 PRECONDITION v112 shipped (`7d57478f`).
 
 ## The cross-cutting rules this design stands on
@@ -95,6 +103,9 @@ PRECONDITION v112 shipped (`7d57478f`).
 - Per-dish identity logging (index + techName + Key) at slew start/stop, both peers (user ask).
 
 ## L5 — DRIVE CHAIN (OPEN-5): VM-captured payload broadcasts + slot events
+> **BUILT v119 (`b7ed3799`) per `votv-drive-chain-L5-impl-DESIGN-2026-07-18.md`** — with
+> the four revisions named in the Status header. The section below is the ARCH-level
+> frame as designed; the impl doc is the as-built truth.
 
 - **DrivePayload** (reliable) {drive eid, name, id, level, size, decoded}: VM-bracket dirty-mark
   on the four drive verbs (deck import/export, comp swap, eraser wipe); the barrier emits the

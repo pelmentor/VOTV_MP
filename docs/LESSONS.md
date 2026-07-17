@@ -412,6 +412,27 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   format change (v116 disc content, qf R8-Q3). *Look FIRST:* `laptop_sync.cpp DriveEjectContentWatch`.
   `memory/lesson_adoption_eid_binding_correlates_client_birth_sidedata.md`
 
+- **Overlap-triggered halves of a mirrored world FSM SELF-SIMULATE on receivers** (the pose
+  stream drags the prop into the trigger; Delay(0) decouples the capture from any wire-apply
+  scope); verb-triggered halves NEVER self-sim — classify every transition trigger BEFORE
+  designing the lane; the self-simmed half wants idempotent state lines, the verb half needs
+  the wire event mandatorily (v119 driveSlot: insert self-sims, unsynced eject = permanent
+  occupied-by-ghost). `memory/lesson_overlap_half_of_world_fsm_self_simulates.md`
+- **Deferred wire applies (pending-until-resolvable) stash the target state AT QUEUE and DROP
+  on replay if it moved** + one pending per target, newest supersedes — blind replay resurrects
+  a superseded state and self-primes the baseline so no sweep ever heals it (v119 audit CRIT-1;
+  the inverse of op-before-state-ready). `memory/lesson_pending_deferred_apply_stash_state_and_drop.md`
+- **Deny/refund/reap handshakes correlate by ITEM CONTENT, never sender alone** — the v118
+  module reap was safe only because the BYTE discriminated; single-class items (drives) need
+  the payload content hash + the reap moved to the adoption-payload seam (v119 audit MAJOR-1:
+  slot-only matching silently eats a legitimate same-peer birth).
+  `memory/lesson_deny_refund_correlates_by_content_not_sender.md`
+- **First-sight-in-sweep != birth authorship**: a joiner's save-loaded entities materialize
+  AFTER its connect prime and would re-author the host's own rows under a first-sight
+  broadcast rule (v119 smoke-measured) — note authorship at the local birth drain (actor+TTL);
+  clients broadcast only noted births, the host its organic world.
+  `memory/lesson_first_sight_is_not_birth_authorship.md`
+
 ## 4. Dispatch, hooks & input seams
 
 - **Presser-local SOUNDS/effects mirror at the NATIVE effect seam, never by classifying inputs** —
