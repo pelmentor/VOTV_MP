@@ -705,12 +705,13 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // + replays them in ConnectReplayForSlot. mainPlayer.holding_actor with an Aprop_C no
 // longer feeds the PropSpawn/PropPose path (the trash clump/pile carry -- the
 // non-Aprop_C holding_actor case -- stays on its lane untouched).
-inline constexpr uint16_t kProtocolVersion = 117; // v117 (2026-07-18, L6 deck playback): NEW
-                                                  // ReliableKind PlayDeckEvent=107 (unit-3
-                                                  // playback play/stop edges at the audio Func
-                                                  // seam, gen-guarded) -- a peer without the
-                                                  // kind would silently drop the lane, so the
-                                                  // pair must hard-close at the gate.
+inline constexpr uint16_t kProtocolVersion = 118; // v118 (2026-07-18, L8 physMods): NEW
+                                                  // ReliableKind PhysModsState=108 (value-ops
+                                                  // + host-canonical module array). A peer
+                                                  // without the kind silently drops the lane;
+                                                  // hard-close at the gate.
+// v117 (2026-07-18, L6 deck playback): NEW ReliableKind PlayDeckEvent=107 (unit-3
+// playback play/stop edges at the audio Func seam, gen-guarded).
 // v116 (2026-07-17 eve, the catch-attribution retire):
                                                   // SkySignalCatch kind gains 2 = connect STATE-SEED
                                                   // (applied like 0, never announced to the activity
@@ -2362,6 +2363,22 @@ enum class ReliableKind : uint8_t {
                        //     clean restart). Symmetric + RELAYED. No join seed (a joiner
                        //     misses in-flight playback -- arch residual; fields seed via
                        //     DeskState adopt). Payload: PlayDeckEventPayload (12 B).
+    PhysModsState = 108, // v118 (physmods_sync -- L8): the desk 12-slot PHYSICAL-MODULES array.
+                       //     Design: 8-round /qf 2026-07-18. The array is a SET (native
+                       //     dup-check => byte unique), so ops carry VALUES not slots:
+                       //     op 0=plug{byte} / 1=unplug{byte} (peer->host, HOST-TERMINAL,
+                       //     derived from a 1 Hz local diff poll with drain-before-adopt);
+                       //     op 2=canonical{bytes[12]} (host->all after every host apply;
+                       //     receivers adopt WHOLESALE + prime + reflected updPhysMods
+                       //     under the wire guard -- measured a pure function of the
+                       //     array); op 3=deny{origOp in byte, byte in byte2} (host->the
+                       //     no-op author: dup plug = REFUND spawn at the desk; raced
+                       //     unplug = the author destroys its local hand/world ghost; the
+                       //     host also reaps the denied byte's kind-104 fresh birth in a
+                       //     10 s TTL). The module-prop halves ride existing seams (the
+                       //     bidirectional destroy seam; the spawn watcher; the widened
+                       //     client-birth class whitelist). NOT client-relayed.
+                       //     Payload: PhysModsStatePayload (16 B).
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -4411,6 +4428,17 @@ struct PlayDeckEventPayload {
     uint32_t gen;          // 4 -- play: the minted playback generation; stop: the gen it ends
 };
 static_assert(sizeof(PlayDeckEventPayload) == 12, "PlayDeckEventPayload must be 12 bytes");
+
+// v118 (L8): the desk physical-modules lane (PhysModsState=108). See the
+// ReliableKind entry for the op semantics (value-ops + host-canonical array).
+struct PhysModsStatePayload {
+    uint8_t op;         // 1 -- 0=plug 1=unplug (peer->host) 2=canonical 3=deny
+    uint8_t byte;       // 1 -- ops 0/1: the module byte; op 3: the ORIGINAL op
+    uint8_t byte2;      // 1 -- op 3: the denied module byte; else 0
+    uint8_t _pad;       // 1
+    uint8_t bytes[12];  // 12 -- op 2: the canonical array; else zero
+};
+static_assert(sizeof(PhysModsStatePayload) == 16, "PhysModsStatePayload must be 16 bytes");
 
 // v113 (L4 dishes): the host->all dish POSE stream (DishPose=39, unreliable,
 // newest-wins by header seq). Movers-only rows at 4 Hz while any dish slews +

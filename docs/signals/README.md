@@ -153,6 +153,8 @@ hands-on FAILED
 on 5 fronts — all designed out in v112 (`votv-desk-input-lane-DESIGN-2026-07-16.md`). Remaining
 OPEN: OPEN-1 (cursor jerks — v116 removed the diag-battery noise [kerfur_census 8-25 ms walk] and
 added HOST perf_probe, the never-measured half; npc_client walk = the named suspect), OPEN-2
-(coordLog cluster), OPEN-3 (upgrade-sync), OPEN-5/8/9 + OPEN-10 (laptop v2: PC buffer +
-portable PC; per-device claim discrimination) (L4+L7+L6 BUILT; the remaining train is
-L8 -> L5 -> L9, the 0x45 frequency probe HALT-gates L5/L9).
+(coordLog cluster), OPEN-3 (upgrade-sync), OPEN-5/9 + OPEN-10 (laptop v2: PC buffer +
+portable PC; per-device claim discrimination) (L4+L7+L6+L8 BUILT — **v118 L8 physMods
+2026-07-18**: value-ops + host-canonical array per its own 8-round /qf, the UNPLUG-path
+reframe + the explosion measured presser-local, `votv-physmods-L8-impl-DESIGN-2026-07-18.md`;
+the remaining train is L5 -> L9, the 0x45 frequency probe HALT-gates both).

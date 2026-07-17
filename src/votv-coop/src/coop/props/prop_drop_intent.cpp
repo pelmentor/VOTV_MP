@@ -19,7 +19,9 @@
                                             // GetPropNameString, WriteSpParityIdentity
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/sdk_profile.h"            // profile::name::{GameplayStaticsClass,FinishSpawningActorFn,PropSetKeyFn}
-#include "ue_wrap/desk/tape_caddy.h"             // v114 (L7): IsReelClass whitelist + the Progress birth scalar
+#include "ue_wrap/desk/tape_caddy.h"            // v114 (L7): IsReelClass whitelist + the Progress birth scalar
+#include "ue_wrap/desk/phys_mods.h"             // v118 (L8): IsModuleClass whitelist
+#include "coop/interactables/physmods_sync.h"   // v118 (L8): the denied-birth reap
 #include "ue_wrap/core/types.h"
 #include "ue_wrap/core/ufunction_hook.h"         // InstallPostHook (chains after host_spawn_watcher's)
 
@@ -256,10 +258,16 @@ void Tick(coop::net::Session* session) {
         // by PeekIncomingSpawn above; tracked actors by the EidForActor check; the actor already
         // carries the NewGuid key Init minted inside FinishSpawn). Author it host-side via
         // ReelEjectIntent -- the same HostSpawnPlacedProp author, class-whitelisted at the host.
-        const bool reelEject = !parked &&
-                               ue_wrap::tape_caddy::EnsureResolved() &&
-                               ue_wrap::tape_caddy::IsReelClass(R::ClassOf(e.actor));
-        if (!parked && !reelEject) continue;  // not a place of a picked-up prop, not a reel birth
+        // v118 (L8): the fresh-birth class whitelist widens to desk modules --
+        // the playerHitWith UNPLUG births a module INTO THE HAND (a client
+        // Aprop_C spawn never broadcasts), so its later drop is the same
+        // local-only-ghost class as the v114 reel eject.
+        const bool freshBirth = !parked &&
+            ((ue_wrap::tape_caddy::EnsureResolved() &&
+              ue_wrap::tape_caddy::IsReelClass(R::ClassOf(e.actor))) ||
+             (ue_wrap::phys_mods::EnsureResolved() &&
+              ue_wrap::phys_mods::IsModuleClass(R::ClassOf(e.actor))));
+        if (!parked && !freshBirth) continue;  // not a place of a picked-up prop, not a whitelisted birth
         // Author the host-authoritative spawn intent (place OR reel-eject birth).
         coop::net::PropDropIntentPayload p{};
         const std::wstring cls = R::ClassNameOf(e.actor);
@@ -285,7 +293,7 @@ void Tick(coop::net::Session* session) {
                 p.physFlags |= pf::kHasSavedScalar;
             }
         }
-        if (reelEject) {
+        if (freshBirth) {
             // Born ASLEEP on the host (no free-fall; the held-prop pose stream takes over).
             p.physFlags |= pf::kSleep;
         }
@@ -297,12 +305,12 @@ void Tick(coop::net::Session* session) {
         p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
         p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
         p.scaleX = scl.X; p.scaleY = scl.Y; p.scaleZ = scl.Z;
-        session->SendReliable(reelEject ? coop::net::ReliableKind::ReelEjectIntent
-                                        : coop::net::ReliableKind::PropDropIntent,
+        session->SendReliable(freshBirth ? coop::net::ReliableKind::ReelEjectIntent
+                                         : coop::net::ReliableKind::PropDropIntent,
                               &p, sizeof(p));
         if (parked) UnparkKey(key);   // consume from BOTH the set AND the FIFO (mirror invariant)
         UE_LOGI("[PROP-DROP] CLIENT authored %s key='%ls' cls='%ls' name='%ls' loc=(%.1f,%.1f,%.1f)%s",
-                reelEject ? "REEL-EJECT intent" : "drop intent",
+                freshBirth ? "FRESH-BIRTH intent" : "drop intent",
                 key.c_str(), cls.c_str(),
                 WireToWide(p.propName.len, p.propName.data, sizeof(p.propName.data)).c_str(),
                 p.locX, p.locY, p.locZ,
@@ -351,17 +359,23 @@ void OnReelEjectIntent(coop::net::Session& session, const coop::net::PropDropInt
                        uint8_t senderSlot) {
     UE_ASSERT_GAME_THREAD("prop_drop_intent::OnReelEjectIntent");
     if (session.role() != coop::net::Role::Host) return;
-    // v114 (L7): the client-eject birth author. CLASS-WHITELISTED to the Aprop_reel_C lineage --
-    // this is NOT a general client-spawn door (the design's explicit gate; a non-reel class here
-    // is a protocol violation, logged and dropped).
+    // v114 (L7): the client fresh-BIRTH author. CLASS-WHITELISTED -- reels (the caddy eject)
+    // and, since v118 (L8), desk modules (the socket unplug). NOT a general client-spawn door
+    // (the design's explicit gate; any other class here is a protocol violation, dropped).
     const std::wstring cls = WireToWide(p.className.len, p.className.data, sizeof(p.className.data));
     void* clsObj = R::FindClass(cls.c_str());
-    if (!clsObj || !ue_wrap::tape_caddy::EnsureResolved() ||
-        !ue_wrap::tape_caddy::IsReelClass(clsObj)) {
-        UE_LOGW("[PROP-DROP] HOST ReelEjectIntent from slot=%u rejected: class '%ls' is not a reel",
+    const bool isReel = clsObj && ue_wrap::tape_caddy::EnsureResolved() &&
+                        ue_wrap::tape_caddy::IsReelClass(clsObj);
+    const bool isModule = clsObj && ue_wrap::phys_mods::EnsureResolved() &&
+                          ue_wrap::phys_mods::IsModuleClass(clsObj);
+    if (!isReel && !isModule) {
+        UE_LOGW("[PROP-DROP] HOST birth intent from slot=%u rejected: class '%ls' not whitelisted",
                 senderSlot, cls.c_str());
         return;
     }
+    // v118 (L8): a module birth matching a fresh unplug-DENY for this sender is the raced
+    // ghost that got dropped before the deny landed -- reap it (physmods_sync logs).
+    if (isModule && coop::physmods_sync::HostShouldReapModuleBirth(senderSlot, clsObj)) return;
     OnPropDropIntent(session, p, senderSlot);  // same author: dup-guard + HostSpawnPlacedProp
 }
 

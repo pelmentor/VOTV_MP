@@ -37,7 +37,7 @@ tracker points there. Wire-lane discoverability lives in `COOP_SYNC_MAP.md`. Nei
 | driveSlot occupancy (slot FSM) | freeze+teleport, slot/drive pointers, anti-bounce latch | state-mirror (tbd) | tbd | — (generic prop pose only) | **OPEN-5** |
 | signalDriveEraser | 3 s wipe → payload zeroed | 2 intent (tbd) | tbd | — | **OPEN-5** |
 | U4 comp pane | RNG rate sim; level-up re-mints ID; upgrade gate | 4 single-sim | occupant | `CompState 60` / `CompData 61` | **AS-BUILT** (payload/slot halves = OPEN-5) |
-| physMods (desk modules) | 12 slots; module prop destroyed on plug; hot-plug explosion; gates tape speed/level lamps/weather shield | state-mirror (tbd) | host (tbd) | — none | **OPEN-8** |
+| physMods (desk modules) | 12-slot SET (byte unique); plug destroys the held module; UNPLUG (hit the socket) rebirths it into the hand; hot-op in EITHER direction explodes (presser-local, measured); gates tape speed/lamps/laptop-fwd/weather shield | value-ops + host-canonical array | host (canonical) / presser (ops) | `PhysModsState 108` (`physmods_sync` + `ue_wrap/desk/phys_mods`) | **AS-BUILT v118 (2026-07-18)** — L8 per `votv-physmods-L8-impl-DESIGN-2026-07-18.md` (8-round /qf "that holds"; the arch's slot-deltas REVISED to value-ops + canonical — the SET fact makes layout divergence structurally impossible): 1 Hz diff poll + drain-before-adopt; deny/refund op (dup plug refunded, raced unplug ghost swept + birth reaped); client unplug births via the widened kind-104 whitelist (IsChildOf(Aprop_physModule_C)); consume rides the bidirectional destroy seam (zero lane code). Smoke PASS + join canonical proven; NOT hands-on |
 | Meadow DATABASE (`saveSlot.savedSignals_0/_comp_0`) | U3 SAVE copies rows in; laptop plays/deletes/moves | 2 intent (tbd) | host (tbd) | — (join save-transfer only) | **OPEN-9** |
 | Tape caddy `wallunit_tapes` | 1 Hz accrual ×2 reels; reels ride props; speed from physMods | presser slot edges + host corrector | presser / host | `ReelSlot 102` + `ReelPose 40` (`tape_caddy_sync`) | **AS-BUILT v114** (smoke PASS, NOT hands-on) |
 | Daily task `saveSlot.taskNew` | drone `sell` writes reel_big/small; day rollover regrades | 3 host-mirror | host (all writers host-only, census) | `TaskNewState 103` (`daily_task_sync`) | **AS-BUILT v114** (smoke PASS, NOT hands-on) |
@@ -263,11 +263,16 @@ do cross the generic spawn/destroy seams). The daily grade rides `saveSlot.taskN
 small` via drone `sell` (reads struct_save snapshots; reward only if BOTH > 0) + the day-rollover
 `processTask`. Host-owned prop sim + taskNew mirroring wanted; join transfer already seeds both.
 
-### OPEN-8 · physMods (desk physical modules)
-12 slots; plug destroys the module prop (generic destroy lane covers the prop only); the ARRAY +
-its consumers (tape speed byte 21, level lamps + auto-continue byte 3, laptop auto-forward byte
-5, weather shield byte 6) + the `explotano` hot-plug explosion are unsynced. Gates OPEN-7 speed
-and U4 behavior.
+### OPEN-8 · physMods (desk physical modules) — **BUILT v118 (2026-07-18; smoke PASS + join canonical proven, NOT hands-on)**
+
+> **AS-BUILT:** `coop/interactables/physmods_sync` + `ue_wrap/desk/phys_mods` per
+> `votv-physmods-L8-impl-DESIGN-2026-07-18.md` (8-round /qf; 4 self-caught corrections incl.
+> the UNPLUG-path reframe — "modules permanent" was false — and the explosion-damage-path
+> retraction). The master-table row is the as-built truth. Consumers (tape speed byte 21,
+> lamps/auto-continue 3, laptop-fwd 5, weather shield 6) converge via the mirrored
+> updPhysMods (measured a pure function of the array). The OPEN-7 speed gate is now fed.
+Legacy: 12 slots; plug destroys the module prop; the explotano hot-op explosion is
+presser-local natively (explosion_C targets the local player only — measured).
 
 ### OPEN-10 · Laptop v2: PC file buffer + the portable PC (NEW 2026-07-17, cut from v116 v1)
 `laptop_C.floppyBuffer/floppyBufferUIDs` (files copied onto the PC; persisted; mutates only while a
@@ -288,6 +293,12 @@ save-transfer only, no live lane. Same intent-CRDT shape as the shipped
 ---
 
 ## CHANGELOG
+- **2026-07-18 (v118 `pending-commit`, L8 physMods)** — L8 built per its own 8-round /qf
+  (value-ops + host-canonical array REVISING the arch's slot-deltas; the unplug path
+  discovered — the R1 reframe; the explosion measured presser-local — an inference
+  retracted). PhysModsState=108, proto 118; the kind-104 client-birth whitelist widened to
+  desk modules. Smoke PASS + the joiner canonical hand-off proven in-log; audits pending at
+  write time. OPEN-8 flipped AS-BUILT.
 - **2026-07-18 (v117 `pending-commit`, L6 deck playback)** — the event_dispatch_signal.cpp
   extraction landed first (e88cc5e0: the 18 signal-pipeline cases out of the 791-LOC state
   router; every future lane case lands in the signal family). Then L6 built per its own

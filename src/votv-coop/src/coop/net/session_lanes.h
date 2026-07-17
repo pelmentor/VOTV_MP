@@ -122,6 +122,11 @@ inline Lane LaneForKind(ReliableKind k) {
     // SavedSignalAppend (a play must land after its row's append -- the
     // append-before-play proof assumes one ordered stream). Pin it.
     case ReliableKind::PlayDeckEvent:  return Lane::Normal;
+    // v118 (L8): PhysModsState's ops/canonical/deny assume in-lane ordering
+    // (an op must not overtake the canonical it was diffed against). Pin it.
+    // NOT in the relay whitelist: ops are host-terminal, the canonical is
+    // host-authored point/broadcast.
+    case ReliableKind::PhysModsState:  return Lane::Normal;
     default:                           return Lane::Normal;
     }
 }

@@ -1,8 +1,27 @@
-# Hands-on runbook — v112..v116 + v117 L6 DECK PLAYBACK (batched), take 4
+# Hands-on runbook — v112..v116 + v117 L6 DECK + v118 L8 PHYSMODS (batched), take 4
 
-DEPLOYED: see the v117 section below for the current DLL hash (2026-07-18 build).
-kProtocolVersion **117** (v116's catch/laptop changes + the NEW PlayDeckEvent lane;
-a 116-or-older peer HARD-CLOSEs at the gate — RELAUNCH BOTH PEERS).
+DEPLOYED: see the v118 section below for the current DLL hash (2026-07-18 build).
+kProtocolVersion **118** (v117's PlayDeckEvent + the NEW PhysModsState lane;
+a 117-or-older peer HARD-CLOSEs at the gate — RELAUNCH BOTH PEERS).
+
+## What changed in v118 (2026-07-18 — L8 physMods)
+The desk's 12-slot physical-modules array now syncs (design
+votv-physmods-L8-impl-DESIGN-2026-07-18.md, 8-round /qf; value-ops + host-canonical
+array; both audits caught + fixed ONE critical pre-handoff — the host self-op misroute).
+**STEPS (v118):** with a module prop in hand (tape-compression etc.): (a) HOST plugs it
+into a desk socket -> the module must appear plugged on the CLIENT's desk (socket visual +
+its effect, e.g. tape speed) — logs: host `physmods: local PLUG byte=N -- canonical will
+carry it`, client `canonical adopted`; (b) CLIENT plugs one -> host log `host applied
+op=0 byte=N from slot 1 -- canonical broadcast`, both desks agree; (c) UNPLUG (hit the
+socket): the module pops into the unplugger's HAND, the socket empties on BOTH; the
+unplugged module dropped by the CLIENT must materialize for the host (the widened birth
+whitelist) — logs: `FRESH-BIRTH intent` on the client, the host spawn; (d) hot-plug with
+a unit powered (no coldswap rule): the presser explodes LOCALLY (native shape; the other
+peer is unaffected — measured, not a bug); (e) a JOINER's desk must show the host's
+modules (the `canonical -> joiner` line). Watch-fors: a phantom duplicate module
+appearing near the desk (= the fixed CRITICAL regressing), `unplug ... denied (raced)`
+lines outside an actual race, module effects (tape speed byte 21 / lamps byte 3)
+diverging between peers.
 **The take-3 test (17:00-17:09) found the v113-116 root this build fixes**: the client's
 successful ping at 17:04:46 never crossed (the claim-gated catch detector raced the
 FSM-hold release) -> host NO SIGNAL / frozen host dishes / diverged client dishes /

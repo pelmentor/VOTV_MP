@@ -17,6 +17,7 @@
 #include "coop/interactables/desk_snd_fx.h"
 #include "coop/interactables/dish_sync.h"
 #include "coop/interactables/laptop_sync.h"      // v116: LaptopState
+#include "coop/interactables/physmods_sync.h"    // v118 (L8): PhysModsState
 #include "coop/interactables/signal_catch_sync.h"
 #include "coop/interactables/signal_sync.h"
 #include "coop/interactables/tape_caddy_sync.h"  // v114 (L7): ReelSlot
@@ -99,6 +100,23 @@ bool HandleSignalEvent(net::Session& /*session*/,
                 ? static_cast<uint8_t>(msg.senderPeerSlot)
                 : static_cast<uint8_t>(0xFF);
         coop::deck_play_sync::OnPlayDeck(pd, pdslot);
+        break;
+    }
+    case net::ReliableKind::PhysModsState: {
+        // v118 (L8): value-ops (peer->host) / canonical array (host->all) /
+        // deny. Role + trust gates live in physmods_sync::OnPhysMods.
+        if (msg.payloadLen < sizeof(net::PhysModsStatePayload)) {
+            UE_LOGW("event_feed: PhysModsState payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::PhysModsStatePayload));
+            break;
+        }
+        net::PhysModsStatePayload pm{};
+        std::memcpy(&pm, msg.payload, sizeof(pm));
+        const uint8_t pmslot =
+            (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                ? static_cast<uint8_t>(msg.senderPeerSlot)
+                : static_cast<uint8_t>(0xFF);
+        coop::physmods_sync::OnPhysMods(pm, pmslot);
         break;
     }
     case net::ReliableKind::DishArm: {
