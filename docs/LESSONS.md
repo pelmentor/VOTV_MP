@@ -284,7 +284,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   an intent lane. Applies to L9 meadow / any daily-graded state. *Look FIRST:*
   `memory/lesson_rollover_sell_state_host_only_for_free.md` (the census) + daily_task_sync.cpp.
 - **Pre-world subsystems Install at StartCoopSession, NOT world-gated.** `memory/feedback_preworld_install_at_startcoopsession.md`
-- **When a release VERB can't be caught, STREAM THROUGH the state.** `memory/lesson_stream_through_release_not_verb.md`
+- **When a release VERB can't be caught, STREAM THROUGH the state** — and when the observed state has
+  its own POST-release dynamics (the desk cursor's focus-UNGATED glide integrator, ~12.4 s max decay),
+  the CLAIM is not the stream's lifetime: the sender streams until the VALUE settles; the receiver
+  decouples apply from the claim axis (v115 `c5ff11a4`, 2nd instance).
+  *Look FIRST:* `memory/lesson_stream_through_release_not_verb.md` + `desk_cursor_sync.cpp` v2.
 - **An e2e assert must DISCRIMINATE the axis it claims.** `memory/lesson_e2e_assert_must_discriminate_the_axis.md`
 - **The join-window PropSnapPos POSITION reconcile is eid-generic at the receiver** — a new
   save-authoritative pos reconcile is SEND-SIDE ONLY (capture baseline + flush); the chip overlay
@@ -344,8 +348,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 - **Continuously-MOVING display state needs an unreliable pose-rate stream, not reliable snapshots** —
   the hand-item swing rendered at "1 fps" under a 0.5 s drift-gated reliable resend; split identity
-  (reliable announce) from motion (MsgType::HandPose=35, RagdollPose plumbing end-to-end).
-  *Look FIRST:* `memory/lesson_continuous_motion_needs_pose_stream.md` (v109 `a3c55529`).
+  (reliable announce) from motion (MsgType::HandPose=35, RagdollPose plumbing end-to-end). AND the
+  mirror interp must DEDUPE identical-target packets + ADAPT its window to the position-CHANGE cadence
+  (EMA 25..80 ms, not fixed 33 ms) — a sender fps dip staircases a fixed window (v115 cursor jerks).
+  *Look FIRST:* `memory/lesson_continuous_motion_needs_pose_stream.md` (v109 `a3c55529`; interp v115
+  `desk_cursor_sync.cpp CursorInterp`).
 - **The client join world-load episode now guards TWO consumers** — the v106 keyed-destroy broadcast
   suppression AND the email shadow diff (2026-07-11 `848a1fc0`: priming/diffing saveSlot.emails across
   the client's own load mis-read 2 swapped default rows as player deletes → EmailDelete broadcast →
@@ -372,6 +379,17 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   `memory/lesson_departure_toast_gates_on_ready_edge_not_transport.md`
 
 ## 4. Dispatch, hooks & input seams
+
+- **Presser-local SOUNDS/effects mirror at the NATIVE effect seam, never by classifying inputs** —
+  Func-patch `AudioComponent:Play` + `ActorComponent:SetActive/Activate` and pointer-whitelist the
+  target COMPONENTS (the whitelist doubles as the owner filter: the laptop's same-named comps
+  self-exclude). Func-visibility is decided by the CALLEE's NATIVENESS, never the call opcode —
+  EX_VirtualFunction on a native target funnels through `UFunction->Func` (286-asset census, v115).
+  Echo = a GT wire-apply depth guard around EVERY wire apply; both-peers-organic callers must be
+  censused FIRST; loops are STATE (join re-assert + host-owned leaver teardown), one-shots are events.
+  An e2e wire self-test must OUTWAIT the receiver's world-load (+5 s fx dropped at the unresolved
+  desk; +20 s from connected landed). *Look FIRST:*
+  `memory/lesson_audio_effect_mirror_func_patch_native_seam.md` + `desk_snd_fx.cpp` (v115 `c5ff11a4`).
 
 - **BP INNER calls (`EX_CallMath`/`EX_*`) BYPASS ProcessEvent** — a PE hook won't fire. THIRD instance
   2026-07-10: the T1 probe's PE-table interceptors on `Delay`/`K2_SetTimer*`/`SetActorTickInterval`/`QuitGame`

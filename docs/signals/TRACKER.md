@@ -21,13 +21,14 @@ tracker points there. Wire-lane discoverability lives in `COOP_SYNC_MAP.md`. Nei
 | Desk/console occupancy | one peer "inside" an enterable screen | 4 claim | host-arbitrated | `DeviceClaim 51` (`device_occupancy`) | **AS-BUILT** (all 8 devices; hands-on for entry) |
 | Desk scalars + log line | discrete desk state + a log append | 1 poll-delta | occupant | `DeskState 54` / `DeskLogLine 65` | **AS-BUILT** |
 | Refiner pane (comp) | `comp_progress` refine (NOT the download) | 4 single-sim | occupant | `CompState 60` / `CompData 61` | **AS-BUILT** |
-| **Desk coords-panel cursor** | live cursor over the coord screen | 4 owner pose-stream | occupant | `DeskCursorPose 36` (`desk_cursor_sync`) | **VERIFIED** (v109, user TAKE=SMOOTH) — ⚠ see OPEN-1 |
+| **Desk coords-panel cursor** | live cursor over the coord screen | 4 owner pose-stream | occupant | `DeskCursorPose 36` (`desk_cursor_sync`) | **AS-BUILT v115 `c5ff11a4`** (claim-DECOUPLED stream: momentum tail through release [settle 0.25px/500ms, cap 15s > the measured 12.4s max decay], no interp reset on release/flap, adaptive window [EMA 25..80ms] + identical-target dedupe, ZeroMovement at stream-start) — supersedes the v109 shape after the 2026-07-17 user reports (jerks + tail lost); awaiting hands-on. ⚠ OPEN-1 may be absorbed by the adaptive window — re-judge at the take |
+| **Desk unit-1 AUDIO effects** | keypress clicks, verb/outcome beeps, coordFail, corrds_loop + pingLoop | presser-authored effect forward | whoever pressed (claim-free) | `DeskSndFx 105` (`desk_snd_fx` + `ue_wrap/desk_audio`) | **AS-BUILT v115 `c5ff11a4`** (Func-patch on the native audio seam — every whitelist-comp call site measured EX_VirtualFunction/native; loops join-re-asserted from bIsActive + host-owned leaver teardown; RULE-2: PlayScanEffects beep + PlayPingSuccess replay RETIRED; e2e self-test proven host->client in smoke 12:39; residual: PlaySound2D buttonshort14 + the laptop's own comps) — awaiting hands-on |
 | **Desk alarm-clock** | HH:MM display, frozen host-mirror | 3 host-mirror | host | `ClockPose 37` + reliable connect-edge | **AS-BUILT** (v110 `2dde3e16`, NOT hands-on) |
 | **Freq/polarity + download rate** | tune → download SPEED; per-peer sim + 2 RNG | 3 host-auth sim (outputs) + claim-free input deltas | host / presser | `DeskSimPose=38` 7ch + `DeskInput=97`/`DeskScanEvent=98` (`desk_sim_sync` + `desk_input_sync`) | **AS-BUILT v112** (the BUGS-v111 fix; smoke PASS) — awaiting hands-on |
 | coord log lines (`CR:`/animated) | `ProduceLogLines` runs on EVERY peer | 4 holder-owned | occupant (planned) | partial (`CR:` filtered off wire) | **OPEN-2** (filter premise now MEASURED false for CR/APPROX/ANALYSIS) |
 | Dishes rotation/kinematics (24 big) | rest pose = load-time RNG (unsaved); per-slew RNG; catch targets already synced | 3/4 (tbd) | host (planned) | — (`SkySignalCatch` covers targets only) | **OPEN-4** (RE'd 2026-07-16) |
 | Stationary PC / laptop screen | portable-PC power + screen | 1/4 (tbd) | tbd | — | **OPEN** (screens gap-list #5) |
-| U1 SHIFT quick-scan (arrows) | spawnDirs UMG arrows + beep + shared cooldown charge | 2/4 (tbd) | occupant | — none | **OPEN** (= BUG-5a; never synced) |
+| U1 SHIFT quick-scan (arrows) | spawnDirs UMG arrows + beep + shared cooldown charge | 2 presser-event | presser | `DeskScanEvent 98` (arrows visual + charge, v112 `desk_input_sync` scan classification) + `DeskSndFx 105` (the beep, v115) | **AS-BUILT v112+v115** — was stale-OPEN here; code: `SendScan`/`OnDeskScan` + the fx lane; awaiting hands-on |
 | U2 desk gauge/detector sounds | vol=match×\|speed\|, pitch=Lerp(match); loops on toggles | derived (needs speeds mirrored) | occupant/host | speeds on NO lane | **BUG-3** (data starvation) |
 | U2 save/delete/lid verbs | SAVE→savedSignals_0 (id mint); DELETE aborts active signal; lid=collision gate | 2 intent | host-gate | `SavedSignalAppend/Delete 58/59` cover the list; capOpened/delete-active NOT | **PARTIAL** |
 | U3 play deck (playback/volume/SARV/scroll) | world-audible signalSound; display remaps | 4 holder-owned (tbd) | occupant | — none | **OPEN-6** |
@@ -121,7 +122,11 @@ MIRROR STATE + SUPPRESS the local sim, never verb-hook
 The v109 cursor is SMOOTH on a fresh session (user-verified) but has been observed dropping to ~5 fps
 part-way through a session. Cause unattributed (not yet reproduced deterministically). Logs:
 `scratchpad/desk_divergence_crash_{HOST,CLIENT_1}_0715.log`. Not a divergence — a rate/transport
-degradation on the shipped stream.
+degradation on the shipped stream. **v115 UPDATE (2026-07-17): the user re-reported jerkiness
+mid-v114-hands-on; two mechanisms were code-measured and removed (claim release/flap = interp
+reset+snap; same-pos-new-seq packets reopening the fixed 33ms window = staircase at sender-fps
+dips) — the v115 adaptive window + dedupe + claim-decoupling may close this OPEN entirely;
+re-judge at the v115 take (a same-slot claim-flap WARN now attributes any residual).**
 
 ### OPEN-3 · Upgrade-level sync (NOT a desk detail — its own surface; surfaced by OPEN-0 gate 2)
 The freq/pol download formula reads upgrade fields (`upg_scanner`, `upg_downloadSpd`, filter-size) and

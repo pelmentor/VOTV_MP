@@ -115,7 +115,21 @@ the laptop is a future extension of this lane.
 - R4: an observer's own mute setting is honored per-comp playback but a forwarded loop
   reflects the PRESSER's soundActive state at the edge.
 
-## Verification state
-- BUILT + 2 audits (perf hot-path + correctness) -- results appended below when run.
-- Smoke gate: fires/sec counters + the e2e self-test line on both peers.
-- NOT hands-on until the user's take.
+## Verification state (as-built, 2026-07-17 s19)
+- BUILT commit `c5ff11a4`, proto 115, DLL `e130383f11c8dee1` x4 (hash-verified).
+- Perf audit: PASS, 0 CRITICAL (function-by-function table; both WARNs fixed pre-commit:
+  desk_audio resolve-incomplete log-once + the cue NEGATIVE cache; console_desk.cpp 1005 LOC
+  flagged >800 with the console_atlas extraction proposal -- REDUCED from 1030 by the
+  retirements; event_dispatch_state.cpp 773, nearing).
+- Correctness audit: 0 CRITICAL; 1 WARN fixed pre-commit (the flap WARN fired on an ordinary
+  X->Y desk handoff -- now discriminates on the RELEASED slot); 1 NIT fixed (stale "spawnDirs
+  + beep" log text).
+- Smoke: PASS x2 (30 s + 75 s; RSS stable ~3.2 GB both peers). Seam counters measured live:
+  Play=1169 SetActive=22012 Activate=559 per 60 s game-wide, deskHits = the selftest only ->
+  the detour cost bound holds empirically. E2E self-test PROVEN: the first run's +5 s dispatch
+  was dropped at the client's still-unresolved desk (world-load races the probe -- fixed to
+  +20 s from the connected edge); run 2: host `SELFTEST organic dispatch fired` 12:39:49 ->
+  client `desk_snd: applied op=0 comp=3 cue='newdesk_beep4' from slot 0` the same second.
+  Zero WARN/ERROR from the new lanes in either log. `[dev] desk_snd_selftest` left OFF.
+- NOT hands-on: v115 stacks as the FOURTH unverified proto layer (v112+v113+v114+v115);
+  runbook `research/handson_runbook_2026-07-17_desk_v114.md` take 2 carries the v115 steps.

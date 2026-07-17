@@ -1,17 +1,67 @@
-# Hands-on runbook — v112 desk INPUT + v113 L4 DISHES + v114 L7 CADDY/TASK (batched), take 1
+# Hands-on runbook — v112 INPUT + v113 DISHES + v114 CADDY/TASK + v115 AUDIO/CURSOR (batched), take 2
 
-DEPLOYED: `votv-coop.dll 13874C48D3D7F220` x4 (HOST + CLIENT_1/2/3), hash-verified.
-kProtocolVersion **114** (a 113-or-older peer HARD-CLOSEs at the gate). HEAD `ba8ce297`
-(committed; unpushed). Autonomous LAN smoke PASS (both L7 lanes resolved on both peers:
-reelBig=0x288/reelSmall=0x28C/Progress=0x364; install latched once; zero lane WARN/ERROR;
-RSS stable). Perf audit PASS 0 CRITICAL (both recommendations applied pre-commit);
-correctness audit CRITICAL 1 (parked-place Progress reset) FIXED pre-deploy.
-**NOTHING below is hands-on verified yet.** This take BATCHES THREE unverified proto layers
-(v112 + v113 + v114 — flagged in the L7 pass, round 7); per-lane log prefixes keep
-attribution: `desk_input:`/`desk_sim:` = v112, `dish_sync:`/`[dish]` = v113,
-`[reel]`/`[task]` = v114. The v112+v113 steps live in
+DEPLOYED: `votv-coop.dll e130383f11c8dee1` x4 (HOST + CLIENT_1/2/3), hash-verified.
+kProtocolVersion **115** (a 114-or-older peer HARD-CLOSEs at the gate). HEAD `c5ff11a4`
+(committed; unpushed). v115 smoke PASS x2 (30s + 75s; seam counters measured live:
+Play=1169/SetActive=22012/Activate=559 per 60s, deskHits=selftest only; the e2e audio
+self-test PROVEN: host organic dispatch -> client `desk_snd: applied cue='newdesk_beep4'`
+same second; zero new-lane WARN/ERROR). v115 audits: perf PASS 0 CRITICAL (both WARNs
+fixed pre-commit), correctness 0 CRITICAL (flap-WARN X->Y false-positive fixed).
+**NOTHING below is hands-on verified yet.** This take BATCHES FOUR unverified proto layers
+(v112 + v113 + v114 + v115); per-lane log prefixes keep attribution:
+`desk_input:`/`desk_sim:` = v112, `dish_sync:`/`[dish]` = v113, `[reel]`/`[task]` = v114,
+`desk_snd:`/`desk_cursor:` = v115. The v112+v113 steps live in
 `handson_runbook_2026-07-16_desk_v113.md` (still current for those lanes — run its STEPS
-first or interleave); THIS file adds only the v114 half.
+first or interleave); THIS file adds the v114 half + the v115 half (take-1 of this file was
+superseded mid-prep: the user's first v114 hands-on pass surfaced the v115 report set —
+missing observer sounds + cursor jerks/momentum — fixed same-day).
+
+## What changed in v115 (desk AUDIO mirror + cursor v2 — design `votv-desk-audio-mirror-v115-DESIGN-2026-07-17.md`)
+1. The OTHER peer now HEARS your desk unit-1 activity: keyboard clicks (down AND up),
+   the button/verb sounds (switch-cursor, ping key, SHIFT scan, 1/2/3 dot), the outcome
+   beeps (ok beepLong1 / cooldown-denied beep4 / broken-radar fail), the cursor-movement
+   loop while you hold move keys, and the ping loop. Screen-button MOUSE clicks carry the
+   same sounds.
+2. Cursor momentum crosses: flick the cursor, get off the unit — every peer's screen shows
+   the same glide to the same rest position (the screen dims at dismount, as native).
+3. Cursor smoothness: the mirror no longer snaps on desk release/re-claim, and the interp
+   window adapts to the sender's real frame cadence (fps dips no longer staircase).
+4. NOT covered (known residuals): the "Satellites are active" error beep (PlaySound2D
+   static); the LAPTOP's own keyboard clicks (same class, future whitelist extension);
+   ping FSM stage sounds/rings stay presser-local (pre-existing).
+
+## STEPS (v115 half; any point during the v112-v114 steps at the desk)
+1. CLIENT sits at unit 1, types arrows/WASD + 1/2/3 + SHIFT (incl. on cooldown). HOST
+   stands NEAR the desk (not using it): expect clicks per key down/up, buttonquick1 +
+   beepLong1 on a dot, beep4 on a cooldown denial, buttonlong5 on SHIFT, and the
+   cursor-glide loop sound WHILE keys are held (silent during pure momentum glide —
+   native behavior). Swap roles and repeat.
+2. HOST clicks the desk's physical SCREEN BUTTONS with the mouse (bring/switch coord):
+   CLIENT nearby hears buttonquick1/buttonlong4 + the outcome beep.
+3. Momentum: CLIENT flicks the cursor (hold a direction ~1s), releases the key AND
+   immediately gets off the unit. HOST watches the screen: the cursor keeps gliding to a
+   stop (dimmed), SAME rest position on both screens (compare CR readout if in doubt).
+4. Smoothness: CLIENT drives the cursor in circles ~30s; HOST watches for jerks. Then
+   CLIENT gets off/on repeatedly mid-motion — no snap-back on the HOST's screen.
+5. Ping loop: CLIENT starts a triangulation ping (ENTER with a valid triangle) — HOST
+   hears the ping loop start; it ends on the catch/fail (pingSuccess already crossed
+   pre-v115; now the loop + start beep do too).
+
+## WHAT TO READ IN THE LOGS (v115)
+- Both peers at boot: `desk_audio: class-level resolve complete` + `desk_snd: audio seams
+  installed (Play=1 SetActive=1 Activate=1)` (once).
+- On the OBSERVER during the other peer's typing: `desk_snd: applied op=.. comp=.. cue=..`
+  (1-in-32 throttle — a few lines per burst, not per click).
+- `desk_snd: seam counters /60s: ...` — Play/SetActive/Activate rates; deskHits should
+  roughly track the presser's key rate while at the desk.
+- Cursor: `desk_cursor: applying slot=.. ema=..ms` (~5s throttle while mirroring);
+  `desk_cursor: momentum tail ended (settled, ..ms)` on the sender after a glide;
+  `desk_cursor: claim FLAP` = the occupancy-flicker attribution WARN (should NOT appear
+  in normal play; if it does, that is the OPEN-1 attribution we wanted).
+- BAD signs: any `desk_snd: apply failed`, `desk_snd: fx ring overflow`, a `claim FLAP`
+  storm, loop sounds STUCK ON after the presser leaves/disconnects.
+
+--- (v114 half below, unchanged) ---
 
 ## What changed in v114 (L7, all BUILT — design `votv-tape-caddy-L7-impl-DESIGN-2026-07-17.md`)
 1. The STOLAS tape caddy's reel slots sync: insert/eject on either peer mirrors (slot meshes

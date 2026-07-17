@@ -114,14 +114,19 @@ Every signal element earns its row in `TRACKER.md` only when it reaches VERIFIED
 
 ## Status at a glance → `TRACKER.md`
 
-The living element-by-element ledger is **[TRACKER.md](TRACKER.md)**. Headline (2026-07-17):
-the transport-layer elements are SHIPPED (occupancy, desk scalars, dish-aim, saved signals, cursor
-v109 SMOOTH, clock v110, freq/pol + download-rate SIM v111, the BUGS-v111 fix v112, **L4 dish
-kinematics v113** commit `f204c0f7`, **L7 tape caddy + daily task v114** — presser reel-slot
-edges + host accrual corrector + taskNew host mirror + the client-eject prop birth, commit
-`ba8ce297`, smoke PASS). **NOT hands-on: v112, v113 AND v114 all await the user take** (batched —
-THREE proto layers stack; runbook `research/handson_runbook_2026-07-17_desk_v114.md`; per-lane
-logs keep attribution). The v111 hands-on FAILED on 5 fronts — all designed out in v112
-(`votv-desk-input-lane-DESIGN-2026-07-16.md`). Remaining OPEN: OPEN-1 (cursor 5fps), OPEN-2
-(coordLog cluster), OPEN-3 (upgrade-sync), OPEN-5/6/8/9 (L4+L7 are BUILT; the train order is
-L6 -> L8 -> L5 -> L9).
+The living element-by-element ledger is **[TRACKER.md](TRACKER.md)**. Headline (2026-07-17 pm):
+the transport-layer elements are SHIPPED (occupancy, desk scalars, dish-aim, saved signals, clock
+v110, freq/pol + download-rate SIM v111, the BUGS-v111 fix v112, **L4 dish kinematics v113**
+commit `f204c0f7`, **L7 tape caddy + daily task v114** commit `ba8ce297`, and **v115 desk AUDIO
+mirror + cursor v2** commit `c5ff11a4` — the user's mid-v114-hands-on reports (missing
+keypress/beep/loop sounds for observers; cursor jerks; the momentum tail lost at dismount) fixed
+at the native audio seam (Func-patch Play/SetActive/Activate, relayed DeskSndFx=105) + a
+claim-DECOUPLED cursor stream with a settle-gated momentum tail and an adaptive interp window;
+smoke PASS x2 + the e2e audio self-test proven host->client). **NOT hands-on: v112, v113, v114
+AND v115 all await the user take** (batched — FOUR proto layers stack; runbook
+`research/handson_runbook_2026-07-17_desk_v114.md` [now incl. the v115 half]; per-lane log
+prefixes keep attribution: `desk_input:`/`dish_sync:`/`[reel]`/`[task]`/`desk_snd:`/
+`desk_cursor:`). The v111 hands-on FAILED on 5 fronts — all designed out in v112
+(`votv-desk-input-lane-DESIGN-2026-07-16.md`). Remaining OPEN: OPEN-1 (cursor 5fps — the v115
+adaptive window may absorb it, re-judge at the take), OPEN-2 (coordLog cluster), OPEN-3
+(upgrade-sync), OPEN-5/6/8/9 (L4+L7 are BUILT; the train order is L6 -> L8 -> L5 -> L9).
