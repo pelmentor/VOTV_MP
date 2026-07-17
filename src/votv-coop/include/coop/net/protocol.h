@@ -705,7 +705,20 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // + replays them in ConnectReplayForSlot. mainPlayer.holding_actor with an Aprop_C no
 // longer feeds the PropSpawn/PropPose path (the trash clump/pile carry -- the
 // non-Aprop_C holding_actor case -- stays on its lane untouched).
-inline constexpr uint16_t kProtocolVersion = 115; // v115 (2026-07-17, desk audio-effect mirror):
+inline constexpr uint16_t kProtocolVersion = 115; // v115b (2026-07-17 pm, BEHAVIOR-only -- no wire
+                                                  // format change, no bump): the coord_isPing RAW APPLY
+                                                  // is retired at every receiver (DeskInput field 12 ->
+                                                  // bookkeeping only; DeskState adopt never copies it).
+                                                  // Measured root: the native ping FSM is a LATENT tick
+                                                  // machine gated on coord_isPing (analogd uber @82980 ->
+                                                  // @80105 stage engine, ==1.0 latches @79979) -- the raw
+                                                  // apply woke a PHANTOM parallel sim on observers
+                                                  // (divergent verdicts, phantom host ARM 14:47:38,
+                                                  // double coordLog authorship). ONE machine per ping:
+                                                  // the presser's. Companions: the desk FSM-hold claim
+                                                  // (device_occupancy reconciler) + the arm-poll re-init
+                                                  // window (DISARM suppressed while signalData lives).
+                                                  // v115 (2026-07-17, desk audio-effect mirror):
                                                   // presser-authored one-shot/loop sound forward at the
                                                   // NATIVE audio seam -- Func-patch on AudioComponent:Play
                                                   // + ActorComponent:SetActive/Activate (every whitelist-
@@ -3178,7 +3191,9 @@ struct DeskStatePayload {
     uint8_t activeDownload;     // 1
     uint8_t activeCoords;       // 1
     uint8_t activeComp;         // 1
-    uint8_t coordIsPing;        // 1
+    uint8_t coordIsPing;        // 1 -- v115b: DIAGNOSTIC only; receivers never adopt it
+                                //    (the ping FSM's run-flag -- adopting TRUE wakes a
+                                //    phantom sim on the joiner; the 2026-07-17 root)
     uint8_t adopt;              // 1
 };
 static_assert(sizeof(DeskStatePayload) == 52, "DeskStatePayload must be 52 bytes (v113)");
@@ -4235,7 +4250,12 @@ enum class DeskInputField : uint8_t {
     ActiveDownload = 9,  // bool    active_download (+ hum/light side effects)
     ActiveCoords = 10,   // bool    active_coords  (+ hum/light side effects)
     ActiveComp = 11,     // bool    active_comp    (+ light/console-glow side effects)
-    CoordIsPing = 12,    // bool    coord_isPing (rising = presser's ENTER; falling = its FSM end)
+    CoordIsPing = 12,    // bool    coord_isPing edge NOTIFICATION (rising = presser's ENTER;
+                         //         falling = its FSM end). v115b: receivers NEVER write it
+                         //         into the machine -- it is the ping FSM's run-flag (latent
+                         //         tick machine @82980; the raw apply woke a phantom sim on
+                         //         every observer). Bookkeeping only: host ping attribution
+                         //         + the device_occupancy desk FSM-hold.
     CooldownCharge = 13, // float   coord_cooldown -- UPWARD jumps only (a press charge; decay is
                          //         per-peer local and never rides the wire)
     Count = 14,

@@ -247,6 +247,7 @@ void ConnectReplayForSlot(int slot) {
     coop::turbine_sync::QueueConnectBroadcastForSlot(slot);       // v61 wind-turbine facing/spin snap
     coop::device_occupancy::QueueConnectBroadcastForSlot(slot);   // v63 live device claims (busy table)
     coop::console_state_sync::QueueConnectBroadcastForSlot(slot); // v64 sky-signal snapshot + desk adopt
+    coop::desk_input_sync::SeedPingAttributionFromMachine();      // v115b: a SOLO host's ping edge is absorbed unwired (PollOnce gated on connected) -- re-derive from ground truth so a mid-ping joiner gets the FSM-hold (audit CRIT-1)
     coop::desk_snd_fx::QueueConnectBroadcastForSlot(slot);        // v115: desk loop-sound ground truth (a mid-loop joiner gets the ON)
     coop::signal_catch_sync::QueueConnectBroadcastForSlot(slot);  // v70 in-flight catch replay (identity half)
     coop::dish_sync::QueueConnectBroadcastForSlot(slot);          // v113 (L4): dish snapshot + (if armed) the DishArm row -- AFTER the desk rows + the kind=0 catch row (same ordered lane)

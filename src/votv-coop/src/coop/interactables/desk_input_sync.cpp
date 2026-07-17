@@ -30,8 +30,15 @@ Clock::time_point g_nextPoll{};
 CD::Scalars g_baseline;
 bool g_primed = false;
 
-// HOST: the slot that last set coordIsPing=true (0 = the host itself). A
-// leaver's dangling TRUE would swallow every peer's desk keys forever.
+// HOST: the slot whose ping FSM is currently running (0 = the host itself,
+// 0xFF = none). v116 root fix: coord_isPing is a RUN-FLAG -- the native ping
+// FSM is a latent tick machine gated on it (analogd uber @82980 IFNOT(
+// coord_isPing) -> the @80105 stage engine), so a wire apply into the machine
+// WAKES a phantom parallel sim on the receiver (measured 2026-07-17: the
+// host's phantom armed at 14:47:38 while the client's real ping failed).
+// The wire delta is BOOKKEEPING ONLY now: rising arms this attribution +
+// the desk-claim deny (device_occupancy consults PingActiveSlot()); falling
+// clears it. The machine field is written ONLY by the local native FSM.
 uint8_t g_pingSetterSlot = 0xFF;
 
 bool g_scanWidgetWarned = false;  // log-once for the spawnDirs null-guard
@@ -85,7 +92,9 @@ bool PatchScalar(const coop::net::DeskInputPayload& p, CD::Scalars& sc) {
     case DeskInputField::ActiveDownload:  sc.activeDownload = p.boolVal != 0; break;
     case DeskInputField::ActiveCoords:    sc.activeCoords = p.boolVal != 0; break;
     case DeskInputField::ActiveComp:      sc.activeComp = p.boolVal != 0; break;
-    case DeskInputField::CoordIsPing:     sc.coordIsPing = p.boolVal != 0; break;
+    // CoordIsPing deliberately ABSENT (v116): it is the ping FSM's run-flag --
+    // patching it into any scalar set that reaches WriteScalars would wake the
+    // phantom sim. OnDeskInput intercepts it as bookkeeping before ApplyField.
     case DeskInputField::CooldownCharge:  sc.coordCooldown = p.floatVal; break;
     default: return false;
     }
@@ -142,8 +151,10 @@ void PollOnce(coop::net::Session* s) {
         SendDelta(s, DeskInputField::ActiveComp, 0, 0, cur.activeComp);
     if (cur.coordIsPing != g_baseline.coordIsPing) {
         SendDelta(s, DeskInputField::CoordIsPing, 0, 0, cur.coordIsPing);
-        if (s->role() == coop::net::Role::Host && cur.coordIsPing)
-            g_pingSetterSlot = 0;  // the host's own press
+        if (s->role() == coop::net::Role::Host) {
+            if (cur.coordIsPing) g_pingSetterSlot = 0;       // the host's own press
+            else if (g_pingSetterSlot == 0) g_pingSetterSlot = 0xFF;  // its FSM ended
+        }
     }
 
     // COOLDOWN: only an UPWARD jump is a press charge (decay is local; all
@@ -196,6 +207,21 @@ void OnDeskInput(const coop::net::DeskInputPayload& p, uint8_t senderSlot) {
     if (!s) return;
     if (p.field >= static_cast<uint8_t>(DeskInputField::Count)) return;
     if (!std::isfinite(p.floatVal)) return;
+
+    // v116 ROOT FIX: CoordIsPing is NEVER applied to the machine. The native
+    // ping FSM is a latent tick machine gated on coord_isPing (@82980) with
+    // ==1.0 stage latches inside (@79979) -- a raw write here woke a PHANTOM
+    // parallel sim on every observer (divergent verdicts, double coordLog
+    // authorship, the 14:47:38 phantom ARM). The delta is bookkeeping only:
+    // ping attribution for the leaver clear + the desk-claim deny.
+    if (static_cast<DeskInputField>(p.field) == DeskInputField::CoordIsPing) {
+        if (s->role() == coop::net::Role::Host) {
+            if (p.boolVal) g_pingSetterSlot = senderSlot;
+            else if (g_pingSetterSlot == senderSlot) g_pingSetterSlot = 0xFF;
+        }
+        return;
+    }
+
     if (!CD::EnsureResolved() || !CD::Instance()) return;  // inherited residual: dropped at unresolved desk
     CD::Scalars sc;
     if (!CD::ReadScalars(sc)) return;
@@ -209,9 +235,6 @@ void OnDeskInput(const coop::net::DeskInputPayload& p, uint8_t senderSlot) {
     // same GT task -- the next poll never reads this apply as a local edge.
     if (g_primed) PatchScalar(p, g_baseline);
     else { g_baseline = sc; g_primed = true; }
-    if (s->role() == coop::net::Role::Host &&
-        static_cast<DeskInputField>(p.field) == DeskInputField::CoordIsPing && p.boolVal)
-        g_pingSetterSlot = senderSlot;
 }
 
 void OnDeskScan(const coop::net::DeskScanEventPayload& p, uint8_t senderSlot) {
@@ -238,43 +261,38 @@ void PrimeBaselines() {
     }
 }
 
+uint8_t PingActiveSlot() { return g_pingSetterSlot; }
+
+void SeedPingAttributionFromMachine() {
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != coop::net::Role::Host) return;
+    if (g_pingSetterSlot != 0xFF) return;  // a live wire attribution wins
+    CD::Scalars sc;
+    if (!CD::EnsureResolved() || !CD::Instance() || !CD::ReadScalars(sc)) return;
+    if (!sc.coordIsPing) return;
+    // Only the host's own FSM can be running here: no peer was connected to
+    // author a delta, and receivers never write the machine field (v115b).
+    g_pingSetterSlot = 0;
+    UE_LOGI("desk_input: ping attribution seeded from machine ground truth "
+            "(solo-host ping caught at the connect edge)");
+}
+
 void OnPeerLeft(int slot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || s->role() != coop::net::Role::Host) return;
     if (g_pingSetterSlot != static_cast<uint8_t>(slot)) return;
+    // v116 (RULE 2): the machine-field clear is GONE -- no receiver wire-writes
+    // coord_isPing anymore, so no peer's machine can hold a leaver's dangling
+    // TRUE. Only the attribution (the desk-claim deny input) needs clearing;
+    // the leaver's OWN machine died with its session.
     g_pingSetterSlot = 0xFF;
-    if (!CD::EnsureResolved() || !CD::Instance()) return;
-    CD::Scalars sc;
-    if (!CD::ReadScalars(sc) || !sc.coordIsPing) return;
-    // The leaver's dangling ping would swallow every peer's desk keys forever:
-    // host-author the falling edge.
-    sc.coordIsPing = false;
-    coop::desk_snd_fx::ScopedWireApply guard;  // v115: echo guard
-    if (CD::WriteScalars(sc)) {
-        g_baseline.coordIsPing = false;
-        coop::net::DeskInputPayload p{};
-        p.field = static_cast<uint8_t>(DeskInputField::CoordIsPing);
-        p.boolVal = 0;
-        s->SendReliable(coop::net::ReliableKind::DeskInput, &p, sizeof(p));
-        UE_LOGI("desk_input: cleared dangling coordIsPing from leaver slot %d", slot);
-    }
+    UE_LOGI("desk_input: ping attribution cleared -- setter slot %d left mid-ping", slot);
 }
 
 void OnDisconnect() {
-    // Session-end sibling of OnPeerLeft (audit 2026-07-16 WARN-3): a REMOTE
-    // peer's wire-applied coordIsPing=true would outlive the session (the ping
-    // FSM runs presser-only -> the surviving SP world swallows every desk key
-    // until reload). Clear it if latched -- safe even mid-LOCAL-FSM, whose own
-    // end re-writes false.
-    if (g_primed) {
-        CD::Scalars sc;
-        if (CD::EnsureResolved() && CD::Instance() && CD::ReadScalars(sc) && sc.coordIsPing) {
-            sc.coordIsPing = false;
-            coop::desk_snd_fx::ScopedWireApply guard;  // v115: echo guard
-            if (CD::WriteScalars(sc))
-                UE_LOGI("desk_input: cleared wire-applied coordIsPing at session end");
-        }
-    }
+    // v116 (RULE 2): the session-end machine clear is GONE with the raw wire
+    // write that made it necessary (audit 2026-07-16 WARN-3 covered a state
+    // that can no longer exist -- a LOCAL organic ping ends itself natively).
     g_baseline = {};
     g_primed = false;
     g_pingSetterSlot = 0xFF;

@@ -236,7 +236,12 @@ CD::Scalars PayloadToScalars(const coop::net::DeskStatePayload& p) {
     sc.activeDownload = p.activeDownload != 0;
     sc.activeCoords = p.activeCoords != 0;
     sc.activeComp = p.activeComp != 0;
-    sc.coordIsPing = p.coordIsPing != 0;
+    // v116 ROOT FIX: coord_isPing is NEVER adopted -- it is the ping FSM's
+    // run-flag (latent tick machine @82980); adopting TRUE would wake a
+    // phantom sim on the joiner (the second wire path of the 2026-07-17
+    // double-FSM bug; the DeskInput path is the first). The payload field
+    // stays on the wire as diagnostic truth; a joiner cannot be mid-ping.
+    sc.coordIsPing = false;
     return sc;
 }
 

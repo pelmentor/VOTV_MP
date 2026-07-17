@@ -2,6 +2,7 @@
 
 #include "coop/interactables/device_occupancy.h"
 
+#include "coop/interactables/desk_input_sync.h"  // v116: PingActiveSlot -> the desk FSM-hold
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"
 #include "coop/player/players_registry.h"
@@ -57,6 +58,69 @@ std::chrono::steady_clock::time_point g_lastDenySound{};
 constexpr auto kDenyDebounce = std::chrono::milliseconds(300);  // press+release double-fire
 
 bool g_observersInstalled = false;
+
+// v116: the desk FSM-hold (HOST-only author). While a peer's ping FSM runs
+// (desk_input_sync::PingActiveSlot), the desk is functionally that peer's even
+// after it physically dismounts (the FSM keeps consuming the committed dots
+// for tens of seconds) -- so the host keeps a REAL busy-table entry for the
+// pinger. Every existing surface then does the work: BusyByOther's local
+// immediate-deny + ForceExitLocal, the arbitration's held-by deny, OnDishAim's
+// holder gate (a non-holder's aim never ships -> the presser's dots can't be
+// stomped mid-FSM). This replaces the native OnKeyDown coord_isPing swallow
+// that the retired v112 raw flag write used to provide by accident -- the raw
+// write is gone because it WOKE the phantom FSM (the v116 root).
+// g_deskFsmHold marks the entry as FSM-authored: a physical grant of the desk
+// clears it (the entry now belongs to the sitting player); a physical release
+// mid-FSM is re-asserted by the reconciler on the next tick.
+const wchar_t* const kDeskClaim = L"desk";
+bool g_deskFsmHold = false;
+std::chrono::steady_clock::time_point g_nextFsmHoldPoll{};
+
+void SendClaim(coop::net::Session* s, const std::wstring& key, uint8_t slot, bool busy);  // fwd
+
+void ReconcileDeskFsmHold(coop::net::Session* s) {
+    if (s->role() != coop::net::Role::Host || !s->connected()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < g_nextFsmHoldPoll) return;
+    g_nextFsmHoldPoll = now + std::chrono::milliseconds(250);
+
+    const uint8_t pinger = coop::desk_input_sync::PingActiveSlot();
+    if (pinger != 0xFF) {
+        bool inserted = false;
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            auto it = g_busy.find(kDeskClaim);
+            if (it == g_busy.end()) {
+                g_busy[kDeskClaim] = pinger;
+                inserted = true;
+            }
+            // held by someone else: a physical holder won a race window --
+            // leave it (never force-exit a sitting player from here).
+        }
+        if (inserted) {
+            g_deskFsmHold = true;
+            SendClaim(s, kDeskClaim, pinger, true);
+            UE_LOGI("device_occupancy: desk FSM-hold asserted for pinging slot %u",
+                    static_cast<unsigned>(pinger));
+        }
+    } else if (g_deskFsmHold) {
+        // The ping ended (or its setter left) while OUR fsm entry stands:
+        // release it. A physical grant in between cleared g_deskFsmHold, so a
+        // sitting player's claim is never torn down here.
+        uint8_t held = 0xFF;
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            auto it = g_busy.find(kDeskClaim);
+            if (it != g_busy.end()) { held = it->second; g_busy.erase(it); }
+        }
+        g_deskFsmHold = false;
+        if (held != 0xFF) {
+            SendClaim(s, kDeskClaim, held, false);
+            UE_LOGI("device_occupancy: desk FSM-hold released (ping ended, slot %u)",
+                    static_cast<unsigned>(held));
+        }
+    }
+}
 
 uint8_t LocalSlot() {
     return coop::players::Registry::Get().LocalPeerId();
@@ -171,6 +235,9 @@ void Install(coop::net::Session* session) {
 void Tick() {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->running()) return;
+    // v116: the desk FSM-hold reconciler runs regardless of the widget layer
+    // (a REMOTE ping needs no local screen resolved).
+    ReconcileDeskFsmHold(s);
     if (!DS::EnsureResolved()) return;
     void* local = coop::players::Registry::Get().Local();
     if (!local) {
@@ -239,7 +306,11 @@ void Tick() {
             }
             g_localKey = key;
             if (s->role() == coop::net::Role::Host) {
-                // Host arbitrates its own claim directly.
+                // Host arbitrates its own claim directly. (v116: a physical
+                // self-grant of the desk supersedes an FSM-hold entry -- only
+                // reachable when the host itself is the pinger, else
+                // BusyByOther already denied above.)
+                if (key == kDeskClaim) g_deskFsmHold = false;
                 {
                     std::lock_guard<std::mutex> lk(g_mutex);
                     g_busy[key] = mySlot;
@@ -283,6 +354,9 @@ void OnReliable(const coop::net::DeviceClaimPayload& p, uint8_t senderSlot) {
                 if (free || cur == senderSlot) g_busy[key] = senderSlot;
             }
             if (free || cur == senderSlot) {
+                // v116: a physical grant of the desk supersedes an FSM-hold
+                // entry (the pinger sat back down) -- the entry is theirs now.
+                if (g_deskFsmHold && key == kDeskClaim) g_deskFsmHold = false;
                 UE_LOGI("device_occupancy: HOST grants '%ls' to slot %u",
                         key.c_str(), static_cast<unsigned>(senderSlot));
                 SendClaim(s, key, senderSlot, true);  // broadcast the verdict (acks the winner)
@@ -413,6 +487,8 @@ void OnDisconnect() {
     g_localWidget = nullptr;
     g_pendingSend = false;
     g_denyPending = false;
+    g_deskFsmHold = false;   // v116
+    g_nextFsmHoldPoll = {};  // v116
 }
 
 }  // namespace coop::device_occupancy

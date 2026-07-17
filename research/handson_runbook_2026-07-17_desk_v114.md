@@ -1,20 +1,50 @@
-# Hands-on runbook — v112 INPUT + v113 DISHES + v114 CADDY/TASK + v115 AUDIO/CURSOR (batched), take 2
+# Hands-on runbook — v112 INPUT + v113 DISHES + v114 CADDY/TASK + v115 AUDIO/CURSOR + v115b PING-FSM (batched), take 3
 
-DEPLOYED: `votv-coop.dll e130383f11c8dee1` x4 (HOST + CLIENT_1/2/3), hash-verified.
-kProtocolVersion **115** (a 114-or-older peer HARD-CLOSEs at the gate). HEAD `c5ff11a4`
-(committed; unpushed). v115 smoke PASS x2 (30s + 75s; seam counters measured live:
-Play=1169/SetActive=22012/Activate=559 per 60s, deskHits=selftest only; the e2e audio
-self-test PROVEN: host organic dispatch -> client `desk_snd: applied cue='newdesk_beep4'`
-same second; zero new-lane WARN/ERROR). v115 audits: perf PASS 0 CRITICAL (both WARNs
-fixed pre-commit), correctness 0 CRITICAL (flap-WARN X->Y false-positive fixed).
-**NOTHING below is hands-on verified yet.** This take BATCHES FOUR unverified proto layers
-(v112 + v113 + v114 + v115); per-lane log prefixes keep attribution:
+DEPLOYED: `votv-coop.dll 0926373e2a256beb` x4 (HOST + CLIENT_1/2/3), hash-verified
+2026-07-17 evening. kProtocolVersion **115** (v115b is a BEHAVIOR-only layer on the same
+proto; a 114-or-older peer HARD-CLOSEs at the gate). v115 smoke PASS x2 + e2e audio
+self-test PROVEN (see take-2 history in git); v115b smoke PASS (both peers stable, client
+connected, puppet spawned, no RAM breach; zero new-lane lines while nobody pings —
+correct; zero new WARN/ERROR from the diff).
+**NOTHING below is hands-on verified yet.** This take BATCHES FIVE unverified layers
+(v112 + v113 + v114 + v115 + v115b); per-lane log prefixes keep attribution:
 `desk_input:`/`desk_sim:` = v112, `dish_sync:`/`[dish]` = v113, `[reel]`/`[task]` = v114,
-`desk_snd:`/`desk_cursor:` = v115. The v112+v113 steps live in
-`handson_runbook_2026-07-16_desk_v113.md` (still current for those lanes — run its STEPS
-first or interleave); THIS file adds the v114 half + the v115 half (take-1 of this file was
-superseded mid-prep: the user's first v114 hands-on pass surfaced the v115 report set —
-missing observer sounds + cursor jerks/momentum — fixed same-day).
+`desk_snd:`/`desk_cursor:` = v115, `FSM-hold`/`ping attribution`/`re-init window` = v115b.
+The v112+v113 steps live in `handson_runbook_2026-07-16_desk_v113.md` (still current for
+those lanes — run its STEPS first or interleave); THIS file adds the v114 half + the v115
+half + the v115b ping half (take-2 was superseded mid-take: the user's LIVE ping test at
+14:46-14:48 surfaced the PHANTOM ping-FSM — the v112 coordIsPing raw apply woke a parallel
+sim on the host; fixed same-evening, design
+`votv-ping-fsm-phantom-v115b-DESIGN-2026-07-17.md`).
+
+## What changed in v115b (the phantom ping FSM fix)
+1. Only the PRESSER's machine runs a ping now. The observer's machine never wakes (no
+   phantom stage sounds from the peer who did NOT press Enter; no phantom ARM).
+2. While a ping runs, the desk is CLAIM-HELD for the pinger (host FSM-hold): another peer
+   mounting the desk mid-ping gets the native deny + is seated back out. It releases by
+   itself when the FSM ends.
+3. A successful catch is no longer stomped a second later (the false DISARM after the
+   catch replay is suppressed while the signal data lives).
+
+## STEPS (v115b half; needs a signal in range — repeat the 14:46 scenario)
+1. CLIENT at unit 1: place 3 dots, Enter. WATCH the HOST's log: there must be NO
+   `desk_snd:` pingSound stage cues authored by slot 0 while the client pings, and NO
+   `dish_sync: host ARM broadcast` before the client's own verdict.
+2. While the client's ping runs (~20-60 s), HOST tries to mount the desk: expect the
+   native deny click + forced exit; host log `device_occupancy: desk FSM-hold asserted
+   for pinging slot 1`, then `... released (ping ended, slot 1)` when the FSM finishes.
+3. If the ping FAILS ("inner circle too small" / "no signal in local area"): satellites
+   moving + the re-Enter block are NATIVE (each attempt costs) — the unit-2 DETECTOR must
+   NOT rise on a local fail anymore.
+4. If the ping SUCCEEDS: `signal_catch: catch replay applied` on the host, and within ~30 s
+   `dish_sync: host ARM broadcast` (the real one) with NO `DISARM applied (machine reset +
+   signal actor deleted)` in between on the client. The host log may show ONE `dish_sync:
+   mesh down with live signalData ... DISARM suppressed` line — that is the re-init window
+   working (root-3); it repeating per-poll would be a bug (it is log-once per episode).
+5. Right screen during the ping: coordLog lines appear ONCE each (no double-author thrash);
+   the messages' cadence should be smooth now. Re-judge the CURSOR smoothness in the same
+   sitting (residual R-c: the presser-side ema doubling had no root yet — the phantom was
+   a per-tick machine on the observer and may have been it).
 
 ## What changed in v115 (desk AUDIO mirror + cursor v2 — design `votv-desk-audio-mirror-v115-DESIGN-2026-07-17.md`)
 1. The OTHER peer now HEARS your desk unit-1 activity: keyboard clicks (down AND up),

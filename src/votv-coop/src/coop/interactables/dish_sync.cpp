@@ -45,6 +45,9 @@ bool g_havePrevArm = false;
 bool g_prevMeshValid = false;
 uint64_t g_prevSignalKey = 0;
 int32_t g_prevPolarity = -1;
+// v116 root-3: log-once for the DISARM suppression inside the re-init window
+// (see HostArmPoll -- state predicate, re-arms per episode).
+bool g_reinitWindowLogged = false;
 
 // ---- client state ----------------------------------------------------------
 // The wire shadow: what OUR mirror last wrote (never engine-read). A live
@@ -70,6 +73,7 @@ void ResetModuleState() {
     g_prevMeshValid = false;
     g_prevSignalKey = 0;
     g_prevPolarity = -1;
+    g_reinitWindowLogged = false;
     std::memset(g_shadowMoving, 0, sizeof(g_shadowMoving));
     g_cueWatch = 0;
     g_parkedDisher = nullptr;
@@ -216,6 +220,28 @@ void HostArmPoll(coop::net::Session* s) {
         g_prevPolarity = polarity;
         return;
     }
+    // v116 root-3: a machine RE-INIT (signal_catch catch replay ->
+    // ResetDownloadMachine -> LATENT display respawn) makes the mesh
+    // transiently invalid while the NEW signalData is already written. A real
+    // disarm always deletes the signalData first (the @33832 chain / the
+    // kind=1 replay's ClearCoordSignal-then-Reset order) -- so "mesh gone but
+    // a signal key present" is the respawn window, not a disarm. Measured
+    // cost of not distinguishing (2026-07-17 14:47:58): a false DISARM one
+    // second after a client's successful catch reset every peer's machine and
+    // deleted the catcher's signal actor. Hold prevMeshValid=TRUE through the
+    // window: the eventual respawn then fires the real ARM edge (or, if the
+    // mesh returns within one poll, the key change broadcasts arm-over-arm).
+    const bool reinitWindow = !mesh && g_prevMeshValid && haveKey && key != 0;
+    if (reinitWindow) {
+        if (!g_reinitWindowLogged) {
+            g_reinitWindowLogged = true;
+            UE_LOGI("dish_sync: mesh down with live signalData (key=%llu) -- machine "
+                    "re-init window, DISARM suppressed until the display respawns",
+                    static_cast<unsigned long long>(key));
+        }
+        return;  // keep ALL baselines; the window resolves to an ARM edge
+    }
+    g_reinitWindowLogged = false;
     const bool meshEdge = mesh != g_prevMeshValid;
     const bool keyChange = mesh && haveKey && key != g_prevSignalKey;
     const bool polChange = mesh && haveProg && polarity != g_prevPolarity;
