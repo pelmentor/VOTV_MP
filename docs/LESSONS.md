@@ -739,6 +739,15 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 ## 8. Build / deploy / git hygiene
 
 - **`deploy-all.ps1` deploys Release** → ALWAYS build Release + hash-verify. `memory/lesson_deploy_sources_release_config_not_relwithdebinfo.md`
+- **A "pure refactor" claim becomes a MEASUREMENT via the three-commit shape: dedups first, then a
+  FROZEN standalone instrument (dev TU over public APIs — the refactor commit physically can't touch
+  it) + digest BASELINE x2 on the UNSPLIT code, then the move + same scenario → digests byte-equal
+  cross-peer AND cross-commit** (+ literal git-diff of moved bodies, symbol-level negative grep, a
+  reconnect cycle for the connect/prime/teardown surface). Digest = content-only (proven
+  eid-independent). Born: the rack extraction `73dc9ba1` (2026-07-18); the recipe for the queued
+  session_streams/net_pump/console_atlas extractions. *Look FIRST:*
+  `votv-rack-extraction-DESIGN-2026-07-18.md` §4-5+§8; `coop/dev/drive_selftest.cpp`.
+  `memory/lesson_refactor_equivalence_frozen_digest_instrument.md`
 - **env/.bat host = HIDDEN lobby by design; the scoreboard listed-checkbox mirror LIES on that path**
   (2026-07-17: absence from the server browser after a .bat launch is NOT a bug — v56 rule, test
   lobbies must not pollute the list; but `AnnounceEnvHostHidden` bypasses `session_manager::SetListed`
