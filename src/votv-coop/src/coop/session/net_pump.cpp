@@ -29,7 +29,8 @@
 #include "coop/net/session.h"
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"  // K-6  // OnClientWorldReady (v75 deferred-adoption per-world reset)
-#include "coop/creatures/wisp_grab_hold.h"  // Killer Wisp v2: grab-window body placement (ticks AFTER the puppet pose loop)
+#include "coop/player/puppet_drive.h"      // 2026-07-18 decomposition: puppet array + drive
+#include "coop/props/registry_reaper.h"    // 2026-07-18 decomposition: reaper/re-seed engine
 #include "coop/props/remote_prop_spawn.h"  // OnClientWorldReadyResetSweep (deferred prop sweep per-world reset)
 #include "coop/props/join_membership_sweep.h"  // anti-smear 2026-06-30: claim+sweep extracted out of remote_prop_spawn
 #include "coop/session/player_handshake.h"
@@ -66,13 +67,8 @@ namespace {
 namespace R = ue_wrap::reflection;
 namespace P = ue_wrap::profile;
 
-// Per-slot remote-player puppets. Indexed by the coop::players::Registry
-// slot convention: slot 0 = host (only used on CLIENT processes to hold the
-// host's puppet); slots 1..kMaxPeers-1 = clients (used on HOST processes to
-// hold each connected client's puppet). On HOST, slot 0 is unused
-// (representing host self); on CLIENT, slots 1..kMaxPeers-1 are unused.
-// Each entry's actor / spawn-retry / Tick state is independent.
-std::array<coop::RemotePlayer, coop::players::kMaxPeers> g_puppets{};
+// (The per-slot puppet array moved to coop/player/puppet_drive, 2026-07-18
+// decomposition -- net_pump reaches it via puppet_drive::DestroySlot/DriveTick.)
 
 // Cached local mainPlayer_C for the net pump. coop::players::Registry::Get().Local()
 // already caches + filters puppets via the controller discriminator
@@ -164,10 +160,8 @@ constexpr int kDeathMenuBypassMs = 30 * 1000;
 // client -- returns the user to the main menu so they always know it ended.)
 bool g_fleeing = false;
 
-// True once the local peer has been in the gameplay world during THIS session. Lets the
-// per-4s world check tell "left gameplay to the menu" (flee) apart from the transient
-// not-yet-in-gameplay window at the start of a join (no flee). Reset by OnSessionStart.
-bool g_everInGameplayThisSession = false;
+// (The been-in-gameplay latch moved to registry_reaper with the menu-guard's
+// detection half, 2026-07-18 decomposition.)
 
 // `travel`: false when VOTV's OWN quit-to-menu transition is ALREADY in flight
 // (the RAM-balloon guard path) -- re-dispatching transition("/Game/menu") on top
@@ -242,8 +236,10 @@ void FleeToMainMenu(coop::net::Session& session, const char* why, bool travel = 
 // ArrowComponent -> LowLevelFatalError (user's client crash, ESC->menu 14:45).
 void TearDownCoopStateForSessionEnd(coop::net::Session& session) {
     for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-        coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
-        if (g_puppets[slot].valid()) g_puppets[slot].Destroy();
+        // DestroySlot = unconditional UnregisterPuppet + destroy-if-live (the old
+        // inline pair, verbatim inside puppet_drive); the per-slot interleave with
+        // DisconnectSlot is preserved here, its one composition owner.
+        coop::puppet_drive::DestroySlot(slot);
         coop::subsystems::DisconnectSlot(session, slot);
     }
     coop::subsystems::DisconnectAll();
@@ -256,8 +252,19 @@ void OnSessionStart() {
     g_wasConnectedBySlot.fill(false);
     g_localDeathHandled = false;
     g_fleeing = false;  // re-arm the one-shot flee for this new session
-    g_everInGameplayThisSession = false;
+    coop::registry_reaper::OnSessionStart();  // the been-in-gameplay latch (menu guard)
     coop::local_streams::OnSessionStart();  // held-prop + ragdoll edge detectors
+}
+
+bool IsFleeing() {
+    return g_fleeing;
+}
+
+void FleeAfterNativeMenuTravel(coop::net::Session& session) {
+    if (g_fleeing) return;  // internal latch (defense; the reaper's predicate already gates)
+    TearDownCoopStateForSessionEnd(session);
+    FleeToMainMenu(session, "left gameplay to the menu (native quit)",
+                   /*travel=*/false);
 }
 
 void FleeToMainMenuOnDeath(coop::net::Session& session, const char* why) {
@@ -269,11 +276,7 @@ void FleeToMainMenuOnDeath(coop::net::Session& session, const char* why) {
     FleeToMainMenu(session, why);
 }
 
-coop::RemotePlayer& Puppet(int slot) {
-    // g_puppets is a GT-only-by-convention side-table (no mutex). Enforce it.
-    UE_ASSERT_GAME_THREAD("g_puppets (net_pump::Puppet)");
-    return g_puppets[slot];
-}
+// (Puppet(slot) moved to coop/player/puppet_drive, 2026-07-18 decomposition.)
 
 // v56: has THIS process (as a client) announced world-ready for the current
 // connection? Gates the world-dependent client tick blocks (puppet spawn from
@@ -313,12 +316,29 @@ static void* g_announcedWorld = nullptr;
 // fixed delay -- v74's 2 s delay was the crutch that, combined with the impossible key-match, let
 // the double persist).
 
+// The announce axis' ONE owner (2026-07-18 decomposition): the body is the old
+// reaper-side maybeReAnnounce lambda's, verbatim -- registry_reaper now only
+// requests through here.
+void MaybeRequestReAnnounce(coop::net::Session& session, void* reapWorld) {
+    if (session.role() == coop::net::Role::Host) return;
+    if (reapWorld != g_announcedWorld) {
+        g_reAnnounceWorldReady.store(true, std::memory_order_relaxed);
+        // JOIN BARRIER: the re-announce waits for the NEW world's load tail exactly
+        // like the first announce did -- open a fresh probe session for it.
+        coop::world_load_episode::ArmQuiesceProbe("world-change re-announce");
+    } else {
+        UE_LOGI("net_pump: world-change re-seed on the SAME world already announced (%p) -- "
+                "NOT re-announcing (suppresses the join menu-shadow-drain double-snapshot + "
+                "kerfur re-adopt dupe)", reapWorld);
+    }
+}
+
 void Tick(coop::net::Session& session, float displayOffsetX) {
-    // This whole body is game-thread-only: it drives g_puppets (a GT-only-by-
-    // convention side-table) and runs ElementDeleter::Flush (the controlled
-    // game-thread destruction point). One guard at the top enforces the
-    // invariant for everything below it.
-    UE_ASSERT_GAME_THREAD("net_pump::Tick (g_puppets + ElementDeleter::Flush)");
+    // This whole body is game-thread-only: it drives the puppet array (via
+    // puppet_drive, a GT-only-by-convention side-table) and runs
+    // ElementDeleter::Flush (the controlled game-thread destruction point).
+    // One guard at the top enforces the invariant for everything below it.
+    UE_ASSERT_GAME_THREAD("net_pump::Tick (puppet drive + ElementDeleter::Flush)");
 
     // ---- L5 HITCH + source probe (2026-06-23, diagnostic, always-on, ~free). The user reports a
     // PERMANENT ~3-4s frame stutter on both peers. The instrumented periodic walks (reseed 20s, *_sync,
@@ -398,16 +418,6 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // Self-gated (one-shot, latches only once a live chipPile native exists) -> cheap no-op otherwise.
     if (worldUp) coop::save_identity_bind::RunReseedOrphanSelfTest();
 
-    // Pose-apply diagnostic (lag hunt 2026-06-06): the wire is proven clean (net-diag), so
-    // measure the APPLY side. Per remote puppet, accumulate the FRESH-pose count (isNew/sec)
-    // and the latest stream target below, then log once/sec the target vs the puppet's rendered
-    // position + the trailing distance. Healthy = ~sendHz fresh/s + a small trail; a big/growing
-    // trail means the interp/engine apply lags the on-time stream; low fresh/s = upstream
-    // staleness. Game-thread-only Tick -> static locals need no atomics.
-    static std::array<int, coop::players::kMaxPeers> sPoseFresh{};
-    static std::array<coop::net::PoseSnapshot, coop::players::kMaxPeers> sPoseTarget{};
-    static std::chrono::steady_clock::time_point sNextPoseDiag{};
-
     // Deferred-element destruction flush (MTA CElementDeleter shape; see
     // coop/element/element_deleter.h). Drains, on the game thread at one
     // controlled point, any Elements parked for destruction since the last
@@ -421,366 +431,12 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // stay direct -- only their Element bookkeeping funnels here.
     coop::element::ElementDeleter::Get().Flush();
 
-    // Dead-Prop-Element reconciliation (PR-FOUNDATION 2026-05-30). A mass GC
-    // purge (cave/level transition, save-load) flags ~2000 props PendingKill AT
-    // ONCE without firing per-actor K2_DestroyActor, so the sole eviction path
-    // (the PRE observer) is bypassed and the dead Prop Element shadows leak --
-    // unbounded across transitions, exhausting the 16384 tracker caps after ~7
-    // and silently breaking prop tracking. Throttle to ~once per 4 s + cap 256
-    // evicts/call so steady-state cost is one bounded Registry walk every few
-    // seconds (no-op when nothing is dead) and a post-purge backlog drains over
-    // a handful of scans. Runs regardless of connection state (props seed at
-    // boot; a transition can happen before any peer connects) and on BOTH roles
-    // (each peer maintains its OWN local props). Game-thread (this Tick) -- the
-    // reaper Enqueues to the deleter, flushed at the top of the NEXT tick.
-    {
-        PP::Scope _s{PP::Bucket::Reaper};
-        using ReapClock = std::chrono::steady_clock;
-        static ReapClock::time_point sNextReap{};
-        // The reaper evicts up to this many dead Prop Elements per 4s scan (bounds
-        // the per-Flush ~Prop count). SEPARATE from the re-seed episode threshold
-        // below.
-        constexpr size_t kReapEvictCap = 256;
-        // World-change re-seed trigger (snapshot-completeness fix 2026-05-30).
-        // The one-shot boot seed runs on the pre-travel world; after VOTV's
-        // boot-time `open untitled_1` (and any future cave/level travel) the new
-        // level's PLACED props are live-but-untracked (placed props don't fire a
-        // catchable Init POST -- the very reason the seed exists). The host then
-        // tracks ~70 of ~3300 props -> the late-joiner snapshot ships ~2%.
-        //
-        // DETECTOR: the reaper ONLY ever finds props flagged PendingKill WITHOUT a
-        // K2_DestroyActor (normal destruction goes through that observer -> reaped
-        // is 0 in steady gameplay). So a single scan reaping >= kReseedPurge props
-        // is a mass purge = a level/world transition. The threshold is well below
-        // the eviction cap so it also catches SMALL transitions (e.g. exiting a
-        // cave back to the main world purges only the cave's props -- a 256-cap-hit
-        // gate would miss it and leave the main world untracked; audit 2026-05-30),
-        // while staying above any incidental GC.
-        constexpr size_t kReseedPurge = 64;
-        // We defer the re-seed to the END of the purge EPISODE -- the scan where the
-        // reaper drain CATCHES UP (reaps < kReseedPurge => backlog fully drained).
-        // Running it against a fully-drained registry avoids any recycled-address
-        // idempotency edge (a new prop reusing a not-yet-drained dead prop's actor
-        // address would be skipped by MarkPropElement). The episode flag (not a
-        // cooldown) gates re-arming: one purge drains over many 4s scans, all ONE
-        // episode; a genuinely NEW transition (later cave entry) starts a fresh
-        // episode and re-seeds again. Same GT cost class as the boot seed (both
-        // ~thousands of MarkPropElement on this Tick); the reaper leaves the
-        // re-seeded props (fresh valid internalIdx -> IsLiveByIndex true). Smoke
-        // 2026-05-30: snapshot 70 -> 2314 (the 2314-vs-3328-found gap is empty/None-
-        // key props, correctly excluded as non-syncable).
-        //
-        // Gate hardening 2026-06-10: the flag moved to prop_element_tracker
-        // (SetInPurgeEpisode/InPurgeEpisode) so the snapshot coherence gate
-        // can read it -- the world-stamp alone proved insufficient (the
-        // boot/save-load flow leaves the stamped UWorld alive while the
-        // registry is majority-dead; smoke-falsified). net_pump still owns
-        // every detection edge below (RULE 2: one flag, one owner of writes).
-        const auto reapNow = ReapClock::now();
-        // (v106: the v105b forced-reconcile request path is RETIRED -- pickup
-        // destroys broadcast at the K2_DestroyActor Func seam, drop/place actors
-        // express at the hand edge / FinishSpawningActor Func seam, all
-        // event-driven at the moment they happen. This reap + the periodic
-        // census below remain the SAFETY NET for mass GC purges and any
-        // non-BeginDeferred spawn path -- background cadence, no user-visible
-        // latency rides on them anymore.)
-        if (reapNow >= sNextReap) {
-            sNextReap = reapNow + std::chrono::seconds(4);
-            // Gameplay-world gate (2026-06-01, post-flee menu-leak fix). The reaper +
-            // world-change re-seed are GAMEPLAY-only. After a gameplay->menu travel (the
-            // local-death flee to the main menu) the tracker still holds thousands of
-            // now-dead prop-element shadows; running the reaper/re-seed at the MENU reaps
-            // them and then re-seeds on the menu's OWN actors in a vicious allocating loop
-            // that balloons RAM to OOM ~1 min after the flee (user-observed: menu was fine
-            // for a minute, then ballooned -- exactly when the temporary detour bypass
-            // expired and this resumed). At a non-gameplay world we skip BOTH: the shadows
-            // sit inert and the reaper resumes + cleans them on the next gameplay entry.
-            // Gameplay world is untitled_1; the menu is /Game/menu.menu.
-            // L5 (FPS): the World instance changes ~once per session (level travel), so DON'T full-walk
-            // ~237k GUObjectArray for it every 4s -- cache it + IsLiveByIndex-revalidate, re-resolving (one
-            // walk) only on a miss. A travel kills the old world -> serial bump -> IsLiveByIndex false ->
-            // re-resolve finds the new /Game/menu world, so the menu-travel RAM-balloon guard below STILL
-            // fires; the death-watch scans the Prop Registry (not reapWorld), so it is unaffected. (engine.cpp:60
-            // EnsureWorldContext caches identically but returns the immortal GameInstance -- the reaper needs
-            // the WORLD instance for its gameplay-vs-menu name check, so it keeps its own cache.)
-            static void*   g_reapWorld    = nullptr;
-            static int32_t g_reapWorldIdx = -1;
-            if (!g_reapWorld || !R::IsLiveByIndex(g_reapWorld, g_reapWorldIdx)) {
-                ue_wrap::ScopedWalkTimer _wt("reaper:FindWorld");
-                g_reapWorld    = R::FindObjectByClass(P::name::WorldClass);
-                g_reapWorldIdx = g_reapWorld ? R::InternalIndexOf(g_reapWorld) : -1;
-            }
-            void* reapWorld = g_reapWorld;
-            // Allocation-free name checks (audit 2026-06-10): the old ToString
-            // wstring here was the one survivor of the balloon-fix pattern in
-            // this file -- 4s-throttled so never a balloon, but same pattern,
-            // same diff. Substring semantics preserved ("ntitled" matches the
-            // gameplay world prefix-case-agnostically).
-            const bool inGameplayWorld =
-                reapWorld && R::NameContains(R::NameOf(reapWorld), L"ntitled");
-            // RAM-balloon guard (2026-06-08, user: HOST pressed MAIN MENU mid-session ->
-            // ballooning). VOTV's OWN quit-to-menu travels to /Game/menu WITHOUT going
-            // through our FleeToMainMenu, so the session stays running + our whole layer
-            // keeps churning at the menu = the balloon. Once we've been in gameplay this
-            // session, a transition to the MENU world (matched specifically, so a cave /
-            // streamed sublevel never trips it) means the local peer LEFT -> flee now (Stop
-            // the session + arm the dormancy bypass). The harness running->stopped edge
-            // (host) would also catch the resulting stop; g_fleeing dedupes. Piggybacks on
-            // this existing 4 s world scan (no new per-tick cost) -- 4 s << the ~1 min balloon.
-            if (inGameplayWorld) {
-                g_everInGameplayThisSession = true;
-            } else if (g_everInGameplayThisSession && !g_fleeing && session.running() &&
-                       reapWorld && R::NameContains(R::NameOf(reapWorld), L"menu")) {
-                UE_LOGW("net: gameplay->MENU while a session is live (VOTV quit-to-menu?) -- "
-                        "ending the session + stopping the layer churn (RAM-balloon guard)");
-                coop::prop_element_tracker::SetInPurgeEpisode(false);  // left gameplay (matches the !inGameplayWorld reset below)
-                // FULL teardown first (2026-07-04 client ESC->menu crash): this path used
-                // to skip the disconnect fanout entirely (FleeToMainMenu's edge reset also
-                // suppresses the aggregate-disconnect edge), leaving stale weather/time/sky
-                // caches + pending applies armed over the teardown -- see
-                // TearDownCoopStateForSessionEnd. travel=false: the user's own menu
-                // transition is ALREADY in flight; a second dispatch loaded the menu twice.
-                TearDownCoopStateForSessionEnd(session);
-                FleeToMainMenu(session, "left gameplay to the menu (native quit)",
-                               /*travel=*/false);
-                return;
-            }
-            if (!inGameplayWorld) coop::prop_element_tracker::SetInPurgeEpisode(false);  // inert at menu; re-arm on gameplay re-entry
-            std::vector<coop::element::ElementId> reapedEids;
-            const size_t reaped = inGameplayWorld
-                ? coop::prop_element_tracker::ReapDeadLocalPropElements(kReapEvictCap, &reapedEids)
-                : 0;
-            // Reaper escalation (2026-06-27, purge-timing race fix lever (a)). A mass-purge
-            // backlog otherwise drains at kReapEvictCap (256) per 4 s throttle -- ~9 scans x 4 s
-            // = ~37 s for a ~2300 backlog. That slow drain is the 09:54 ghost root: the
-            // episode-end re-seed (below) fires only after the drain catches up, so a 37 s drain
-            // lands the re-seed ~37 s into the join -- AFTER the save-identity bind/reconcile has
-            // already armed on the pre-purge world, orphaning the save-authoritative natives
-            // (tracked-but-unbound = ghosts). The 16:42 run worked only because a fast 4096-cap
-            // self-heal drain happened to land the re-seed BEFORE the bind armed. So when THIS
-            // scan hit the eviction cap (backlog remains) or a purge episode is still mid-drain,
-            // cancel the 4 s throttle: the next tick reaps again immediately and the backlog
-            // drains at frame cadence (~256/frame, ~0.15 s total) under the join cover instead of
-            // 256/4 s. Per-call cost stays bounded at 256 (no single-frame hitch). Self-
-            // terminating: the first scan that reaps < cap with the episode ended restores the
-            // throttle. This races the re-seed back AHEAD of the bind (restores 16:42 timing);
-            // lever (b) re-binds deterministically if a late GC purge still lands after the arm.
-            if (inGameplayWorld &&
-                (reaped >= kReapEvictCap || coop::prop_element_tracker::InPurgeEpisode())) {
-                sNextReap = reapNow;  // drain again next tick -- no 4 s wait while a backlog remains
-            }
-            // PART 1 (2026-06-18) HOST-AUTHORITATIVE prop/pile death-watch. A host prop/pile
-            // destroyed via a BP-internal EX_CallMath path (garbage-truck collect, ambient cull,
-            // removeWOrespawn/LifeSpan despawn, grab-morph) NEVER fires K2_DestroyActor, so the
-            // ProcessEvent detour can't see it -- the ONLY thing that ever removed the peer's
-            // stale mirror was the retired 4s full re-snapshot's sweep. The reaper above detects
-            // exactly these (a dead LOCAL element K2 never drained). In STEADY state (NOT a mass-
-            // purge transition -- that is engine teardown the client does on its own travel) the
-            // HOST now broadcasts an explicit PropDestroy(eid) per vanish -- MTA Packet_EntityRemove,
-            // by IDENTITY (the sound replacement for the retired unsound proximity death-watch).
-            // The client resolves the host-range eid -> drops its mirror. Idempotent vs the instant
-            // OnPileGrabPre grab-destroy (a 2nd by-eid PropDestroy is a logged no-op on the receiver).
-            // ASSUMPTION (audit L3, 2026-06-18): VOTV is ONE persistent untitled_1 world with no
-            // in-gameplay sublevel/cave streaming, so the only thing that purges props is a full world
-            // swap (reaps ALL ~3300 = a mass purge, excluded by reaped<kReseedPurge). IF a partial
-            // LoadStreamLevel cave-travel is ever added (a <64 purge inside a live UWorld with peers in
-            // DIFFERENT sublevels), this would PropDestroy the unloaded sublevel's props on a peer still
-            // there -- re-gate on a membership/co-location check then.
-            if (session.role() == coop::net::Role::Host && reaped > 0 &&
-                reaped < kReseedPurge && !coop::prop_element_tracker::InPurgeEpisode()) {
-                int sent = 0;
-                for (coop::element::ElementId eid : reapedEids) {
-                    if (eid == coop::element::kInvalidId || eid == 0) continue;
-                    coop::net::PropDestroyPayload dp{};
-                    dp.key.len = 0;  // eid-only: the client resolves the mirror by host-range eid
-                    dp.elementId = static_cast<uint32_t>(eid);
-                    session.SendPropDestroy(dp);
-                    ++sent;
-                }
-                if (sent > 0)
-                    UE_LOGI("net_pump: host death-watch -- broadcast %d explicit PropDestroy(eid) for "
-                            "steady-state prop/pile vanish(es) the un-hookable BP path never replicated "
-                            "(MTA per-entity remove, by identity)", sent);
-            }
-            // Catch up ALREADY-connected peers to the now-complete prop set:
-            // their connect-edge snapshot (if it ran at all -- the fork-A
-            // coherence gate defers it mid-transition) enumerated the PRE-
-            // re-seed registry. Re-trigger the per-slot snapshot;
-            // prop_snapshot queues it if a drain is in flight and
-            // re-enumerates the (now complete) registry at dequeue, and the
-            // client's RegisterPropMirror dedupes props it already holds.
-            // No-op when no peer is connected yet. Host-only. (DEFERRED
-            // joiners are independent of this added>0 path: the re-seed's
-            // generation bump wakes them via prop_snapshot's DrainChunk
-            // flush unconditionally.)
-            auto retriggerReadySlots = [&session]() {
-                if (session.role() != coop::net::Role::Host) return;
-                for (int slot = 1; slot < coop::players::kMaxPeers; ++slot) {
-                    if (session.IsSlotReady(slot)) {
-                        coop::prop_snapshot::TriggerForSlot(slot);
-                        UE_LOGI("net_pump: re-snapshot ready slot %d after re-seed", slot);
-                    }
-                }
-            };
-            // CLIENT re-announce gate (2026-06-16). Re-announce world-ready ONLY when the UWorld
-            // actually SWAPPED since our last announce -- NOT for the join's menu-shadow drain within
-            // the same world (which spuriously double-snapshotted + duped kerfurs). See g_announcedWorld.
-            auto maybeReAnnounce = [&session, reapWorld]() {
-                if (session.role() == coop::net::Role::Host) return;
-                if (reapWorld != g_announcedWorld) {
-                    g_reAnnounceWorldReady.store(true, std::memory_order_relaxed);
-                    // JOIN BARRIER: the re-announce waits for the NEW world's load tail exactly
-                    // like the first announce did -- open a fresh probe session for it.
-                    coop::world_load_episode::ArmQuiesceProbe("world-change re-announce");
-                } else {
-                    UE_LOGI("net_pump: world-change re-seed on the SAME world already announced (%p) -- "
-                            "NOT re-announcing (suppresses the join menu-shadow-drain double-snapshot + "
-                            "kerfur re-adopt dupe)", reapWorld);
-                }
-            };
-            if (reaped >= kReseedPurge) {
-                if (!coop::prop_element_tracker::InPurgeEpisode()) {
-                    coop::prop_element_tracker::SetInPurgeEpisode(true);
-                    UE_LOGI("net_pump: mass-purge detected (reaped %zu >= %zu) -- world-change re-seed deferred to drain-complete",
-                            reaped, kReseedPurge);
-                }
-            } else if (coop::prop_element_tracker::InPurgeEpisode()) {
-                // Drain caught up: the old level's dead Prop Elements are fully
-                // evicted and the new level has loaded. Re-seed now (clean -- no
-                // recycled-address collisions) + catch up connected peers.
-                coop::prop_element_tracker::SetInPurgeEpisode(false);
-                // (a) RE-SEED-ORPHAN FIX (2026-06-28, the 09:54 ghost root). The episode-defer above already
-                // waits for the reap backlog to fall below kReseedPurge, BUT the reaper Take()s each dead Prop
-                // Element and DEFERS ~Element to ElementDeleter::Flush (worker-thread safety, element_deleter.h).
-                // The top-of-Tick Flush ran BEFORE this Tick's reaper, so the natives the reaper just Took THIS
-                // Tick are still pending -- their registry actor->eid reverse is STALE until ~Element. A re-seed
-                // running now would adjudicate that half-gone state (MarkPropElement's IsBoundMirrorNative /
-                // EidForActor guards read a Taken-but-not-yet-destructed Element), orphaning a churned save-native
-                // bind into a tracked-but-unbound ghost. Flush the pending deferred-deletes FIRST so the re-seed
-                // sees SETTLED state -- force the precondition, don't race it. [[feedback-snapshot-before-state-ready]]
-                coop::element::ElementDeleter::Get().Flush();
-                // v122: the mass purge that just drained is exactly when element-less keyed
-                // index entries (no Registry row -> invisible to the element reaper) died
-                // en masse -- drain them here before the walk re-indexes the new world.
-                const size_t keyDrained = coop::prop_element_tracker::DrainDeadKeyIndexEntries();
-                if (keyDrained > 0)
-                    UE_LOGI("net_pump: post-purge key-index drain evicted %zu dead element-less keyed entr(ies)", keyDrained);
-                const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps();
-                UE_LOGI("net_pump: world-change re-seed added %zu live keyed prop(s) (snapshot-completeness)", added);
-                // (b) RE-BIND ON RE-SEED (2026-06-28). A GC-churned save-native re-creates UNBOUND at its save
-                // position (the per-family cursor was already consumed -> it overflow-drops). Re-bind it BY
-                // POSITION right HERE -- the purge-surviving stable key is the host-shipped save-time position
-                // (1cm exact; the moved-in-window case is handled by b3 PropSnapPos / proxy-wins). Don't wait
-                // ~30s for the late quiescence divergence sweep to do it -- that gap IS the 09:54 orphan window.
-                // Cheap early-out (returns 0) when nothing churned; only the rare post-purge re-seed pays the
-                // GUObjectArray walk -- NOT the 0.25 Hz steady re-seed below (W-2 perf rule).
-                if (coop::save_identity_bind::IsEnabled()) {
-                    const int rebound = coop::save_identity_bind::BindUnboundReCreates();
-                    if (rebound > 0)
-                        UE_LOGI("net_pump: post-purge re-seed re-bound %d unbound save-native(s) (chip by position, "
-                                "kerfur by key; 09:54 orphan window closed at the re-seed edge, not the late sweep)", rebound);
-                }
-                if (added > 0) retriggerReadySlots();
-                // CLIENT: re-announce world-ready so the host re-replays its authoritative state into
-                // the new world (re-binds our keyless chipPiles to host eids) -- but ONLY if the world
-                // actually swapped (maybeReAnnounce). The join's same-world shadow drain must not.
-                maybeReAnnounce();
-            } else if (inGameplayWorld &&
-                       coop::prop_element_tracker::HasSeededOnce() &&
-                       !coop::prop_element_tracker::IsRegistrySeededForCurrentWorld()) {
-                // Fork A small-travel companion: a travel purging fewer than
-                // kReseedPurge keyed elements never starts a purge episode, so
-                // the episode-end re-seed -- the only post-travel stamp
-                // refresher -- would never run and the snapshot coherence gate
-                // would stay closed forever. The reap above (cap 256 > 64)
-                // already evicted the sub-64 dead THIS scan, so this re-seed
-                // runs against a drained registry (no recycled-address
-                // window, the reason the EPISODE path defers to drain-
-                // complete). HasSeededOnce keeps the boot window owned by
-                // SeedKnownKeyedProps (observers-before-seed doctrine).
-                // Ordered as `else if` behind the episode branches: the first
-                // scan of a MASS travel takes the episode path and this never
-                // preempts the throttled drain.
-                const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps();
-                UE_LOGI("net_pump: world changed without a mass purge -- re-seeded (%zu new keyed)", added);
-                if (added > 0) retriggerReadySlots();
-                maybeReAnnounce();  // only if the UWorld actually swapped (see g_announcedWorld)
-            } else if (inGameplayWorld &&
-                       coop::prop_element_tracker::HasSeededOnce() &&
-                       coop::prop_element_tracker::IsRegistrySeededForCurrentWorld()) {
-                // STEADY gameplay world (no level transition): the ONLY ongoing
-                // detector for props that come into existence mid-session via
-                // EX_CallMath -- the Q spawn-menu, the toolgun, the ambient
-                // spawners, and grab-morph chipPiles. Those bypass UObject::
-                // ProcessEvent (our sole hook seam), so the Init-POST observer
-                // never sees them: they sit UNTRACKED (overlay "key=.. / no eid")
-                // and are never mirrored to peers (user 2026-06-16: spawn-menu
-                // props + piles invisible on the client). This 0.25 Hz
-                // GUObjectArray re-seed (same cadence + cost class as the reaper
-                // above; the FindObjectByClass world resolve is shared) mints
-                // each new keyed prop's eid AND each keyless chipPile's eid (the
-                // SeedWalk_ IsChipPile branch). added==0 (steady, nothing newly
-                // spawned) costs only the walk -- zero peer traffic.
-                //
-                // R1 (2026-06-17, MTA CEntityAddPacket): broadcast ONE bracket-free
-                // additive PropSpawn per NEWLY-adopted prop (prop_snapshot::
-                // ExpressIncrementalSpawn), NOT a full re-bracketed snapshot. The old
-                // retriggerReadySlots() re-fired a SnapshotBegin/Complete bracket every
-                // ~4s during a join, and each bracket RE-ARMED the client's destructive
-                // divergence sweep (~10x in 90s = the join-churn that thrashed piles +
-                // doomed kerfur mirrors). An incremental add never opens a bracket -> the
-                // sweep is not re-armed. MTA's strictly-incremental streaming: one
-                // CEntityAddPacket per new entity, never a world re-send
-                // (Server/.../CStaticFunctionDefinitions.cpp:8349). ExpressIncrementalSpawn
-                // is host-only internally; on a client the re-seed key-INDEXES keyed props
-                // WITHOUT minting Elements (v122 no-passive-mint -- the silent census mint
-                // was the zombie double-row factory) and still mints keyless chipPile
-                // elements; it broadcasts nothing. (retriggerReadySlots stays --
-                // the episode-end + small-travel branches above legitimately re-bracket on
-                // a real world transition, where the client SHOULD re-reconcile.)
-                // PERF (FPS #3, user 2026-06-22 -- a periodic ~4s FPS stutter on BOTH peers): ReSeedKnownKeyedProps
-                // is a FULL ~237k-entry GUObjectArray census (+ a ToString(NameOf) string-alloc per keyed-
-                // interactable + a second full walk for the world). Running it every ~4s unconditionally cost the
-                // whole walk even when nothing spawned (added==0). GUARD it on the GUObjectArray HIGH-WATER MARK:
-                // NumObjects() grows when a new UObject is appended (the common case for a spawn-menu/toolgun/
-                // ambient/morph prop), so do the census EXACTLY then and SKIP the no-op walk while NumObjects is
-                // unchanged -- eliminating the at-rest stutter (the idle client never walks). A spawn that reuses
-                // a freed slot leaves NumObjects flat; a periodic SAFETY census every ~5th invocation (~20s)
-                // bounds that coverage gap, and any later array growth catches it immediately. The join/world-
-                // change branches above are UNGATED (they always re-seed in full), so snapshot coherence is intact.
-                static int32_t sLastSteadyNum = -1;
-                static int     sSinceFullWalk = 0;
-                const int32_t  curNum   = R::NumObjects();
-                const bool     grew     = (curNum != sLastSteadyNum);
-                const bool     periodic = (++sSinceFullWalk >= 5);   // ~20s safety walk (this branch runs ~0.25 Hz)
-                // (v106: recycled-slot drop/place actors -- NumObjects flat,
-                // `grew` blind -- are expressed event-driven at the hand edge /
-                // FinishSpawningActor Func seam; the ~20s periodic walk here is
-                // the safety net only.)
-                if (grew || periodic) {
-                    if (periodic && !grew)
-                        UE_LOGI("net_pump: steady-world re-seed -- periodic SAFETY census (NumObjects flat at %d; "
-                                "catches any free-slot-reused spawn the high-water guard skipped)", curNum);
-                    sLastSteadyNum  = curNum;
-                    sSinceFullWalk  = 0;
-                    std::vector<void*> newProps;
-                    ue_wrap::ScopedWalkTimer _wt("reseed:KnownKeyedProps");  // L5 profile (this branch is high-water-gated)
-                    const size_t added = coop::prop_element_tracker::ReSeedKnownKeyedProps(&newProps);
-                    if (added > 0) {
-                        UE_LOGI("net_pump: steady-world re-seed adopted %zu NEW runtime-spawned keyed prop(s) "
-                                "(spawn-menu/toolgun/ambient/pile) -- broadcasting one PropSpawn each "
-                                "(incremental delta, no re-bracket; MTA CEntityAddPacket shape)", added);
-                        // The late-registration deliver-missing owner: a generic prop broadcasts an
-                        // incremental PropSpawn; a kerfur OFF-prop (skipped by the generic express, no
-                        // KerfurConvert fired) takes the convert-safe deferred path. See
-                        // coop::prop_snapshot::DeliverLateRegisteredProps + the OWNER BOUNDARY there.
-                        coop::prop_snapshot::DeliverLateRegisteredProps(newProps);
-                    }
-                }
-                // else: NumObjects unchanged -> nothing newly allocated -> SKIP the full census (the FPS fix).
-            }
-        }
-    }
+    // Dead-Prop-Element reconciliation + world-change re-seed + the gameplay->menu
+    // RAM-balloon guard -> coop/props/registry_reaper (2026-07-18 decomposition;
+    // the whole ~4s scan block verbatim). Returns true when the menu guard fired
+    // (session torn down + fleeing) -- abort this Tick exactly like the old
+    // inline `return` did.
+    if (coop::registry_reaper::Tick(session)) return;
 
     // Detect peer disconnect (Connected -> Handshaking/Disconnected). DESTROY
     // the puppet -- a frozen-in-place puppet of a peer who already quit is
@@ -798,18 +454,12 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
         // the disconnect-edge also fires correctly off IsSlotReady.
         const bool slotConnected = session.IsSlotReady(slot);
         if (g_wasConnectedBySlot[slot] && !slotConnected) {
-            // N-3 (2026-05-29 audit): UnregisterPuppet drops the Player Element
-            // from players::Registry. If the puppet was never spawned (peer
-            // disconnected after Join but before any PoseSnapshot), g_puppets[
-            // slot].valid() is false but playerBySlot_[slot] may still hold a
-            // mirror Element installed by EstablishMirrorForSlot. Calling
-            // UnregisterPuppet unconditionally is safe -- DropPlayerElement_
-            // is a no-op when playerBySlot_ is null.
-            coop::players::Registry::Get().UnregisterPuppet(static_cast<uint8_t>(slot));
-            if (g_puppets[slot].valid()) {
-                g_puppets[slot].Destroy();
+            // DestroySlot = the old inline pair verbatim (unconditional
+            // UnregisterPuppet -- the N-3 no-puppet-yet case is safe inside --
+            // + destroy-if-live); it returns whether a live puppet died so the
+            // edge keeps its log line exactly.
+            if (coop::puppet_drive::DestroySlot(slot))
                 UE_LOGI("net: peer slot %d disconnected -- puppet destroyed", slot);
-            }
             coop::subsystems::DisconnectSlot(session, slot);
         }
         if (!g_wasConnectedBySlot[slot] && slotConnected) {
@@ -1062,165 +712,22 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
             coop::local_streams::Tick(session, g_netLocal, g_netLocalController);
     }
 
-    // Per-slot pose drive. Iterate ALL peer slots [0, kMaxPeers) and skip
-    // our OWN slot -- so each peer drives a puppet for every OTHER peer.
-    // (PR-FOUNDATION Tier 2 host-relay: a client now sees not just the host
-    // at slot 0 but also peer-clients at slots 2/3 once the host relays
-    // their poses (T2-2) + identities (T2-1, PlayerJoined). Before relay
-    // exists, TryGetRemotePose returns false for peer-client slots, so this
-    // is a harmless no-op at those slots.) Each slot has its own RemotePlayer
-    // puppet + spawn-retry backoff.
-    //
-    // World-up-gated together with the ragdoll drive / puppet Tick / remote-
-    // prop apply below: all of it spawns or drives engine actors, which is
-    // meaningless (and at the menu, actively wrong) without a gameplay world.
-    // Poses keep streaming meanwhile -- TryGetRemotePose holds only the
-    // LATEST snapshot per slot, so nothing accumulates while gated.
+    // Per-slot puppet drive -> coop/player/puppet_drive (2026-07-18
+    // decomposition; the whole block verbatim: pose spawn/apply, ragdoll
+    // drive, per-puppet interp Tick, wisp hold, pose-diag emit). The
+    // worldReadyAnnounced load is evaluated IN the call expression -- the same
+    // observation point as the old in-loop load (both writers ran earlier in
+    // this same Tick). remote_prop stays HERE (a prop concern, not a puppet
+    // one), under the SAME worldUp predicate, after the drive -- the original
+    // order tick-loop -> wisp -> pose-diag -> remote_prop is preserved.
     if (worldUp) {
-    {
-        PP::Scope _s{PP::Bucket::Puppets};
-        using namespace std::chrono;
-        // Per-slot spawn retry timer (static-local: harmless across session
-        // restarts because the timer is monotonic and a stale "wait until X"
-        // either lets us spawn immediately if X is in the past, or makes us
-        // wait the bounded remaining time -- no risk of carrying state that
-        // affects correctness).
-        static std::array<steady_clock::time_point, coop::players::kMaxPeers> sNextSpawnAttempt{};
-        const auto now = steady_clock::now();
-        // Host self-assigns slot 0 in the registry. Idempotent setter so it's
-        // fine to run every tick. Client LocalPeerId is set asynchronously by
-        // the wire-layer AssignPeerSlot handler (event_feed.cpp).
-        if (isHost) {
-            coop::players::Registry::Get().SetLocalPeerId(coop::players::kPeerIdHost);
-        }
-        const uint8_t localSlot = coop::players::Registry::Get().LocalPeerId();
-        for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-            // Never drive a puppet for our own slot. On the host localSlot==0;
-            // on a client localSlot is its assigned slot (kPeerIdUnknown=0xFF
-            // until AssignPeerSlot lands, which matches no slot -> all slots
-            // eligible, but TryGetRemotePose gates spawning anyway).
-            if (static_cast<uint8_t>(slot) == localSlot) continue;
-            coop::net::PoseSnapshot remote;
-            bool isNew = false;
-            if (!session.TryGetRemotePose(slot, remote, &isNew)) continue;
-            sPoseTarget[slot] = remote;  // pose-diag: latest stored pose (the interp target source)
-            if (!g_puppets[slot].valid()) {
-                // v56: a save-transfer joiner receives poses while still at the
-                // MENU (downloading + loading the host save) -- never spawn a
-                // puppet into a non-gameplay world; the pose keeps streaming
-                // and the spawn happens on the first pose after world-ready.
-                if (session.role() == coop::net::Role::Client &&
-                    !g_worldReadyAnnounced.load(std::memory_order_relaxed)) continue;
-                // Spawn-retry backoff: BeginDeferredActorSpawnFromClass refuses
-                // if the world is mid-transition (OMEGA->story under multi-
-                // instance CPU contention can take many seconds; refused
-                // spawns reach hundreds/sec at 60 Hz pump rate = pure log
-                // noise + wasted reflection calls). Only retry once per second
-                // after a failure (RULE 1: don't crutch the engine, just wait).
-                if (now < sNextSpawnAttempt[slot]) continue;
-                UE_LOGI("net: first remote pose on slot %d -> auto-spawning puppet", slot);
-                // v93 skins (docs/COOP_CLIENT_MODEL.md): the puppet wears the skin
-                // this peer announced (Join field / SkinChange), any slot incl. the
-                // host. Empty (not yet announced) -> kel baseline; the skin re-applies
-                // live when it lands (player_handshake::StoreSkinForSlot).
-                if (!g_puppets[slot].Spawn(coop::player_handshake::SkinForSlot(slot))) {
-                    UE_LOGW("net: slot %d puppet spawn failed; will retry in 1 s", slot);
-                    sNextSpawnAttempt[slot] = now + seconds(1);
-                    continue;
-                }
-                // Register with the central Registry. peerId == slot directly.
-                coop::players::Registry::Get().RegisterPuppet(
-                    static_cast<uint8_t>(slot), &g_puppets[slot]);
-                // Apply the cached nickname now that the puppet exists. The
-                // identity (Join / PlayerJoined) can arrive BEFORE the first
-                // pose spawns the puppet -- in that race the handler cached
-                // the nick but found no puppet to label. Reading the cache
-                // here closes that gap for the host puppet AND cross-peer
-                // puppets (T2-1). Falls back to the placeholder if no
-                // identity has landed yet; the handler re-applies on arrival.
-                g_puppets[slot].SetNickname(
-                    coop::player_handshake::NicknameForSlot(slot));
-                // Join announcement at the APPEARANCE seam: the puppet just spawned, which is
-                // the moment the user actually sees the peer (2026-07-03: the old host announce
-                // on ClientWorldReady+5s ran ~6 s before the puppet in the measured live flow).
-                // CLIENT: announce here -- "Joined <host>'s game" (slot 0, +5s: own loading
-                // screen) or cross-peer "<nick> joined the game" (immediate); the whole block is
-                // gated on the client's own g_worldReadyAnnounced (the `continue` above). HOST:
-                // announce here only once the slot is world-ready -- a pre-world menu/loading
-                // pose can spawn the puppet early (user 2026-06-17), and in that order
-                // OnClientWorldReady announces instead (both funnel through the same latch).
-                if (session.role() == coop::net::Role::Client ||
-                    session.IsSlotWorldReady(slot))
-                    coop::player_handshake::AnnouncePeerSpawned(session.role(), slot);
-            }
-            // Only RE-BASE the interpolation on a NEW packet; re-pushing the
-            // latest every frame would zero `errorPos_` mid-window and freeze
-            // motion. The per-frame advance happens in Tick() below.
-            if (isNew) {
-                coop::net::PoseSnapshot withOffset = remote;
-                withOffset.x += displayOffsetX;  // loopback mirror shift (0 for real coop)
-                g_puppets[slot].SetTargetPose(withOffset);
-                ++sPoseFresh[slot];  // pose-diag: a fresh target this second
-            }
-        }
-    }
-    // v22: per-slot ragdoll PELVIS-physics drive. Decoupled from the pose stream
-    // above (a momentary pose-packet gap must not stall the ragdoll velocity feed).
-    // Only FRESH packets apply -- the puppet's mirror body integrates between them.
-    // SetRagdollPose applies the velocity to the body + stamps the streamed pelvis
-    // rotation for the next Tick's ApplyToEngine. Runs BEFORE the Tick loop so the
-    // velocity is set before the same-frame ApplyToEngine reads the body.
-    for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-        if (!g_puppets[slot].valid()) continue;
-        coop::net::RagdollPoseSnapshot rdoll;
-        bool rdollNew = false;
-        if (session.TryGetRemoteRagdollPose(slot, rdoll, &rdollNew) && rdollNew) {
-            g_puppets[slot].SetRagdollPose(rdoll);
-        }
-    }
+        coop::puppet_drive::DriveTick(session, displayOffsetX,
+                                      g_worldReadyAnnounced.load(std::memory_order_relaxed));
 
-    // Tick every live puppet (independent of which slot received pose data
-    // this frame -- the per-puppet interpolation needs Tick every frame even
-    // when no fresh pose arrived).
-    for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-        if (g_puppets[slot].valid()) g_puppets[slot].Tick();
-    }
-
-    // Killer-wisp grab-window body placement (v2 choreography). MUST run AFTER the
-    // puppet Tick loop above: a held victim puppet is snapped to the wisp's
-    // 'playerGrab' socket, overwriting the streamed pose for the hold window (the
-    // module's own liveness guards release it). Cheap no-op when nothing is held.
-    coop::wisp_grab_hold::Tick();
-
-    // Pose-apply diagnostic emit (once/sec). target = the latest pose received for this slot;
-    // puppet = its rendered location AFTER this frame's interp Tick; trail = how far the
-    // rendered puppet is behind the target it should be converging to.
-    {
-        const auto pdNow = std::chrono::steady_clock::now();
-        if (pdNow >= sNextPoseDiag) {
-            sNextPoseDiag = pdNow + std::chrono::seconds(1);
-            for (int slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-                if (!g_puppets[slot].valid()) { sPoseFresh[slot] = 0; continue; }
-                const ue_wrap::FVector cur = g_puppets[slot].GetLocation();
-                const float dx = sPoseTarget[slot].x - cur.X, dy = sPoseTarget[slot].y - cur.Y;
-                const float trail = std::sqrt(dx * dx + dy * dy);
-                UE_LOGI("pose-diag[slot %d]: fresh=%d/s targetSpeed=%.0f target=(%.0f,%.0f) "
-                        "puppet=(%.0f,%.0f) trail=%.0fcm", slot, sPoseFresh[slot],
-                        sPoseTarget[slot].speed, sPoseTarget[slot].x, sPoseTarget[slot].y,
-                        cur.X, cur.Y, trail);
-                if (trail > 500.f)
-                    UE_LOGW("pose-diag[slot %d]: puppet TRAILS its target by %.0f cm (fresh=%d/s) "
-                            "-- the apply/interp is behind the on-time pose stream", slot, trail,
-                            sPoseFresh[slot]);
-                sPoseFresh[slot] = 0;
-            }
-        }
-    }
-
-    // Receiver-side held-prop driver. Drains the latest PropPose from the
-    // session and applies it (lookup-by-Key on first arrival, transform writes
-    // thereafter). Stream-stop timeout (>500 ms) treated as implicit release.
-    { PP::Scope _s{PP::Bucket::RemoteProp}; coop::remote_prop::Tick(session); }
+        // Receiver-side held-prop driver. Drains the latest PropPose from the
+        // session and applies it (lookup-by-Key on first arrival, transform writes
+        // thereafter). Stream-stop timeout (>500 ms) treated as implicit release.
+        { PP::Scope _s{PP::Bucket::RemoteProp}; coop::remote_prop::Tick(session); }
     }  // worldUp (puppet drive + ragdoll + pose-diag + remote prop)
 
     // Surface session events (joins/disconnects) to the feed + send our Join.

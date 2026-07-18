@@ -6,7 +6,7 @@
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
 #include "coop/config/config.h"
-#include "coop/session/net_pump.h"
+#include "coop/player/puppet_drive.h"
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
@@ -119,7 +119,7 @@ void Update() {
         targets[nTargets++] = {localMesh, 0};
     int remoteBodies = 0;
     for (int slot = 0; slot < static_cast<int>(coop::players::kMaxPeers); ++slot) {
-        coop::RemotePlayer& rp = coop::net_pump::Puppet(slot);
+        coop::RemotePlayer& rp = coop::puppet_drive::Puppet(slot);
         if (!rp.IsRagdollDisplayed()) continue;
         void* body = rp.RagdollBody();
         if (!body || !R::IsLiveByIndex(body, rp.RagdollBodyIdx())) continue;

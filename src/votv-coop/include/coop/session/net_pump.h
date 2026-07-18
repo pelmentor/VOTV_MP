@@ -1,12 +1,14 @@
 // coop/net_pump.h -- main per-tick net pump ORCHESTRATOR.
 //
-// Owns the peer puppet array, the per-slot connect/disconnect edge logic,
-// the death policy + flee-to-menu, the dead-prop reaper, and the puppet
-// pose/ragdoll drive. The sync-module fan-out lists live in coop/subsystems
-// (the wiring registry) and the outbound local pose/held-prop/ragdoll
-// streams in coop/local_streams -- net_pump calls both at the right tick
-// moments. Driven from the harness timeline tick at the game-thread post
-// rate.
+// Owns the per-slot connect/disconnect edge logic, the death policy +
+// flee-to-menu, and the world-ready announce axis. The dead-prop reaper /
+// re-seed engine lives in coop/props/registry_reaper, the puppet array +
+// pose/ragdoll drive in coop/player/puppet_drive (both extracted 2026-07-18;
+// net_pump calls them at the right tick moments and still owns the tick
+// ORDER). The sync-module fan-out lists live in coop/subsystems (the wiring
+// registry) and the outbound local pose/held-prop/ragdoll streams in
+// coop/local_streams. Driven from the harness timeline tick at the
+// game-thread post rate.
 //
 // State previously lived in harness.cpp as file-scope globals; extracted
 // per the audit (`research/findings/architecture-audits/votv-coop-audit-post-pr4-7-2026-05-28.md`)
@@ -18,7 +20,6 @@
 
 #pragma once
 
-namespace coop { class RemotePlayer; }
 namespace coop::net { class Session; }
 
 namespace coop::net_pump {
@@ -43,12 +44,26 @@ void OnSessionStart();
 // path. Game thread only.
 void FleeToMainMenuOnDeath(coop::net::Session& session, const char* why);
 
-// Accessor for scenario branches that drive a single puppet outside the
-// net path (drive / show / skin / autotest visuals / etc). Slot 1 is
-// the canonical "the remote" puppet on HOST; slots 1..kMaxPeers-1 hold
-// per-peer puppets in coop order. Returns a reference -- the underlying
-// array is module-owned.
-coop::RemotePlayer& Puppet(int slot);
+// (The per-slot puppet array + its accessor moved to coop/player/puppet_drive
+// (2026-07-18 decomposition) -- see puppet_drive::Puppet.)
+
+// True while this session is already travelling to the main menu (the one-shot
+// flee latch). registry_reaper's gameplay->menu guard reads it so its branch
+// predicate stays literal across the extraction. Game thread.
+bool IsFleeing();
+
+// The announce axis' ONE owner (2026-07-18 decomposition): registry_reaper
+// requests a world-ready re-announce after a world-change re-seed; this owner
+// compares against the last-announced world, arms the quiesce probe, and sets
+// the re-announce flag -- or logs the same-world suppression. No-op on the
+// host. Game thread.
+void MaybeRequestReAnnounce(coop::net::Session& session, void* reapWorld);
+
+// The gameplay->menu RAM-balloon guard's ACTION half (detection lives in
+// registry_reaper's world scan): full coop-state teardown + the no-travel flee
+// (VOTV's own menu transition is already in flight). Idempotent via the flee
+// latch. Game thread.
+void FleeAfterNativeMenuTravel(coop::net::Session& session);
 
 // True once THIS client has announced ClientWorldReady for the current
 // connection (false on the host, which never announces; latched false again

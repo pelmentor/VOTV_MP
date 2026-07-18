@@ -36,6 +36,7 @@
 #include "coop/comms/chat_feed.h"
 #include "coop/player/roster.h"
 #include "coop/net/session.h"
+#include "coop/player/puppet_drive.h"
 #include "coop/session/net_pump.h"
 #include "coop/session/subsystems.h"
 #include "coop/creatures/npc_sync.h"
@@ -122,7 +123,7 @@ bool BanAcceptFilter(const char* remoteIp) {
 // Puppet array + per-slot edge state + held-prop edge detector + the local-
 // pose read + the per-tick observer orchestrator + the main NetPumpTick body
 // extracted to coop/net_pump.cpp (PR-4.13). Harness reaches the puppets via
-// coop::net_pump::Puppet(slot) and calls coop::net_pump::Tick(g_session, ...)
+// coop::puppet_drive::Puppet(slot) and calls coop::net_pump::Tick(g_session, ...)
 // from the timeline tick lambdas; coop::net_pump::OnSessionStart() resets
 // edge-detector state on each session.Start.
 
@@ -183,7 +184,7 @@ void SpawnSecondPlayerWhenReady() {
         }
         auto state = std::make_shared<std::atomic<int>>(0);  // 0 pending,1 not-ready,2 ok,3 failed
         Post([state, i] {
-            if (coop::net_pump::Puppet(1).valid()) { state->store(2); return; }
+            if (coop::puppet_drive::Puppet(1).valid()) { state->store(2); return; }
             void* local = coop::players::Registry::Get().Local();
             const bool diag = (i % 20 == 0);  // ~every 2 s
             if (!local) {
@@ -206,7 +207,7 @@ void SpawnSecondPlayerWhenReady() {
                 return;
             }
             UE_LOGI("play: mainPlayer_C ready @ (%.0f,%.0f,%.0f) -- spawning puppet", p.X, p.Y, p.Z);
-            state->store(coop::net_pump::Puppet(1).Spawn() ? 2 : 3);
+            state->store(coop::puppet_drive::Puppet(1).Spawn() ? 2 : 3);
         });
         while (state->load() == 0) ::Sleep(5);  // let the posted check run (~1 frame)
         const int s = state->load();
@@ -700,7 +701,7 @@ void RunPlayLoop(bool idleInGameplay) {
                         static_cast<int>(g_session.state()),
                         static_cast<unsigned long long>(g_session.packetsSent()),
                         static_cast<unsigned long long>(g_session.packetsRecv()),
-                        coop::net_pump::Puppet(1).valid() ? 1 : 0);
+                        coop::puppet_drive::Puppet(1).valid() ? 1 : 0);
                 // Memory heartbeat (2026-07-04, the 17:10 "host ate RAM then died" report):
                 // the log had ZERO memory observability, so "was it climbing for minutes or
                 // spiking at death?" is unanswerable. 30 s cadence names the shape next time.
@@ -723,8 +724,8 @@ void RunPlayLoop(bool idleInGameplay) {
                     UE_LOGI("pos diag: local actor=(%.0f,%.0f,%.0f) actorYaw=%.1f ctrl(P=%.1f Y=%.1f)",
                             loc.X, loc.Y, loc.Z, rot.Yaw, cRot.Pitch, cRot.Yaw);
                 }
-                if (coop::net_pump::Puppet(1).valid()) {
-                    const auto p = coop::net_pump::Puppet(1).GetLocation();
+                if (coop::puppet_drive::Puppet(1).valid()) {
+                    const auto p = coop::puppet_drive::Puppet(1).GetLocation();
                     UE_LOGI("pos diag: puppet world=(%.0f,%.0f,%.0f)", p.X, p.Y, p.Z);
                 }
             });
@@ -856,13 +857,13 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         Post([] { Report("pre-spawn"); });
         Post([] {
             UE_LOGI("harness: === spawn coop::RemotePlayer (2nd mainPlayer_C) ===");
-            coop::net_pump::Puppet(1).Spawn();
+            coop::puppet_drive::Puppet(1).Spawn();
         });
         ::Sleep(2000);
         Post([] { Report("post-spawn"); });
         Post([] {
-            if (coop::net_pump::Puppet(1).valid()) {
-                ue_wrap::FVector p = coop::net_pump::Puppet(1).GetLocation();
+            if (coop::puppet_drive::Puppet(1).valid()) {
+                ue_wrap::FVector p = coop::puppet_drive::Puppet(1).GetLocation();
                 UE_LOGI("harness: orphan post-spawn pos=(%.0f,%.0f,%.0f)", p.X, p.Y, p.Z);
             }
         });
@@ -871,11 +872,11 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         for (int i = 1; i <= 5; ++i) {
             ::Sleep(3000);
             Post([i] {
-                if (!coop::net_pump::Puppet(1).valid()) { UE_LOGW("harness: drive %d -- no orphan", i); return; }
-                ue_wrap::FVector p = coop::net_pump::Puppet(1).GetLocation();
+                if (!coop::puppet_drive::Puppet(1).valid()) { UE_LOGW("harness: drive %d -- no orphan", i); return; }
+                ue_wrap::FVector p = coop::puppet_drive::Puppet(1).GetLocation();
                 p.X += 150.f;
-                const bool ok = coop::net_pump::Puppet(1).SetLocation(p);
-                ue_wrap::FVector got = coop::net_pump::Puppet(1).GetLocation();
+                const bool ok = coop::puppet_drive::Puppet(1).SetLocation(p);
+                ue_wrap::FVector got = coop::puppet_drive::Puppet(1).GetLocation();
                 UE_LOGI("harness: drive step %d set X=%.0f ok=%d -> read (%.0f,%.0f,%.0f)",
                         i, p.X, ok, got.X, got.Y, got.Z);
             });
@@ -1048,7 +1049,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
                             static_cast<int>(g_session.state()),
                             static_cast<unsigned long long>(g_session.packetsSent()),
                             static_cast<unsigned long long>(g_session.packetsRecv()),
-                            coop::net_pump::Puppet(1).valid() ? 1 : 0);
+                            coop::puppet_drive::Puppet(1).valid() ? 1 : 0);
                 });
             }
             ::Sleep(16);  // ~60 Hz pump for smooth Tick() interp (see play-net branch)
@@ -1064,26 +1065,26 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         ::Sleep(2000);
         Post([] {
             UE_LOGI("show: === spawn skin-puppet ===");
-            coop::net_pump::Puppet(1).Spawn();
+            coop::puppet_drive::Puppet(1).Spawn();
         });
         ::Sleep(3000);
         Post([] {
-            if (!coop::net_pump::Puppet(1).valid()) { UE_LOGW("show: no puppet"); return; }
-            const ue_wrap::FVector at = coop::net_pump::Puppet(1).GetLocation();
+            if (!coop::puppet_drive::Puppet(1).valid()) { UE_LOGW("show: no puppet"); return; }
+            const ue_wrap::FVector at = coop::puppet_drive::Puppet(1).GetLocation();
             UE_LOGI("show: drive WALK in place (speed=200) to test AnimBP locomotion");
             // Same loc/yaw, just bump speed -- the first SetTargetPose since spawn
             // snaps (hasPose_ false), then Tick applies. AnimBP locomotion picks it up.
             coop::net::PoseSnapshot s{at.X, at.Y, at.Z, /*yaw*/0.f, /*pitch*/0.f, /*speed*/200.f};
-            coop::net_pump::Puppet(1).SetTargetPose(s);
-            coop::net_pump::Puppet(1).Tick();
+            coop::puppet_drive::Puppet(1).SetTargetPose(s);
+            coop::puppet_drive::Puppet(1).Tick();
         });
         ::Sleep(4000);
         Post([] {
-            if (!coop::net_pump::Puppet(1).valid()) return;
-            const ue_wrap::FVector at = coop::net_pump::Puppet(1).GetLocation();
+            if (!coop::puppet_drive::Puppet(1).valid()) return;
+            const ue_wrap::FVector at = coop::puppet_drive::Puppet(1).GetLocation();
             coop::net::PoseSnapshot s{at.X, at.Y, at.Z, /*yaw*/0.f, /*pitch*/0.f, /*speed*/0.f};
-            coop::net_pump::Puppet(1).SetTargetPose(s);
-            coop::net_pump::Puppet(1).Tick();
+            coop::puppet_drive::Puppet(1).SetTargetPose(s);
+            coop::puppet_drive::Puppet(1).Tick();
             UE_LOGI("show: back to idle (speed=0)");
         });
         UE_LOGI("harness: ==== SHOW DONE ====");
@@ -1095,10 +1096,10 @@ DWORD WINAPI TimelineThread(LPVOID param) {
             R::DebugProbeSuperStructOffset();
             void* local = coop::players::Registry::Get().Local();
             DumpComponents("local mainPlayer_C", local);
-            coop::net_pump::Puppet(1).Spawn();
+            coop::puppet_drive::Puppet(1).Spawn();
         });
         ::Sleep(2000);
-        Post([] { DumpComponents("orphan mainPlayer_C", coop::net_pump::Puppet(1).actor()); });
+        Post([] { DumpComponents("orphan mainPlayer_C", coop::puppet_drive::Puppet(1).actor()); });
         UE_LOGI("harness: ==== SKIN INSPECT DONE ====");
     } else if (scenario == "newgame") {
         ::Sleep(5000);

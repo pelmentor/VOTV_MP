@@ -29,7 +29,7 @@
 #include "harness/autotest.h"
 #include "harness/screenshot.h"
 
-#include "coop/session/net_pump.h"
+#include "coop/player/puppet_drive.h"
 #include "coop/player/player_damage.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/remote_player.h"
@@ -81,7 +81,7 @@ bool PuppetHasFloppingRagdollBody() {
     auto done = std::make_shared<std::atomic<int>>(0);
     auto ok = std::make_shared<int>(0);
     GT::Post([done, ok] {
-        coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+        coop::RemotePlayer& rp = coop::puppet_drive::Puppet(1);
         void* body = rp.RagdollBody();
         if (body && R::IsLiveByIndex(body, rp.RagdollBodyIdx())) {  // recycle-proof (audit 2026-06-01)
             // Aragdoll_C::SkeletalMesh @0x0230 -- the body mesh component.
@@ -109,7 +109,7 @@ void AimHostAtPuppet() {
     auto done = std::make_shared<std::atomic<int>>(0);
     GT::Post([done] {
         void* local = coop::players::Registry::Get().Local();
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        void* puppet = coop::puppet_drive::Puppet(1).GetActor();
         if (!local || !R::IsLive(local) || !puppet || !R::IsLive(puppet)) { done->store(1); return; }
         void* ctrl = E::GetController(local);
         if (!ctrl || !R::IsLive(ctrl)) { done->store(1); return; }
@@ -137,7 +137,7 @@ void PositionHostForShot() {
     auto done = std::make_shared<std::atomic<int>>(0);
     GT::Post([done] {
         void* local = coop::players::Registry::Get().Local();
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        void* puppet = coop::puppet_drive::Puppet(1).GetActor();
         if (!local || !R::IsLive(local) || !puppet || !R::IsLive(puppet)) { done->store(1); return; }
         const ue_wrap::FVector h = E::GetActorLocation(local);
         const ue_wrap::FVector p = E::GetActorLocation(puppet);
@@ -163,7 +163,7 @@ void PositionHostForShot() {
 void ProbePuppetRagdollGeometry(const char* tag) {
     auto done = std::make_shared<std::atomic<int>>(0);
     GT::Post([done, tag] {
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        void* puppet = coop::puppet_drive::Puppet(1).GetActor();
         void* local = coop::players::Registry::Get().Local();
         if (!puppet || !R::IsLive(puppet)) { done->store(1); return; }
         ue_wrap::FVector origin{}, extent{};
@@ -202,7 +202,7 @@ void ObserveOnHost() {
         auto done = std::make_shared<std::atomic<int>>(0);
         auto isRag = std::make_shared<int>(-1);  // -1 = no puppet, 0 = up, 1 = ragdoll-displayed
         GT::Post([done, isRag] {
-            coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+            coop::RemotePlayer& rp = coop::puppet_drive::Puppet(1);
             if (!rp.valid()) { *isRag = -1; done->store(1); return; }
             // The xray-actor rework state: a spawned playerRagdoll_C display body
             // (IsRagdollDisplayed) is the authoritative "this puppet is ragdolled"
@@ -374,7 +374,7 @@ void ObserveDamageOnHost() {
         auto done = std::make_shared<std::atomic<int>>(0);
         auto state = std::make_shared<int>(-1);  // -1 no puppet, 0 not flashing, 1 flashing
         GT::Post([done, state] {
-            coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+            coop::RemotePlayer& rp = coop::puppet_drive::Puppet(1);
             if (!rp.valid()) { *state = -1; done->store(1); return; }
             *state = rp.IsHurtFlashing() ? 1 : 0;
             done->store(1);
@@ -393,7 +393,7 @@ void ObserveDamageOnHost() {
             {
                 auto d2 = std::make_shared<std::atomic<int>>(0);
                 GT::Post([d2] {
-                    void* puppet = coop::net_pump::Puppet(1).GetActor();
+                    void* puppet = coop::puppet_drive::Puppet(1).GetActor();
                     if (!puppet || !R::IsLive(puppet)) { d2->store(1); return; }
                     const ue_wrap::FVector P = E::GetActorLocation(puppet);
                     // Frame the puppet DYNAMICALLY: teleport the host to ~3.5 m in
@@ -422,7 +422,7 @@ void ObserveDamageOnHost() {
                 {
                     auto d4 = std::make_shared<std::atomic<int>>(0);
                     GT::Post([d4] {
-                        void* puppet = coop::net_pump::Puppet(1).GetActor();
+                        void* puppet = coop::puppet_drive::Puppet(1).GetActor();
                         if (puppet && R::IsLive(puppet)) {
                             void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
                             if (mesh && R::IsLive(mesh)) {
@@ -450,7 +450,7 @@ void ObserveDamageOnHost() {
             // Confirm the BODY material restored to the skin (NOT stuck red).
             auto d3 = std::make_shared<std::atomic<int>>(0);
             GT::Post([d3] {
-                void* puppet = coop::net_pump::Puppet(1).GetActor();
+                void* puppet = coop::puppet_drive::Puppet(1).GetActor();
                 if (puppet && R::IsLive(puppet)) {
                     void* mesh = ue_wrap::puppet::GetSkeletalMeshComponent(puppet);
                     if (mesh && R::IsLive(mesh)) {
@@ -633,7 +633,7 @@ void ProbeDamageHazardOnHost() {
     for (int attempt = 0; attempt < 60 && (!*puppet || *before < 0.f); ++attempt) {
         auto done = std::make_shared<std::atomic<int>>(0);
         GT::Post([puppet, before, done] {
-            void* p = coop::net_pump::Puppet(1).GetActor();
+            void* p = coop::puppet_drive::Puppet(1).GetActor();
             if (p && R::IsLive(p)) *puppet = p;
             float v = -1.f; if (ue_wrap::vitals::Read(ue_wrap::vitals::Field::Health, &v)) *before = v;
             done->store(1);
@@ -789,7 +789,7 @@ void DrivePlayerDamageOnHost() {
             auto flashing = std::make_shared<int>(0);
             auto health = std::make_shared<float>(-1.f);
             GT::Post([done, flashing, health] {
-                coop::RemotePlayer& rp = coop::net_pump::Puppet(1);
+                coop::RemotePlayer& rp = coop::puppet_drive::Puppet(1);
                 if (rp.valid()) {
                     *health = rp.GetHealth();
                     if (rp.IsHurtFlashing()) *flashing = 1;
@@ -834,7 +834,7 @@ void FramePuppetForNameplate(bool reposition) {
     auto done = std::make_shared<std::atomic<int>>(0);
     GT::Post([done, reposition] {
         void* local = coop::players::Registry::Get().Local();
-        void* puppet = coop::net_pump::Puppet(1).GetActor();
+        void* puppet = coop::puppet_drive::Puppet(1).GetActor();
         if (!local || !R::IsLive(local) || !puppet || !R::IsLive(puppet)) { done->store(1); return; }
         void* ctrl = E::GetController(local);
         if (!ctrl || !R::IsLive(ctrl)) { done->store(1); return; }
@@ -912,7 +912,7 @@ void FrameStandingPuppetOnHost() {
     for (int attempt = 0; attempt < 600; ++attempt) {  // ~300 s cap; mp.py kills after the shot
         auto done = std::make_shared<std::atomic<int>>(0);
         auto v = std::make_shared<bool>(false);
-        GT::Post([done, v] { *v = coop::net_pump::Puppet(1).valid(); done->store(1); });
+        GT::Post([done, v] { *v = coop::puppet_drive::Puppet(1).valid(); done->store(1); });
         WaitDone(done, 8000);
         if (*v) {
             if (++settle >= 6) {  // let the puppet converge from the spawn placeholder

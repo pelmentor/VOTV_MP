@@ -383,6 +383,8 @@ add_library(votv-coop SHARED
     src/coop/session/session_manager.cpp
     src/coop/session/join_progress.cpp
     src/coop/session/net_pump.cpp
+    src/coop/player/puppet_drive.cpp
+    src/coop/props/registry_reaper.cpp
     src/coop/session/pause_guard.cpp
     src/coop/session/subsystems.cpp
     src/coop/player/local_streams.cpp
