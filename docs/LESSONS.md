@@ -437,8 +437,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   (sortSignal = Array_Get copy + Remove + Insert -> FString deep-copy -> new ptrs every move; the v65
   RowKey + prefix-walk + ptr-keyed caches all died in one v120 pass — they were valid ONLY because the
   deck list has no move verb). Identity for such stores = content-hash MULTISET {hash->count} (move =
-  no-op, duplicates = counts). LOOK FIRST: meadow_db_sync.cpp vs signal_sync.cpp; meadow_store.h doctrine
-  note. `memory/lesson_bp_struct_copy_kills_pointer_identity_at_moves.md`
+  no-op, duplicates = counts). **SHARPENED v121: the rule is TWO-SIDED — census the store's verb
+  GRAMMAR first. NO move verb (laptop buffer quad: removeAt + tail-append only) -> an EXACT greedy
+  edit script (index-anchored) keeps converged arrays order-converged with NO order lane
+  (laptop_buffer_sync DeriveArray).** LOOK FIRST: meadow_db_sync.cpp vs signal_sync.cpp vs
+  laptop_buffer_sync.cpp. `memory/lesson_bp_struct_copy_kills_pointer_identity_at_moves.md`
 - **Lane FIFO orders HAND-OVER, not authorship** — a line deferred to a pending/retry queue is outside
   the shared-lane pin; a later cross-REFERENCING line (order/permutation/canonical-by-instance) that
   sends immediately overtakes it and the receiver skips the unknown reference (v120 order HIGH-1:
@@ -452,6 +455,34 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   send gate on own ClientWorldReady. UN-RETROFITTED sharers: signal_sync (deck), email_sync. LOOK FIRST:
   meadow_db_sync.cpp CaptureJoinSnapshot/QueueConnectBroadcastForSlot.
   `memory/lesson_join_window_b2_skip_is_permanent_loss_seed_delta.md`
+- **A canonical-as-ack on the blob transport must be BOUNDED and SEND-CHECKED** — blob_chunks
+  hard-caps a blob at MaxBlobBytes() (56,100 B) and returns false WITHOUT sending; an ignored result
+  on an ack-bearing path = the authority primes believing it delivered = silent permanent divergence
+  in exactly the content-heavy case (v121 CRIT-1; the laptop buffer is native-unbounded). Bound via
+  deterministic tail-drop + WARN; refused send = no prime + retry arm. LOOK FIRST:
+  laptop_buffer_sync/floppybox_sync PackCanonicalBounded + HostBroadcastCanonical; blob_chunks.h
+  MaxBlobBytes. `memory/lesson_canonical_ack_needs_bounded_blob_and_checked_send.md`
+- **A send-gate must use the send path's OWN readiness predicate** — IsSlotReady (transport) vs
+  IsSlotWorldReady (the B2 gate SendReliable* itself enforces) differ exactly inside the join
+  window; gating on transport-ready = every send refused + a 4 Hz no-prime/detector-refire loop for
+  the whole load window (v121 smoke-caught). Zero world-ready peers = prime SILENTLY (the ready-edge
+  connect replay covers the joiner); WARN on the arm transition only. LOOK FIRST:
+  laptop_buffer_sync/floppybox_sync AnyClientReady; session.h:293 vs :377.
+  `memory/lesson_send_gate_predicate_must_match_the_send_paths_own_gate.md`
+- **A persisted BP field can be a DERIVED MIRROR regenerated from per-peer widget arrays** —
+  laptop.floppyBuffer is rebuilt FROM ui_laptop.bufferSlots by updFloppy at EVERY refresh (incl. the
+  refreshes OUR wire applies trigger via WriteSlot/ClearSlot); genFloppyBuffer's only caller is
+  loadData; nothing native clears bufferSlots -> a raw field write without a widget rebuild is
+  stomped at the next refresh. Wire apply = write fields + the native loadData recipe
+  (RemoveFromParent-each + num=0 + genFloppyBuffer + updFloppy) + prime. LOOK FIRST: ue_wrap
+  laptop.cpp WriteQuadAndRebuild. `memory/lesson_derived_persisted_field_regenerated_from_widget_arrays.md`
+- **Measure a "sibling device"'s BINDING before designing its lane — it may be a remote TERMINAL** —
+  prop_portablePc binds the BASE laptop at BeginPlay (bindPC(gamemode.laptop.laptop)); its screen is
+  a delegate-bound mirror (pcLaunched) that converges FREE once isOpened syncs; its whole "device
+  lane" reduced to one lid bool, and the TRACKER's "own floppyTypes/floppyData" premise was a
+  misattribution (the arrays are prop_floppyBox_C's). Dump the uber: BeginPlay binds? delegate
+  mirrors? Only the remainder needs a lane. LOOK FIRST: the v121 design doc SS0/SS3;
+  prop_portablePc.json. `memory/lesson_sibling_device_may_be_remote_terminal_measure_binding.md`
 
 ## 4. Dispatch, hooks & input seams
 

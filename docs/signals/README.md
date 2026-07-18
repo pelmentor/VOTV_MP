@@ -153,8 +153,8 @@ hands-on FAILED
 on 5 fronts — all designed out in v112 (`votv-desk-input-lane-DESIGN-2026-07-16.md`). Remaining
 OPEN: OPEN-1 (cursor jerks — v116 removed the diag-battery noise [kerfur_census 8-25 ms walk] and
 added HOST perf_probe, the never-measured half; npc_client walk = the named suspect), OPEN-2
-(coordLog cluster), OPEN-3 (upgrade-sync), OPEN-9 + OPEN-10 (laptop v2: PC buffer +
+(coordLog cluster), OPEN-3 (upgrade-sync) (OPEN-9 SHIPPED v120; OPEN-10 laptop v2 SHIPPED v121 +
 portable PC; per-device claim discrimination) (L4+L7+L6+L8+L5 BUILT — **v118 L8 physMods
 2026-07-18**: value-ops + host-canonical array per its own 8-round /qf, the UNPLUG-path
 reframe + the explosion measured presser-local, `votv-physmods-L8-impl-DESIGN-2026-07-18.md`;
-the TRAIN IS COMPLETE — **v120 L9 meadow DB 2026-07-19** (`6967a13a`, 15-round /qf `votv-meadow-db-L9-impl-DESIGN-2026-07-19.md`: content-hash multiset rows + HOST-CANONICAL ORDER [user rule-1] + join seed; smoke x2 + e2e digest 0->1->0 cross-peer) after **v119 L5 drives** (7-round /qf, three lanes, both audits folded). Every signal-chain lane L4-L9 is now AS-BUILT (NONE hands-on; take 4 = TEN layers v112..v120). Remaining in-family: OPEN-10 laptop v2, the bulk-image lane, the v65 deck join-gap retrofit.
+the TRAIN IS COMPLETE — **v120 L9 meadow DB 2026-07-19** (`6967a13a`, 15-round /qf `votv-meadow-db-L9-impl-DESIGN-2026-07-19.md`: content-hash multiset rows + HOST-CANONICAL ORDER [user rule-1] + join seed; smoke x2 + e2e digest 0->1->0 cross-peer) after **v119 L5 drives** (7-round /qf, three lanes, both audits folded). Every signal-chain lane L4-L9 is now AS-BUILT, and **v121 OPEN-10 laptop v2 (2026-07-18, `035a6031`, 11-round /qf `votv-laptop-v2-OPEN10-impl-DESIGN-2026-07-18.md`)** closed the laptop family: buffer-quad edit-script lane + portable-PC lid + floppyBox LIFO; the v116 op=4 chunker retired -> blob_chunks; smoke x3 + BOTH selftest circles digest-proven cross-peer. (NONE hands-on; take 4 = ELEVEN layers v112..v121.) Remaining in-family: the bulk-image lane, the v65 deck join-gap retrofit.
