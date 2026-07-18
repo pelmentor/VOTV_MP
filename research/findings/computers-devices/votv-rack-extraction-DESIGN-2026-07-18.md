@@ -1,6 +1,8 @@
 # Rack-lane extraction from drive_sync.cpp — mini owner-API design (s21b, 2026-07-18)
 
-**Status: DESIGN (8-round /qf, "that holds" at R8/15). Implementation = three commits (see §5).**
+**Status: AS-BUILT (see §8). 8-round /qf "that holds" at R8/15; three commits landed
+(0=promotion bc14fa33, A=instrument 5971cdd7, B=extraction); digest equality proven
+cross-peer AND cross-commit; NOT hands-on.**
 **Scope: PURE REFACTOR — no wire-format, no protocol, no behavior change; behavior preservation
 is MEASURED (digest equality across commits), not asserted.**
 
@@ -138,3 +140,54 @@ R6 promotion split into its own commit 0; connect seed inside the digest surface
 R7 baseline x2 (stability); teardown logs added (the silent wipe becomes measured); reconnect
    cycle promoted to mandatory.
 R8 "that holds".
+
+## §8 BUILD OUTCOME (2026-07-18 evening — AS-BUILT, not hands-on)
+
+Commits: **0** = `bc14fa33` (LivePropActor promotion; negative grep clean; note: the census
+sharpened during rounds — laptop's LidActorForEid was the 3rd byte-identical copy, so
+rule-of-three was met even before the extraction). **A** = `5971cdd7` (drive_selftest; its
+subsystems/CMake wiring rides commit B — the files interleave with the extraction wiring;
+the instrument FILES are identical across A/B, which is what comparability needs). **B** =
+the extraction (this commit). DLL `6431c14382b38437` x4 hash-verified, proto 121 unchanged.
+
+Instrument note (run-1 lesson): a fresh save has NO rack (shop item) — the host seeds one
+via SpawnActor at the desk slot ~5 s after connect; the spawn fans to the client via the
+host watcher. Digest values are eid-independent (proven: eids 6102/6147/6103 across runs,
+same three digests).
+
+**Digest equality (the §4 measurement):** baseline x2 on the UNSPLIT DLL and the extraction
+run all produced the SAME three values — empty `cea1940d5997c1f3`, host row
+`c4b0a7012829f902`, client row `2f57cabc0b11d213` — cross-peer (empty + client-circle
+states on both peers; the host-filled state's client tick-window artifact reproduces
+IDENTICALLY in baseline and B, preserving comparability) and cross-commit. Op sequences
+verbatim modulo the intended drive_sync->drive_rack log-prefix rename. Smokes: baseline x2
+PASS + commit-B PASS (mp.py smoke, RSS stable ~3.2 GB, zero module WARN/failures).
+
+**Reconnect cycle (mandatory per R7):** host stayed up; client joined -> circles -> client
+killed -> relaunched -> rejoined. Host log shows the rising-edge re-prime x2 ("drive_rack:
+baselines primed (connect seed)" 18:42:57 + 18:44:51) + TWO full connect seeds ("1 racks"
+each) + the phase-2 client's adopt and a full second circle (host applied set/take
+18:45:36/44). Teardown logs added to both modules' OnDisconnect (was silent).
+
+**Audits:** perf — PASS, 0 CRITICAL (table in the audit transcript; walk count 2->2,
+MarkDirtyFromVerb atomics-only, all Installs O(1)-latched under the 125 Hz contract; one
+dev-only WARN: drive_selftest's ResolveRack walks at 125 Hz while no rack resolves —
+ini-gated default-0, throttle queued if the probe ever gets long exposure). correctness —
+FAITHFUL per function; both flagged doc-drifts fixed (drive_sync.h teardown comment;
+COOP_SYNC_MAP row). Belt-and-suspenders literal git-diff of the moved bodies vs
+5971cdd7~2: all SAME after the two intended renames; sole difference = one comment word in
+HostApplyRackOp.
+
+**Residual DISCOVERED (pre-existing, NOT this refactor's):** a rejoining client whose
+downloaded save CONTAINS the rack ends up with ONE actor under TWO identities — the
+save-loaded prop takes a provisional client-band eid (45223) BEFORE CreateOrAdoptPropMirror
+binds the host eid (6103) to the same key; both identities stay live, so client-side organic
+changes emit a doomed op under the client-band eid (silently dropped by the host — 
+LivePropActor fails) alongside the good op under the host eid; the canonical heals
+convergence. This is the join-window save-loaded-keyed-prop identity class
+(docs/COOP_STABLE_ID_SIDECAR.md thread), first EXPOSED here because no prior test ever
+joined a world whose save contained a rack. Evidence: scratchpad
+rackB_reconnect_CLIENT_phase2.log (18:45:10-44). Queued for the stable-ID thread, not a
+lane bug (the pre-split code behaves identically).
+
+Honest status: **AS-BUILT** — smoke + digest-equality + reconnect evidence, no hands-on.

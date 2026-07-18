@@ -10,9 +10,9 @@
 //     signal_wire codec sans image, BlobChunkPayload chunks). 0x45
 //     dirty-marks + a 1 Hz diff-gated baseline poll; birth authors broadcast
 //     at adoption.
-//   RackState (111) -- prop_driveRack 16-row storage: presser index-ops
-//     peer->host HOST-TERMINAL + host-canonical full array + reflected
-//     gen() re-apply; deny/refund for races.
+//   (RackState (111) lives in drive_rack_sync -- extracted 2026-07-18,
+//    votv-rack-extraction-DESIGN-2026-07-18.md. This module keeps ALL the
+//    0x45 verb registration and forwards rack marks.)
 //
 // Design of record: votv-drive-chain-L5-impl-DESIGN-2026-07-18.md (7-round
 // /qf). The slotted-latch of that design is SATISFIED BY the existing
@@ -42,10 +42,10 @@ void Tick();
 // Router entries (event_dispatch_signal.cpp).
 void OnDriveSlotState(const coop::net::DriveSlotStatePayload& p, uint8_t senderSlot);
 void OnDrivePayloadChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot);
-void OnRackStateChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot);
 
-// HOST: queue the L5 connect seed (slot lines + drive payloads + rack
-// canonicals) for a peer that just reached world-ready.
+// HOST: queue the L5 connect seed (slot lines + drive payloads; the rack
+// canonicals ride drive_rack_sync's seed right after) for a peer that just
+// reached world-ready.
 void QueueConnectBroadcastForSlot(int peerSlot);
 
 // (The v118-style slot-only birth reap was audit-rejected for drives -- one
@@ -61,8 +61,9 @@ void QueueConnectBroadcastForSlot(int peerSlot);
 // re-broadcast the host's own connect-seed rows + 2 unmatched-eid strays).
 void NoteLocalDriveBirth(void* actor);
 
-// Full teardown (the OnDisconnect fanout) -- clears baselines, dirty marks,
-// pending applies, deny records; re-run implicitly at next session start.
+// Full teardown (the OnDisconnect fanout) -- clears slot/payload baselines,
+// dirty marks, pending applies, noted births; the deny/taken rings are
+// drive_rack_sync's (its own OnDisconnect). Re-run implicitly at next start.
 void OnDisconnect();
 
 }  // namespace coop::drive_sync

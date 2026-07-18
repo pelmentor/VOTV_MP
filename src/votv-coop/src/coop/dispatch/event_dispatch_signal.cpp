@@ -21,7 +21,8 @@
 #include "coop/interactables/floppybox_sync.h"   // v121: FloppyBoxState
 #include "coop/interactables/meadow_db_sync.h"   // v120 (L9): MeadowAppend/MeadowDelete
 #include "coop/interactables/physmods_sync.h"    // v118 (L8): PhysModsState
-#include "coop/interactables/drive_sync.h"       // v119 (L5): DriveSlotState/DrivePayload/RackState
+#include "coop/interactables/drive_sync.h"       // v119 (L5): DriveSlotState/DrivePayload
+#include "coop/interactables/drive_rack_sync.h"  // v119 (L5): RackState (extracted 2026-07-18)
 #include "coop/interactables/signal_catch_sync.h"
 #include "coop/interactables/signal_sync.h"
 #include "coop/interactables/tape_caddy_sync.h"  // v114 (L7): ReelSlot
@@ -169,7 +170,7 @@ bool HandleSignalEvent(net::Session& /*session*/,
             (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
                 ? static_cast<uint8_t>(msg.senderPeerSlot)
                 : static_cast<uint8_t>(0xFF);
-        coop::drive_sync::OnRackStateChunk(rc, rcslot);
+        coop::drive_rack_sync::OnRackStateChunk(rc, rcslot);
         break;
     }
     case net::ReliableKind::MeadowAppend: {
