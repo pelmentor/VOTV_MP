@@ -211,6 +211,8 @@ add_library(votv-coop SHARED
     src/ue_wrap/desk/dish.cpp
     src/ue_wrap/desk/tape_caddy.cpp
     src/ue_wrap/devices/laptop.cpp
+    src/ue_wrap/devices/portable_pc.cpp
+    src/ue_wrap/devices/floppybox.cpp
     src/ue_wrap/desk/desk_audio.cpp
     src/ue_wrap/desk/phys_mods.cpp
     src/ue_wrap/desk/drive_chain.cpp
@@ -230,6 +232,7 @@ add_library(votv-coop SHARED
     src/ue_wrap/core/fname_utils.cpp
     src/ue_wrap/core/ftext_utils.cpp
     src/ue_wrap/core/fstring_utils.cpp
+    src/ue_wrap/core/field_io.cpp
     src/ue_wrap/desk/signal_dynamic.cpp
     src/ue_wrap/desk/meadow_store.cpp
     src/ue_wrap/desk/saved_signals.cpp
@@ -394,6 +397,8 @@ add_library(votv-coop SHARED
     src/coop/interactables/dish_sync.cpp
     src/coop/interactables/tape_caddy_sync.cpp
     src/coop/interactables/laptop_sync.cpp
+    src/coop/interactables/laptop_buffer_sync.cpp
+    src/coop/interactables/floppybox_sync.cpp
     src/coop/interactables/signal_catch_sync.cpp
     src/coop/player/sleep_sync.cpp
     src/coop/creatures/wisp_attack_sync.cpp

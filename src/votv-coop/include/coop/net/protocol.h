@@ -705,7 +705,13 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // + replays them in ConnectReplayForSlot. mainPlayer.holding_actor with an Aprop_C no
 // longer feeds the PropSpawn/PropPose path (the trash clump/pile carry -- the
 // non-Aprop_C holding_actor case -- stays on its lane untouched).
-inline constexpr uint16_t kProtocolVersion = 120; // v120 (2026-07-19, L9 meadow DB): NEW
+inline constexpr uint16_t kProtocolVersion = 121; // v121 (2026-07-18, OPEN-10 laptop v2): NEW
+                                                  // ReliableKinds LaptopBlob=115 +
+                                                  // LaptopQuad=116 + FloppyBoxState=117;
+                                                  // LaptopState SHRUNK (the v116 op=4
+                                                  // custom chunker retired -> blob_chunks;
+                                                  // chunk fields deleted) + lid op=6.
+                                                  // Prior: v120 (2026-07-19, L9 meadow DB): NEW
                                                   // ReliableKinds MeadowAppend=112 +
                                                   // MeadowDelete=113 + MeadowOrder=114
                                                   // (the laptop signal database:
@@ -2452,6 +2458,36 @@ enum class ReliableKind : uint8_t {
                        //     hashes (in-flight appends) keep tail order; missing
                        //     skipped; duplicates byte-identical = any assignment.
                        //     NOT client-relayed. Same lane as 112/113 (FIFO proof).
+    LaptopBlob = 115,  // v121 (laptop_sync -- OPEN-10): chunked laptop CONTENT streams
+                       //     (BlobChunkPayload; blob head byte: 0 = slot content
+                       //     {nametype, objectData, data[]}, 1 = disc content by eid
+                       //     {readWrites, data[]}). Replaces the v116 op=4 custom
+                       //     chunker (RULE 2 -- one chunk transport). Host refans
+                       //     client-originated chunks per-chunk VERBATIM with the
+                       //     origin byte (no reassemble-resend: (sender,seq) assembler
+                       //     keys stay stable). Pinned to the SAME Lane::Normal as
+                       //     LaptopState -- the op=1/3-park -> content pairing needs
+                       //     one ordered stream. NOT relay-whitelisted (manual refan).
+    LaptopQuad = 116,  // v121 (laptop_buffer_sync -- OPEN-10): the laptop file-buffer
+                       //     QUAD {floppyData, floppyBuffer, floppyBufferUIDs,
+                       //     floppyReadwrites}. BlobChunkPayload; blob head op:
+                       //     0 = client edit-script BATCH (client->host only; entries
+                       //     removeAt{arrayId,idx,hash} / appendTail{arrayId,uid,string}
+                       //     + rwDelta, derived under the measured no-move grammar),
+                       //     1 = host CANONICAL quad (host->clients; receivers accept
+                       //     senderSlot==0 ONLY; adopt = drain-before-adopt +
+                       //     skip-rebuild-on-equal + eager widget rebuild). The host
+                       //     answers EVERY batch with an unconditional canonical (the
+                       //     canonical IS the ack). Never refanned. Lane::Normal.
+    FloppyBoxState = 117, // v121 (floppybox_sync -- OPEN-10): the disc crate
+                       //     prop_floppyBox_C LIFO stack {floppyTypes[], floppyData[]}
+                       //     (cap 15), eid-addressed. BlobChunkPayload; blob head op:
+                       //     0 = push{type, dataString} / 1 = pop{contentHash} (both
+                       //     client->host; host tail-anchored apply) / 2 = DENY (pop
+                       //     miss -> author reaps its adopted-birth disc if alive,
+                       //     skips if consumed) / 3 = canonical arrays (host->clients,
+                       //     senderSlot==0 only, after every op + on organic change).
+                       //     The RackState shape verbatim. Never refanned. Lane::Normal.
     // Slots 21/22 (HeldClumpGrab/Release) RETIRED 2026-06-03 (v26, RULE 2): the v25
     // hand-attach model for the trash clump was the wrong shape (VOTV carries the
     // clump via the physics grab, floating in front, like the mannequin -- not
@@ -3326,21 +3362,17 @@ static_assert(sizeof(SkySignalCatchPayload) == 80, "SkySignalCatchPayload must b
 // per (sender, kind, eid), total cap 4 KB (truncate+WARN beyond -- OPEN-9
 // residual). In-lane ordering guarantees scalars-before-chunks.
 struct LaptopStatePayload {
-    uint8_t  op;          // 0=power, 1=insert, 2=eject, 3=state, 4=content chunk
-    uint8_t  isOpened;    // op 0/3
+    uint8_t  op;          // 0=power, 1=insert, 2=eject, 3=state, 6=portable-PC lid
+    uint8_t  isOpened;    // op 0/3: laptop power; op 6: lid opened
     uint8_t  zip;         // op 1/3
     uint8_t  slot;        // op 1: 0=floppy hitbox, 1=zip hitbox
     int32_t  floppyType;  // op 1/3 (-1 = empty)
     int32_t  readWrites;  // op 1/3
-    uint32_t eid;         // op 1: thrown world-disc eid (0=held); op 4 kind 1: target disc eid
-    uint16_t chunkSeq;    // op 4: 0..chunkTotal-1
-    uint16_t chunkTotal;  // op 4
-    uint16_t contentLen;  // op 4: bytes used in content[]
-    uint8_t  contentKind; // op 4: 0 = laptop slot content, 1 = disc content
-    uint8_t  _pad;
-    char     content[192];
+    uint32_t eid;         // op 1: thrown world-disc eid (0=held); op 6: portable PC eid
+    // v121: the v116 op=4 chunk fields (chunkSeq/Total/contentLen/contentKind/content[192])
+    // RETIRED (RULE 2) -- content rides ReliableKind::LaptopBlob via blob_chunks now.
 };
-static_assert(sizeof(LaptopStatePayload) == 216, "LaptopStatePayload must be 216 bytes");
+static_assert(sizeof(LaptopStatePayload) == 16, "LaptopStatePayload must be 16 bytes");
 static_assert(sizeof(LaptopStatePayload) <= 228, "LaptopStatePayload must fit the inline reliable buffer");
 
 // v64 (reshaped v70, v113): the desk's live-visible scalars (ReliableKind::DeskState).

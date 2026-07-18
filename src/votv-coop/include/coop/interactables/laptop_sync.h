@@ -21,9 +21,15 @@
 //             materializes (deferred retry). A client-ejected disc's content
 //             arrives client->host after the adoption eid-binding.
 //
-// OUT of v1 (TRACKER row): the PC buffer (floppyBuffer/UIDs) + the portable
-// PC device (prop_portablePc_C; shares the 'laptop' claim key -- the
-// per-device discrimination is that row's first design question).
+// v121 (OPEN-10, design doc votv-laptop-v2-OPEN10-impl-DESIGN-2026-07-18.md):
+//   - the op=4 custom chunker RETIRED (RULE 2) -- content rides
+//     ReliableKind::LaptopBlob via blob_chunks (head [kind][eid]; host refans
+//     client chunks per-chunk verbatim with the origin byte);
+//   - LID axis (op=6, {eid, isOpened}) -- the portable PC
+//     (prop_portablePc_C, a remote terminal to THIS laptop, measured bindPC)
+//     lid state: 1 Hz element walk + idempotent any-peer lines + reflected
+//     Open() apply + join rows. The buffer QUAD lives in laptop_buffer_sync
+//     (PrimeBaselines piggybacks its shadow prime).
 //
 // Game thread throughout (net-pump tick + reliable dispatch).
 
@@ -40,15 +46,20 @@ namespace coop::laptop_sync {
 void Install(coop::net::Session* session);
 
 // 4 Hz: resolve + instance-generation check, the power/slot edge polls, the
-// client pending-eject-content drain, the deferred disc-content retries.
+// client pending-eject-content drain, the deferred disc-content retries,
+// the 1 Hz lid sweep.
 void Tick();
 
-// Wire ingest (both roles). HOST: applies + re-fans (except origin); a
-// client-authored op=4 kind=1 lands on the host's authoritative disc first.
+// Wire ingest (both roles). HOST: applies + re-fans (except origin).
 void OnLaptopState(const coop::net::LaptopStatePayload& p, uint8_t senderSlot);
 
-// HOST: ship the joiner the full laptop state (op=3 + op=4 kind=0 chunks) +
-// one op=4 kind=1 row per live content-bearing disc (ground-truth read).
+// LaptopBlob content chunks (v121): host refans verbatim per chunk, then both
+// roles assemble + apply ([kind][eid] head; kind 0 = slot content pairs with
+// the parked op=1/3 edge, kind 1 = disc content by eid).
+void OnLaptopBlobChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot);
+
+// HOST: ship the joiner the full laptop state (op=3 + slot-content blob) +
+// one disc-content blob per live content-bearing disc + the lid rows.
 void QueueConnectBroadcastForSlot(int peerSlot);
 
 void OnDisconnect();

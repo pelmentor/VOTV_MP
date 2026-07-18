@@ -5,7 +5,7 @@
 #include "ue_wrap/devices/laptop.h"
 
 #include "ue_wrap/core/call.h"
-#include "ue_wrap/core/fstring_utils.h"
+#include "ue_wrap/core/field_io.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 
@@ -17,19 +17,21 @@ namespace {
 
 namespace R = reflection;
 
+// Field IO extracted to ue_wrap/core/field_io at v121 (floppybox needed the
+// same helpers -- RULE 2, one implementation; the free-what-we-replaced
+// doctrine lives there now).
+using field_io::FStringView;
+using field_io::TArrayView;
+using field_io::ReadFStringAt;
+using field_io::WriteFStringField;
+using field_io::ReadFStringArrayField;
+using field_io::WriteFStringArrayField;
+using field_io::ReadInt32ArrayField;
+using field_io::WriteInt32ArrayField;
+
 uint64_t NowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
-struct FStringView { wchar_t* data; int32_t num; int32_t max; };
-struct TArrayView  { uint8_t* data; int32_t num; int32_t max; };
-
-std::wstring ReadFStringAt(const void* base, int32_t off) {
-    const auto* v = reinterpret_cast<const FStringView*>(
-        reinterpret_cast<const uint8_t*>(base) + off);
-    if (!v->data || v->num <= 1) return std::wstring();
-    return std::wstring(v->data, static_cast<size_t>(v->num - 1));
 }
 
 // ---- resolved state ----
@@ -44,86 +46,18 @@ int32_t g_offDiscData = -1, g_offDiscReadWrites = -1;
 void*   g_fnAction = nullptr;      // actionOptionIndex
 void*   g_fnUpdButton = nullptr;   // updButton
 void*   g_fnWidgetUpdFloppy = nullptr;  // ui_laptop.updFloppy
+// v121 (OPEN-10 quad): buffer fields + the widget rebuild seam.
+int32_t g_offFloppyBuffer = -1;     // laptop.floppyBuffer (TArray<FString>)
+int32_t g_offFloppyBufUids = -1;    // laptop.floppyBufferUIDs (TArray<int32>)
+int32_t g_offWidgetBufferSlots = -1;  // ui_laptop.bufferSlots (TArray<UUserWidget*>)
+int32_t g_offBufRowData = -1;       // ui_bufferDatablock_C.data (FString)
+void*   g_fnWidgetGenFloppyBuffer = nullptr;  // ui_laptop.genFloppyBuffer
+void*   g_fnWidgetRemoveFromParent = nullptr; // UWidget::RemoveFromParent (declaring class!)
 bool    g_resolved = false;
 uint64_t g_nextResolveTryMs = 0;
 
 void* g_inst = nullptr;
 int32_t g_instIdx = -1;
-
-// Free the engine-allocated buffer behind an FString header slot (no-op on
-// null/empty). The fstring_utils PIN doctrine ("leak it, the engine's later
-// reassign frees it") holds only when writing into a FRESH buffer; these
-// laptop fields are overwritten REPEATEDLY on the same live instance across
-// a session, and on a non-presser peer no native reassign ever runs between
-// our writes -- so WE must free what WE replaced (perf audit v116 finding 1;
-// EngineFree is GMalloc-matched, engine_heap.cpp doctrine).
-void FreeFStringSlot(void* header16) {
-    auto* v = reinterpret_cast<FStringView*>(header16);
-    if (v->data) R::EngineFree(v->data);
-    v->data = nullptr; v->num = 0; v->max = 0;
-}
-
-void FreeFStringArraySlot(TArrayView* view) {
-    if (view->data) {
-        for (int32_t i = 0; i < view->num; ++i)
-            FreeFStringSlot(view->data + i * 16);
-        R::EngineFree(view->data);
-    }
-    view->data = nullptr; view->num = 0; view->max = 0;
-}
-
-bool WriteFStringField(void* base, int32_t off, const std::wstring& s) {
-    if (off < 0) return false;
-    uint8_t* slot = reinterpret_cast<uint8_t*>(base) + off;
-    const FStringView old = *reinterpret_cast<const FStringView*>(slot);
-    if (!fstring_utils::MintFString(s, slot)) return false;  // failure leaves the old value intact
-    if (old.data) R::EngineFree(old.data);
-    return true;
-}
-
-// Engine-side TArray<FString> mint: EngineAlloc the element buffer (16 B per
-// FString header), MintFString each element into it, then swap the header and
-// free the REPLACED buffer + its element strings (see FreeFStringSlot note).
-// Empty input writes the null array (old buffer freed the same way).
-bool WriteFStringArrayField(void* base, int32_t off, const std::vector<std::wstring>& in) {
-    if (off < 0) return false;
-    auto* view = reinterpret_cast<TArrayView*>(reinterpret_cast<uint8_t*>(base) + off);
-    if (in.empty()) {
-        FreeFStringArraySlot(view);
-        return true;
-    }
-    const size_t bytes = in.size() * 16;
-    uint8_t* buf = static_cast<uint8_t*>(R::EngineAlloc(bytes));
-    if (!buf) return false;
-    std::memset(buf, 0, bytes);
-    for (size_t i = 0; i < in.size(); ++i) {
-        if (!fstring_utils::MintFString(in[i], buf + i * 16)) {
-            // Roll back the partial mint (elements already minted + the buffer);
-            // the old array stays untouched.
-            for (size_t j = 0; j < i; ++j) FreeFStringSlot(buf + j * 16);
-            R::EngineFree(buf);
-            return false;
-        }
-    }
-    const TArrayView old = *view;
-    view->data = buf;
-    view->num = static_cast<int32_t>(in.size());
-    view->max = static_cast<int32_t>(in.size());
-    TArrayView oldCopy = old;
-    FreeFStringArraySlot(&oldCopy);
-    return true;
-}
-
-std::vector<std::wstring> ReadFStringArrayField(const void* base, int32_t off) {
-    std::vector<std::wstring> out;
-    if (off < 0) return out;
-    const auto* view = reinterpret_cast<const TArrayView*>(
-        reinterpret_cast<const uint8_t*>(base) + off);
-    if (!view->data || view->num <= 0 || view->num > 4096) return out;
-    for (int32_t i = 0; i < view->num; ++i)
-        out.push_back(ReadFStringAt(view->data + i * 16, 0));
-    return out;
-}
 
 bool CallWidgetUpdFloppy(void* inst) {
     if (!g_fnWidgetUpdFloppy || g_offWidget < 0) return false;
@@ -179,6 +113,28 @@ bool EnsureResolved() {
     g_fnWidgetUpdFloppy = widgetCls ? R::FindFunction(widgetCls, L"updFloppy") : nullptr;
     if (!g_fnAction)
         UE_LOGW("laptop: actionOptionIndex not found -- power replay disabled");
+
+    // v121 quad: laptop buffer fields + the widget rebuild seam.
+    g_offFloppyBuffer  = R::FindPropertyOffset(cls, L"floppyBuffer");
+    g_offFloppyBufUids = R::FindPropertyOffset(cls, L"floppyBufferUIDs");
+    if (g_offFloppyBuffer < 0)  { UE_LOGW("laptop: floppyBuffer offset -- fallback 0x4B8"); g_offFloppyBuffer = 0x4B8; }
+    if (g_offFloppyBufUids < 0) { UE_LOGW("laptop: floppyBufferUIDs offset -- fallback 0x4D8"); g_offFloppyBufUids = 0x4D8; }
+    if (widgetCls) {
+        g_offWidgetBufferSlots = R::FindPropertyOffset(widgetCls, L"bufferSlots");
+        g_fnWidgetGenFloppyBuffer = R::FindFunction(widgetCls, L"genFloppyBuffer");
+    }
+    void* bufRowCls = R::FindClass(L"ui_bufferDatablock_C");
+    g_offBufRowData = bufRowCls ? R::FindPropertyOffset(bufRowCls, L"data") : -1;
+    // RemoveFromParent is DECLARED on the engine UWidget class -- FindFunction
+    // is exact-owner (no SuperStruct climb, the FindFunction lesson).
+    void* uwidgetCls = R::FindClass(L"Widget");
+    g_fnWidgetRemoveFromParent = uwidgetCls ? R::FindFunction(uwidgetCls, L"RemoveFromParent") : nullptr;
+    if (g_offWidgetBufferSlots < 0 || !g_fnWidgetGenFloppyBuffer ||
+        g_offBufRowData < 0 || !g_fnWidgetRemoveFromParent)
+        UE_LOGW("laptop: quad widget seam partial (bufferSlots=0x%X gen=%p rowData=0x%X "
+                "removeFromParent=%p) -- quad rebuild degraded",
+                g_offWidgetBufferSlots, g_fnWidgetGenFloppyBuffer, g_offBufRowData,
+                g_fnWidgetRemoveFromParent);
 
     g_cls = cls; g_discBaseCls = discCls;
     g_resolved = true;
@@ -313,6 +269,110 @@ bool WriteDiscContent(void* discActor, const DiscContent& in) {
     uint8_t* p = reinterpret_cast<uint8_t*>(discActor);
     *reinterpret_cast<int32_t*>(p + g_offDiscReadWrites) = in.readWrites;
     return WriteFStringArrayField(discActor, g_offDiscData, in.data);
+}
+
+// ---- the file-buffer quad (v121, OPEN-10) ----------------------------------
+
+namespace {
+
+void* WidgetOf(void* inst) {
+    if (g_offWidget < 0) return nullptr;
+    return *reinterpret_cast<void* const*>(
+        reinterpret_cast<const uint8_t*>(inst) + g_offWidget);
+}
+
+}  // namespace
+
+bool ReadQuad(BufferQuad& out) {
+    void* l = Instance();
+    if (!l) return false;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(l);
+    out.data       = ReadFStringArrayField(l, g_offFloppyData);
+    out.buffer     = ReadFStringArrayField(l, g_offFloppyBuffer);
+    out.bufferUids = ReadInt32ArrayField(l, g_offFloppyBufUids);
+    out.readWrites = *reinterpret_cast<const int32_t*>(p + g_offReadWrites);
+    return true;
+}
+
+bool ReadQuadInts(int32_t& fdNum, int32_t& fbNum, int32_t& uidNum, int32_t& rw) {
+    void* l = Instance();
+    if (!l) return false;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(l);
+    auto num = [&](int32_t off) -> int32_t {
+        if (off < 0) return 0;
+        const auto* v = reinterpret_cast<const TArrayView*>(p + off);
+        return (v->data && v->num > 0) ? v->num : 0;
+    };
+    fdNum  = num(g_offFloppyData);
+    fbNum  = num(g_offFloppyBuffer);
+    uidNum = num(g_offFloppyBufUids);
+    rw = *reinterpret_cast<const int32_t*>(p + g_offReadWrites);
+    return true;
+}
+
+bool WriteQuadAndRebuild(const BufferQuad& in) {
+    void* l = Instance();
+    if (!l) return false;
+    uint8_t* p = reinterpret_cast<uint8_t*>(l);
+    bool wrote = true;
+    wrote &= WriteFStringArrayField(l, g_offFloppyData, in.data);
+    wrote &= WriteFStringArrayField(l, g_offFloppyBuffer, in.buffer);
+    wrote &= WriteInt32ArrayField(l, g_offFloppyBufUids, in.bufferUids);
+    *reinterpret_cast<int32_t*>(p + g_offReadWrites) = in.readWrites;
+    if (!wrote)
+        UE_LOGW("laptop: quad apply PARTIAL (an array mint failed) -- widget rebuilds "
+                "from the actual fields; the next canonical re-converges");
+
+    void* widget = WidgetOf(l);
+    if (!widget || g_offWidgetBufferSlots < 0 || !g_fnWidgetGenFloppyBuffer ||
+        !g_fnWidgetRemoveFromParent) {
+        UE_LOGW("laptop: quad fields written but widget rebuild unreachable");
+        return false;
+    }
+    // Teardown: RemoveFromParent each bufferSlots row (native removeBuffer
+    // per-row semantics, measured @166-311) then num=0 (buffer kept for the
+    // engine's Array_Add reuse -- no free, elements are engine-owned widgets).
+    auto* slots = reinterpret_cast<TArrayView*>(
+        reinterpret_cast<uint8_t*>(widget) + g_offWidgetBufferSlots);
+    if (slots->data && slots->num > 0 && slots->num <= 4096) {
+        for (int32_t i = 0; i < slots->num; ++i) {
+            void* row = *reinterpret_cast<void* const*>(slots->data + i * 8);
+            if (!row || !R::IsLive(row)) continue;
+            ParamFrame f(g_fnWidgetRemoveFromParent);
+            if (f.valid()) Call(row, f);
+        }
+    }
+    slots->num = 0;
+    // Rebuild: the native loadData recipe (genFloppyBuffer + updFloppy).
+    {
+        ParamFrame f(g_fnWidgetGenFloppyBuffer);
+        if (f.valid()) Call(widget, f);
+    }
+    CallWidgetUpdFloppy(l);
+    return true;
+}
+
+bool ReadWidgetBufferMirror(int32_t& outCount, uint64_t& outFnv) {
+    void* l = Instance();
+    if (!l) return false;
+    void* widget = WidgetOf(l);
+    if (!widget || g_offWidgetBufferSlots < 0 || g_offBufRowData < 0) return false;
+    const auto* slots = reinterpret_cast<const TArrayView*>(
+        reinterpret_cast<const uint8_t*>(widget) + g_offWidgetBufferSlots);
+    outCount = (slots->data && slots->num > 0 && slots->num <= 4096) ? slots->num : 0;
+    uint64_t h = 1469598103934665603ull;
+    for (int32_t i = 0; i < outCount; ++i) {
+        void* row = *reinterpret_cast<void* const*>(slots->data + i * 8);
+        if (!row || !R::IsLive(row)) continue;
+        const std::wstring s = ReadFStringAt(row, g_offBufRowData);
+        const auto* bytes = reinterpret_cast<const uint8_t*>(s.data());
+        for (size_t b = 0; b < s.size() * sizeof(wchar_t); ++b) {
+            h ^= bytes[b];
+            h *= 1099511628211ull;
+        }
+    }
+    outFnv = h;
+    return true;
 }
 
 void ResetCache() {

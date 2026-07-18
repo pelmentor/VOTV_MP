@@ -141,6 +141,15 @@ inline Lane LaneForKind(ReliableKind k) {
     case ReliableKind::MeadowAppend:   return Lane::Normal;
     case ReliableKind::MeadowDelete:   return Lane::Normal;
     case ReliableKind::MeadowOrder:    return Lane::Normal;  // v120: same FIFO stream as 112/113 (an order line must not overtake the append it references)
+    // v121 (OPEN-10): the laptop family MUST share LaptopState's lane -- an op=1/3
+    // park pairs with the LaptopBlob content stream right behind it, and the
+    // joiner's op=3-then-content ordering rides the same proof (GNS orders within
+    // a lane, across kinds). LaptopQuad batches/canonicals are cross-referenced
+    // with slot edges (floppyType predicate) -- same stream. FloppyBoxState is
+    // self-contained but rides the family lane for the same one-FIFO discipline.
+    case ReliableKind::LaptopBlob:     return Lane::Normal;
+    case ReliableKind::LaptopQuad:     return Lane::Normal;
+    case ReliableKind::FloppyBoxState: return Lane::Normal;
     default:                           return Lane::Normal;
     }
 }

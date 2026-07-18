@@ -1,9 +1,31 @@
-# Hands-on runbook — v112..v116 + v117 L6 + v118 L8 + v119 L5 + v120 L9 MEADOW (batched), take 4
+# Hands-on runbook — v112..v121 (desk chain + meadow + laptop v2, batched), take 4
 
-DEPLOYED: `votv-coop.dll 452973c707d9cb8d...` x4, hash-verified 2026-07-19.
-kProtocolVersion **120** (v120's MeadowAppend/Delete/Order lanes; a 119-or-older peer
-HARD-CLOSEs at the gate — RELAUNCH BOTH PEERS). TEN unverified layers v112..v120;
-prefixes attribute.
+DEPLOYED: `votv-coop.dll a451fce7cb674d04...` x4, hash-verified 2026-07-18.
+kProtocolVersion **121** (v121's LaptopBlob/LaptopQuad/FloppyBoxState lanes + the
+LaptopState struct shrink; a 120-or-older peer HARD-CLOSEs at the gate — RELAUNCH BOTH
+PEERS). ELEVEN unverified layers v112..v121; prefixes attribute.
+
+## What changed in v121 (2026-07-18 — OPEN-10 laptop v2) — proto 121, DLL a451fce7cb674d04 x4
+
+Три оси: (A) ФАЙЛОВЫЙ БУФЕР ноутбука (вкладка floppy: erase / move-to-buffer / transfer /
+remove-buffer) теперь синхронится ЖИВЬЁМ (раньше — только через сейв при джойне);
+(B) КРЫШКА портативного PC (открыть/закрыть); (C) ЯЩИК ДИСКЕТ (prop_floppyBox — стопка
+до 15). Grep prefixes: `laptop_buffer:` / `floppybox:` / `laptop_sync:` (lid = op=6).
+
+**STEPS (v121):** (a) БУФЕР: peer A вставляет дискету в ноут, двигает файл в буфер
+(move-to-buffer) — peer B открывает ноут и видит файл в буфере в ~1 s
+(`laptop_buffer: canonical adopted`); erase/transfer/remove-buffer — так же; rw-счётчик
+дискеты падает одинаково у обоих; (b) ОДНОВРЕМЕННО: A в UI ноута двигает буфер, B КИДАЕТ
+дискету в слот — обе оси применяются, без затирания (edit-script ops не стомпают
+floppyData); (c) КРЫШКА: открой/закрой портативный PC — у другого пира крышка
+анимируется в ~1 s (`wire LID applied`); джойнер видит текущее состояние крышки;
+(d) ЯЩИК: положи дискету в ящик (E с дискетой в руке) — у другого пира она появляется в
+стопке (`floppybox: push applied` + canonical); возьми верхнюю (E) — у другого исчезает;
+(e) ГОНКА ЯЩИКА: оба пира жмут E на ОДИН ящик почти одновременно — один получает диск,
+второму диск реапается из руки с логом `pop DENIED -- held disc reaped` (окно <1 s;
+дубликата НЕ должно остаться). KNOWN RESIDUALS: контент слота >4 KB режется (WARN,
+OPEN-9-класс); canonical-квад >56 KB режет хвостовые строки буфера (WARN — практически
+недостижимо без гигантских файлов).
 
 ## What changed in v120 (2026-07-19 — L9 meadow DB) — proto 120, DLL 452973c707d9cb8d x4
 

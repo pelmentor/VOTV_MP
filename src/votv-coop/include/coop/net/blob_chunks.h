@@ -41,6 +41,15 @@ inline uint64_t Fnv64(const uint8_t* p, size_t n) {
 }
 inline uint64_t Fnv64(const std::vector<uint8_t>& b) { return Fnv64(b.data(), b.size()); }
 
+// The transport ceiling: 255 chunks x the inline chunk payload. A blob past
+// this NEVER sends (ChunkAndSend WARNs + returns false before any chunk) --
+// callers with unbounded content must bound BELOW this and check the return
+// (v121 correctness CRIT-1: an ignored false on a canonical path is a silent
+// permanent divergence).
+inline constexpr size_t MaxBlobBytes() {
+    return sizeof(coop::net::BlobChunkPayload{}.data) * 255;
+}
+
 // Ship one blob as BlobChunkPayload chunks under `kind` with per-sender id
 // `seq`. True only if every chunk was accepted (I-3).
 bool SendBlob(coop::net::Session* s, coop::net::ReliableKind kind, uint32_t seq,

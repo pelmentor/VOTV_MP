@@ -27,7 +27,7 @@ tracker points there. Wire-lane discoverability lives in `COOP_SYNC_MAP.md`. Nei
 | **Freq/polarity + download rate** | tune → download SPEED; per-peer sim + 2 RNG | 3 host-auth sim (outputs) + claim-free input deltas | host / presser | `DeskSimPose=38` 7ch + `DeskInput=97`/`DeskScanEvent=98` (`desk_sim_sync` + `desk_input_sync`) | **AS-BUILT v112** (the BUGS-v111 fix; smoke PASS) — awaiting hands-on |
 | coord log lines (`CR:`/animated) | `ProduceLogLines` runs on EVERY peer | 4 holder-owned | occupant (planned) | partial (`CR:` filtered off wire) | **OPEN-2** (filter premise now MEASURED false for CR/APPROX/ANALYSIS) |
 | Dishes rotation/kinematics (24 big) | rest pose = load-time RNG (unsaved); per-slew RNG; catch targets already synced | 3/4 (tbd) | host (planned) | — (`SkySignalCatch` covers targets only) | **OPEN-4** (RE'd 2026-07-16) |
-| Stationary PC (laptop_C) power + floppy | ACTIVATE boot/shutdown (isOpened, fused latent chain) + floppy insert/eject (insert DESTROYS the disc into laptop scalars; eject SPAWNS a fresh one) | presser edges + host content authority | presser (edges) / host (disc content) | `LaptopState 106` (`laptop_sync` + `ue_wrap/devices/laptop`) | **AS-BUILT v116 `613f2ac4`** — power = isOpened edge + native actionOptionIndex(b8) replay under want-target predicate; floppy = 4 Hz slot edges, ATOMIC scalars+content apply at chunk assembly (audit IMPORTANT-1), content chunked 192 B/4 KB; disc destroy rides the v106 K2_DestroyActor seam (one owner), eject spawn rides birth channels; DiscContent by eid (adoption-binding correlation for client ejects; ground-truth rows at join). RE `votv-laptop-pc-RE-2026-07-17.md`. Smoke x3, awaiting hands-on. **OUT of v1 -> OPEN-10** |
+| Stationary PC (laptop_C) power + floppy | ACTIVATE boot/shutdown (isOpened, fused latent chain) + floppy insert/eject (insert DESTROYS the disc into laptop scalars; eject SPAWNS a fresh one) | presser edges + host content authority | presser (edges) / host (disc content) | `LaptopState 106` (`laptop_sync` + `ue_wrap/devices/laptop`) | **AS-BUILT v116 `613f2ac4`** — power = isOpened edge + native actionOptionIndex(b8) replay under want-target predicate; floppy = 4 Hz slot edges, ATOMIC scalars+content apply at chunk assembly (audit IMPORTANT-1), content chunked 192 B/4 KB; disc destroy rides the v106 K2_DestroyActor seam (one owner), eject spawn rides birth channels; DiscContent by eid (adoption-binding correlation for client ejects; ground-truth rows at join). RE `votv-laptop-pc-RE-2026-07-17.md`. Smoke x3, awaiting hands-on. **v121: op=4 chunker RETIRED -> LaptopBlob (blob_chunks); + lid op=6; buffer quad + floppyBox = OPEN-10 BUILT (see below)** |
 | U1 SHIFT quick-scan (arrows) | spawnDirs UMG arrows + beep + shared cooldown charge | 2 presser-event | presser | `DeskScanEvent 98` (arrows visual + charge, v112 `desk_input_sync` scan classification) + `DeskSndFx 105` (the beep, v115) | **AS-BUILT v112+v115** — was stale-OPEN here; code: `SendScan`/`OnDeskScan` + the fx lane; awaiting hands-on |
 | U1 ENTER triangulation ping (the FSM) | latent tick machine gated on `coord_isPing` (@82980 -> @80105 stage engine; ==1.0 latches; verdict spawns signalData + moves the theater) | ONE machine = the presser's, organically; observers: bookkeeping only | presser (FSM) / host (theater+ARM, v113) | CoordIsPing rides `DeskInput 97` as an edge NOTIFICATION (never machine-applied since v115b); catch on `SkySignalCatch`; ARM on `DishArm 99` | **AS-BUILT v115b `de31889e`** — the v112 raw apply WOKE a phantom sim on observers (live-caught 2026-07-17 14:46: divergent verdicts, phantom ARM raising the mirrored detector, double coordLog authorship, false post-catch DISARM). Fix: bookkeeping-only + desk FSM-hold claim (device_occupancy reconciler; deny+ForceExit for others mid-ping) + arm-poll re-init window (DISARM suppressed while signalData lives) + solo-host connect seed (audit CRIT-1). **v116 `613f2ac4` closed the SECOND defect the same FSM-hold exposed**: the catch detector's claim gate raced the hold's release (see the Signal-catch row). Observers still see no stage visuals (R-a; SURFACED to the user 2026-07-17 as a product question — display-only mirror if wanted). Awaiting hands-on take 4 |
 | U2 desk gauge/detector sounds | vol=match×\|speed\|, pitch=Lerp(match); loops on toggles | derived (needs speeds mirrored) | occupant/host | speeds on NO lane | **BUG-3** (data starvation) |
@@ -285,15 +285,28 @@ small` via drone `sell` (reads struct_save snapshots; reward only if BOTH > 0) +
 Legacy: 12 slots; plug destroys the module prop; the explotano hot-op explosion is
 presser-local natively (explosion_C targets the local player only — measured).
 
-### OPEN-10 · Laptop v2: PC file buffer + the portable PC (NEW 2026-07-17, cut from v116 v1)
-`laptop_C.floppyBuffer/floppyBufferUIDs` (files copied onto the PC; persisted; mutates only while a
-peer drives the PC UI) + the sibling device `prop_portablePc_C` (own floppyTypes/floppyData) are
-UNSYNCED. **The first design question is per-device claim discrimination**: `device_screen.cpp`
-maps BOTH `laptop_C` AND `prop_portablePc_C` to the SAME occupancy claim key "laptop" — a
-claim-release-authored buffer snapshot cannot tell which device the leaving holder drove, and two
-peers on the two devices cannot both hold the claim (qf R7-Q4). Also here: the v116 content-cap
-residual (>4 KB disc content truncates with a WARN) + the mid-session content-loss TTL fallback.
-RE base: `votv-laptop-pc-RE-2026-07-17.md` FD-Q5/§4.
+### OPEN-10 · Laptop v2 — **BUILT v121 (2026-07-18, NOT hands-on)**
+Design of record: `votv-laptop-v2-OPEN10-impl-DESIGN-2026-07-18.md` (11-round /qf "that holds").
+Two of the old premises were MEASURED FALSE at design time: `floppyTypes/floppyData` belong to
+`prop_floppyBox_C` (the disc crate), not the portable PC; and the portable PC is a REMOTE
+TERMINAL to the base laptop (`bindPC(gamemode.laptop.laptop)`) whose screen converges FOR FREE
+via v116 — so the shared "laptop" claim key is CORRECT and the claim-discrimination question
+DISSOLVED. Shipped: (A) `laptop_buffer_sync.cpp` — the buffer QUAD {floppyData, floppyBuffer,
+floppyBufferUIDs, rw} as client edit-script batches (measured no-move grammar) -> host
+content-anchored apply -> unconditional post-batch canonical (the ack), eager widget rebuild
+(bufferSlots teardown + genFloppyBuffer + updFloppy — measured: updFloppy REGENERATES
+floppyBuffer from bufferSlots), int pre-filter idle path; (B) portable-PC LID op=6 in
+laptop_sync (1 Hz element sweep, reflected Open() re-applier, join rows); (C)
+`floppybox_sync.cpp` — the crate's LIFO arrays as push/pop value-ops + host canonical
+(RackState shape), pop-DENY -> reap-if-alive/skip-if-consumed. The v116 op=4 custom chunker
+RETIRED (RULE 2) -> blob_chunks on the sibling kind LaptopBlob; LaptopStatePayload shrank to
+16 B. Kinds LaptopBlob=115/LaptopQuad=116/FloppyBoxState=117, proto 121. Audits folded: perf
+0 CRIT (digest pre-filter, incremental shadow-advance-on-accept, sweep gate); correctness
+CRIT-1 (56 KB blob cap + ignored canonical send results -> bounded pack + retry arms) +
+IMPORTANT-2 (per-sender op=1 park map). Smoke x3 PASS + BOTH selftest circles proven
+cross-peer (host organic + client derivation; matching raw+widget digests). Residuals: the
+4 KB slot-content cap (OPEN-9 class) + the canonical transport tail-drop WARN; buffer-UID
+cross-pair on duplicate-content rows (content-identical, canonical heals).
 
 ### OPEN-9 · Meadow DATABASE stores — **BUILT v120 (2026-07-19, NOT hands-on)**
 Design of record: `votv-meadow-db-L9-impl-DESIGN-2026-07-19.md` (15-round /qf "that holds").
@@ -318,6 +331,15 @@ pile): image bytes, wire-delete playback-stop.
 ---
 
 ## CHANGELOG
+
+- **2026-07-18 (v121, OPEN-10 laptop v2)** — buffer quad + portable-PC lid + floppyBox built
+  per an 11-round /qf (design `votv-laptop-v2-OPEN10-impl-DESIGN-2026-07-18.md`). TRACKER's
+  own OPEN-10 premises corrected by measurement (floppyTypes/floppyData = the CRATE's; the
+  portable PC = a remote terminal -> claim-discrimination dissolved). Three new kinds
+  (LaptopBlob=115/LaptopQuad=116/FloppyBoxState=117), LaptopStatePayload 216->16 B (op=4
+  chunker retired, RULE 2), proto 121. Perf 0 CRIT + correctness CRIT-1/IMPORTANT-2 folded;
+  smoke x3 PASS with BOTH e2e selftest circles (host organic + client derivation) digest-proven
+  cross-peer. NOT hands-on.
 - **2026-07-19 night (v119, L5 drive chain)** — the 0x45 HALT gate run + PASSED (gnatives_probe
   v4: desk/drive/laptop matchers, upd REJECTED ~238/s ambient, SIZES offsets [V] but 0 rows in
   s_1234 -> L9 image size unmeasured, blob_chunks mandated). L5 built per its own 7-round /qf

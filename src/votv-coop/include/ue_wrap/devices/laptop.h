@@ -8,7 +8,11 @@
 // actionOptionIndex b8) + the floppy slot axis (floppyType / zip /
 // readWrites / nametype / objectData JSON / data[] scalar apply)
 // + the disc prop content accessors (Aprop_floppyDisc_C .data/.readWrites).
-// The PC buffer (floppyBuffer/UIDs) + the portable PC are OUT (TRACKER row).
+// v121 (OPEN-10, laptop_buffer_sync): the file-buffer QUAD accessors
+// (floppyData/floppyBuffer/floppyBufferUIDs/floppyReadwrites) + the widget
+// rebuild (per-row teardown = native removeBuffer semantics; rebuild = native
+// loadData recipe genFloppyBuffer + updFloppy) + the widget-side buffer
+// mirror digest (selftest discrimination of a stale rebuild).
 //
 // No network logic, no coop state (principle 7). Game thread only.
 
@@ -70,6 +74,32 @@ struct DiscContent {
 };
 bool ReadDiscContent(void* discActor, DiscContent& out);
 bool WriteDiscContent(void* discActor, const DiscContent& in);
+
+// ---- the file-buffer quad (v121, OPEN-10) ----
+struct BufferQuad {
+    std::vector<std::wstring> data;      // floppyData (also slot-owned; quad reads it whole)
+    std::vector<std::wstring> buffer;    // floppyBuffer
+    std::vector<int32_t>      bufferUids; // floppyBufferUIDs (parallel to buffer)
+    int32_t readWrites = -1;             // floppyReadwrites
+};
+bool ReadQuad(BufferQuad& out);
+
+// The cheap int pre-filter (R3 proof: EVERY native buffer verb changes at
+// least one of these; rw is monotone-decreasing between inserts): array nums
+// + rw without any string copies.
+bool ReadQuadInts(int32_t& fdNum, int32_t& fbNum, int32_t& uidNum, int32_t& rw);
+
+// Receiver-side quad apply: raw-write the four fields, then the WIDGET REBUILD
+// (measured invariant: updFloppy regenerates floppyBuffer FROM bufferSlots, so
+// stale widgets stomp wire values): RemoveFromParent each bufferSlots row +
+// bufferSlots.num=0 (native removeBuffer per-row semantics), genFloppyBuffer
+// (native loadData recipe), updFloppy. False if the widget is unreachable
+// (fields are still written).
+bool WriteQuadAndRebuild(const BufferQuad& in);
+
+// Widget-side buffer mirror (selftest digest): bufferSlots count + FNV-1a64
+// over each row widget's 'data' string. False when the widget is unreachable.
+bool ReadWidgetBufferMirror(int32_t& outCount, uint64_t& outFnv);
 
 void ResetCache();  // level reload: drop the cached instance
 
