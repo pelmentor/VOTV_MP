@@ -3,6 +3,7 @@
 #include "ue_wrap/desk/console_desk.h"
 
 #include "ue_wrap/core/call.h"
+#include "ue_wrap/core/component_calls.h"
 #include "ue_wrap/core/fname_utils.h"
 #include "ue_wrap/core/ftext_utils.h"
 #include "ue_wrap/core/log.h"
@@ -110,10 +111,8 @@ int32_t g_offAtlasUiCoords = -1;     // atlas.ui_coordinates (Uui_coordinates_C*
 int32_t g_offCueWorking = -1;        // desk.computerWorking_Cue (UAudioComponent*)
 int32_t g_offCueProg = -1;           // desk.prog
 int32_t g_offCueDone = -1;           // desk.Done
-void* g_setTextFn = nullptr;         // UTextBlock::SetText(FText)
-const wchar_t* g_setTextParam = nullptr;
-void* g_setSoundFn = nullptr;        // UAudioComponent::SetSound(USoundBase*)
-void* g_activateFn = nullptr;        // UActorComponent::Activate(bool bReset)
+// (SetText/SetSound/Activate/SetActive/SetVisibility/SetVolumeMultiplier +
+// CallParamless moved to ue_wrap/core/component_calls, 2026-07-19 promotion.)
 void* g_sndWorking = nullptr;        // SoundCue 'computerWorking_Cue' (the loop)
 void* g_sndWorkingEnd = nullptr;     // SoundCue 'computerWorking_end' (the wind-down)
 
@@ -150,9 +149,6 @@ void* g_finFn = nullptr;                 // desk fin() (OnAudioFinished delegate
 void* g_downloadPlaySignallFn = nullptr; // desk download_playSignall() (the active_download setter)
 void* g_setMatsFn = nullptr;             // desk setMats() (screen materials -- the comp setter)
 void* g_spawnDirsFn = nullptr;           // desk spawnDirs() (the scan arrows)
-void* g_setActiveFn = nullptr;           // UActorComponent::SetActive(bNewActive, bReset)
-void* g_setVisibilityFn = nullptr;       // USceneComponent::SetVisibility(bNewVisibility, bPropagate)
-void* g_setVolumeMultFn = nullptr;       // UAudioComponent::SetVolumeMultiplier(float)
 
 std::chrono::steady_clock::time_point g_nextResolve{};
 bool g_coreResolved = false;
@@ -470,54 +466,11 @@ void* AtlasTextBlock(int32_t off) {
     return (tb && R::IsLive(tb)) ? tb : nullptr;
 }
 
-bool SetTextOn(void* textBlock, const wchar_t* text) {
-    if (!textBlock || !text) return false;
-    if (!g_setTextFn) {
-        if (void* cls = R::ClassOf(textBlock))
-            g_setTextFn = R::FindFunction(cls, L"SetText");
-        if (g_setTextFn) {
-            if (R::FindParamOffset(g_setTextFn, L"InText") >= 0) g_setTextParam = L"InText";
-            else if (R::FindParamOffset(g_setTextFn, L"inText") >= 0) g_setTextParam = L"inText";
-        }
-    }
-    if (!g_setTextFn || !g_setTextParam) return false;
-    uint8_t ftext[ue_wrap::ftext_utils::kFTextSize];
-    if (!ue_wrap::ftext_utils::MintFText(text, ftext)) return false;
-    ue_wrap::ParamFrame f(g_setTextFn);
-    if (!f.valid() || !f.SetRaw(g_setTextParam, ftext, sizeof(ftext))) return false;
-    return ue_wrap::Call(textBlock, f);
-}
-
 void* DeskAudioComponent(int32_t off) {
     void* d = Instance();
     if (!d || off < 0) return nullptr;
     void* c = *reinterpret_cast<void**>(reinterpret_cast<uint8_t*>(d) + off);
     return (c && R::IsLive(c)) ? c : nullptr;
-}
-
-bool CueSetSound(void* comp, void* sound) {
-    if (!comp || !sound) return false;
-    if (!g_setSoundFn) {
-        if (void* cls = R::ClassOf(comp))
-            g_setSoundFn = R::FindFunction(cls, L"SetSound");
-    }
-    if (!g_setSoundFn) return false;
-    ue_wrap::ParamFrame f(g_setSoundFn);
-    if (!f.valid() || !f.SetRaw(L"NewSound", &sound, sizeof(sound))) return false;
-    return ue_wrap::Call(comp, f);
-}
-
-bool CueActivate(void* comp) {
-    if (!comp) return false;
-    if (!g_activateFn) {
-        if (void* cls = R::ClassOf(comp))
-            g_activateFn = R::FindFunction(cls, L"Activate");
-    }
-    if (!g_activateFn) return false;
-    ue_wrap::ParamFrame f(g_activateFn);
-    if (!f.valid()) return false;
-    f.Set<bool>(L"bReset", true);
-    return ue_wrap::Call(comp, f);
 }
 
 }  // namespace
@@ -571,34 +524,34 @@ bool PaintCompProgress(float progress) {
     // The native paint: Conv_FloatToText(min 3 integral / 3,3 fractional) + "%".
     wchar_t buf[24];
     swprintf(buf, 24, L"%07.3f%%", progress);
-    return SetTextOn(tb, buf);
+    return ue_wrap::component_calls::SetText(tb, buf);
 }
 
 bool PaintCompProcess(const wchar_t* text) {
     void* tb = AtlasTextBlock(g_offTextCompProcess);
     if (!tb) return false;
-    return SetTextOn(tb, text);
+    return ue_wrap::component_calls::SetText(tb, text);
 }
 
 bool CompCueStart() {
     void* c = DeskAudioComponent(g_offCueWorking);
     if (!c) return false;
-    if (g_sndWorking) CueSetSound(c, g_sndWorking);
-    return CueActivate(c);
+    if (g_sndWorking) ue_wrap::component_calls::SetSound(c, g_sndWorking);
+    return ue_wrap::component_calls::Activate(c);
 }
 
 bool CompCueStop() {
     void* c = DeskAudioComponent(g_offCueWorking);
     if (!c) return false;
     if (!g_sndWorkingEnd) return false;  // never Activate the LOOP as a stop
-    if (!CueSetSound(c, g_sndWorkingEnd)) return false;
-    return CueActivate(c);
+    if (!ue_wrap::component_calls::SetSound(c, g_sndWorkingEnd)) return false;
+    return ue_wrap::component_calls::Activate(c);
 }
 
 bool CompBeepDone(bool maxed) {
     void* c = DeskAudioComponent(maxed ? g_offCueDone : g_offCueProg);
     if (!c) return false;
-    return CueActivate(c);
+    return ue_wrap::component_calls::Activate(c);
 }
 
 bool ReadDishAim(DishAim& out) {
@@ -897,44 +850,6 @@ bool ReadMaxCooldown(float& out) {
 
 namespace {
 
-// UActorComponent::SetActive(bNewActive, bReset) -- the hum loops' native
-// switch (uber [1116/1150/1155] uses SetActive(value, true)).
-bool CompSetActive(void* comp, bool value) {
-    if (!comp) return false;
-    if (!g_setActiveFn) {
-        if (void* cls = R::ClassOf(comp))
-            g_setActiveFn = R::FindFunction(cls, L"SetActive");
-    }
-    if (!g_setActiveFn) return false;
-    ue_wrap::ParamFrame f(g_setActiveFn);
-    if (!f.valid()) return false;
-    f.Set<bool>(L"bNewActive", value);
-    f.Set<bool>(L"bReset", true);
-    return ue_wrap::Call(comp, f);
-}
-
-// USceneComponent::SetVisibility(bNewVisibility, bPropagateToChildren) -- the
-// unit lamps (uber [1115/1126/1149/1154] use SetVisibility(value, false)).
-bool CompSetVisibility(void* comp, bool value) {
-    if (!comp) return false;
-    if (!g_setVisibilityFn) {
-        if (void* cls = R::ClassOf(comp))
-            g_setVisibilityFn = R::FindFunction(cls, L"SetVisibility");
-    }
-    if (!g_setVisibilityFn) return false;
-    ue_wrap::ParamFrame f(g_setVisibilityFn);
-    if (!f.valid()) return false;
-    f.Set<bool>(L"bNewVisibility", value);
-    f.Set<bool>(L"bPropagateToChildren", false);
-    return ue_wrap::Call(comp, f);
-}
-
-bool CallParamless(void* obj, void* fn) {
-    if (!obj || !fn) return false;
-    ue_wrap::ParamFrame f(fn);
-    return f.valid() && ue_wrap::Call(obj, f);
-}
-
 }  // namespace
 
 bool ApplyActiveToggleEffects(int unit, bool value) {
@@ -945,27 +860,27 @@ bool ApplyActiveToggleEffects(int unit, bool value) {
     // blocks incl. an unconditional stopSound -- too broad for one field.
     switch (unit) {
     case 0: {  // active_play: stopSound() + light_play + computerHum_play
-        CallParamless(d, g_stopSoundFn);
-        CompSetVisibility(DeskAudioComponent(g_offLightPlay), value);
-        CompSetActive(DeskAudioComponent(g_offHumPlay), value);
+        ue_wrap::component_calls::CallParamless(d, g_stopSoundFn);
+        ue_wrap::component_calls::SetVisibility(DeskAudioComponent(g_offLightPlay), value);
+        ue_wrap::component_calls::SetActive(DeskAudioComponent(g_offHumPlay), value);
         return true;
     }
     case 1: {  // active_download: download_playSignall() + light_down + computerHum_downl
-        CallParamless(d, g_downloadPlaySignallFn);
-        CompSetVisibility(DeskAudioComponent(g_offLightDown), value);
-        CompSetActive(DeskAudioComponent(g_offHumDownl), value);
+        ue_wrap::component_calls::CallParamless(d, g_downloadPlaySignallFn);
+        ue_wrap::component_calls::SetVisibility(DeskAudioComponent(g_offLightDown), value);
+        ue_wrap::component_calls::SetActive(DeskAudioComponent(g_offHumDownl), value);
         return true;
     }
     case 2: {  // active_coords: light_coord + computerHum_coords
-        CompSetVisibility(DeskAudioComponent(g_offLightCoord), value);
-        CompSetActive(DeskAudioComponent(g_offHumCoords), value);
+        ue_wrap::component_calls::SetVisibility(DeskAudioComponent(g_offLightCoord), value);
+        ue_wrap::component_calls::SetActive(DeskAudioComponent(g_offHumCoords), value);
         return true;
     }
     case 3: {  // active_comp: light_comp + active_console mirror + setMats()
-        CompSetVisibility(DeskAudioComponent(g_offLightComp), value);
+        ue_wrap::component_calls::SetVisibility(DeskAudioComponent(g_offLightComp), value);
         if (g_offActiveConsole >= 0)
             *reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(d) + g_offActiveConsole) = value;
-        CallParamless(d, g_setMatsFn);
+        ue_wrap::component_calls::CallParamless(d, g_setMatsFn);
         // (The computerWorking cue transitions stay owned by coop/comp_sync --
         // its CompCueStart/Stop edges; not duplicated here.)
         return true;
@@ -980,18 +895,10 @@ bool ApplyPlayVolumeEffects(int32_t value) {
     // (FClamp(v/10, 0.1, 5)) -- the raw play_volume field write is the caller's.
     void* comp = DeskAudioComponent(g_offSignalSound);
     if (!comp) return false;
-    if (!g_setVolumeMultFn) {
-        if (void* cls = R::ClassOf(comp))
-            g_setVolumeMultFn = R::FindFunction(cls, L"SetVolumeMultiplier");
-    }
-    if (!g_setVolumeMultFn) return false;
     float mult = static_cast<float>(value) / 10.0f;
     if (mult < 0.1f) mult = 0.1f;
     if (mult > 5.0f) mult = 5.0f;
-    ue_wrap::ParamFrame f(g_setVolumeMultFn);
-    if (!f.valid()) return false;
-    f.Set<float>(L"NewVolumeMultiplier", mult);
-    return ue_wrap::Call(comp, f);
+    return ue_wrap::component_calls::SetVolumeMultiplier(comp, mult);
 }
 
 bool PlayScanEffects() {
@@ -1003,17 +910,17 @@ bool PlayScanEffects() {
     // v115 (RULE 2): the beepLong1 no longer plays here -- the presser's
     // organic playPingSound rides the DeskSndFx audio-seam lane; this replay
     // keeps only the VISUAL (the ui_coordArrow widgets).
-    return CallParamless(d, g_spawnDirsFn);
+    return ue_wrap::component_calls::CallParamless(d, g_spawnDirsFn);
 }
 
 bool CallDeckPlaySignal() {
     void* d = Instance();
-    return d && CallParamless(d, g_playSignalFn);
+    return d && ue_wrap::component_calls::CallParamless(d, g_playSignalFn);
 }
 
 bool CallDeckStopSound() {
     void* d = Instance();
-    return d && CallParamless(d, g_stopSoundFn);
+    return d && ue_wrap::component_calls::CallParamless(d, g_stopSoundFn);
 }
 
 void* DeckFinFn() { return g_finFn; }
