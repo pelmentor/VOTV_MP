@@ -222,7 +222,7 @@ RNG-authority rows. Identity for logging: `Index` + `techName` (NATO from Bravo,
 
 ### OPEN-5 · The drive chain — **BUILT v119 (2026-07-18/19 night; smoke x2 + connect-seed payloads proven, NOT hands-on)**
 
-> **AS-BUILT:** `coop/interactables/drive_sync` + `ue_wrap/desk/drive_chain` per
+> **AS-BUILT:** `coop/interactables/drive_sync` + `coop/interactables/drive_rack_sync` (RackState extracted 2026-07-18, `73dc9ba1`) + `ue_wrap/desk/drive_chain` per
 > `votv-drive-chain-L5-impl-DESIGN-2026-07-18.md` (7-round /qf + 4 build deviations, all
 > evidence-driven — see the doc's BUILD OUTCOME). Three lanes: DriveSlotState=109 (idempotent
 > any-peer slot FSM lines, host canonical; the deterministic eject-latch completion),
@@ -351,7 +351,8 @@ pile): image bytes, wire-delete playback-stop.
   (F-1/2/3/6/7 folded), correctness 1 CRIT (stale pending-replay -> per-role coalesce +
   baseline-stash drop) + 1 MAJOR (slot-only reap -> CONTENT-correlated taken-ring/payload-hash
   reap; HostShouldReapDriveBirth retired) — both fixed pre-handoff. drive_sync.cpp 1007 LOC >
-  soft cap: rack extraction QUEUED as its own commit. OPEN-5 flipped AS-BUILT.
+  soft cap: rack extraction DONE 2026-07-18 (`73dc9ba1`, drive_rack_sync 553; digest-equality
+  proven -- votv-rack-extraction-DESIGN-2026-07-18.md). OPEN-5 flipped AS-BUILT.
 - **2026-07-18 (v118 `45a886a4`, L8 physMods)** — L8 built per its own 8-round /qf
   (value-ops + host-canonical array REVISING the arch's slot-deltas; the unplug path
   discovered — the R1 reframe; the explosion measured presser-local — an inference

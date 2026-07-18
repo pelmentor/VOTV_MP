@@ -1,6 +1,9 @@
 # Hands-on runbook — v112..v121 (desk chain + meadow + laptop v2, batched), take 4
 
-DEPLOYED: `votv-coop.dll a451fce7cb674d04...` x4, hash-verified 2026-07-18.
+DEPLOYED: `votv-coop.dll 6431c14382b38437...` x4, hash-verified 2026-07-18 evening
+(= v121 + the rack extraction `73dc9ba1` + LivePropActor `bc14fa33` + [dev] drive_selftest
+`5971cdd7` -- pure refactor, digest-proven behavior-identical, proto 121 unchanged, adds NO
+new test layer; the v121 build was a451fce7cb674d04).
 kProtocolVersion **121** (v121's LaptopBlob/LaptopQuad/FloppyBoxState lanes + the
 LaptopState struct shrink; a 120-or-older peer HARD-CLOSEs at the gate — RELAUNCH BOTH
 PEERS). ELEVEN unverified layers v112..v121; prefixes attribute.

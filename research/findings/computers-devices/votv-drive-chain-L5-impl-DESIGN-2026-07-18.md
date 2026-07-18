@@ -169,10 +169,9 @@ touches). FOUR deviations/strengthenings vs the converged text, each evidence-dr
    matches. HostShouldReapDriveBirth RETIRED (RULE 2).
 Perf audit: 0 CRITICAL; F-1 (vm_dispatch install-failure latch), F-2 (ActorForEid ->
 O(1) Registry::Get), F-3 (eraser census 5 s negative-cache), F-6 (DriveClass accessor),
-F-7 (pending cap 256) all applied. **drive_sync.cpp = ~1007 LOC > 800 soft cap:
-extraction QUEUED as its own commit -- the rack lane (~350 LOC: canonical blob codec +
-sweep + host ops + client apply + deny/taken rings) splits to
-coop/interactables/drive_rack_sync.cpp before the next lane touches the file.**
+F-7 (pending cap 256) all applied. **drive_sync.cpp soft-cap flag: RESOLVED 2026-07-18 -- the rack lane extracted to
+coop/interactables/drive_rack_sync.cpp (commit 73dc9ba1; drive_sync 1007->606; digest-equality
+proven, see votv-rack-extraction-DESIGN-2026-07-18.md).**
 
 ## /qf round map (7 rounds)
 R1: self-sim discovery + eject-never-self-sims + dropGrabObject/rack/slot-offset reads +
