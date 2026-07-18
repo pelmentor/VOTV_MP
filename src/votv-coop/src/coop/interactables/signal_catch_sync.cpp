@@ -260,13 +260,14 @@ void RunDetectors(coop::net::Session* s, const CD::CoordSignal& sig, bool haveSi
                         "slewValid=%u) -- relayed",
                         sig.objectName.c_str(), sig.x, sig.y, sig.z,
                         static_cast<unsigned>(p.slewValid));
-                // v116 feature: the catcher's own activity-feed line ("You caught
-                // signal 'X'"); receivers announce at their OnReliable sites.
-                uint8_t localSlot = coop::players::Registry::Get().LocalPeerId();
-                if (s->role() == coop::net::Role::Host ||
-                    localSlot == coop::players::kPeerIdUnknown)
-                    localSlot = 0;
-                coop::peer_action_feed::Announce(localSlot, /*isLocalActor=*/true,
+                // v116 feature: the catcher's own activity-feed line ("<OwnNick>
+                // caught signal 'X'" -- same line everyone sees, no "You");
+                // receivers announce at their OnReliable sites. The raw
+                // LocalPeerId passes through: Announce resolves the local slot
+                // to LocalNickname() itself (the old Unknown->0 forcing would
+                // misattribute a pre-assignment catch to the host).
+                coop::peer_action_feed::Announce(
+                    coop::players::Registry::Get().LocalPeerId(),
                     L"caught signal '" + sig.objectName + L"'");
                 // L4: the client's own ping slews are unpreventable
                 // (EX-invisible) -- kill them NOW, after the payload (built
@@ -359,7 +360,7 @@ void OnReliable(const coop::net::SkySignalCatchPayload& p, uint8_t senderSlot) {
         // The host's own 1 Hz sky poll sees the row removal and broadcasts a
         // fresh snapshot; the recent-catch filter covers any stale one in flight.
         if (p.kind == 0)
-            coop::peer_action_feed::Announce(senderSlot, /*isLocalActor=*/false,
+            coop::peer_action_feed::Announce(senderSlot,
                 L"caught signal '" + WireName(p.row) + L"'");
     } else {
         // Client: transport-trusted (we only receive from the host; senderSlot
@@ -368,7 +369,7 @@ void OnReliable(const coop::net::SkySignalCatchPayload& p, uint8_t senderSlot) {
         ApplyReplay(s, p);
         // kind=2 (connect seed) is state adoption, not a live action -- no feed.
         if (p.kind == 0)
-            coop::peer_action_feed::Announce(senderSlot, /*isLocalActor=*/false,
+            coop::peer_action_feed::Announce(senderSlot,
                 L"caught signal '" + WireName(p.row) + L"'");
     }
 }

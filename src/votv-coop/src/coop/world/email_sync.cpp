@@ -350,14 +350,14 @@ void Tick() {
         std::vector<ShadowRow> next;
         next.reserve(static_cast<size_t>(n));
         std::vector<uint64_t> removed;
-        // Local peer's display slot (chat_sync parity: host = 0; client = registry id).
-        // Used to color the "You deleted an email" peer-action line the same as our
-        // chat lines. Computed once; the removed loop below is the local-delete branch
-        // (a remote delete erased the shadow synchronously in ApplyDeleteByHash, so it
-        // never appears here).
-        uint8_t localSlot = coop::players::Registry::Get().LocalPeerId();
-        if (s->role() == coop::net::Role::Host || localSlot == coop::players::kPeerIdUnknown)
-            localSlot = 0;
+        // Local peer's slot for the "<OwnNick> deleted an email" peer-action line
+        // (the subject is always a nickname). Computed once; the removed loop below
+        // is the local-delete branch (a remote delete erased the shadow synchronously
+        // in ApplyDeleteByHash, so it never appears here). Raw LocalPeerId: Announce
+        // resolves the local slot to LocalNickname() itself (the old Unknown->0
+        // forcing would misattribute a pre-assignment delete to the host under nick
+        // rendering; host's id IS 0 already).
+        const uint8_t localSlot = coop::players::Registry::Get().LocalPeerId();
         size_t j = 0;
         std::vector<std::wstring> removedTopics;  // announces deferred past the bulk gate below
         for (ShadowRow& srow : g_shadow) {
@@ -390,7 +390,7 @@ void Tick() {
         // deleted what. Only in an actual session (no point telling yourself solo).
         if (s->connected())
             for (const std::wstring& topic : removedTopics)
-                coop::peer_action_feed::Announce(localSlot, true,
+                coop::peer_action_feed::Announce(localSlot,
                                                  L"deleted an email: " + topic);
         // A bulk batch of new rows in ONE poll is a save load (history materializing),
         // not gameplay -- adopt it as baseline and never broadcast it (the joiner gets
@@ -501,7 +501,7 @@ void OnDelete(const coop::net::ContentHashPayload& p, uint8_t senderSlot) {
     std::wstring topic;
     if (ApplyDeleteByHash(p.contentHash, &topic)) {
         // A remote peer deleted this shared email -- surface who, to the local feed.
-        coop::peer_action_feed::Announce(senderSlot, false, L"deleted an email: " + topic);
+        coop::peer_action_feed::Announce(senderSlot, L"deleted an email: " + topic);
     } else {
         // Deferred (row not present yet / transient misalignment): the tombstone retry
         // in Tick applies it later WITHOUT an announce (senderSlot isn't carried on the

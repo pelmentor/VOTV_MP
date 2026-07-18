@@ -2,6 +2,7 @@
 
 #include "coop/interactables/device_occupancy.h"
 
+#include "coop/comms/peer_action_feed.h"  // the busy-notice chat line (AnnounceDirect)
 #include "coop/interactables/desk_input_sync.h"  // v116: PingActiveSlot -> the desk FSM-hold
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"
@@ -53,9 +54,42 @@ bool g_pendingSend = false;
 
 // Deny-gate dispatch state (GT-only; PRE/POST pair within one dispatch).
 bool g_denyPending = false;
-std::wstring g_denyKey;  // for the log line only
+std::wstring g_denyKey;   // log + the busy-line cooldown key
+uint8_t g_denyHolder = 0xFF;  // holder slot captured in PRE (drives the busy line's nick)
+std::wstring g_denyName;      // the aimed unit's native object name captured in PRE
 std::chrono::steady_clock::time_point g_lastDenySound{};
 constexpr auto kDenyDebounce = std::chrono::milliseconds(300);  // press+release double-fire
+
+// Aim memo (GT-only): the last E-press device classify. The individual UNIT is
+// only knowable at the aim seam (5 of 7 families render ONE shared widget
+// instance, so widget -> owning-unit is architecturally underivable at the
+// force-exit surfaces) -- capture (native name, key) at EVERY device aim,
+// unconditionally, so the rising-edge / lost-race denies can name the unit the
+// player just entered. <5s freshness bounds staleness; miss falls back to the
+// claim-key text (cosmetic only).
+std::wstring g_memoName;
+std::wstring g_memoKey;
+std::chrono::steady_clock::time_point g_memoTime{};
+constexpr auto kMemoFresh = std::chrono::seconds(5);
+
+// Per-key busy-LINE cooldown: an E-masher keeps the 300ms deny CLICK cadence but
+// must not flood the 6-line chat feed (one line per device per ~3s).
+std::wstring g_lastLineKey;
+std::chrono::steady_clock::time_point g_lastLineTime{};
+constexpr auto kLineCooldown = std::chrono::seconds(3);
+
+// Push the local-only busy notice: "<HolderNick> is using <deviceName>". Rides
+// peer_action_feed::AnnounceDirect (UNgated by the cosmetic ui.chat.peer_actions
+// toggle: deny feedback is functional UX -- without it the deny is a bare click
+// sound; user 2026-07-18). Empty deviceName falls back to the claim key.
+void PushBusyLine(const std::wstring& key, const std::wstring& deviceName, uint8_t holder) {
+    const auto now = std::chrono::steady_clock::now();
+    if (key == g_lastLineKey && now - g_lastLineTime < kLineCooldown) return;
+    g_lastLineKey = key;
+    g_lastLineTime = now;
+    coop::peer_action_feed::AnnounceDirect(
+        holder, L"is using " + (deviceName.empty() ? key : deviceName));
+}
 
 bool g_observersInstalled = false;
 
@@ -162,6 +196,13 @@ void ForceExitLocal(void* local, const std::wstring& key, uint8_t holder) {
                 key.c_str(), static_cast<unsigned>(holder));
     }
     coop::prop_sound::PlayDenyClick(local);
+    // Busy notice for BOTH force-exit surfaces (rising-edge immediate deny +
+    // lost-race verdict). The unit name comes from the aim memo -- the loser's
+    // own E-press wrote it moments ago (sub-100ms race); a miss degrades to the
+    // claim-key text.
+    const bool fresh = !g_memoKey.empty() && g_memoKey == key &&
+                       (std::chrono::steady_clock::now() - g_memoTime) < kMemoFresh;
+    PushBusyLine(key, fresh ? g_memoName : std::wstring(), holder);
 }
 
 // ---- the InpActEvt_use deny gate (PRE clears the aim, POST restores) -------
@@ -182,11 +223,19 @@ void OnUseInputPre(void* self, void*, void*) {
     if (!aimed) return;
     const std::wstring key = DS::ClassifyDeviceActorClaimKey(aimed);
     if (key.empty()) return;  // not aiming at an enterable device
+    // Aim memo -- written UNCONDITIONALLY (before the busy check): the canonical
+    // rising-edge / lost-race denies see the table FREE at this press, so a
+    // deny-gated write would leave exactly those surfaces nameless.
+    g_memoName = R::ToString(R::NameOf(aimed));
+    g_memoKey = key;
+    g_memoTime = std::chrono::steady_clock::now();
     uint8_t holder = 0xFF;
     if (!BusyByOther(key, LocalSlot(), &holder)) return;  // free or our own
     if (DS::ClearAimForDispatch(self)) {
         g_denyPending = true;
         g_denyKey = key;
+        g_denyHolder = holder;
+        g_denyName = g_memoName;
     }
 }
 
@@ -198,8 +247,10 @@ void OnUseInputPost(void* self, void*, void*) {
     const auto now = std::chrono::steady_clock::now();
     if (now - g_lastDenySound < kDenyDebounce) return;  // press+release = one click
     g_lastDenySound = now;
-    UE_LOGI("device_occupancy: DENIED E at busy device '%ls'", g_denyKey.c_str());
+    UE_LOGI("device_occupancy: DENIED E at busy device '%ls' ('%ls' held by slot %u)",
+            g_denyKey.c_str(), g_denyName.c_str(), static_cast<unsigned>(g_denyHolder));
     if (self) coop::prop_sound::PlayDenyClick(self);
+    PushBusyLine(g_denyKey, g_denyName, g_denyHolder);
 }
 
 void InstallObservers() {
@@ -487,6 +538,13 @@ void OnDisconnect() {
     g_localWidget = nullptr;
     g_pendingSend = false;
     g_denyPending = false;
+    g_denyHolder = 0xFF;
+    g_denyName.clear();
+    g_memoName.clear();      // busy-notice aim memo (session-end full teardown)
+    g_memoKey.clear();
+    g_memoTime = {};
+    g_lastLineKey.clear();
+    g_lastLineTime = {};
     g_deskFsmHold = false;   // v116
     g_nextFsmHoldPoll = {};  // v116
 }
