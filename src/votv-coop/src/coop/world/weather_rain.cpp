@@ -417,6 +417,11 @@ bool ReadLocalIsRaining(bool* outFound) {
         reinterpret_cast<uint8_t*>(cycle) + P::off::AdaynightCycle_isRaining);
 }
 
+void* Cycle() {
+    void* cycle = ResolveCycle();
+    return (cycle && R::IsLive(cycle)) ? cycle : nullptr;
+}
+
 void OnDisconnect() {
     g_session.store(nullptr, std::memory_order_release);
     g_causeRainEchoSuppress.store(false, std::memory_order_release);

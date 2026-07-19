@@ -71,6 +71,11 @@ bool DebugForceSnow(bool isSnow);
 // "false (cycle null)" from "false (not raining)". Game thread only.
 bool ReadLocalIsRaining(bool* outFound);
 
+// The module's validated cycle pointer (may be null while loading). For
+// diagnostic consumers (coop/dev/weather_probe) that gate their own cadence;
+// the console_desk::Instance() precedent. Game thread only.
+void* Cycle();
+
 // Disconnect hook: clears the session ptr, the echo flag (defensive), and
 // the module's own cycle cache (may dangle across level transitions).
 void OnDisconnect();

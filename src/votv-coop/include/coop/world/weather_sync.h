@@ -70,6 +70,12 @@ void OnDisconnect();
 // Game thread only.
 void ApplyFromHost(const coop::net::WeatherStatePayload& payload);
 
+// Read-only accessors for the changeWindOrigin roll interceptor counters
+// (the counters stay with their writer -- the interceptor in this TU).
+// Consumed by coop/dev/weather_probe's [probe wind] line.
+uint32_t WindRollFired();
+uint32_t WindRollSuppressed();
+
 // (DebugForceRain / DebugForceSnow / ReadLocalIsRaining live in
 // coop/world/weather_rain.h -- the rain+snow cycle-side sub-lane module.
 // The DebugForceRedSky / ApplyRedSky / ApplyLightningStrike thin forwards

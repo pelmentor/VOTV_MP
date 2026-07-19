@@ -454,6 +454,7 @@ add_library(votv-coop SHARED
     src/coop/dev/save_probe.cpp
     src/coop/dev/dev_gate.cpp
     src/coop/dev/force_weather.cpp
+    src/coop/dev/weather_probe.cpp
     src/coop/dev/freecam.cpp
     src/coop/dev/flashlight_setup.cpp
     src/coop/dev/pos_hud.cpp
