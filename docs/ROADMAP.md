@@ -38,6 +38,40 @@ relay topology is still 2-player-shaped; 4-peer LAN smoke missing.
 
 ---
 
+## Project phases — the long-term arc (fixed 2026-07-19, user-approved)
+
+The MTA/gmod trajectory. Everything below "Phase 0 — Feasibility" in this
+document is the DETAIL of project phase 1. Each later phase gets its own
+phase-gate breakdown when it opens.
+
+1. **votv-coop** ◐ — the current work: functional coop on the standalone
+   substrate (this whole document).
+2. **Sandbox mode** ☐ — support VOTV's sandbox game mode with its own rules
+   (coop currently targets the story/normal mode). Produces the "rules of a
+   mode" as an explicit, portable layer — the thing phase 4 will port.
+3. **LuaJIT embedding** ☐ — vendor LuaJIT + bindings over the `ue_wrap`/
+   `coop` APIs. The scripting SUBSTRATE only; nothing moves to Lua yet.
+4. **Lua API** ☐ — the C++ core STAYS (transport, sync, identity,
+   interpolation — MTA keeps its core native for a reason); the coop and
+   sandbox mode RULES move to Lua as the first two reference resources.
+   Not a rewrite — an API layer plus two ported rule sets.
+5. **Resource system** ☐ — custom modes AND plugins as ONE mechanism
+   (the MTA shape: manifest, server+client scripts, events, start/stop).
+   A gamemode-resource and a utility-resource live in the same system —
+   no separate "plugin API".
+6. **Dedicated server** ☐ — 24/7 hosting with zero players (the gmod
+   shape: host from in-game OR run dedicated). Architectural commitment,
+   decided up front: our host-authority = the host's game simulates the
+   world, so dedicated = the HOST GAME RUNNING HEADLESS (no render) driven
+   by our DLL — NOT a from-scratch server binary (MTA's server never runs
+   GTA, but MTA distributes world-sim to clients; we do the opposite).
+7. **Resource infrastructure** ☐ — client-side resource download from the
+   server (no manual mod-pack installs), Lua sandboxing/security (clients
+   execute untrusted server code — mandatory layer), and the server
+   browser (the VPS signaling service grows into the master list).
+
+---
+
 ## Phase 0 — Feasibility + bootstrap ☑
 
 **Gate met:** `docs/FEASIBILITY.md` documents 0.2-0.8; viable verdict;
