@@ -1,7 +1,7 @@
 #include "coop/dev/force_weather.h"
 
 #include "coop/net/session.h"
-#include "coop/world/weather_sync.h"
+#include "coop/world/weather_rain.h"
 #include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/log.h"
 
@@ -34,7 +34,7 @@ void SetSnow(bool on) {
     }
     g_snowOn.store(on, std::memory_order_release);
     GT::Post([on] {
-        if (!coop::weather_sync::DebugForceSnow(on)) {
+        if (!coop::weather_rain::DebugForceSnow(on)) {
             UE_LOGW("force_weather: DebugForceSnow(%d) failed -- cycle not yet live "
                     "or UFunction unresolved", on ? 1 : 0);
         }

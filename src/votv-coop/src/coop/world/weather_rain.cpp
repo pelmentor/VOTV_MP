@@ -1,0 +1,427 @@
+// coop/weather_rain.cpp -- Phase 5W rain+snow cycle-side sub-lane. See
+// coop/world/weather_rain.h. Bodies extracted VERBATIM from weather_sync.cpp
+// (2026-07-19 modularization cut); the log lines keep the "weather:" prefix
+// (tools/lan-test.ps1 greps the literals).
+
+#include "coop/world/weather_rain.h"
+
+#include "coop/net/protocol.h"
+#include "coop/net/session.h"
+#include "ue_wrap/core/call.h"
+#include "ue_wrap/core/game_thread.h"
+#include "ue_wrap/core/log.h"
+#include "ue_wrap/core/reflection.h"
+#include "ue_wrap/core/sdk_profile.h"
+#include "ue_wrap/core/types.h"
+
+#include <atomic>
+#include <cstdint>
+
+namespace coop::weather_rain {
+namespace {
+
+namespace P = ue_wrap::profile;
+namespace R = ue_wrap::reflection;
+namespace GT = ue_wrap::game_thread;
+
+// The 5 rain/snow/wind mutator UFunctions. Resolved once in Install; UFunction
+// ptrs are UClass-stable across cycle recreation (see the weather_sync
+// OnDisconnect comment), so no re-latch machinery exists here either.
+void* g_causeRainFn          = nullptr;
+void* g_setRainPropertiesFn  = nullptr;
+void* g_setWindParametersFn  = nullptr;
+void* g_intComsTriggerSnowFn = nullptr;
+void* g_setRainParticlesFn   = nullptr;
+
+// Module latch: true once all 5 mutators are resolved.
+bool g_installed = false;
+
+// Session pointer for the Debug* host-role checks; atomic so reads can't race
+// the harness setter on another thread (the weather_redsky SetSession shape).
+std::atomic<coop::net::Session*> g_session{nullptr};
+
+// Phase 5W Inc-fix-2 (2026-05-27) echo-suppress for causeRain. Per the IDA
+// RE pass (votv-weather-RE-causeRain-IDA-2026-05-27.md), causeRain's BP
+// body has 3x RandomFloat + 3x Ease calls -- it re-rolls rainStrength
+// every time it fires. When the RECEIVER calls causeRain via reflection
+// to apply the host's wire-received state, the Random rolls overwrite
+// the strength we just set. Result: client's rainStrength drifts away
+// from host's authoritative value.
+//
+// Fix (Option a from the IDA RE, the project's own echo-suppress
+// precedent at item_activate.cpp:145+220): a PRE-interceptor on
+// causeRain that cancels its body when this flag is set. The flag is
+// set ONLY around the receiver's causeRain call in ApplyFromHost --
+// elsewhere (host's DebugForceRain, organic timerRain scheduler) the
+// flag stays false and causeRain runs normally. Atomic for cross-thread
+// safety with the interceptor's read in ProcessEventDetour.
+std::atomic<bool> g_causeRainEchoSuppress{false};
+
+// Own cycle cache for the external-entry surfaces (Debug*, ReadLocalIsRaining)
+// that cannot take the cycle as a parameter. Same IsLiveByIndex revalidation
+// shape as weather_sync's canonical cache (see its comment for the recycled-
+// slot crash history); cleared in OnDisconnect. Game-thread only.
+void* g_cycleCache = nullptr;
+int32_t g_cycleIdx = -1;
+
+void* ResolveCycle() {
+    if (g_cycleCache && R::IsLiveByIndex(g_cycleCache, g_cycleIdx)) return g_cycleCache;
+    g_cycleCache = R::FindObjectByClass(P::name::DaynightCycleClass);
+    g_cycleIdx = g_cycleCache ? R::InternalIndexOf(g_cycleCache) : -1;
+    return g_cycleCache;
+}
+
+// Phase 5W Inc-fix-2: echo-suppress interceptor for causeRain. Cancels
+// the BP body ONLY when g_causeRainEchoSuppress is set. Used by the
+// receiver's ApplyFromHost to skip causeRain's Random-roll body when
+// applying wire-received state. When the flag is false (host's organic
+// DebugForceRain / scheduler-driven calls), this is a pass-through.
+bool OnCauseRainPreEchoSuppress(void* /*self*/, void* /*params*/) {
+    if (g_causeRainEchoSuppress.load(std::memory_order_acquire)) {
+        // Suppress: skip the BP body so its Random rolls don't overwrite
+        // the rainStrength we just set via setRainProperties.
+        return true;
+    }
+    return false;  // normal pass-through
+}
+
+}  // namespace
+
+void SetSession(coop::net::Session* session) {
+    g_session.store(session, std::memory_order_release);
+}
+
+bool Install() {
+    if (!g_installed) {
+        void* cls = R::FindClass(P::name::DaynightCycleClass);
+        if (!cls) return false;
+
+        struct Entry { const wchar_t* name; void** out; };
+        Entry mut[] = {
+            { P::name::DaynightCycle_causeRainFn,          &g_causeRainFn          },
+            { P::name::DaynightCycle_setRainPropertiesFn,  &g_setRainPropertiesFn  },
+            { P::name::DaynightCycle_setWindParametersFn,  &g_setWindParametersFn  },
+            { P::name::DaynightCycle_intComsTriggerSnowFn, &g_intComsTriggerSnowFn },
+            { P::name::DaynightCycle_setRainParticlesFn,   &g_setRainParticlesFn   },
+        };
+        int mResolved = 0;
+        for (auto& e : mut) {
+            if (*e.out) { ++mResolved; continue; }
+            if (void* fn = R::FindFunction(cls, e.name)) { *e.out = fn; ++mResolved; }
+        }
+        // All 5 rain/snow/wind mutators required so the client can apply every
+        // state delta.
+        if (mResolved != 5) return false;
+        g_installed = true;
+        UE_LOGI("weather: rain module resolved -- 5/5 mutator UFunctions on daynightCycle_C");
+    }
+
+    // Phase 5W Inc-fix-2: echo-suppress interceptor on causeRain, registered
+    // on BOTH host AND client. The interceptor itself is conditional on
+    // g_causeRainEchoSuppress -- if the flag is false (organic dispatches:
+    // host's DebugForceRain, scheduler-driven timerRain bodies that
+    // internally call causeRain) the interceptor is a pass-through. The
+    // flag is set true only around ApplyFromHost's causeRain call, so the
+    // BP body's Random rolls don't overwrite our wire-received scalars.
+    // Registered once per session (regardless of role).
+    static bool sCauseRainInterceptorReg = false;
+    if (!sCauseRainInterceptorReg && g_causeRainFn) {
+        if (GT::RegisterInterceptor(g_causeRainFn, &OnCauseRainPreEchoSuppress)) {
+            sCauseRainInterceptorReg = true;
+            UE_LOGI("weather: causeRain echo-suppress PRE interceptor registered "
+                    "(@%p; conditional on g_causeRainEchoSuppress flag)",
+                    g_causeRainFn);
+        } else {
+            UE_LOGW("weather: causeRain echo-suppress interceptor registration FAILED "
+                    "(interceptor table full?)");
+        }
+    }
+    return true;
+}
+
+void ReadState(void* cycle, coop::net::WeatherStatePayload& out) {
+    const uint8_t* base = reinterpret_cast<uint8_t*>(cycle);
+    const bool isRaining       = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_isRaining);
+    const bool isSnow          = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_isSnow);
+    const bool enable_rain     = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_enable_rain);
+    const bool enable_fog      = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_enable_fog);
+    const bool enable_superfog = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_enable_superfog);
+    const bool enableSunlight  = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_enableSunlight);
+    const bool enableMoonlight = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_enableMoonlight);
+    const bool permanentRain   = *reinterpret_cast<const bool*>(base + P::off::AdaynightCycle_permanentRain);
+    out.flags = 0;
+    if (isRaining)       out.flags |= coop::net::weather_flags::kIsRaining;
+    if (isSnow)          out.flags |= coop::net::weather_flags::kIsSnow;
+    if (enable_rain)     out.flags |= coop::net::weather_flags::kEnableRain;
+    if (enable_fog)      out.flags |= coop::net::weather_flags::kEnableFog;
+    if (enable_superfog) out.flags |= coop::net::weather_flags::kEnableSuperfog;
+    if (enableSunlight)  out.flags |= coop::net::weather_flags::kEnableSunlight;
+    if (enableMoonlight) out.flags |= coop::net::weather_flags::kEnableMoonlight;
+    if (permanentRain)   out.flags |= coop::net::weather_flags::kPermanentRain;
+
+    out.rainStrength         = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainStrength);
+    out.rainLightningChance  = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainLightningChance);
+    out.rainDeactivateChance = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainDeactivateChance);
+    out.rainWindSpeed        = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rainWindSpeed);
+    // v24: the rainStrength EASE TARGET. rainStrength (above) is the interpolated
+    // CURRENT value; ReceiveTick eases it toward `rain`. A late joiner that only got
+    // rainStrength would see it decay back toward its local (unsynced) target -- so
+    // carry the target too and anchor it on apply.
+    out.rain                 = *reinterpret_cast<const float*>(base + P::off::AdaynightCycle_rain);
+}
+
+void ApplyFromHost(void* cycle, const coop::net::WeatherStatePayload& payload,
+                   const coop::net::WeatherStatePayload& cur, ApplyOutcome& outcome) {
+    uint8_t* base = reinterpret_cast<uint8_t*>(cycle);
+
+    const uint8_t newFlags = payload.flags;
+    const uint8_t curFlags = cur.flags;
+    using namespace coop::net::weather_flags;
+
+    // Phase 5W Inc-fix-2 (2026-05-27): RULE-1 receiver -- revert to
+    // pure-UFunction chain after the user flagged direct memory writes
+    // as a crutch ("You shipped a crutch, not per rule 1"). See
+    // [[feedback-no-direct-memory-write-crutch]]. The prior commit
+    // (987898b) bypassed causeRain's BP body via direct memory writes
+    // to skip its Random rolls. User correction: that's a bypass, not
+    // a fix, and screenshots showed the host wasn't actually rendering
+    // visible rain particles either (only atmospheric mist); the
+    // host-vs-client diff I claimed to see was wrong. So the crutch
+    // wasn't even fixing a real gap.
+    //
+    // Restored chain (pure UFunction, mirrors host's DebugForceRain):
+    //   A. Config bits via direct write (these are STATIC config bools
+    //      with no BP listeners; direct write is canonical -- not a
+    //      bypass of a misbehaving BP). [acceptable]
+    //   B. setRainProperties(isRaining, 4 scalars) UFunction.
+    //   C. causeRain(isRaining) UFunction -- whose Random-roll behavior
+    //      is now flagged for proper RE rather than bypass.
+    //   D. setRainParticles UFunction (template swap).
+    //   E. intComs_triggerSnow UFunction.
+    //   F. setWindParameters UFunction.
+    //
+    // The visible-particle gap is now an OPEN problem; the in-progress
+    // IDA RE pass on causeRain's BP body + the red-sky pathway will
+    // surface the proper fix. Until that lands, the wire layer matches
+    // host's reflection-driven trigger exactly -- both peers reach the
+    // same atmospheric state, neither shows particle rendering, parity
+    // is maintained without the crutch.
+
+    const bool newRain = (newFlags & kIsRaining) != 0;
+    const bool curRain = (curFlags & kIsRaining) != 0;
+
+    // Step A: config-bit direct writes (static config bools; no BP
+    // listeners that need fan-out -- the dump shows no Set* UFunctions
+    // for these bits, so this is the canonical write path, not a bypass).
+    // (enable_fog / enable_superfog moved to weather_fog::ApplyFromHost --
+    // fog is actor-driven, so those bits ride with the actor assert, not here.)
+    if (((curFlags ^ newFlags) & kEnableRain) != 0)
+        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enable_rain) =
+            (newFlags & kEnableRain) != 0;
+    if (((curFlags ^ newFlags) & kEnableSunlight) != 0)
+        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enableSunlight) =
+            (newFlags & kEnableSunlight) != 0;
+    if (((curFlags ^ newFlags) & kEnableMoonlight) != 0)
+        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_enableMoonlight) =
+            (newFlags & kEnableMoonlight) != 0;
+    if (((curFlags ^ newFlags) & kPermanentRain) != 0)
+        *reinterpret_cast<bool*>(base + P::off::AdaynightCycle_permanentRain) =
+            (newFlags & kPermanentRain) != 0;
+
+    const bool rainStateChanged =
+        newRain != curRain ||
+        cur.rainStrength != payload.rainStrength ||
+        cur.rainLightningChance != payload.rainLightningChance ||
+        cur.rainDeactivateChance != payload.rainDeactivateChance ||
+        cur.rainWindSpeed != payload.rainWindSpeed;
+
+    // Step B: setRainProperties writes the bool + 5 scalars via the
+    // canonical UFunction (matches host's DebugForceRain order).
+    if (rainStateChanged && g_setRainPropertiesFn) {
+        ue_wrap::ParamFrame f(g_setRainPropertiesFn);
+        f.Set<bool>(L"isRaining",            newRain);
+        f.Set<float>(L"rainStrength",        payload.rainStrength);
+        f.Set<float>(L"rainLightningChance", payload.rainLightningChance);
+        f.Set<float>(L"rainDeactivateChance",payload.rainDeactivateChance);
+        f.Set<float>(L"rainWindSpeed",       payload.rainWindSpeed);
+        ue_wrap::Call(cycle, f);
+    }
+
+    // v24: anchor the rain ease TARGET (rain@0x02E0). setRainProperties above wrote
+    // rainStrength (the CURRENT value), but ReceiveTick eases rainStrength toward
+    // `rain` every frame -- so a late joiner whose local `rain` is 0 would watch the
+    // synced rainStrength decay back to 0. Pin the target to the host's whenever it
+    // differs (gating on rainStateChanged alone would miss a target-only drift during
+    // a continuous-rain episode -- audit 2026-06-02).
+    if (cur.rain != payload.rain) {
+        *reinterpret_cast<float*>(base + P::off::AdaynightCycle_rain) = payload.rain;
+    }
+
+    // Step C: causeRain triggers the BP rain-transition. ITS BODY HAS
+    // 3x RandomFloat + 3x Ease (IDA RE 2026-05-27) that would re-roll
+    // the rainStrength we just wrote in Step B. Echo-suppress flag
+    // short-circuits the body for this call only -- the BP transition
+    // visual side effects (audio cue) ARE lost on the receiver, but
+    // setRainProperties downstream chain (setRainParameters, setRainParticles)
+    // still fires + drives the visible state derived from our wire-
+    // received scalars. Per [[feedback-no-direct-memory-write-crutch]]
+    // -- proper fix, not a bypass.
+    if (newRain != curRain && g_causeRainFn) {
+        g_causeRainEchoSuppress.store(true, std::memory_order_release);
+        ue_wrap::ParamFrame f(g_causeRainFn);
+        f.Set<bool>(L"isRaining", newRain);
+        ue_wrap::Call(cycle, f);
+        g_causeRainEchoSuppress.store(false, std::memory_order_release);
+    }
+
+    // Step D: setRainParticles (template swap; safe per RE Q1.2).
+    if (rainStateChanged && g_setRainParticlesFn) {
+        ue_wrap::ParamFrame f(g_setRainParticlesFn);
+        ue_wrap::Call(cycle, f);
+    }
+
+    // Step E: setWindParameters propagates rainWindSpeed to AdirectionalWind_C.
+    if (rainStateChanged && g_setWindParametersFn) {
+        ue_wrap::ParamFrame f(g_setWindParametersFn);
+        ue_wrap::Call(cycle, f);
+    }
+
+    // ---- isSnow via intComs_triggerSnow(bool) -- 53 BP listeners need
+    // the UFunction dispatch fan-out (direct write at @0x03B0 misses them).
+    const bool newSnow = (newFlags & kIsSnow) != 0;
+    const bool curSnow = (curFlags & kIsSnow) != 0;
+    if (newSnow != curSnow && g_intComsTriggerSnowFn) {
+        ue_wrap::ParamFrame f(g_intComsTriggerSnowFn);
+        f.Set<bool>(L"isSnow", newSnow);
+        ue_wrap::Call(cycle, f);
+    }
+
+    outcome.rainTx = (newRain != curRain);
+    outcome.snowTx = (newSnow != curSnow);
+    outcome.scalarsChanged = rainStateChanged;
+}
+
+bool DebugForceRain(bool isRaining, float rainStrength) {
+    if (!GT::IsGameThread()) {
+        UE_LOGW("weather: DebugForceRain off-game-thread -- caller must wrap in GT::Post");
+        return false;
+    }
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != coop::net::Role::Host) {
+        UE_LOGW("weather: DebugForceRain called on non-host or unconfigured session");
+        return false;
+    }
+    if (!g_installed || !g_setRainPropertiesFn || !g_causeRainFn) {
+        UE_LOGW("weather: DebugForceRain UFunctions not yet resolved -- skipping");
+        return false;
+    }
+    void* cycle = ResolveCycle();
+    if (!cycle || !R::IsLive(cycle)) {
+        UE_LOGW("weather: DebugForceRain no live daynightCycle_C -- skipping");
+        return false;
+    }
+
+    // Proper RULE-1 invocation sequence per
+    // research/findings/weather-wind/votv-weather-RE-mainGamemode-2026-05-26.md + the
+    // RE agent's 2026-05-27 deep pass. Required because direct
+    // `setRainProperties(true, 1.0, 0, 0, 0)` ALONE has two latent risks:
+    //   (a) the BP body of `setRainProperties` is not visible in the CXX
+    //       dump -- we cannot prove it internally calls `setRainParticles`
+    //       to start the visible UParticleSystemComponent rainEffect;
+    //   (b) `causeRain` body may internally guard on `enable_rain` (the
+    //       feature flag at @0x044B) -- the dump can't disprove this.
+    //
+    // The proper sequence:
+
+    // Step 1 -- precondition: enable_rain := true. Cheap (one byte write).
+    // Belt against any internal guard in causeRain's BP body; harmless
+    // if the BP body doesn't check the flag.
+    *reinterpret_cast<bool*>(reinterpret_cast<uint8_t*>(cycle) +
+                             P::off::AdaynightCycle_enable_rain) = isRaining;
+
+    // Step 2 -- setRainProperties FIRST. Writes the 5 scalar fields,
+    // including rainDeactivateChance=0 which prevents the scheduler's
+    // per-tick auto-stop roll from terminating the rain mid-test.
+    // Ordering matters: if causeRain ran first the rain could be
+    // auto-deactivated by a stray timerRain tick before scalars tighten.
+    {
+        ue_wrap::ParamFrame f(g_setRainPropertiesFn);
+        f.Set<bool>(L"isRaining",            isRaining);
+        f.Set<float>(L"rainStrength",        rainStrength);
+        f.Set<float>(L"rainLightningChance", 0.f);
+        f.Set<float>(L"rainDeactivateChance",0.f);
+        f.Set<float>(L"rainWindSpeed",       0.f);
+        ue_wrap::Call(cycle, f);
+    }
+
+    // Step 3 -- causeRain drives the BP transition: particle Activate,
+    // audio cue start, isRaining @0x02E4 flip with side-effect fan-out.
+    // setRainProperties wrote the bool already; calling causeRain with
+    // the same value is the documented BP-edge trigger (we want the
+    // particle Activate, not just the state write).
+    {
+        ue_wrap::ParamFrame f(g_causeRainFn);
+        f.Set<bool>(L"isRaining", isRaining);
+        ue_wrap::Call(cycle, f);
+    }
+
+    // Step 4 -- propagate to AdirectionalWind_C. rainWindSpeed=0 above
+    // means no extra wind, but the function still ensures the wind
+    // actor is in a known state.
+    if (g_setWindParametersFn) {
+        ue_wrap::ParamFrame f(g_setWindParametersFn);
+        ue_wrap::Call(cycle, f);
+    }
+
+    UE_LOGI("weather: DebugForceRain isRaining=%d strength=%.2f -- "
+            "wrote enable_rain + setRainProperties + causeRain + setWindParameters; "
+            "POST observers on the mutators broadcast WeatherState",
+            isRaining ? 1 : 0, rainStrength);
+    return true;
+}
+
+bool DebugForceSnow(bool isSnow) {
+    if (!GT::IsGameThread()) {
+        UE_LOGW("weather: DebugForceSnow off-game-thread -- caller must wrap in GT::Post");
+        return false;
+    }
+    auto* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != coop::net::Role::Host) {
+        UE_LOGW("weather: DebugForceSnow called on non-host or unconfigured session");
+        return false;
+    }
+    if (!g_installed || !g_intComsTriggerSnowFn) {
+        UE_LOGW("weather: DebugForceSnow intComs_triggerSnow not yet resolved -- skipping");
+        return false;
+    }
+    void* cycle = ResolveCycle();
+    if (!cycle || !R::IsLive(cycle)) {
+        UE_LOGW("weather: DebugForceSnow no live daynightCycle_C -- skipping");
+        return false;
+    }
+    ue_wrap::ParamFrame f(g_intComsTriggerSnowFn);
+    f.Set<bool>(L"isSnow", isSnow);
+    ue_wrap::Call(cycle, f);
+    UE_LOGI("weather: DebugForceSnow isSnow=%d -- intComs_triggerSnow dispatched; "
+            "POST observer broadcasts WeatherState to client", isSnow ? 1 : 0);
+    return true;
+}
+
+bool ReadLocalIsRaining(bool* outFound) {
+    if (outFound) *outFound = false;
+    if (!GT::IsGameThread()) return false;
+    void* cycle = ResolveCycle();
+    if (!cycle || !R::IsLive(cycle)) return false;
+    if (outFound) *outFound = true;
+    return *reinterpret_cast<bool*>(
+        reinterpret_cast<uint8_t*>(cycle) + P::off::AdaynightCycle_isRaining);
+}
+
+void OnDisconnect() {
+    g_session.store(nullptr, std::memory_order_release);
+    g_causeRainEchoSuppress.store(false, std::memory_order_release);
+    g_cycleCache = nullptr;
+    g_cycleIdx = -1;
+}
+
+}  // namespace coop::weather_rain

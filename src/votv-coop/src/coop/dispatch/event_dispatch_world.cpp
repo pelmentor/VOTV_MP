@@ -19,6 +19,8 @@
 #include "coop/items/inventory_pickup_sync.h"
 #include "coop/world/sky_sync.h"
 #include "coop/world/time_sync.h"
+#include "coop/world/weather_lightning.h"
+#include "coop/world/weather_redsky.h"
 #include "coop/world/weather_sync.h"
 
 #include "ue_wrap/core/game_thread.h"
@@ -322,7 +324,7 @@ bool HandleWorldEvent(net::Session& session,
         }
         net::RedSkyPayload pCopy = p;
         ue_wrap::game_thread::Post([pCopy] {
-            ::coop::weather_sync::ApplyRedSky(pCopy);
+            ::coop::weather_redsky::Apply(pCopy);
         });
         break;
     }
@@ -370,7 +372,7 @@ bool HandleWorldEvent(net::Session& session,
         }
         net::LightningStrikePayload pCopy = p;
         ue_wrap::game_thread::Post([pCopy] {
-            ::coop::weather_sync::ApplyLightningStrike(pCopy);
+            ::coop::weather_lightning::Apply(pCopy);
         });
         break;
     }

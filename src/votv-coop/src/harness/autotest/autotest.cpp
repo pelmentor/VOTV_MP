@@ -33,7 +33,8 @@
 #include "coop/player/players_registry.h"
 #include "coop/props/prop_element_tracker.h"
 #include "coop/player/remote_player.h"
-#include "coop/world/weather_sync.h"
+#include "coop/world/weather_rain.h"
+#include "coop/world/weather_redsky.h"
 #include "coop/dev/flashlight_setup.h"
 #include "harness/screenshot.h"
 #include "ue_wrap/core/call.h"
@@ -746,7 +747,7 @@ DWORD WINAPI FlashlightTestThread(LPVOID /*arg*/) {
 // ---- Phase 5W autonomous weather sync test ------------------------------
 //
 // Host-only. After session-Connected + autotest-pose settle, the host calls
-// coop::weather_sync::DebugForceRain via GT::Post -- which writes
+// coop::weather_rain::DebugForceRain via GT::Post -- which writes
 // enable_rain=true + calls setRainProperties + causeRain + setWindParameters
 // per the proper-invocation RE pass (2026-05-27, RULE 1). Each forced
 // state change broadcasts a WeatherState packet (the host POST observer
@@ -782,7 +783,7 @@ void RunAutonomousWeatherTest() {
         auto state = std::make_shared<std::atomic<bool>>(false);
         GT::Post([found, state] {
             bool ok = false;
-            const bool rain = coop::weather_sync::ReadLocalIsRaining(&ok);
+            const bool rain = coop::weather_rain::ReadLocalIsRaining(&ok);
             state->store(rain, std::memory_order_release);
             found->store(ok ? 1 : -1, std::memory_order_release);
         });
@@ -815,7 +816,7 @@ void RunAutonomousWeatherTest() {
         const bool on = ph.on;
         const float strength = ph.strength;
         GT::Post([on, strength, callDone] {
-            const bool ok = coop::weather_sync::DebugForceRain(on, strength);
+            const bool ok = coop::weather_rain::DebugForceRain(on, strength);
             callDone->store(ok ? 1 : -1, std::memory_order_release);
         });
         while (callDone->load() == 0) ::Sleep(5);
@@ -834,7 +835,7 @@ void RunAutonomousWeatherTest() {
         auto readState = std::make_shared<std::atomic<bool>>(false);
         GT::Post([readDone, readState] {
             bool ok = false;
-            const bool rain = coop::weather_sync::ReadLocalIsRaining(&ok);
+            const bool rain = coop::weather_rain::ReadLocalIsRaining(&ok);
             readState->store(rain, std::memory_order_release);
             readDone->store(ok ? 1 : -1, std::memory_order_release);
         });
@@ -881,7 +882,7 @@ void RunAutonomousRedSkyTest() {
     UE_LOGI("redsky_test: phase ON -- DebugForceRedSky(true)");
     auto onDone = std::make_shared<std::atomic<int>>(0);
     GT::Post([onDone] {
-        const bool ok = coop::weather_sync::DebugForceRedSky(true);
+        const bool ok = coop::weather_redsky::DebugForce(true);
         onDone->store(ok ? 1 : -1, std::memory_order_release);
     });
     while (onDone->load() == 0) ::Sleep(5);
@@ -896,7 +897,7 @@ void RunAutonomousRedSkyTest() {
     UE_LOGI("redsky_test: phase OFF -- DebugForceRedSky(false)");
     auto offDone = std::make_shared<std::atomic<int>>(0);
     GT::Post([offDone] {
-        const bool ok = coop::weather_sync::DebugForceRedSky(false);
+        const bool ok = coop::weather_redsky::DebugForce(false);
         offDone->store(ok ? 1 : -1, std::memory_order_release);
     });
     while (offDone->load() == 0) ::Sleep(5);

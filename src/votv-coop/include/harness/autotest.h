@@ -98,7 +98,7 @@ void RunAutonomousFlashlightTest();
 DWORD WINAPI FlashlightTestThread(LPVOID arg);
 
 // Phase 5W: autonomous weather sync test. Host-only. After stabilization,
-// calls weather_sync::DebugForceRain to force rain on / off / on / off
+// calls weather_rain::DebugForceRain to force rain on / off / on / off
 // at 5-second intervals. The POST observer on setRainProperties catches
 // each call and broadcasts a WeatherState packet. Verification:
 //   - Host log: at least 2 `weather: host broadcast` lines.
@@ -113,7 +113,7 @@ DWORD WINAPI WeatherTestThread(LPVOID arg);
 
 // Phase 5W Inc-fix-2 (2026-05-27): autonomous RED SKY sync test. Host-
 // only sender. After stabilization, host calls
-// weather_sync::DebugForceRedSky(true) to flip the entire scene's sky
+// weather_redsky::DebugForce(true) to flip the entire scene's sky
 // + ambient color curves to the red set. Host's POST observer on
 // spawnRedSky catches + broadcasts; client invokes the same on its
 // local gamemode. Verification: both peers' screenshots show red sky.
