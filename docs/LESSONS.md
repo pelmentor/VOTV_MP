@@ -78,6 +78,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   `ConvergeAfterConversion` without mapping its 4 callers (the POLL death-watch was the one that duped); fixed
   by enumerating the seam's 3 PropSpawn broadcasters FIRST -> "track-but-don't-broadcast" (remove the output,
   keep the tracked-flag contract the others coordinate on). `memory/feedback_enumerate_call_sites_before_changing_behavior.md`
+- **A RULE-2 retire census = the NAME vocabulary + the ALIAS/DATAFLOW vocabulary** — s27's
+  netloopback name-grep was blind to the `displayOffsetX` chain (net_pump::Tick param →
+  puppet_drive shift, "loopback mirror") that only the dying scenario ever fed nonzero; and the
+  first closing negative grep matched nothing INCLUDING its own known-positive because the pattern
+  was narrower than the vocabulary. Walk the retired code's outgoing call expressions per-argument
+  ("who else passes non-default here?") + grep prose synonyms, then gate on a control that must hit.
+  `memory/lesson_retire_census_alias_vocabulary.md`
 - **"per rule 1" = full green light** for the root-cause fix in its complete form (incl. hard
   architectural change). Don't scope down, don't ask "is this too big". `memory/feedback_no_crutch_questions_act_autonomously.md`
 - **No design/architect AGENTS** — design yourself from code + docs + MTA; search + audit agents OK. `memory/feedback_no_design_architect_agents.md`
@@ -93,7 +100,7 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 - **A cross-cutting axis has ONE owner** — handlers CAPTURE, never apply (anti-smear). `memory/feedback_one_owner_order_axis.md`
 - **Fix a mirror-identity race WORKING first, generalize only after N>=3.** `memory/feedback_fix_then_generalize_mirror_identity.md`
 - **Every source FOLDER = ONE domain concept; no catch-all names.** `memory/feedback_folder_per_domain_concept_rule.md`
-- **RULE 2 does NOT apply to probes/diagnostics/tools** (they may stay). `memory/feedback_rule2_exempts_probes_diagnostics_tools.md`
+- **RULE 2 does NOT apply to probes/diagnostics/tools** (they may stay) — but the exemption protects WORKING diagnostics, NOT stubs whose documented capability was already removed (s27 netloopback: doc said loopback verifier, code said stub-since-PR-2 → retired `e6f8576e`). Read the code, not the doc row. `memory/feedback_rule2_exempts_probes_diagnostics_tools.md`
 - **Test/probe flags live in `votv-coop.ini [dev]`, NOT bats/env.** `memory/feedback_test_flags_in_ini_not_bats_or_env.md`
 - **`docs/piles/` is the LIVING pile KB** — mark DESIGN vs AS-BUILT vs VERIFIED. `memory/feedback_docs_piles_living_knowledge_base.md`
 - **A diagnostic probe's built-in comparability/quiescent tag is only as good as its DERIVED inputs** —
@@ -143,7 +150,7 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   signal already trusted elsewhere (the doom sweep's probe was). Moving an edge beats compensating
   for it. `memory/lesson_check_existing_barrier_anchor_before_compensating.md`
 - **Harness TimelineThread call sites: an Arm() stays ATOMICS-ONLY (or Post to the GT)** —
-  DriveMenuModeJoinWorldBoot runs OFF the game thread (harness.cpp:285-288); extending a directly-
+  DriveMenuModeJoinWorldBoot runs OFF the game thread (harness/session_runtime.cpp:253, s27 cut); extending a directly-
   called Arm to touch plain GT-owned state is a silent data race (2026-07-12 audit CRITICAL: 8
   fields + a std::string; fixed `7847021e` via an atomic request flag consumed by the GT ticker +
   UE_ASSERT_GAME_THREAD on GT-only entries). *Look FIRST:* the caller's thread — grep the enclosing
@@ -269,6 +276,13 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   shot install ... idempotent"; each sub-Install MUST latch its noisy/expensive work or it re-runs per
   frame (desk_diag ENABLED banner ~37k/session, `2de202ed`). *Look FIRST:* add a `static bool` latch to
   any new Install that logs/allocates/hooks/resolves. `memory/lesson_subsystems_install_runs_every_tick_must_latch.md` (SHARPENED v120: a success-only latch whose FAILED retry re-runs FindClass = a 60 Hz pre-world array-walk bomb — put every resolve retry behind a throttled gate or a cached resolver)
+- **One bool latch fusing DISTINCT terminal states (success vs DISABLED) makes some consumer's gate
+  wrong for one of them** — pre-s27 kerfur_convert `g_installed=true` meant BOTH "ready" and "module
+  disabled", so the request gate PASSED requests in the disabled state (the exact zeroed-frame
+  over-read the disable existed to prevent; latent, found by the s27 split's per-state gate
+  re-derivation). Enumerate (terminal state × consumer gate) before touching any init latch; one
+  latch = one meaning. *Look FIRST:* kerfur_convert_host.h (the documented fail-closed deviation).
+  `memory/lesson_single_latch_fused_states_gate_semantics.md`
 - **Every client-side SUPPRESSION is a LOAN, not a purchase (N=3: weather 06-11, serverbox 07-09,
   garbage_sync 07-10).** Persistent-state neutralizations (tick-disable, field-zero, TimeScale=0,
   suppress flags) need an EXPLICIT OnDisconnect restore; fn-body PRE-cancels SELF-restore ONLY when
@@ -781,7 +795,11 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   under git's 50% rename-similarity threshold (grab residual ~41%) → `--follow` history silently
   severed; extract FIRST (same filename shrinks in place), then a PURE `git mv` as its own commit
   (99-100% detected) — verify with `git log --follow` before calling it done.
-  *Look FIRST:* `votv-rack-extraction-DESIGN-2026-07-18.md` §4-5+§8;
+  SPAN-EDGE variant (s27 vitals, audit-caught `de304643`): a per-TU scaffold span can drag NEIGHBOR
+  comment lines across a function boundary, and the instrument's permissive "//"-prefix allowance is
+  BLIND to it — verify comment-block ownership at every span edge; the closing audit covers that
+  blind spot.
+  *Look FIRST:* `votv-s27-three-cuts-DESIGN-2026-07-19.md`; `votv-rack-extraction-DESIGN-2026-07-18.md` §4-5+§8;
   `votv-session-streams-extraction-DESIGN-2026-07-18.md`;
   `votv-netpump-decomposition-DESIGN-2026-07-18.md`; `votv-autotest-dissolve-DESIGN-2026-07-19.md`;
   `coop/dev/drive_selftest.cpp`.

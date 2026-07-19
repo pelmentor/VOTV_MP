@@ -155,5 +155,5 @@ skeleton commit and never updated as Phase 1 closed each item).
 6. [RESOLVED] Overlay render API = hook `IDXGISwapChain::Present` (DXGI), DX11
    backend (ImGui_ImplDX11 + ImGui_ImplWin32); DX12 detected + logged, not yet
    drawn. Implemented in `src/votv-coop/src/ui/imgui_overlay.cpp` (commit
-   5dc7aa67), wired live at `harness.cpp:1092`. NOTE: uses the mod's own
+   5dc7aa67), wired live at `harness.cpp:469` (Start; s27 renumber). NOTE: uses the mod's own
    vendored ImGui, NOT UE4SS (RULE 3) — the "UE4SS overlay" framing is retired.

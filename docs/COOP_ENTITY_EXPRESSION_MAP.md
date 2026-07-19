@@ -502,7 +502,7 @@ HEAD `29353191`; see the Increment-2 bullet below). A sync-time-context byte rej
   **claims-and-adopts** its conversion ghost (parks/freezes, never destroy+respawn). The historical dupe came
   from the mid-join turn-on window + the invisible spawn leaving untracked ghosts. **[V/RD]**
 - **The 2026-06-29 "two roots" are BOTH CLOSED [status verified against code 2026-07-12]:** ROOT 1
-  (the `fromConvert`/`deferKerfur` arg-slot swap) fixed at `kerfur_convert.cpp:332-344` (explicit
+  (the `fromConvert`/`deferKerfur` arg-slot swap) fixed at `kerfur_convert_client.cpp:125-141` (s27 cut; explicit
   `fromConvert=false, deferKerfur=false` with the ROOT-1 comment); ROOT 2 (mid-join KerfurConvert
   drop) closed by v91 (`retireOffEid` rides the npc EntitySpawn, which the connect snapshot always
   delivers) + the 2026-07-12 JOIN BARRIER (no mid-churn window). Historical design doc:

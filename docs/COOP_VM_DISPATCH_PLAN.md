@@ -321,7 +321,7 @@ FunctionParams guard + per-consumer cross-check.
 
 > **⚠ SUPERSEDED 2026-07-14 — MODEL B (repoint / eid-reuse / "migrate the eid onto B" / split
 > `BindFormActor`) IS MEASURED FALSE.** The 2a-capture IMPLEMENTATION /qf pass (5 rounds + user injection)
-> read the converge code (`kerfur_convert.cpp:188-258`): the eid is **per-form** (minted fresh, A released,
+> read the converge code (`kerfur_convert.cpp:188-258`; s27 cut: now `kerfur_convert_host.cpp::ConvergeAfterConversion`): the eid is **per-form** (minted fresh, A released,
 > wire carries `oldEid→newEid`), **K is the stable identity**, and Npc/Prop are separate `MirrorManager<T>`
 > singletons (no in-place type-migration without a lane merge). The converged model is **FULL-UNIFY A+**:
 > deterministic in-bracket B-capture + **DRAIN** A's prop-eid at birth (a subtraction, NOT a migrate);
