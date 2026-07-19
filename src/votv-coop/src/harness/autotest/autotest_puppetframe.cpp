@@ -41,9 +41,6 @@ bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
     return d->load() != 0;
 }
 
-// Read whether the slot-1 puppet has a LIVE ragdoll display body whose mesh is
-// physically simulating (2026-06-01 xray-actor rework: the visible flop is a
-
 // ---- Puppet-frame nameplate shot (PROPER, non-ragdoll capture) ----------------
 // Frame the slot-1 STANDING puppet for an autonomous nameplate screenshot
 // (mp.py puppetshot): stand the host a few metres back + aim the camera at the

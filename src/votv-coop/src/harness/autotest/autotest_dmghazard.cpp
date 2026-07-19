@@ -38,9 +38,6 @@ bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
     return d->load() != 0;
 }
 
-// Read whether the slot-1 puppet has a LIVE ragdoll display body whose mesh is
-// physically simulating (2026-06-01 xray-actor rework: the visible flop is a
-
 // ===================== #6 puppet-damage hazard PROBE =====================
 // MUST-VERIFY #6 (gates Inc3-WIRE -- the combat loop). Static RE (IDA + SDK,
 // 2026-05-31) found NO per-actor health field on mainPlayer_C: health lives ONLY

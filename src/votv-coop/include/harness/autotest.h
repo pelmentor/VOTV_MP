@@ -180,7 +180,7 @@ DWORD WINAPI PropReapTestThread(LPVOID arg);
 void RunAutonomousReSeedTest();
 DWORD WINAPI ReSeedTestThread(LPVOID arg);
 
-// Vitals Inc2b ragdoll/faint e2e WIRE test (2026-05-31, harness/autotest_vitals.cpp).
+// Vitals Inc2b ragdoll/faint e2e WIRE test (2026-05-31, harness/autotest_ragdoll.cpp).
 // BOTH peers, role-branched: the CLIENT drives ragdollMode(1,1,0)/forceGetUp() on
 // its LOCAL possessed player; the HOST observes its slot-1 puppet flip isRagdoll
 // 0->1->0 purely via the pose stream's kStateBitRagdoll + RemotePlayer's reconcile.
@@ -191,14 +191,14 @@ DWORD WINAPI ReSeedTestThread(LPVOID arg);
 void RunAutonomousRagdollTest();
 DWORD WINAPI RagdollTestThread(LPVOID arg);
 
-// Puppet-frame nameplate shot (2026-06-07, harness/autotest_vitals.cpp) -- PROPER
+// Puppet-frame nameplate shot (2026-06-07, harness/autotest_puppetframe.cpp) -- PROPER
 // non-ragdoll capture. HOST stands ~420u back from the slot-1 STANDING puppet + aims
 // at its head + HOLDS the frame so mp.py puppetshot can grab the ImGui "Client"
 // nameplate over it; CLIENT just stands. Gated by env VOTVCOOP_RUN_PUPPET_FRAME="1".
 void RunAutonomousPuppetFrame();
 DWORD WINAPI PuppetFrameThread(LPVOID arg);
 
-// Vitals Inc3 damage hurt-flash e2e WIRE test (2026-05-31, harness/autotest_vitals.cpp).
+// Vitals Inc3 damage hurt-flash e2e WIRE test (2026-05-31, harness/autotest_damage.cpp).
 // BOTH peers: the CLIENT lowers its own saveSlot.health in steps; vitals Inc1 streams
 // the lower fraction; the HOST confirms its slot-1 puppet's nameplate flashes red
 // (RemotePlayer::IsHurtFlashing) -- proving a peer's damage shows on its puppet with
@@ -207,7 +207,7 @@ DWORD WINAPI PuppetFrameThread(LPVOID arg);
 void RunAutonomousDamageTest();
 DWORD WINAPI DamageTestThread(LPVOID arg);
 
-// Vitals #6 puppet-damage HAZARD probe (2026-05-31, harness/autotest_vitals.cpp).
+// Vitals #6 puppet-damage HAZARD probe (2026-05-31, harness/autotest_dmghazard.cpp).
 // Gates Inc3-WIRE. HOST-only verdict: invokes AmainPlayer_C::"Add Player Damage" on
 // the slot-1 UNPOSSESSED puppet and diffs the host's OWN saveSlot.health. A drop ==
 // health is the shared per-machine saveSlot (static RE said so; this locks it at
@@ -218,7 +218,7 @@ DWORD WINAPI DamageTestThread(LPVOID arg);
 void RunAutonomousDmgHazardTest();
 DWORD WINAPI DmgHazardTestThread(LPVOID arg);
 
-// Vitals Inc3-WIRE relay e2e (2026-05-31, harness/autotest_vitals.cpp). BOTH peers.
+// Vitals Inc3-WIRE relay e2e (2026-05-31, harness/autotest_playerdmg.cpp). BOTH peers.
 // The HOST sends synthetic PlayerDamage to slot 1 (player_damage::DebugForceHitPuppet);
 // the CLIENT receives + applies Add Player Damage to its OWN player; the client's
 // streamed health drop flashes the host's slot-1 puppet (reusing the Inc3 hurt-flash).

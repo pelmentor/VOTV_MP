@@ -35,9 +35,6 @@ bool WaitDone(const std::shared_ptr<std::atomic<int>>& d, int timeoutMs) {
     return d->load() != 0;
 }
 
-// Read whether the slot-1 puppet has a LIVE ragdoll display body whose mesh is
-// physically simulating (2026-06-01 xray-actor rework: the visible flop is a
-
 // ===================== Inc3-WIRE relay e2e (PlayerDamage) =====================
 // Proves the WHOLE host->owner damage relay with NO real enemy. The HOST both DRIVES
 // and OBSERVES: it sends synthetic PlayerDamage to slot 1 (player_damage::
