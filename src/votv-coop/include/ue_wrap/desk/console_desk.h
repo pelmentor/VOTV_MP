@@ -93,26 +93,19 @@ bool CoordLogTailEquals(const std::wstring& expected, size_t maxChars);
 // (engine-side FString handling -- we never write engine FStrings raw).
 bool AppendCoordLog(const std::wstring& suffix);
 
-// The coords-panel cursor state (the REAL dish aim -- the ui_coordinates
-// widget fields; spaceRenderer.coords is dead bytecode). Receivers raw-write
-// + the reflected updCursorLocations() repaint, which also rotates the
-// physical pingDishes (setRot).
-struct DishAim {
-    float viewX = 0, viewY = 0;   // viewCoordinate
-    float c0X = 0, c0Y = 0;       // Coordinate_0
-    float c1X = 0, c1Y = 0;       // Coordinate_1
-    float c2X = 0, c2Y = 0;       // Coordinate_2
-    int32_t selected = 0;         // the selected cursor index
-    uint8_t direction = 0;        // Direction @0x441 -- the catch-gate toggle (v70)
-};
-bool ReadDishAim(DishAim& out);
-// v109: the LIVE cursor and the COMMITTED locks are now SEPARATE writes (see the
-// .cpp). WriteCursorOnly = viewCoordinate memcpy, NO dispatch (the 60Hz interpolated
-// stream; the widget's own Tick repaints). WriteDishCommitted = the discrete locks +
-// updCursorLocations repaint (commit rate). WriteDishAim (wrote both + dispatched at
-// 3Hz) is RETIRED -- two authors on viewCoordinate is the dupe shape (RULE 2).
-bool WriteCursorOnly(float viewX, float viewY);
-bool WriteDishCommitted(const DishAim& in);
+// (The coords-panel cursor state -- DishAim + ReadDishAim/WriteCursorOnly/
+// WriteDishCommitted -- moved to ue_wrap/desk/coords_panel, 2026-07-19
+// one-class-per-file split. The two desk-half seams it consumes live below.)
+
+// The raw desk.Widget -> atlas.ui_coordinates slot value (atlas IsLive-checked,
+// the widget pointer UNVALIDATED) -- coords_panel's instance chain does the
+// class-validate + cache half. Null while the desk/atlas is not live.
+void* AtlasUiCoordsSlot();
+
+// Dispatch the desk's updateCoordCoords (az/alt text repaint; refresh-verb
+// table [8]) -- coords_panel's committed-apply tail. False on unresolved.
+bool CallUpdateCoordCoords();
+
 // v109: replay the desk's native intComs_unfocused (reset-on-release; dims, not hides).
 bool CallIntComsUnfocused();
 

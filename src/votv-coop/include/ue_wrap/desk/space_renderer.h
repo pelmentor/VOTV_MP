@@ -84,6 +84,6 @@ bool ZeroMovement();
 
 // (The dish aim does NOT live here: spaceRenderer.coords/coords_rot are dead
 // bytecode -- the real cursor state is on the ui_coordinates widget; see
-// ue_wrap::console_desk::ReadDishAim/WriteDishAim. Phase-2 impl RE.)
+// ue_wrap::coords_panel::ReadDishAim + the split writes. Phase-2 impl RE.)
 
 }  // namespace ue_wrap::space_renderer

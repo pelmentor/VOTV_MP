@@ -9,6 +9,7 @@
 #include "coop/dev/desk_diag.h"  // [dev] JOIN-ADOPT pre-apply baseline hook (no-op unless desk_diag=1)
 
 #include "ue_wrap/desk/console_desk.h"
+#include "ue_wrap/desk/coords_panel.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/desk/space_renderer.h"
 
@@ -25,6 +26,7 @@ namespace {
 
 namespace SR = ue_wrap::space_renderer;
 namespace CD = ue_wrap::console_desk;
+namespace CP = ue_wrap::coords_panel;
 
 using Clock = std::chrono::steady_clock;
 
@@ -77,7 +79,7 @@ bool g_logPrimed = false;
 constexpr size_t kLogReadMax = 1100;
 
 // ---- dish aim ---------------------------------------------------------------
-CD::DishAim g_dishLastSent;
+CP::DishAim g_dishLastSent;
 Clock::time_point g_nextDish{};
 
 bool RowIdentityEq(const SR::SignalRow& a, const SR::SignalRow& b) {
@@ -419,14 +421,14 @@ void Tick() {
         // locks, so aimEq compares committed-only: a cursor SWEEP no longer triggers a
         // reliable re-send (only a commit does). Two authors on viewCoordinate was the
         // dupe shape -- the old p.viewX/p.viewY writes are DELETED here (RULE 2).
-        auto aimEq = [](const CD::DishAim& a, const CD::DishAim& b) {
+        auto aimEq = [](const CP::DishAim& a, const CP::DishAim& b) {
             return a.c0X == b.c0X && a.c0Y == b.c0Y &&
                    a.c1X == b.c1X && a.c1Y == b.c1Y &&
                    a.c2X == b.c2X && a.c2Y == b.c2Y &&
                    a.selected == b.selected && a.direction == b.direction;
         };
-        CD::DishAim aim;
-        if (CD::ReadDishAim(aim) && !aimEq(aim, g_dishLastSent)) {
+        CP::DishAim aim;
+        if (CP::ReadDishAim(aim) && !aimEq(aim, g_dishLastSent)) {
             coop::net::DishAimStatePayload p{};
             p.c0X = aim.c0X; p.c0Y = aim.c0Y;
             p.c1X = aim.c1X; p.c1Y = aim.c1Y;
@@ -535,13 +537,13 @@ void OnDishAim(const coop::net::DishAimStatePayload& p, uint8_t senderSlot) {
     if (holder == 0xFF || senderSlot != holder) return;
     if (coop::device_occupancy::LocalHolds(kDeskClaim)) return;  // we are the streamer
     if (!CD::EnsureResolved()) return;
-    CD::DishAim aim;  // viewX/viewY stay 0 -- WriteDishCommitted ignores them (cursor lane owns viewCoordinate)
+    CP::DishAim aim;  // viewX/viewY stay 0 -- WriteDishCommitted ignores them (cursor lane owns viewCoordinate)
     aim.c0X = p.c0X; aim.c0Y = p.c0Y;
     aim.c1X = p.c1X; aim.c1Y = p.c1Y;
     aim.c2X = p.c2X; aim.c2Y = p.c2Y;
     aim.selected = p.selected;
     aim.direction = p.direction;
-    CD::WriteDishCommitted(aim);
+    CP::WriteDishCommitted(aim);
 }
 
 void OnDeskLogLine(const coop::net::DeskLogLinePayload& p, uint8_t senderSlot) {
@@ -591,8 +593,8 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
         // an IDLE occupant sends nothing and a joiner would see STALE locks. Snapshot
         // the current committed coords on connect (the live cursor needs no snapshot --
         // the DeskCursorPose stream re-primes it within one send interval).
-        CD::DishAim aim;
-        if (CD::ReadDishAim(aim)) {
+        CP::DishAim aim;
+        if (CP::ReadDishAim(aim)) {
             coop::net::DishAimStatePayload p{};
             p.c0X = aim.c0X; p.c0Y = aim.c0Y;
             p.c1X = aim.c1X; p.c1Y = aim.c1Y;

@@ -18,6 +18,7 @@
 #include "coop/net/session.h"
 
 #include "ue_wrap/desk/console_desk.h"
+#include "ue_wrap/desk/coords_panel.h"
 #include "ue_wrap/desk/dish.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
@@ -34,6 +35,7 @@ namespace coop::dev::desk_diag {
 namespace {
 
 namespace CD  = ue_wrap::console_desk;
+namespace CP  = ue_wrap::coords_panel;
 namespace DSH = ue_wrap::dish;
 namespace R   = ue_wrap::reflection;
 
@@ -199,8 +201,8 @@ void Tick() {
     float decoded = 0; int32_t polarity = -1;
     const bool haveDl = CD::ReadDownloadProgress(decoded, polarity);
     const int meshValid = CD::DownloadMeshValid() ? 1 : 0;
-    CD::DishAim aim{};
-    const bool haveAim = CD::ReadDishAim(aim);
+    CP::DishAim aim{};
+    const bool haveAim = CP::ReadDishAim(aim);
     CD::CoordSignal sig{};
     const bool haveSig = CD::ReadCoordSignal(sig);
     const int32_t dishN = DSH::EnsureResolved() ? DSH::Count() : -1;

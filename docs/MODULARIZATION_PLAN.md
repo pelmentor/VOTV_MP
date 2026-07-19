@@ -38,10 +38,11 @@
 > | session.cpp 9 scalar stream channels -> `net/session_streams.cpp` (1208->679+620) | DONE, mutant-proven 4p matrix + literal diff | `06921557` |
 > | net_pump 915-line Tick -> `props/registry_reaper.cpp` (401) + `player/puppet_drive.cpp` (218); net_pump 1237->744 | DONE, same apparatus + menu-guard audit trace | `de249463` |
 > | console_desk generic component calls -> `ue_wrap/core/component_calls.cpp` (1021->928) | DONE, smoke | `b5c1b911` |
-> | console_desk ui_coordinates_C one-class-per-file split (928 -> ~760) | **DESIGNED-DEFERRED** — the seams (WriteDishCommitted desk-verb tail, PlayScanEffects widget gate, desk.Widget->atlas->ui_coordinates walk) form a two-direction dependency; needs its own /qf (anti-smear beats the size rule until it converges) | — |
+> | console_desk ui_coordinates_C one-class-per-file split (928 -> 822 + coords_panel 173) | **DONE** (2026-07-19, 2-round /qf; seams = console_desk::AtlasUiCoordsSlot + CallUpdateCoordCoords publics, PlayScanEffects gates on coords_panel::Instance; literal body-diff PASS w/ mutate control, smoke PASS w/ both coords_panel log lines on both peers) | s24 |
+> | console_desk residual 822>800 — next cut = the v70 signal-catch/download-machine surface (~150 LOC: ReadCoordSignal/ResetDownloadMachine/ArmDownloadFromSignal/...) OR the comp pane (~110 LOC) into own ue_wrap/desk file | **PROPOSED** (2026-07-19 audit flag) | — |
 > | prop_identity (prop.cpp) / laptop lid axis | **MOOT** — re-measured 799 / 691, both under the soft cap | — |
 >
-> Residue >800 after ledger 3: kerfur_convert 1259, harness 1222, weather_sync 1154, console_desk 928
+> Residue >800 after ledger 3 (upd. 07-19): kerfur_convert 1259, harness 1222, weather_sync 1154, console_desk 822 (coords_panel split DONE; next-cut proposal above)
 > (proposal above). protocol.h exempt (constants header).
 >
 > **(2026-07-07 claim, superseded by ledger 3 above for the >800 queue):** the A-D modularization was COMPLETE at the RULE-1-correct boundary. Every safe/valid extraction

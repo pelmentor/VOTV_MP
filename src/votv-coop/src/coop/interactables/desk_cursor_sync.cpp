@@ -40,6 +40,7 @@
 #include "coop/net/session.h"
 
 #include "ue_wrap/desk/console_desk.h"
+#include "ue_wrap/desk/coords_panel.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/desk/space_renderer.h"
 
@@ -51,6 +52,7 @@ namespace coop::desk_cursor_sync {
 namespace {
 
 namespace CD = ue_wrap::console_desk;
+namespace CP = ue_wrap::coords_panel;
 namespace SR = ue_wrap::space_renderer;
 
 std::atomic<coop::net::Session*> g_session{nullptr};
@@ -205,8 +207,8 @@ void Tick() {
 
     if (wantStream) {
         if (CD::EnsureResolved()) {
-            CD::DishAim aim;
-            if (CD::ReadDishAim(aim)) {
+            CP::DishAim aim;
+            if (CP::ReadDishAim(aim)) {
                 coop::net::DeskCursorPoseSnapshot snap{ aim.viewX, aim.viewY };
                 s->SetLocalDeskCursor(true, snap);  // net thread streams it at sendHz
                 if (!g_streaming) {
@@ -296,7 +298,7 @@ void Tick() {
                             g_interp.window_.IsOpen() ? 1 : 0,
                             static_cast<double>(g_interp.emaChangeMs));
                 coop::desk_snd_fx::ScopedWireApply guard;
-                CD::WriteCursorOnly(g_interp.curX, g_interp.curY);
+                CP::WriteCursorOnly(g_interp.curX, g_interp.curY);
             }
         }
     }
