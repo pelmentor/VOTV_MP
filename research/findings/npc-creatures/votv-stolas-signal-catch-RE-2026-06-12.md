@@ -221,7 +221,9 @@ the 9 event lines belong on the wire (§6.4).
 
 ### 5.1 Symptom 1 — host never saw the dots move: ARCHETYPE-vs-INSTANCE resolve bug
 
-`ue_wrap/console_desk.cpp:184 UiCoordsInstance()` resolves the widget via
+`UiCoordsInstance()` (2026-07-19: now `ue_wrap::coords_panel::Instance()` in
+`ue_wrap/desk/coords_panel.cpp` after the one-class-per-file split; the fixed
+chain-resolve described below moved verbatim) resolved the widget via
 `R::FindObjectsByClass(L"ui_coordinates_C")` first-live-hit. The cooked
 `ui_consolesAtlas` asset contains a **NormalExport named `ui_coordinates`
 (export #360, ui_consolesAtlas.json)** — the WIDGET-TREE TEMPLATE. At runtime

@@ -65,10 +65,47 @@ phase-gate breakdown when it opens.
    world, so dedicated = the HOST GAME RUNNING HEADLESS (no render) driven
    by our DLL — NOT a from-scratch server binary (MTA's server never runs
    GTA, but MTA distributes world-sim to clients; we do the opposite).
+   Open questions logged 2026-07-19 (user discussion):
+   - **Ghost host** — the architecture assumes the host is a live player
+     with a pawn; a zero-player host needs its local pawn parked/excluded
+     (not a slot, not an event target). THE phase-6 design question.
+   - **No redistribution** — the server package = our DLL + launcher +
+     config dropped onto the OPERATOR'S OWN game copy (itch.io). No
+     SteamCMD analog; we never ship game files.
+   - **Linux via Wine spike** — no native VOTV Linux build exists and we
+     cannot produce one (no source; rule 1 forbids rebuilding the game).
+     Wine/Proton headless (`-nullrhi`, Xvfb if needed,
+     `WINEDLLOVERRIDES="xinput1_3=n,b"`) is the Linux path; expectation
+     (NOT measured): 0-10% CPU overhead on a CPU-bound headless load with
+     fsync/ntsync, RAM budget better than a same-size Windows box. The
+     spike measures our existing perf-probe metrics + 24h uptime.
+   - **Native game server binary = only via the devs** (UE4.27 LinuxServer
+     target needs the game project). If that ever lands, our DLL needs its
+     own port (ELF loading, new AOB signatures).
 7. **Resource infrastructure** ☐ — client-side resource download from the
    server (no manual mod-pack installs), Lua sandboxing/security (clients
    execute untrusted server code — mandatory layer), and the server
    browser (the VPS signaling service grows into the master list).
+   Trust note (2026-07-19): once servers are public, client-side cheating
+   returns as a threat — MTA's answer is a client AC + server-side
+   validation hooks, NOT authority architecture (MTA is client-simulated
+   with per-element syncers; verified in the vendored source,
+   `CUnoccupiedVehicleSync::FindPlayerCloseToVehicle` assigns the nearest
+   player as an element's simulator). In our current model only the HOST
+   is trusted (host == admin, acceptable); a public-server future needs
+   its own AC layer decision here.
+8. **Native standalone server** ☐ — the long-horizon MTA endgame, only
+   AFTER 5-7: authority INVERSION to the true MTA shape — the server holds
+   state + Lua rules + arbitration (our C++ core needs no engine), clients
+   simulate the world with per-element syncers (the MTA precedent above).
+   NOT "rewrite VOTV in C++": server-side authoritative physics without
+   the engine is a decade-class trap; the MTA inversion shrinks the job to
+   rules + state machines, which phases 4-5 already produce as Lua
+   resources. The accumulated RE corpus (docs/events/, docs/signals/,
+   docs/items/, COOP_RNG_AUTHORITY, the entity-expression map) IS the
+   rules specification. Research branch: executing the game's own cooked
+   BP bytecode in our VM (we already parse it; native-call stubs are the
+   wall). The phase-6 Wine dedicated stays the workhorse meanwhile.
 
 ---
 
