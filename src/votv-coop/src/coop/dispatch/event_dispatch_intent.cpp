@@ -13,7 +13,7 @@
 #include "event_dispatch.h"  // co-located private header (src tree, not include/)
 
 #include "coop/creatures/kerfur_command.h"
-#include "coop/creatures/kerfur_convert.h"
+#include "coop/creatures/kerfur_convert_host.h"
 #include "coop/creatures/roach_sync.h"    // v108: CLIENT->HOST local roach consumption intent
 #include "coop/interactables/interactable_sync.h"
 #include "coop/items/order_sync.h"
@@ -104,7 +104,7 @@ bool HandleIntentEvent(net::Session& session,
             (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
                 ? static_cast<uint8_t>(msg.senderPeerSlot)
                 : static_cast<uint8_t>(0xFF);
-        coop::kerfur_convert::OnConvertRequest(p, senderSlot);
+        coop::kerfur_convert_host::OnConvertRequest(p, senderSlot);
         break;
     }
     case net::ReliableKind::KerfurCommand: {

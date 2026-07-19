@@ -278,6 +278,7 @@ add_library(votv-coop SHARED
     src/coop/interactables/interactable_sync.cpp
     src/coop/creatures/kerfur_convert.cpp
     src/coop/creatures/kerfur_convert_client.cpp
+    src/coop/creatures/kerfur_convert_host.cpp
     src/coop/creatures/kerfur_command.cpp
     src/coop/creatures/kerfur_menu_input.cpp
     src/coop/creatures/kerfur_entity.cpp

@@ -65,7 +65,7 @@
 #include "coop/creatures/kerfur_form_assembler.h"
 
 #include "coop/config/config.h"
-#include "coop/creatures/kerfur_convert.h"  // OBSERVE (2026-07-14 G1): ActiveRequestVerbEid -- the CallFunction route scope
+#include "coop/creatures/kerfur_convert_host.h"  // OBSERVE (2026-07-14 G1): ActiveRequestVerbEid -- the CallFunction route scope
 #include "coop/element/element.h"    // ElementId, kInvalidId (gate 1 per-eid read)
 #include "coop/element/registry.h"   // Registry::EidForActor (gate 1 per-eid read)
 #include "coop/net/session.h"
@@ -197,7 +197,7 @@ void StoreCapturedForm(void* b, int32_t idx, void* cls) {
 }
 // G1: is the host currently executing a client's convert-request via CallFunction (the 0x45-blind route)?
 bool InReqScope() {
-    return coop::kerfur_convert::ActiveRequestVerbEid() != E::kInvalidId;
+    return coop::kerfur_convert_host::ActiveRequestVerbEid() != E::kInvalidId;
 }
 
 // ---- the substrate ENTRY callback (observe-only) -------------------------------
@@ -299,7 +299,7 @@ void OnFinishSpawn(void* /*context*/, void* /*sourceObject*/, void* spawnedResul
         UE_LOGI("[kerfur_asm][%s] SPAWN %ls actor=%p class=%ls %s verbId=%d depth=%d bIdx=%d bLive=%d reqEid=%d",
                 RoleTag(), isForm ? L"FORM" : L"floppy", spawnedResult, cn.c_str(),
                 scope, av.verbId, av.depth, bIdx, bIndexLive ? 1 : 0,
-                reqScope ? static_cast<int>(coop::kerfur_convert::ActiveRequestVerbEid()) : -1);
+                reqScope ? static_cast<int>(coop::kerfur_convert_host::ActiveRequestVerbEid()) : -1);
     }
 }
 

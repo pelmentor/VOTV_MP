@@ -75,13 +75,9 @@ namespace coop::kerfur_convert {
 // classes for the converge walk. Caches `session`.
 void Install(coop::net::Session* session);
 
-// HOST-only receiver for KerfurConvertRequest (wired in event_dispatch_state).
-// Validates + executes the verb + converges, all on the game thread (the
-// event_feed drain). senderPeerSlot is log-only. payload.elementId is the
-// dying-form's host-range MIRROR eid (the client is eid-based); the host
-// resolves both the actor and the stable KerfurId from it.
-void OnConvertRequest(const coop::net::KerfurConvertPayload& payload,
-                      uint8_t senderPeerSlot);
+// The HOST executor half (OnConvertRequest + ConvergeAfterConversion + the
+// request-verb bracket / ActiveRequestVerbEid) lives in kerfur_convert_host.h
+// (s27 cut).
 
 // The CLIENT half (the KerfurConvert wire apply + the conversion-ghost custody:
 // claim/cleanup/TakeParkedGhostByEid) lives in kerfur_convert_client.h (s27 cut).
@@ -131,16 +127,8 @@ bool TryAdoptFreshKerfurProp(void* actor);
 // declines: no wire identity to converge). Game thread (the destroy seam).
 bool TryCaptureKerfurPropDestroy(void* actor, coop::element::ElementId dyingEid);
 
-// OBSERVE (2026-07-14, G1 increment): the host-range eid of the conversion request the host is
-// CURRENTLY executing via R::CallFunction inside OnConvertRequest, or kInvalidId when not inside one
-// (the g_requestVerbEid bracket, kerfur_convert.cpp:945-947). The host-exec-client-request path runs
-// the verb via CallFunction, which is ASSEMBLER-BLIND -- the 0x45 substrate only catches the local
-// EX_Local menu toggle, never a CallFunction dispatch. The kerfur_form_assembler consults this to
-// recognize the CallFunction bracket as a SECOND capture scope (else a CallFunction-route B lands in
-// formOut, indistinguishable from a world-load spawn). Game-thread only marker (no lock needed).
-coop::element::ElementId ActiveRequestVerbEid();
-
-// Clear per-session state (the pending queue). Net disconnect.
+// Clear per-session state (the poll watch + the poll throttle) and fan the
+// disconnect to the client/host halves (parked ghosts; the request bracket).
 void OnDisconnect();
 
 }  // namespace coop::kerfur_convert
