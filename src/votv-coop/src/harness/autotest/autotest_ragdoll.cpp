@@ -1,4 +1,6 @@
-// harness/autotest_vitals.cpp -- autonomous vitals-pillar wire test.
+// harness/autotest_ragdoll.cpp -- the ragdoll/faint sync e2e autotest
+// (VOTVCOOP_RUN_RAGDOLL_TEST; ex-autotest_vitals.cpp, s27 dissolve: the
+// damage/dmghazard/playerdmg/puppetframe families live in their own TUs).
 //
 // Inc2b end-to-end ragdoll/faint sync test. Drives the FULL wire path:
 //
