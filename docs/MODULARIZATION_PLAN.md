@@ -41,9 +41,10 @@
 > | console_desk ui_coordinates_C one-class-per-file split (928 -> 822 + coords_panel 173) | **DONE** (2026-07-19, 2-round /qf; seams = console_desk::AtlasUiCoordsSlot + CallUpdateCoordCoords publics, PlayScanEffects gates on coords_panel::Instance; literal body-diff PASS w/ mutate control, smoke PASS w/ both coords_panel log lines on both peers) | s24 |
 > | console_desk residual 822>800 — comp-pane cut chosen over the v70 catch surface (MEASURED: the DL_* offsets straddle that cut, shared with the staying sim vector; comp is single-consumer). TWO commits: `f74d05dc` retires the positional g_fields table (named offsets, self-binding {name,&var} rows — /qf R1 find: literal-diff AND the compiler are both BLIND to a missed index renumber; correspondence script w/ mutate control) then `f9dfb5d5` moves the surface to NEW ue_wrap/desk/comp_pane (58+212; own g_required latch = 4 field offsets required, rest opportunistic; seams = NEW public console_desk::AtlasWidget() + Instance()). console_desk 822 -> **740, UNDER the cap**. Body-diff 11 regions + mutate PASS; smoke PASS both peers; audit 6/6 PASS 0 findings | **DONE** (2026-07-19 s24b, 6-round /qf) | `f74d05dc`+`f9dfb5d5` |
 > | prop_identity (prop.cpp) / laptop lid axis | **MOOT** — re-measured 799 / 691, both under the soft cap | — |
+> | weather_sync 1154>800 — the FAMILY axis (fog/lightning/redsky precedent; the ue_wrap daynight_cycle axis REJECTED — would fragment the cycle substrate). TWO commits: `828844b2` NEW coop/world/weather_rain (432+82: the rain+snow cycle-side sub-lane — own 5 mutator resolves + latch, causeRain echo interceptor in-module, ReadState/ApplyFromHost(cycle,payload,cur,&outcome), DebugForceRain/Snow, own IsLiveByIndex cache; orchestrator resolves its 3 observer targets INDEPENDENTLY — no fn-ptr handoff; fused "applied" line byte-identical via the outcome struct; RULE-2: 3 thin forwards RETIRED, 16-row caller census migrated) then commit 2 NEW coop/dev/weather_probe (110+23: the ini-gated [probe weather]/[probe wind] block + ReadComponentIsActive; counters via accessors, cycle via weather_rain::Cycle()). weather_sync 1154 -> 850 -> **784, UNDER the cap**. Evidence: 315+75 moved lines diff w/ mutate controls; baseline-first gated smokes (imported lan-test literals 4/6/75, probes >=88, 4/4 settles, final cross-peer parity, injection-proven WARN gate) | **DONE** (2026-07-19 s25, 7-round /qf "that holds") | `828844b2`+`cd59ad13` |
 >
-> Residue >800 after ledger 3 (upd. 07-19 s24b): kerfur_convert 1259, harness 1222, weather_sync 1154.
-> console_desk CLOSED at 740 (coords_panel + comp_pane splits DONE). protocol.h exempt (constants header).
+> Residue >800 after ledger 3 (upd. 07-19 s25): kerfur_convert 1259, harness 1222 (-> B5 axis), autotest.cpp 1003 (audit flag: split per-feature test routines).
+> console_desk CLOSED at 740; weather_sync CLOSED at 784. protocol.h exempt (constants header).
 >
 > **(2026-07-07 claim, superseded by ledger 3 above for the >800 queue):** the A-D modularization was COMPLETE at the RULE-1-correct boundary. Every safe/valid extraction
 > shipped (A/D/C-engine_save/B5/B1a/B4). B1b was measured to be mis-scoped (executing it would
@@ -296,7 +297,7 @@ each (`wc -l`) — some may already be handled by Tier B.
 | `coop/save/save_transfer.cpp` (moved 2026-07-10) | 838 | pile/kerfur divergence L541-730 | -> B2 target | same move as B2 |
 | `session/player_handshake.cpp` | 828 | UTF-8 codec L132-181 + nick-color/skin wire pack-parse L90-131 | shared string util + `nick_color`/`nameplate` | codec is a generic dup (see D) |
 | `props/trash_collect_sync.cpp` | 810→498 | use-interceptor family (~258) | `trash_use_intercept.{h,cpp}` (~370) | **DONE (B1a, smoke-verified `03d38d2b`)** — see the B1 section |
-| `world/weather_sync.cpp` | 1141 | cohesive — LOW priority | (sky/lightning are internal sub-concerns) | only split if it grows; no misplaced code |
+| `world/weather_sync.cpp` | ~~1141~~ 784 | **DONE 07-19 s25** (ledger 3): weather_rain + weather_probe extracted | family axis | closed under cap |
 | `net/session.cpp` | 885 | `HandleMessage` switch L324-606 | per-message handlers | conceptually core routing — split only if it keeps growing |
 | `harness/harness.cpp` | 1204 | -> B5 (autotest move) + nick-color parse L759-780 -> `nick_color` | | most relief comes from B5 |
 
