@@ -42,6 +42,32 @@ void PersistLocal(uint32_t packed) {
 
 }  // namespace
 
+void SetInitialLocalFromIniHex(const std::string& hex) {
+    // Moved verbatim from the harness boot glue (s27 Tier-C): the v103 (12f)
+    // persisted nick color. "unset" (key absent, a new identity) = custom WHITE
+    // by default (user 2026-07-05); an explicitly EMPTY value = the per-surface
+    // defaults; a 6-digit RRGGBB hex = that color (malformed -> defaults).
+    uint32_t packed = 0;
+    if (hex == "unset") {
+        packed = Pack(255, 255, 255);
+    } else if (hex.size() == 6) {
+        unsigned rgb = 0;
+        bool ok = true;
+        for (char c : hex) {
+            rgb <<= 4;
+            if (c >= '0' && c <= '9')      rgb |= static_cast<unsigned>(c - '0');
+            else if (c >= 'a' && c <= 'f') rgb |= static_cast<unsigned>(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') rgb |= static_cast<unsigned>(c - 'A' + 10);
+            else { ok = false; break; }
+        }
+        if (ok)
+            packed = Pack(static_cast<uint8_t>(rgb >> 16),
+                          static_cast<uint8_t>(rgb >> 8),
+                          static_cast<uint8_t>(rgb));
+    }
+    SetInitialLocal(packed);
+}
+
 void SetInitialLocal(uint32_t packed) {
     g_local.store(packed, std::memory_order_relaxed);
 }

@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "coop/player/players_registry.h"  // kMaxPeers
 
@@ -40,6 +41,14 @@ inline uint8_t B(uint32_t p) { return static_cast<uint8_t>(p); }
 // Boot-time init from votv-coop.ini nick_color= (harness, before the pump
 // ticks). 0 = no custom color persisted.
 void SetInitialLocal(uint32_t packed);
+
+// Boot-time init from the RAW votv-coop.ini nick_color= value (harness passes
+// ReadIniValue("nick_color", "unset")). v103 (12f) semantics: key ABSENT (a new
+// identity) = custom WHITE by default (user 2026-07-05); an explicitly EMPTY
+// value (the user unchecked "Custom nickname color") = the per-surface defaults
+// (chat palette / role colors); RRGGBB hex = that color. Owns the parse so the
+// harness boot glue stays parse-free (MODULARIZATION_PLAN Tier-C, s27).
+void SetInitialLocalFromIniHex(const std::string& hex);
 
 // The local pref (0 = default). Any thread (atomic) -- the F1 picker reads it.
 uint32_t LocalPacked();

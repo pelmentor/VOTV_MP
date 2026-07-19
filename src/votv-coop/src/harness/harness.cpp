@@ -766,31 +766,9 @@ DWORD WINAPI TimelineThread(LPVOID param) {
     // v94: the persisted nameplate pref (absent = visible). The Join prefs byte reads it.
     coop::nameplate::SetInitialLocalVisible(cfg::ReadIniValue("nameplate", "1") != "0");
     // v103 (12f): the persisted nick color (ini nick_color=RRGGBB hex). The Join
-    // color field reads it. Key ABSENT (a new identity) = custom WHITE by default
-    // (user 2026-07-05); an explicitly EMPTY value (the user unchecked "Custom
-    // nickname color") = the per-surface defaults (chat palette / role colors).
-    {
-        const std::string hex = cfg::ReadIniValue("nick_color", "unset");
-        uint32_t packed = 0;
-        if (hex == "unset") {
-            packed = coop::nick_color::Pack(255, 255, 255);
-        } else if (hex.size() == 6) {
-            unsigned rgb = 0;
-            bool ok = true;
-            for (char c : hex) {
-                rgb <<= 4;
-                if (c >= '0' && c <= '9')      rgb |= static_cast<unsigned>(c - '0');
-                else if (c >= 'a' && c <= 'f') rgb |= static_cast<unsigned>(c - 'a' + 10);
-                else if (c >= 'A' && c <= 'F') rgb |= static_cast<unsigned>(c - 'A' + 10);
-                else { ok = false; break; }
-            }
-            if (ok)
-                packed = coop::nick_color::Pack(static_cast<uint8_t>(rgb >> 16),
-                                                static_cast<uint8_t>(rgb >> 8),
-                                                static_cast<uint8_t>(rgb));
-        }
-        coop::nick_color::SetInitialLocal(packed);
-    }
+    // color field reads it; nick_color owns the parse + the absent/empty
+    // semantics (s27 Tier-C move).
+    coop::nick_color::SetInitialLocalFromIniHex(cfg::ReadIniValue("nick_color", "unset"));
 
     // The OMEGA WARNING is on screen during the FIRST few seconds (the intro/menu
     // world), BEFORE we `open` gameplay. Sample widgets across that window so the
