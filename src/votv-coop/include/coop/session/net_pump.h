@@ -27,11 +27,10 @@ namespace coop::net_pump {
 // Per-tick main pump. Game thread only. Reads local pose, drives per-slot
 // puppet spawn + pose interp, fires per-slot connect/disconnect edges,
 // drains every subsystem's TickConnect / DrainChunk / Tick + the
-// event_feed. `displayOffsetX` shifts the rendered puppet sideways for
-// the loopback mirror scenario (0 for real coop).
-void Tick(coop::net::Session& session, float displayOffsetX);
+// event_feed.
+void Tick(coop::net::Session& session);
 
-// Called from the harness Start sites (play + netloopback) BEFORE
+// Called from the harness Start site (play) BEFORE
 // session.Start. Resets edge-detector flags so a session stop/restart
 // doesn't carry stale "was connected" / "was holding prop" state into
 // the new session. Mirrors event_feed::OnSessionStart's contract.

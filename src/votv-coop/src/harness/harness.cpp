@@ -123,7 +123,7 @@ bool BanAcceptFilter(const char* remoteIp) {
 // Puppet array + per-slot edge state + held-prop edge detector + the local-
 // pose read + the per-tick observer orchestrator + the main NetPumpTick body
 // extracted to coop/net_pump.cpp (PR-4.13). Harness reaches the puppets via
-// coop::puppet_drive::Puppet(slot) and calls coop::net_pump::Tick(g_session, ...)
+// coop::puppet_drive::Puppet(slot) and calls coop::net_pump::Tick(g_session)
 // from the timeline tick lambdas; coop::net_pump::OnSessionStart() resets
 // edge-detector state on each session.Start.
 
@@ -141,7 +141,7 @@ void TickShutdownHooks() {
 
 // NetPumpTick body extracted to coop/net_pump.cpp (PR-4.13). Harness call
 // sites in the timeline tick lambdas dispatch via
-// coop::net_pump::Tick(g_session, displayOffsetX) instead.
+// coop::net_pump::Tick(g_session) instead.
 
 void Post(GT::Task t) { GT::Post(std::move(t)); }
 
@@ -312,7 +312,7 @@ void DriveMenuModeJoinWorldBoot() {
         // (2026-06-10 smoke: client armed, in=60 pkt/s, out=0, no Request ever).
         // Coalesced: never stack composites behind a stalled game thread.
         PostPumpComposite([] {
-            coop::net_pump::Tick(g_session, 0.f);
+            coop::net_pump::Tick(g_session);
             coop::nameplate::Update();
             coop::dev::object_overlay::Update(); coop::dev::ragdoll_bone_overlay::Update();
             coop::chat_feed::Tick();
@@ -350,7 +350,7 @@ void DriveMenuModeJoinWorldBoot() {
                 return;
             }
             PostPumpComposite([] {
-                coop::net_pump::Tick(g_session, 0.f);
+                coop::net_pump::Tick(g_session);
                 coop::nameplate::Update();
                 coop::dev::object_overlay::Update(); coop::dev::ragdoll_bone_overlay::Update();
                 coop::chat_feed::Tick();
@@ -401,7 +401,7 @@ void DriveMenuModeJoinWorldBoot() {
 // and the host save-backup is a blocking file copy -- neither belongs on the game thread.
 // Returns Start()'s success: the browser-join path Fails the join (drops the loading
 // screen + reopens the browser) when a synchronous Start failure means no async connect
-// edge will ever arrive. Other callers (env play / host-with-save / netloopback) ignore it.
+// edge will ever arrive. Other callers (env play / host-with-save) ignore it.
 bool StartCoopSession(const coop::net::Config& netCfg) {
     // Never start once teardown has begun: g_session.Start would spawn a net thread
     // AFTER DoShutdown's single Stop(), to be joined at static destruction -- the
@@ -674,7 +674,7 @@ void RunPlayLoop(bool idleInGameplay) {
         if (running) wasHostSession = (g_session.role() == coop::net::Role::Host);
         PostPumpComposite([running, idleInGameplay] {
             if (running) {
-                coop::net_pump::Tick(g_session, 0.f);
+                coop::net_pump::Tick(g_session);
             } else if (idleInGameplay) {
                 // Solo gameplay, no session yet: keep the local observers live.
                 coop::subsystems::Install(g_session);
@@ -776,7 +776,7 @@ DWORD WINAPI TimelineThread(LPVOID param) {
     // since VOTV preloads its UMG and the omega widget is gone by then). Each Post
     // runs on the game thread as soon as the pump is live (which is while the omega
     // screen ticks UMG), so these land during the intro.
-    const bool storyBoot = (scenario == "play" || scenario == "netloopback");
+    const bool storyBoot = (scenario == "play");
     const bool menuMode  = (scenario == "menu");
     if (storyBoot) {
         // Sample widgets across the first ~3 s -- catches the OMEGA gate before we
@@ -807,9 +807,9 @@ DWORD WINAPI TimelineThread(LPVOID param) {
 
     const bool wantGameplay = (scenario == "newgame" || scenario == "orphan" ||
                                scenario == "skin" || scenario == "show" ||
-                               scenario == "play" || scenario == "netloopback");
+                               scenario == "play");
     // Autonomous scenarios boot to the menu then `open` + wait a fixed time. The
-    // story-boot scenarios (play/netloopback) load via LoadStorySave in their own
+    // story-boot scenarios (play) load via LoadStorySave in their own
     // branch, so they skip this sandbox `open`.
     if (wantGameplay && !storyBoot) {
         ::Sleep(4000);
@@ -1002,44 +1002,14 @@ DWORD WINAPI TimelineThread(LPVOID param) {
         // a v56 save-transfer client is AT THE MENU (its queued ConnectDirect must hit
         // the menu-mode branch in the TakePendingStart drain).
         RunPlayLoop(/*idleInGameplay=*/!saveTransferClient);
-    } else if (scenario == "netloopback") {
-        // PR-2 (2026-05-28): the single-process loopback scenario no longer
-        // applies. GNS connection topology is host listens / client dials --
-        // one process can't be its own peer through one Session. Autonomous
-        // LAN testing now uses the two-process mp.py smoke flow. This branch
-        // remains so the existing votv-coop.ini scenario= names parse; it
-        // simply starts a host session that waits for a real client.
-        BootStorySaveBlocking();
-        Post([] { harness::sdk_check::Run(); });
-        coop::net::Config cfg;
-        cfg.role = coop::net::Role::Host;
-        cfg.peerIp = "127.0.0.1";
-        StartCoopSession(cfg);  // host LanDirect -- same wiring as the play env path
-        UE_LOGI("harness: ==== NETLOOPBACK running (self UDP on %u) ====", cfg.port);
-        int tick = 0;
-        while (!coop::shutdown::IsShuttingDown()) {
-            // Coalesced like every other composite poster (audit WARN-1): the
-            // loopback world can stall in loads too; never stack composites.
-            PostPumpComposite([] { coop::net_pump::Tick(g_session, 250.f); coop::nameplate::Update(); coop::dev::object_overlay::Update(); coop::dev::ragdoll_bone_overlay::Update(); coop::chat_feed::Tick(); coop::roster::Refresh(); TickShutdownHooks(); });
-            if (++tick % 120 == 0) {  // ~every 2 s at 60 Hz
-                Post([] {
-                    UE_LOGI("netloopback: state=%d sent=%llu recv=%llu puppet=%d",
-                            static_cast<int>(g_session.state()),
-                            static_cast<unsigned long long>(g_session.packetsSent()),
-                            static_cast<unsigned long long>(g_session.packetsRecv()),
-                            coop::puppet_drive::Puppet(1).valid() ? 1 : 0);
-                });
-            }
-            ::Sleep(16);  // ~60 Hz pump for smooth Tick() interp (see play-net branch)
-        }
     } else if (scenario == "show") {
         // Autonomous visual confirm: spawn the puppet in front, hold idle, then
         // drive a walk (speed) for a few seconds to confirm the AnimBP animates
         // from our direct variable writes. NOTE: this scenario does NOT exercise
         // the receiver-side INTERPOLATION (each SetTargetPose here either snaps
         // -- first call -- or has zero positional delta -- subsequent walk/idle
-        // at same loc). The interp linear LERP path is exercised by netloopback
-        // and the LAN test.
+        // at same loc). The interp linear LERP path is exercised by the LAN
+        // test (the two-process mp.py pose stream).
         ::Sleep(2000);
         Post([] {
             UE_LOGI("show: === spawn skin-puppet ===");

@@ -333,7 +333,7 @@ void MaybeRequestReAnnounce(coop::net::Session& session, void* reapWorld) {
     }
 }
 
-void Tick(coop::net::Session& session, float displayOffsetX) {
+void Tick(coop::net::Session& session) {
     // This whole body is game-thread-only: it drives the puppet array (via
     // puppet_drive, a GT-only-by-convention side-table) and runs
     // ElementDeleter::Flush (the controlled game-thread destruction point).
@@ -721,7 +721,7 @@ void Tick(coop::net::Session& session, float displayOffsetX) {
     // one), under the SAME worldUp predicate, after the drive -- the original
     // order tick-loop -> wisp -> pose-diag -> remote_prop is preserved.
     if (worldUp) {
-        coop::puppet_drive::DriveTick(session, displayOffsetX,
+        coop::puppet_drive::DriveTick(session,
                                       g_worldReadyAnnounced.load(std::memory_order_relaxed));
 
         // Receiver-side held-prop driver. Drains the latest PropPose from the

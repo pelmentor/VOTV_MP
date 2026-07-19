@@ -29,7 +29,6 @@ Scenarios:
 | Scenario | What it does | Used by |
 |---|---|---|
 | `play` | Skip-to-gameplay (LoadStorySave), then idle for hands-on play. | `mp_host_game.bat`, `mp_client_connect.bat` |
-| `netloopback` | Single process, single session in loopback (host self-connected, peer=self, initiate=true). Verifies the transport + serialization + session + interp end-to-end without a 2nd machine. | `tools/run-test.ps1 -Scenario netloopback` |
 | `load:<slot>` | Load a specific save slot. | one-off probes |
 | `none` | Launch only; no harness automation (manual driving). | manual launch |
 | `probe_terminals:<save>` | Phase 5T probe scenario — load save + drive the UE4SS Lua probe harness to dump terminal state. | `tools/probe-terminals.ps1` |
@@ -113,7 +112,6 @@ the auto-memory `[[reference-pile-test-harness]]`.
 - **`tools/run-test.ps1`** — single-process autonomous scenario runner.
   Writes `scenario.txt` next to the DLL, then launches the shipping exe.
   ```powershell
-  ./tools/run-test.ps1 -Scenario netloopback
   ./tools/run-test.ps1 -Scenario "load:s_may2026" -Save s_may2026
   ```
 
@@ -142,7 +140,7 @@ Levelled (`[INFO]`, `[WARN]`, `[ERROR]`), timestamped. Boot health
 check + scenario startup + every UFunction call site that hits an edge
 case logs at least one line.
 
-In netloopback / LAN runs the per-process log is named
+In LAN runs the per-process log is named
 `votv-coop-host.log` / `votv-coop-client.log` (the harness sets the log
 filename from `VOTVCOOP_NET_ROLE`).
 

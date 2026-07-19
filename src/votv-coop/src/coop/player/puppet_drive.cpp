@@ -60,8 +60,7 @@ bool DestroySlot(int slot) {
     return false;
 }
 
-void DriveTick(coop::net::Session& session, float displayOffsetX,
-               bool worldReadyAnnounced) {
+void DriveTick(coop::net::Session& session, bool worldReadyAnnounced) {
     UE_ASSERT_GAME_THREAD("g_puppets (puppet_drive::DriveTick)");
     namespace PP = coop::dev::perf_probe;
 
@@ -155,9 +154,7 @@ void DriveTick(coop::net::Session& session, float displayOffsetX,
             // latest every frame would zero `errorPos_` mid-window and freeze
             // motion. The per-frame advance happens in Tick() below.
             if (isNew) {
-                coop::net::PoseSnapshot withOffset = remote;
-                withOffset.x += displayOffsetX;  // loopback mirror shift (0 for real coop)
-                g_puppets[slot].SetTargetPose(withOffset);
+                g_puppets[slot].SetTargetPose(remote);
                 ++sPoseFresh[slot];  // pose-diag: a fresh target this second
             }
         }

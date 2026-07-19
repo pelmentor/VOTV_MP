@@ -277,7 +277,7 @@ LAN (two-machine + same-box-two-instance both confirmed).
 - ☑ 5.1 Autonomous test harness — `tools/run-test.ps1` writes
        `scenario.txt`, harness reads it from inside the DLL and drives the
        engine from a worker thread (`harness::autotest`). Scenarios:
-       `play`, `netloopback`, `load:<slot>`, `none`, plus the per-feature
+       `play`, `load:<slot>`, `none`, plus the per-feature
        grab / probe-terminals scenarios.
 - ☑ 5.2 LAN test framework — `tools/lan-test.ps1` launches host + client
        same-box two-process, env-var config (`VOTVCOOP_*`), per-PID

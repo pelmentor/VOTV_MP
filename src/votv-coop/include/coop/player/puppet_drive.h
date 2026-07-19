@@ -31,8 +31,7 @@ coop::RemotePlayer& Puppet(int slot);
 // worldUp and passes its own g_worldReadyAnnounced load evaluated IN the call
 // expression (the same observation point as the old in-loop load -- both
 // writers run GT-earlier in the same Tick). Game thread.
-void DriveTick(coop::net::Session& session, float displayOffsetX,
-               bool worldReadyAnnounced);
+void DriveTick(coop::net::Session& session, bool worldReadyAnnounced);
 
 // Drop slot's Player Element from the registry (unconditional -- safe when no
 // puppet ever spawned, see the N-3 note at the call site) and destroy the
