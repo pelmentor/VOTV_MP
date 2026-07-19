@@ -83,14 +83,8 @@ void Install(coop::net::Session* session);
 void OnConvertRequest(const coop::net::KerfurConvertPayload& payload,
                       uint8_t senderPeerSlot);
 
-// CLIENT-only receiver for KerfurConvert (v78, host->all; wired in event_dispatch_state, slot-0
-// gated). The SOLE conversion-transition signal (kerfur redesign 10.3): destroy the old-form mirror
-// at payload.oldEid, then ADOPT this peer's own claimed local conversion ghost to the authoritative
-// payload.newEid (the initiator) or materialize a fresh mirror (other peers). rejected=1 -> the host
-// refused (sentient): keep the mirror, or restore it if we optimistically converted locally (fixes
-// Failure #7). `localPlayer` (live AmainPlayer_C*, may be null) feeds the prop teardown/materialize
-// (held-prop guard + PHC release). Game thread (event_feed drain).
-void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& payload, void* localPlayer);
+// The CLIENT half (the KerfurConvert wire apply + the conversion-ghost custody:
+// claim/cleanup/TakeParkedGhostByEid) lives in kerfur_convert_client.h (s27 cut).
 
 // Drain the deferred-action queue (pushed by the interceptors, which may run
 // on a parallel-anim worker and must not call engine functions or walk the
@@ -100,15 +94,6 @@ void OnKerfurConvert(const coop::net::KerfurConvertBroadcastPayload& payload, vo
 // conversion verb can drain this queue mid-verb otherwise). Cheap no-op when
 // empty. Game thread (net-pump tick).
 void Tick();
-
-// CLIENT (D2 relay): TAKE (find + remove) the parked conversion-ghost tagged with `srcEid` of the requested
-// form (wantNpc -> the parked turn-on NPC; !wantNpc -> the frozen turn-off prop), returning its actor or
-// nullptr. The client's own toggle spawns a local kerfur via the un-hookable EX_CallMath path; the poll
-// PARKS it (AI/physics off) tagged with the converting eid. npc_mirror::OnEntitySpawn (turn-on) and
-// OnKerfurConvert adopt THAT exact actor by EXACT eid -- deterministic, replacing the old 500cm position
-// match (FindParkedGhostNpcNear, removed v91). nullptr for a peer that did not initiate -> it fresh-spawns.
-// Game thread.
-void* TakeParkedGhostByEid(uint32_t srcEid, bool wantNpc);
 
 // HOST: FIRST REFUSAL on the generic expression of a kerfur PROP-form actor (take-8
 // 2026-07-12 host-own toggle dupe RCA). The turn_off verb's fresh prop spawns EX-internally;

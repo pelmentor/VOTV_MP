@@ -19,7 +19,7 @@
 #include "coop/interactables/drone_sync.h"
 #include "coop/interactables/grime_sync.h"
 #include "coop/interactables/interactable_sync.h"
-#include "coop/creatures/kerfur_convert.h"
+#include "coop/creatures/kerfur_convert_client.h"
 #include "coop/interactables/keypad_sync.h"
 #include "coop/interactables/power_sync.h"
 #include "coop/props/trash_pile_sync.h"
@@ -475,7 +475,7 @@ bool HandleStateEvent(net::Session& session,
         }
         net::KerfurConvertBroadcastPayload p{};
         std::memcpy(&p, msg.payload, sizeof(p));
-        coop::kerfur_convert::OnKerfurConvert(p, localPlayer);
+        coop::kerfur_convert_client::OnKerfurConvert(p, localPlayer);
         break;
     }
     default:

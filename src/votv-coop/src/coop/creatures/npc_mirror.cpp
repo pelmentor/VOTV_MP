@@ -16,7 +16,7 @@
 #include "coop/element/npc.h"
 #include "coop/element/registry.h"
 #include "coop/element/identity_create.h"   // the single NPC mirror create funnel (Inc A)
-#include "coop/creatures/kerfur_convert.h"  // TakeParkedGhostByEid -- adopt the client's own turn-on ghost by eid
+#include "coop/creatures/kerfur_convert_client.h"  // TakeParkedGhostByEid -- adopt the client's own turn-on ghost by eid
 #include "coop/element/mirror_defer.h"  // instant-world: hide a freshly-spawned NPC mirror until lift/quiescence reveal
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
@@ -202,7 +202,7 @@ void OnEntitySpawn(const coop::net::EntitySpawnPayload& payload) {
     // no longer fuzzy-miss. Only the INITIATING client has a ghost at this eid -> other peers / save-active NPCs
     // (convertFromEid 0 or no ghost) fall through to fresh-spawn below.
     if (payload.convertFromEid != 0) {
-        if (void* ghost = coop::kerfur_convert::TakeParkedGhostByEid(payload.convertFromEid, /*wantNpc=*/true)) {
+        if (void* ghost = coop::kerfur_convert_client::TakeParkedGhostByEid(payload.convertFromEid, /*wantNpc=*/true)) {
             if (AdoptExistingNpcAsMirror(ghost, payload.elementId, classW)) return;
             // Adopt failed (eid collision) -> fall through to a fresh mirror; the orphan ghost is
             // reaped by kerfur_convert's cleanup.
