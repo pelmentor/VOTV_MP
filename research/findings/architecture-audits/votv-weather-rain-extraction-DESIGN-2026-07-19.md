@@ -11,7 +11,19 @@ resolve+apply+debug+disconnect, takes the cycle AS A PARAMETER, latches its OWN 
 weather_fog.h:44 states the shape explicitly: "P7: this module owns the fog engine substrate
 (offsets + UFunction thunks); weather_sync (gameplay/network) drives it." A competing
 `ue_wrap/world/daynight_cycle` wrapper axis was REJECTED: it would fragment the cycle's
-substrate across coop modules + a ue_wrap file, diverging from the shipped family x3.
+WEATHER substrate across coop modules + a ue_wrap file, diverging from the shipped family x3.
+
+**Post-cut correction (documentize 2026-07-19):** the /qf pass argued the rejection as if no
+ue_wrap cycle wrapper existed — WRONG as a negative existence claim: `ue_wrap/world/
+daynightcycle.{h,cpp}` EXISTS and wraps the cycle's CLOCK concept (totalTime/Day/TimeScale/
+MaxTime/timeZ; consumers time_sync + dev/set_clock). Neither the primary nor 7 critic rounds
+grepped for it. The DECISION stands — the cycle's substrate is deliberately split BY CONCEPT
+(clock half = ue_wrap::daynightcycle per its own header note; weather half = the coop
+weather-module family), and weather_rain conforms to the weather half's shipped shape — but
+the axis argument should have CITED the existing wrapper, not asserted its absence. Lesson:
+[[lesson-axis-decision-census-existing-wrappers]]. (Cache census post-cut: THREE independent
+IsLiveByIndex-validated cycle caches — daynightcycle::Cycle throttled, weather_sync::
+ResolveCycle, weather_rain::ResolveCycle — all the correct recycled-slot-safe shape.)
 
 ## Commit 1 — coop/world/weather_rain.{h,cpp} (the rain+snow cycle-side sub-lane)
 

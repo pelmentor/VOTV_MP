@@ -791,6 +791,22 @@ instead of re-excavating the same hole.** Born because the project dug the same 
   lexical script is the only swap detector). *Look FIRST:*
   `votv-comp-pane-extraction-DESIGN-2026-07-19.md`; `ue_wrap/desk/console_desk.cpp` FieldSlot rows.
   `memory/lesson_positional_resolve_table_silent_shift.md`
+- **Any env-gated autotest scenario (`VOTVCOOP_RUN_*`) rides a standard mp.py smoke with ZERO tool
+  changes** — set the var in the invoking shell (mp.py copies `os.environ` at launch, mp.py:425; the
+  SpawnIf gates live in `harness/autotest/autotest_dispatch.cpp:60-75`; scenarios self-gate by role).
+  Gate discipline: import the shipped verifier's LITERAL patterns verbatim (lan-test.ps1 weather verdict
+  :440-449), run the gate on a BASELINE run first (pattern counting 0 on baseline = broken instrument),
+  min-count FLOORS on periodic diag lines (caught a parallel-audit-shrunk 90s window as 29<30 in s25),
+  compare WITHIN-RUN convergence never cross-run absolutes (organic RNG differs; peers move together).
+  *Look FIRST:* `autotest_dispatch.cpp` for the scenario list; lan-test.ps1 for verdict literals.
+  `memory/lesson_smoke_env_passthrough_scenarios.md`
+- **A NEGATIVE existence claim in a design brief ("no ue_wrap file for X exists") is a measurement, not
+  an assumption** — grep for EXISTING wrappers/modules of the target engine class BEFORE deciding an
+  extraction/placement axis. Born s25: `ue_wrap/world/daynightcycle.{h,cpp}` (the cycle's CLOCK half)
+  existed through a 7-round /qf whose axis argument asserted its absence; the decision survived only
+  because the concepts (clock vs weather) don't overlap. Census every wrapper of the class + which
+  concept each owns, put it IN the brief. *Look FIRST:* `find src -iname "*<class>*"` + grep ue_wrap/.
+  `memory/lesson_axis_decision_census_existing_wrappers.md`
 - **env/.bat host = HIDDEN lobby by design; the scoreboard listed-checkbox mirror LIES on that path**
   (2026-07-17: absence from the server browser after a .bat launch is NOT a bug — v56 rule, test
   lobbies must not pollute the list; but `AnnounceEnvHostHidden` bypasses `session_manager::SetListed`
