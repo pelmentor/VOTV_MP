@@ -205,6 +205,23 @@ master's `LOBBY_TTL` is **90s** (3 missed 30s heartbeats; was 300s — commit `6
 `ad9844b6` live on the VPS). See
 `research/findings/network/votv-master-server-RE-and-rust-port-scope-2026-07-16.md`.
 
+## Version identity surfaces (b122, AS-BUILT 2026-07-19 `5246844a`, drill-verified NOT hands-on)
+
+The Paper-pair identity (game target + build number; docs/RELEASE.md + the
+`votv-version-identity-v122-DESIGN-2026-07-19.md` design doc) touches four UI surfaces:
+- **Browser Version column** = `0.9.0n b122` per row (game falls back to the legacy version tag for
+  pre-field hosts); amber `(!)` on a game/build mismatch — amber ALWAYS means "Connect will be refused
+  with a popup" (no amber-but-joinable state). Browser header shows `DisplayVersion()`.
+- **Pre-flight refusal popup**: a version-mismatched Connect click never raises the loading cover —
+  `join_progress::RefuseJoin` (no Active gate) feeds the same connect-failed modal with the
+  which-axis/who-updates wording (`VersionMismatchVerdict`, session_manager.cpp).
+- **Host feed line** `"<nick> was turned away: <reason>"` (deduped 30 s per nick+reason) when the wire
+  gate refuses a joiner at the Join seam (`player_handshake_version.cpp`).
+- **Boot-warning modal** `MOD INSTALL PROBLEM` (`ui/boot_warning_dialog.{h,cpp}`, connect_failed's
+  ownership shape + the SEH re-fault guard): armed at boot from `MULTIVOID_DUP_FILES` when the xinput
+  proxy found several `multivoid-*.dll` (or a legacy `votv-coop.dll`) beside the exe; names the loaded
+  file + the leftovers. Dup drill screenshot-proven (s29 `dup_popup.png`).
+
 ## Main-menu version / update line (NATIVE UMG — VERIFIED hands-on 2026-07-16)
 
 The old v59 **launch UPDATE toast** is RETIRED (RULE 2; `ed009c0d`), and so is its first replacement,
@@ -213,8 +230,11 @@ render gate needs a surface/HUD open, and the bare main menu has none; retired i
 shipped form is a **native UMG `UTextBlock`** injected as the TOP row of the VerticalBox holding VOTV's
 own build labels ("Alpha 0.9.0" / "Build a090n"), so the coop line reads as one more native label and
 auto show/hides with the menu — **cyan** (the coop accent, matching the MULTIPLAYER button), amber when
-an update is available. Verdict formats: `VOTV-Coop v111 (latest)` / `... -- UPDATE vN AVAILABLE: <url>`
-/ `... (dev; latest released vN)`; plain `VOTV-Coop v<N>` until the check lands.
+an update is available. Verdict formats (b122 Paper-pair identity, 2026-07-19; AS-BUILT, label itself
+hands-on-verified 2026-07-16 in the old format): `votv-coop 0.9.0n b122 (latest)` /
+`... -- UPDATE <tag> AVAILABLE: <url>` / `... (dev; latest released bN)`; plain
+`votv-coop 0.9.0n b122` (`session_manager::DisplayVersion`) until the check lands — and PERMANENTLY
+while the master has no released record (`/v1/latest` proto 0 = NO VERDICT, the client stays silent).
 
 Mechanics: `engine::InjectTextRowAbove` (clones `txt_version`'s text style + the row slot layout;
 `InsertAtTopOfVBox` is the shared snapshot→Clear→re-add reorder, now save/restoring every native row's
@@ -225,9 +245,12 @@ slot layout) + `engine::SetTextBlockColorDispatch` (post-attach colour MUST be t
 **Re-polled on every main-menu entrance** (a >500 ms tick gap = a fresh entrance →
 `session_manager::RefreshLatestVersion`, DoS-safe: one worker in flight + an 8 s min-interval floor).
 The master's `/v1/latest` answer is env-overridable on the VPS (`COOP_LATEST_PROTO` in
-`/etc/coop-master.env`, set to 111 — a release bump is an env edit + restart, no rebuild; the stale
-hardcoded 66 was the "latest released: v66" bug). USER hands-on confirmed: cyan, above the game labels,
-correct "(latest)" verdict. DLL `22CD3EAF...` deployed x4; commits `6d640679` + `fd50f127`, pushed.
+`/etc/coop-master.env` — a release bump is an env edit + restart, no rebuild; docs/RELEASE.md step 5).
+Since 2026-07-19 (b122) the compiled default AND the box env are proto 0 = "no released record" — the
+informational line stays silent until the FIRST real release sets the env (a stale record can never
+fake "(latest)": equality required; the old stale-66 bug class is closed by the 0-default + the
+client's proto<=0 no-verdict guard). USER hands-on confirmed (2026-07-16, pre-b122 format): cyan,
+above the game labels, correct "(latest)" verdict. b122 format rides take 4.
 
 ## Master / signaling server — Rust, on the NEW coop VPS `172.86.94.3` (migrated 2026-07-16)
 

@@ -8,7 +8,10 @@ stale — that's what `research/findings/` is for).
 A **standalone** hook-only mod that runs as an engine-extension layer on
 top of UE4.27 + VOTV. It loads via our own proxy DLL (`xinput1_3.dll`
 forwards XInputGetState/SetState to System32's xinput1_4.dll and
-side-loads `votv-coop.dll`), discovers the game's classes/functions
+side-loads the versioned payload `multivoid-<game>-<build>.dll` — the
+Paper-pair artifact, 2026-07-19; the proxy scans `multivoid-*.dll`, loads
+the highest build, and flags duplicate installs for an in-game popup),
+discovers the game's classes/functions
 through UE reflection (resolved standalone via AOB signatures — no
 UE4SS at runtime), and adds a second networked player by driving the
 engine's own `APawn` / `APlayerController` systems. It does not modify
@@ -40,7 +43,7 @@ does not replace it (principle 6).
 │   NO network/gameplay/coop state.                           │
 ├─────────────────────────────────────────────────────────────┤
 │ loader/  (xinput_proxy.cpp -> xinput1_3.dll)                │
-│   Auto-load votv-coop.dll on game start.                    │
+│   Scan + auto-load multivoid-<game>-<build>.dll on start.   │
 ├─────────────────────────────────────────────────────────────┤
 │ third_party/minhook (MIT, MinHook for the game-thread       │
 │   ProcessEvent detour — static-CRT linked)                  │
@@ -60,8 +63,9 @@ pattern from the methodology's origin). It is a runtime DLL loaded into the
 UE4 process via our own `xinput1_3.dll` proxy (VOTV imports only
 `XInputGetState`/`XInputSetState` from xinput1_3.dll; those are forwarded
 to System32's xinput1_4.dll via `/export:` linker directives, and the
-proxy's `DllMain` side-loads `votv-coop.dll`). No injection, no third-
-party loader. See `src/loader/xinput_proxy.cpp` for the loader source.
+proxy's `DllMain` side-loads the `multivoid-*.dll` payload). No injection,
+no third-party loader. See `src/loader/xinput_proxy.cpp` for the loader
+source (the scan + highest-build pick + duplicate-install detection).
 
 ## How far we can reach into the engine
 

@@ -26,7 +26,8 @@ runs them frequently:
 ## Deploy scripts
 
 - **`deploy-loader.ps1 -GameWin64 <path> [-Standalone]`** — idempotent
-  copy of `xinput1_3.dll` + `votv-coop.dll` into the target Win64 dir.
+  copy of `xinput1_3.dll` + the versioned `multivoid-<game>-<build>.dll`
+  payload into the target Win64 dir (stale/legacy payload names deleted).
   Skip-if-identical so a re-run while VOTV is loaded doesn't fail on
   the locked DLL. `-Standalone` renames `dwmapi.dll` → `dwmapi.dll.off`
   to disable UE4SS in that folder (the host + client copies are

@@ -142,9 +142,12 @@ context proven, RemotePlayer puppet visible + driven on LAN.
 
 ### Standalone shipping vehicle (RULE №3) — DONE
 
-- ☑ C++ toolchain + build: `votv-coop.dll` (CMake + VS2019, x64, static CRT).
-- ☑ Standalone proxy loader: **`xinput1_3.dll`** auto-loads `votv-coop.dll`
-       on game start; UE4SS absent. `tools/deploy-loader.ps1` installs it.
+- ☑ C++ toolchain + build: the mod DLL (CMake + VS2019, x64, static CRT);
+       since 2026-07-19 (b122) the artifact is the Paper-pair-versioned
+       `multivoid-<game>-<build>.dll` (was `votv-coop.dll`).
+- ☑ Standalone proxy loader: **`xinput1_3.dll`** scans + auto-loads the
+       highest-build `multivoid-*.dll` on game start (duplicate installs ->
+       in-game popup); UE4SS absent. `tools/deploy-loader.ps1` installs it.
 - ☑ Standalone reflection (no UE4SS): AOB-resolved `GUObjectArray` +
        `FName::ToString` + `ProcessEvent`. Health check on boot:
        reflection-resolves every primitive, FUNCTIONALLY validates them,

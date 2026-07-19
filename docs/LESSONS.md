@@ -203,6 +203,15 @@ instead of re-excavating the same hole.** Born because the project dug the same 
 
 ## 3. Sync architecture (owners, routers, lifecycle)
 
+- **The HOST's Join always reaches the client BEFORE the client's own Join goes out** (the
+  client's send waits for its Element allocation post-AssignPeerSlot), so any symmetric per-side
+  Join validation fires CLIENT-side first and the host-side branch is a trust-boundary backstop
+  only reachable by a peer that skips its own check — role-swapped drills can NOT cover it; use a
+  NOVAL drill build (validation compiled out one line, never shipped). Measured s29 drills B/B2/B3
+  (2026-07-19, v122 version gate). *Look FIRST:* `player_handshake_version.cpp`
+  ValidateJoinVersionOrRefuse + `player_handshake.cpp` MaybeSendJoinToSlot's eid-wait.
+  `memory/lesson_join_handshake_host_first_ordering.md`
+
 - **Per-UNIT device identity exists ONLY at the AIM seam — 5 of 7 enterable families render ONE
   shared widget instance** (ui_console_C = ALL SAT consoles; gamemode.laptop = base laptop + every
   portable PC), so widget→owning-unit is architecturally underivable at any widget-side surface
